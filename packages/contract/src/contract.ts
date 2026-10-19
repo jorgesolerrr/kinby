@@ -1628,6 +1628,10 @@ export interface StatsBucket {
   interrupted: number;
   mean_duration_seconds: number | null;
   memory_calls: MemoryCallCounts;
+  memory_carried_cost?: number | null;
+  memory_carried_tokens?: number;
+  memory_estimated_turns?: number;
+  memory_tokens?: number;
   navigation?: NavigationMeans;
   origins: OriginUse[];
   output_tokens: number;
@@ -1722,7 +1726,10 @@ export interface TurnMetrics {
   duration_seconds: number | null;
   input_tokens: number;
   memory_calls: MemoryCallCounts;
+  memory_carried_cost?: number | null;
+  memory_carried_tokens?: number;
   memory_consulted: boolean;
+  memory_measured?: boolean;
   memory_tokens: number;
   model: string | null;
   navigation?: Navigation;
@@ -1825,6 +1832,10 @@ export interface StatsSummary {
   interrupted: number;
   mean_duration_seconds: number | null;
   memory_calls: MemoryCallCounts;
+  memory_carried_cost?: number | null;
+  memory_carried_tokens?: number;
+  memory_estimated_turns?: number;
+  memory_tokens?: number;
   navigation?: NavigationMeans;
   origins: OriginUse[];
   output_tokens: number;

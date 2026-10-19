@@ -1465,7 +1465,15 @@ class TurnMetrics(TokenTotals):
     approvals_requested: int
     denies: DenyCounts = Field(default_factory=DenyCounts)
     tool_duration: ToolTime = Field(default_factory=ToolTime)
+    #: The tokens memory tool results added to the turn's context, each counted once.
     memory_tokens: float
+    #: Memory's tokens times the model calls that read them again from the cache.
+    memory_carried_tokens: float = 0
+    #: The carried tokens at the turn model's cache-read rate. None when the model is unpriced.
+    memory_carried_cost: float | None = None
+    #: Whether memory tokens come from the provider's counts. A turn that returned memory but
+    #: recorded no model calls has none to count, and an older core estimated them from characters.
+    memory_measured: bool = False
     rating: TurnRated | None
     navigation: Navigation = Field(default_factory=Navigation)
     delegated_runs: list[ReportedRun] = Field(default_factory=list)
@@ -1516,6 +1524,12 @@ class StatsSummary(TokenTotals):
     tool_calls: dict[str, int]
     memory_calls: MemoryCallCounts
     turns_without_memory: int
+    memory_tokens: float = 0
+    memory_carried_tokens: float = 0
+    #: None only when no turn's carried tokens were priced.
+    memory_carried_cost: float | None = None
+    #: Turns whose memory tokens were not measured, so a range with some does not compare.
+    memory_estimated_turns: int = 0
     approvals_requested: int
     denies: DenyCounts = Field(default_factory=DenyCounts)
     tool_duration: ToolTime = Field(default_factory=ToolTime)

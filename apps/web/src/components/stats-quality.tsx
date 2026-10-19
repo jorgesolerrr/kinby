@@ -9,7 +9,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
-import { bucketLabel, type NavigationPoint, navigationTrend } from "@/lib/stats"
+import { bucketLabel, type NavigationPoint, navigationTrend, tokens, turnCount } from "@/lib/stats"
 
 /** The most-called tools a quality view lists. */
 const TOP_TOOLS = 10
@@ -30,6 +30,8 @@ export function Quality({
     .sort(([a, aCalls], [b, bCalls]) => bCalls - aCalls || a.localeCompare(b))
     .slice(0, TOP_TOOLS)
   const memory = total.memory_calls
+  const turns = turnCount(total)
+  const estimated = total.memory_estimated_turns ?? 0
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -46,7 +48,13 @@ export function Quality({
             ["Remembered", memory.remember ?? 0],
             ["Forgotten", memory.forget ?? 0],
             ["Turns without memory", total.turns_without_memory],
+            ["Tokens per turn", tokens(turns ? Math.round((total.memory_tokens ?? 0) / turns) : 0)],
           ]}
+          note={
+            estimated
+              ? `${estimated} of ${turns} turns' memory tokens are estimated, not measured.`
+              : undefined
+          }
         />
         <Counts
           title="Approvals"
@@ -73,17 +81,20 @@ function Counts({
   title,
   counts,
   empty,
+  note,
 }: {
   title: string
-  counts: [string, number][]
+  counts: [string, number | string][]
   empty?: string
+  note?: string
 }) {
+  const description = counts.length === 0 ? empty : note
   return (
     <section aria-label={title}>
       <Card size="sm" className="h-full">
         <CardHeader>
           <CardTitle>{title}</CardTitle>
-          {counts.length === 0 && <CardDescription>{empty}</CardDescription>}
+          {description && <CardDescription>{description}</CardDescription>}
         </CardHeader>
         {counts.length > 0 && (
           <CardContent>

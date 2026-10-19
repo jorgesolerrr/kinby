@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from itertools import pairwise
 from typing import NewType
 from uuid import UUID
 
@@ -37,7 +38,7 @@ from kinby.contracts import (
     TurnRated,
     TurnStarted,
 )
-from kinby.core.pricing import SHIPPED_PRICES, token_cost
+from kinby.core.pricing import SHIPPED_PRICES, cache_read_cost, token_cost
 from kinby.instance import ModelPrice
 
 _MEMORY_CALL_KINDS = {
@@ -48,7 +49,6 @@ _MEMORY_CALL_KINDS = {
 }
 _SKILL_TOOL = "skill"
 _NAVIGATION_EXCLUDED = frozenset((*_MEMORY_CALL_KINDS, _SKILL_TOOL))
-_CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN = 4
 
 UnpricedModel = NewType("UnpricedModel", str)
 
@@ -57,6 +57,22 @@ UnpricedModel = NewType("UnpricedModel", str)
 class TurnKey:
     thread_id: UUID
     turn_id: UUID
+
+
+@dataclass
+class _ModelCall:
+    input_tokens: int
+    output_tokens: int
+    #: The tool results that came back before the next call.
+    results: list[ToolResult] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _MemoryUse:
+    tokens: float = 0
+    carried_tokens: float = 0
+    carried_cost: float | None = None
+    measured: bool = False
 
 
 @dataclass
@@ -71,8 +87,8 @@ class _TurnEvents:
     tool_duration: Counter[str] = field(default_factory=Counter)
     memory_calls: Counter[str] = field(default_factory=Counter)
     approvals_requested: int = 0
-    memory_characters: int = 0
-    has_model_calls: bool = False
+    returned_memory: bool = False
+    model_calls: list[_ModelCall] = field(default_factory=list)
     model_input_tokens: int = 0
     model_output_tokens: int = 0
     model_cache_read_tokens: int = 0
@@ -85,11 +101,6 @@ class _TurnEvents:
     read_call_ids: set[str] = field(default_factory=set)
     tokens_before_first_write: int = 0
     delegated_runs: list[ReportedRun] = field(default_factory=list)
-
-
-def estimate_memory_tokens(character_count: int) -> float:
-    """Apply the shared character estimate used for memory text."""
-    return character_count / _CHARACTERS_PER_ESTIMATED_MEMORY_TOKEN
 
 
 def closing_day(record: TurnMetrics) -> date:
@@ -134,7 +145,7 @@ def turn_metrics(
         turn = open_turns.get(key)
         if isinstance(payload, ModelCompleted):
             if turn is not None:
-                turn.has_model_calls = True
+                turn.model_calls.append(_ModelCall(payload.input_tokens, payload.output_tokens))
                 turn.model_input_tokens += payload.input_tokens
                 turn.model_output_tokens += payload.output_tokens
                 turn.model_cache_read_tokens += payload.cache_read_tokens
@@ -156,8 +167,9 @@ def turn_metrics(
             continue
         if isinstance(payload, ToolResult):
             if turn is not None:
-                if payload.name in _MEMORY_CALL_KINDS:
-                    turn.memory_characters += len(payload.output)
+                turn.returned_memory |= payload.name in _MEMORY_CALL_KINDS
+                if turn.model_calls:
+                    turn.model_calls[-1].results.append(payload)
                 write = turn.tool_writes.get(payload.call_id)
                 if payload.duration_ms is not None and write is not None:
                     turn.tool_duration["write_ms" if write else "read_ms"] += payload.duration_ms
@@ -185,7 +197,7 @@ def turn_metrics(
             no_work = outcome is CompletionOutcome.NO_WORK
             if (
                 turn is not None
-                and turn.has_model_calls
+                and turn.model_calls
                 and not no_work
                 and _model_totals(turn)
                 != TokenTotals(
@@ -205,6 +217,7 @@ def turn_metrics(
             price = prices.get(turn.model) if turn is not None else None
             if turn is not None and price is None and not no_work:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
+            memory = _memory_use(turn, price) if turn is not None else _MemoryUse()
             record = TurnMetrics(
                 thread_id=event.thread_id,
                 turn_id=event.turn_id,
@@ -231,7 +244,10 @@ def turn_metrics(
                 approvals_requested=turn.approvals_requested if turn else 0,
                 denies=DenyCounts.model_validate(turn.denies if turn else {}),
                 tool_duration=ToolTime.model_validate(turn.tool_duration if turn else {}),
-                memory_tokens=(estimate_memory_tokens(turn.memory_characters) if turn else 0),
+                memory_tokens=memory.tokens,
+                memory_carried_tokens=memory.carried_tokens,
+                memory_carried_cost=memory.carried_cost,
+                memory_measured=memory.measured,
                 rating=None,
                 navigation=_navigation(turn) if turn else Navigation(),
                 delegated_runs=turn.delegated_runs if turn else [],
@@ -280,6 +296,39 @@ def turn_metrics(
         mismatches,
         runs_outside_turns,
     )
+
+
+def _memory_use(turn: _TurnEvents, price: ModelPrice | None) -> _MemoryUse:
+    """Count each step's memory by how much the next model call's input grew."""
+    tokens = carried = 0.0
+    calls = turn.model_calls
+    measured = bool(calls) or not turn.returned_memory
+    for index, (call, following) in enumerate(pairwise(calls)):
+        grown = following.input_tokens - call.input_tokens - call.output_tokens
+        if grown < 0:
+            # The next input left out some of this call's output, such as hidden reasoning.
+            measured = False
+            continue
+        step = grown * _memory_share(call.results)
+        tokens += step
+        carried += step * (len(calls) - index - 2)
+    return _MemoryUse(
+        tokens=tokens,
+        carried_tokens=carried,
+        carried_cost=cache_read_cost(carried, price) if price is not None else None,
+        measured=measured,
+    )
+
+
+def _memory_share(results: list[ToolResult]) -> float:
+    """All of a memory-only step, or memory's share of a mixed step's characters."""
+    memory = [result for result in results if result.name in _MEMORY_CALL_KINDS]
+    if not memory:
+        return 0
+    if len(memory) == len(results):
+        return 1
+    characters = sum(len(result.output) for result in results)
+    return sum(len(result.output) for result in memory) / characters if characters else 0
 
 
 def _record_navigation_call(turn: _TurnEvents, payload: ToolCall) -> None:

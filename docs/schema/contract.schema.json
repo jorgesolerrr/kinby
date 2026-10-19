@@ -5901,6 +5901,29 @@
         "memory_calls": {
           "$ref": "#/$defs/MemoryCallCounts"
         },
+        "memory_carried_cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "memory_carried_tokens": {
+          "default": 0,
+          "type": "number"
+        },
+        "memory_estimated_turns": {
+          "default": 0,
+          "type": "integer"
+        },
+        "memory_tokens": {
+          "default": 0,
+          "type": "number"
+        },
         "navigation": {
           "$ref": "#/$defs/NavigationMeans"
         },
@@ -6118,6 +6141,29 @@
         },
         "memory_calls": {
           "$ref": "#/$defs/MemoryCallCounts"
+        },
+        "memory_carried_cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "memory_carried_tokens": {
+          "default": 0,
+          "type": "number"
+        },
+        "memory_estimated_turns": {
+          "default": 0,
+          "type": "integer"
+        },
+        "memory_tokens": {
+          "default": 0,
+          "type": "number"
         },
         "navigation": {
           "$ref": "#/$defs/NavigationMeans"
@@ -7730,7 +7776,26 @@
         "memory_calls": {
           "$ref": "#/$defs/MemoryCallCounts"
         },
+        "memory_carried_cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "memory_carried_tokens": {
+          "default": 0,
+          "type": "number"
+        },
         "memory_consulted": {
+          "type": "boolean"
+        },
+        "memory_measured": {
+          "default": false,
           "type": "boolean"
         },
         "memory_tokens": {

@@ -712,6 +712,7 @@ describe("the Quality tab", () => {
             tool_calls: { read_file: 12, bash: 30, write_file: 4 },
             memory_calls: { search: 5, open: 3, remember: 1 },
             turns_without_memory: 2,
+            memory_tokens: 7_500.4,
             approvals_requested: 4,
             denies: { policy: 1, user: 2 },
             good_ratings: 3,
@@ -734,7 +735,11 @@ describe("the Quality tab", () => {
       ["Remembered", "1"],
       ["Forgotten", "0"],
       ["Turns without memory", "2"],
+      ["Tokens per turn", "1,250"],
     ])
+    expect(
+      within(screen.getByRole("region", { name: "Memory" })).queryByText(/estimated/),
+    ).toBeNull()
     expect(region("Approvals")).toEqual([
       ["Asked", "4"],
       ["Denied by policy", "1"],
@@ -744,6 +749,20 @@ describe("the Quality tab", () => {
       ["Good", "3"],
       ["Bad", "1"],
     ])
+  })
+  it("says when the range's memory tokens mix measured and estimated turns", async () => {
+    openStats({
+      "stats.get": () =>
+        stats({ total: summary({ completed: 5, failed: 1, memory_estimated_turns: 2 }) }),
+    })
+
+    await openTab("Quality")
+
+    expect(
+      within(screen.getByRole("region", { name: "Memory" })).getByText(
+        "2 of 6 turns' memory tokens are estimated, not measured.",
+      ),
+    ).toBeTruthy()
   })
   it("shows each bucket's mean reads before the first write, over the turns that wrote", async () => {
     const navigated = (turnId: string, closedAt: string, reads: number, writes: number) =>

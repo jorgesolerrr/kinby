@@ -70,7 +70,7 @@ def token_cost(totals: TokenTotals, price: ModelPrice) -> float:
     Cache read and cache write tokens are subsets of input. They price at
     ``cache_read`` and ``cache_write`` when set, otherwise at the input rate.
     """
-    cache_read_rate = price.input if price.cache_read is None else price.cache_read
+    cache_read_rate = _cache_read_rate(price)
     cache_write_rate = price.input if price.cache_write is None else price.cache_write
     uncached = totals.input_tokens - totals.cache_read_tokens - totals.cache_creation_tokens
     return (
@@ -79,3 +79,12 @@ def token_cost(totals: TokenTotals, price: ModelPrice) -> float:
         + totals.cache_creation_tokens * cache_write_rate
         + totals.output_tokens * price.output
     ) / TOKENS_PER_MILLION
+
+
+def cache_read_cost(tokens: float, price: ModelPrice) -> float:
+    """Return the cost of *tokens* read from the cache at *price*."""
+    return tokens * _cache_read_rate(price) / TOKENS_PER_MILLION
+
+
+def _cache_read_rate(price: ModelPrice) -> float:
+    return price.input if price.cache_read is None else price.cache_read
