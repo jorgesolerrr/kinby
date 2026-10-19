@@ -5277,9 +5277,32 @@
     },
     "RunDelegated": {
       "additionalProperties": false,
+      "description": "A delegated run. A client step's names its step and attempt; a tool's names neither.",
       "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "run": {
           "$ref": "#/$defs/DelegatedRun"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "type": {
           "const": "run.delegated",
@@ -6377,6 +6400,17 @@
       "additionalProperties": false,
       "description": "Run one step of a factory run in this instance, and return its result.",
       "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "hook": {
           "anyOf": [
             {

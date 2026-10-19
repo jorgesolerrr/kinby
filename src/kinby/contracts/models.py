@@ -393,8 +393,12 @@ class DelegatedRun(TokenTotals):
 
 
 class RunDelegated(ContractModel):
+    """A delegated run. A client step's names its step and attempt; a tool's names neither."""
+
     type: Literal[EventType.RUN_DELEGATED] = EventType.RUN_DELEGATED
     run: DelegatedRun
+    step: StepId | None = None
+    attempt: int | None = None
 
 
 class RunStopped(ContractModel):
@@ -2543,6 +2547,8 @@ class StepRunCommand(ContractModel):
     ]
     #: The run and step this is. A turn the step runs records it as its origin.
     origin: FactoryRunOrigin
+    #: The attempt at the step this is. None for the factory's needs_human call, which is none.
+    attempt: int | None = None
     #: The hook that records the step result once the step ends, however it ended.
     hook: HookName | None = None
     work_item: dict[ValueName, StepValue]

@@ -658,7 +658,9 @@ class FactoryRuns:
         backoff = 0.0
         while True:
             self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
-            match await self._run_step(instance_id, queued.command):
+            attempt = self._registry.attempts(queued.run_id)[-1].attempt
+            command = queued.command.model_copy(update={"attempt": attempt})
+            match await self._run_step(instance_id, command):
                 case StepResult() as result:
                     self._advance(queued.run_id, result)
                     return

@@ -1872,6 +1872,7 @@ export interface ApiUse {
  * Run one step of a factory run in this instance, and return its result.
  */
 export interface StepRunCommand {
+  attempt?: number | null;
   hook?: HookName | null;
   origin: FactoryRunOrigin;
   results?: {
@@ -2267,8 +2268,13 @@ export interface TurnInterrupted {
   snapshot?: string | null;
   type: "turn.interrupted";
 }
+/**
+ * A delegated run. A client step's names its step and attempt; a tool's names neither.
+ */
 export interface RunDelegated {
+  attempt?: number | null;
   run: DelegatedRun;
+  step?: StepId | null;
   type: "run.delegated";
 }
 /**
