@@ -30,6 +30,7 @@ Ticket [#640](https://github.com/jorgesolerrr/kinby/issues/640): kinby never tel
 ## Consequences
 
 - Free-text replies, editing channel messages when the user answers in the web app, and per-routine mutes are deferred.
+- The hub watches no instance's events, so each instance raises its own notifications (an approval waiting, a routine notice, a `notify` call) on its hub route, through `notification.raise`. The registry grants every instance the `notification:raise` scope, next to ADR 0096's scopes. The instance records each notification in its event log and sends it again until the hub accepts it.
 - `routine.list` and the REPL stop being the only way to learn about a routine notice.
 - [#119](https://github.com/jorgesolerrr/kinby/issues/119)'s reminder fires a turn that calls `notify`, so a reminder names no channel.
 - Discord pairing assumes the bot shares a server with the user, so it can open a DM.
