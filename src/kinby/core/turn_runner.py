@@ -295,6 +295,7 @@ class LangGraphRunner:
         )
         self._emitted_tool_calls: set[tuple[UUID, UUID, str]] = set()
         self._checkpoint_path = instance.manifest.state_dir / _CHECKPOINTS_NAME
+        self._checkpoint_setup = asyncio.Lock()
         graph_builder = StateGraph(ModelState, context_schema=ModelContext)
         graph_builder.add_node("model", self._call_model)
         graph_builder.add_node("tools", self._call_tools)
@@ -795,6 +796,9 @@ class LangGraphRunner:
     ]:
         async with AsyncSqliteSaver.from_conn_string(str(self._checkpoint_path)) as checkpointer:
             checkpointer.serde = _CHECKPOINT_SERIALIZER
+            # Two turns that set up a new checkpoint file at once fail with "database is locked".
+            async with self._checkpoint_setup:
+                await checkpointer.setup()
             yield self._graph_builder.compile(checkpointer=checkpointer), checkpointer
 
     async def _call_model(
