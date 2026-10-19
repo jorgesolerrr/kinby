@@ -3,13 +3,14 @@ import json
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 
 from kinby.cli import main
 from kinby.contracts import (
     AcceptedResult,
+    ApiUse,
     ApprovalRequested,
     CompletionOutcome,
     DelegatedRun,
@@ -19,6 +20,8 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    FactoryRunOrigin,
+    FactoryRunStatus,
     GateDecider,
     GateOutcome,
     MemoryRecalled,
@@ -38,6 +41,9 @@ from kinby.contracts import (
     RoutineOrigin,
     RoutineTrigger,
     RunDelegated,
+    RunStop,
+    RunStopped,
+    RunTokens,
     Scope,
     SourceRuns,
     StatsBucket,
@@ -1041,6 +1047,95 @@ def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unkn
     assert result.records[1].cost is None
     assert result.records[1].prompt_version is None
     assert result.buckets[0].cost == 0.00045
+
+
+def test_stats_get_joins_a_factory_runs_turns_delegated_runs_and_recap_on_its_run_id(
+    tmp_path: Path,
+) -> None:
+    run_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    step_turn = _turn_events(
+        uuid4(),
+        uuid4(),
+        now,
+        TurnStarted(
+            message="review",
+            model="openai:gpt-5",
+            origin=FactoryRunOrigin(factory="checks", run_id=run_id, step="review"),
+        ),
+        TurnCompleted(input_tokens=100, output_tokens=10),
+    )
+    coded = DelegatedRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client="claude",
+        models=["claude-opus-4-1"],
+        input_tokens=1000,
+        output_tokens=200,
+        cache_read_tokens=800,
+        duration_ms=60_000,
+        client_turns=3,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+    stop = RunStop(
+        run_id=run_id,
+        factory="checks",
+        work_item={"issue": 7},
+        status=FactoryRunStatus.DONE,
+        generation=1,
+        attempts=[],
+    )
+    recap = uuid5(run_id, "1")
+    events = [
+        *step_turn,
+        _event(3, run_id, uuid4(), now, RunDelegated(run=coded, step="implement", attempt=1)),
+        _event(4, run_id, uuid4(), now, RunStopped(stop=stop)),
+        _event(
+            5,
+            run_id,
+            recap,
+            now,
+            MemoryRecapped(
+                node=None,
+                input_tokens=50,
+                output_tokens=5,
+                model="anthropic:claude-sonnet-4-6",
+            ),
+        ),
+        *_turn_events(
+            uuid4(),
+            uuid4(),
+            now,
+            TurnStarted(message="chat", model="openai:gpt-5"),
+            TurnCompleted(input_tokens=1, output_tokens=1),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.runs == [
+        RunTokens(
+            run_id=run_id,
+            api=ApiUse(input_tokens=150, output_tokens=15, cost=0.00045),
+            subscriptions=[
+                SubscriptionUse(
+                    usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+                    runs=1,
+                    input_tokens=1000,
+                    output_tokens=200,
+                    cache_read_tokens=800,
+                    duration_ms=60_000,
+                ),
+                SubscriptionUse(usage_source=UsageSource.CHATGPT_SUBSCRIPTION),
+            ],
+        )
+    ]
 
 
 def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recaps() -> None:

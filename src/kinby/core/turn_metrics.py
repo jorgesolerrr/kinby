@@ -29,6 +29,7 @@ from kinby.contracts import (
     PromptVersion,
     ReportedRun,
     RunDelegated,
+    RunStopped,
     TokenTotals,
     ToolCall,
     ToolGated,
@@ -115,12 +116,30 @@ def closing_day(record: TurnMetrics) -> date:
 
 
 @dataclass(frozen=True)
+class StepRun:
+    """A delegated run no turn reported: a factory step's coding client run, under its run."""
+
+    run_id: UUID
+    reported: ReportedRun
+
+
+@dataclass(frozen=True)
+class RunRecap:
+    """The recap of a factory run's stop. Its cost is None when its model is unpriced."""
+
+    run_id: UUID
+    timestamp: datetime
+    tokens: TokenTotals
+    cost: float | None
+
+
+@dataclass(frozen=True)
 class TurnMetricsResult:
     records: list[TurnMetrics]
     unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
     warnings: list[ModelCallMismatch]
-    #: Delegated runs no turn reported: a factory step's coding client runs.
-    runs_outside_turns: list[ReportedRun]
+    step_runs: list[StepRun]
+    run_recaps: list[RunRecap]
 
 
 def turn_metrics(
@@ -134,7 +153,9 @@ def turn_metrics(
     records: list[TurnMetrics] = []
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
     mismatches: list[ModelCallMismatch] = []
-    runs_outside_turns: list[ReportedRun] = []
+    step_runs: list[StepRun] = []
+    run_recaps: list[RunRecap] = []
+    stopped_runs: set[UUID] = set()
     profile_sizes: dict[ProfileVersion, int] = {}
     #: Records that read a profile, each sized once every count has been read.
     profiled: list[tuple[TurnMetrics, ProfileVersion]] = []
@@ -153,6 +174,9 @@ def turn_metrics(
             continue
         if isinstance(payload, ProfileCounted):
             profile_sizes[payload.version] = payload.tokens
+            continue
+        if isinstance(payload, RunStopped):
+            stopped_runs.add(event.thread_id)
             continue
 
         turn = open_turns.get(key)
@@ -202,7 +226,7 @@ def turn_metrics(
             if turn is not None:
                 turn.delegated_runs.append(reported)
             else:
-                runs_outside_turns.append(reported)
+                step_runs.append(StepRun(event.thread_id, reported))
             continue
         if isinstance(payload, TurnCompleted | TurnFailed | TurnInterrupted):
             turn = open_turns.pop(key, None)
@@ -280,21 +304,18 @@ def turn_metrics(
 
         record = closed_turns.get(key)
         if record is None:
+            if isinstance(payload, MemoryRecapped) and event.thread_id in stopped_runs:
+                cost = _recap_cost(payload, prices)
+                run_recaps.append(RunRecap(event.thread_id, event.timestamp, payload, cost))
             continue
         if isinstance(payload, MemoryRecapped):
             if record.outcome is CompletionOutcome.NO_WORK:
                 continue
             main_totals = closing_totals[key]
             main_price = prices.get(record.model) if record.model is not None else None
-            recap_price = prices.get(payload.model) if payload.model is not None else None
-            if recap_price is not None:
-                recap_cost = token_cost(payload, recap_price)
-            elif not (payload.total or payload.cache_read_tokens or payload.cache_creation_tokens):
-                recap_cost = 0
-            else:
-                recap_cost = None
-                if payload.model is not None:
-                    unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
+            recap_cost = _recap_cost(payload, prices)
+            if recap_cost is None and payload.model is not None:
+                unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
             record.input_tokens += payload.input_tokens - record.recap_input_tokens
             record.output_tokens += payload.output_tokens - record.recap_output_tokens
             record.cache_read_tokens = main_totals.cache_read_tokens + payload.cache_read_tokens
@@ -321,8 +342,19 @@ def turn_metrics(
         records,
         {key: frozenset(models) for key, models in unpriced_models_by_turn.items()},
         mismatches,
-        runs_outside_turns,
+        step_runs,
+        run_recaps,
     )
+
+
+def _recap_cost(recap: MemoryRecapped, prices: Mapping[str, ModelPrice]) -> float | None:
+    """The recap's cost at its model: nothing when it spent no tokens, None when unpriced."""
+    price = prices.get(recap.model) if recap.model is not None else None
+    if price is not None:
+        return token_cost(recap, price)
+    if not (recap.total or recap.cache_read_tokens or recap.cache_creation_tokens):
+        return 0
+    return None
 
 
 def _memory_use(turn: _TurnEvents, price: ModelPrice | None) -> _MemoryUse:

@@ -1,8 +1,11 @@
 import {
   CallError,
+  type FactoryRun,
   type OriginUse,
   type ReportedRun,
   type RoutineSummary,
+  type RunUsage,
+  type StatsRunsResult,
   type StatsGetResult,
   type StatsSummary,
   type TurnMetrics,
@@ -133,9 +136,48 @@ function counts(region: HTMLElement): [string | null, string | null][] {
     .map((term, index) => [term.textContent, values[index].textContent])
 }
 
-function openStats(answers: Answers = { "stats.get": () => stats() }) {
+function factoryRun(issue: number, fields: Partial<FactoryRun> = {}): FactoryRun {
+  return {
+    run_id: `run-${issue}`,
+    factory: "software",
+    instance_id: "hub-ada",
+    work_item: { issue },
+    status: "done",
+    step: null,
+    created_at: "2026-09-28T10:00:00Z",
+    updated_at: "2026-09-28T11:30:00Z",
+    ...fields,
+  }
+}
+
+function runUsage(run: FactoryRun, fields: Partial<RunUsage> = {}): RunUsage {
+  return {
+    run,
+    tokens: 0,
+    api: { input_tokens: 0, output_tokens: 0, cost: null },
+    subscriptions: [
+      { usage_source: "claude-subscription", runs: 0 },
+      { usage_source: "chatgpt-subscription", runs: 0 },
+    ],
+    attempts: [],
+    retries: 0,
+    send_backs: 0,
+    duration_seconds: null,
+    ...fields,
+  }
+}
+
+function runsResult(fields: Partial<StatsRunsResult> = {}): StatsRunsResult {
+  return { runs: [], weeks: [], skipped: [], unreachable: [], outdated: [], ...fields }
+}
+
+function openStats(
+  answers: Answers = { "stats.get": () => stats() },
+  hubAnswers: Answers = { "stats.runs": () => runsResult() },
+) {
   const client = stubCaller(answers)
-  render(<StatsPage client={client} clock={fakeClock()} instanceId="hub-ada" />)
+  const caller = stubCaller(hubAnswers)
+  render(<StatsPage client={client} caller={caller} clock={fakeClock()} instanceId="hub-ada" />)
   return client
 }
 
@@ -217,7 +259,7 @@ describe("the stats page", () => {
     const overview = await screen.findByRole("tab", { name: "Overview" })
 
     expect(overview.getAttribute("aria-selected")).toBe("true")
-    for (const name of ["Spend", "Origin", "Quality"]) {
+    for (const name of ["Spend", "Origin", "Quality", "Runs"]) {
       expect(screen.getByRole("tab", { name }).getAttribute("aria-disabled")).toBe("false")
     }
   })
@@ -474,7 +516,7 @@ describe("the stats page", () => {
   it("reads again on window focus and on Refresh, and never on its own", async () => {
     const client = stubCaller({ "stats.get": () => stats() })
     const clock = fakeClock()
-    render(<StatsPage client={client} clock={clock} instanceId="hub-ada" />)
+    render(<StatsPage client={client} caller={stubCaller({})} clock={clock} instanceId="hub-ada" />)
     const user = userEvent.setup()
     await act(() => clock.advance(10 * 60_000))
     expect(statsReads(client)).toHaveLength(1)
@@ -958,5 +1000,88 @@ describe("the Origin tab", () => {
     expect(triage).toContain("Never fired")
     expect(triage).toContain("3 failures in a row")
     expect(triage).toContain("No next firing")
+  })
+})
+
+describe("the Runs tab", () => {
+  it("asks the hub for the range's runs, and lists each run's usage and the weekly medians", async () => {
+    const caller = stubCaller({
+      "stats.runs": () =>
+        runsResult({
+          runs: [
+            runUsage(factoryRun(7), {
+              tokens: 1365,
+              api: { input_tokens: 150, output_tokens: 15, cost: 0.75 },
+              subscriptions: [
+                { usage_source: "claude-subscription", runs: 1 },
+                { usage_source: "chatgpt-subscription", runs: 0 },
+              ],
+              attempts: [
+                { step: "fix", attempts: 2 },
+                { step: "review", attempts: 2 },
+                { step: "publish", attempts: 2 },
+              ],
+              retries: 1,
+              send_backs: 1,
+              duration_seconds: 5400,
+            }),
+            runUsage(factoryRun(8, { status: "running", step: "review" }), {
+              tokens: 11,
+              attempts: [
+                { step: "fix", attempts: 1 },
+                { step: "review", attempts: 1 },
+              ],
+            }),
+          ],
+          weeks: [
+            { start: "2026-09-28", runs: 2, tokens: 687.5, attempts: 4, duration_seconds: 5400 },
+          ],
+        }),
+    })
+    render(
+      <StatsPage
+        client={stubCaller({ "stats.get": () => stats() })}
+        caller={caller}
+        clock={fakeClock()}
+        instanceId="hub-ada"
+      />,
+    )
+
+    await openTab("Runs")
+
+    expect(rows(await screen.findByRole("table", { name: "Runs" }))).toEqual([
+      [
+        "issue 7",
+        "Done",
+        "1,365",
+        "$0.75",
+        "Claude 1",
+        "fix 2 · review 2 · publish 2",
+        "1",
+        "1",
+        "1h 30m",
+      ],
+      ["issue 8", "Running at review", "11", "not priced", "—", "fix 1 · review 1", "0", "0", "—"],
+    ])
+    expect(rows(screen.getByRole("table", { name: "Weekly medians" }))).toEqual([
+      ["Sep 28", "2", "688", "4", "1h 30m"],
+    ])
+    expect(caller.calls).toEqual([
+      {
+        method: "stats.runs",
+        params: { instance_id: "hub-ada", since: "2026-09-24T00:00:00.000Z" },
+      },
+    ])
+  })
+
+  it("says when no run started in the range, and which instances' tokens it left out", async () => {
+    openStats(undefined, {
+      "stats.runs": () => runsResult({ unreachable: ["hub-bob"], skipped: ["hub-cy"] }),
+    })
+
+    await openTab("Runs")
+
+    expect(await screen.findByText("No factory run started in this range.")).toBeDefined()
+    expect(screen.getByText("Tokens leave out 2 instances")).toBeDefined()
   })
 })

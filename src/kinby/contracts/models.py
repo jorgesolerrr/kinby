@@ -1597,6 +1597,21 @@ class PlanLimit(ContractModel):
     resets_at: AwareDatetime
 
 
+class ApiUse(TokenTotals):
+    """The model calls the API usage source paid for, priced where the model is known."""
+
+    cost: float | None = None
+
+
+class RunTokens(ContractModel):
+    """One factory run's tokens in this instance: its agent steps' turns and its recap, priced,
+    and its client steps' delegated runs, counted per subscription usage source."""
+
+    run_id: UUID
+    api: ApiUse
+    subscriptions: list[SubscriptionUse]
+
+
 class StatsGetResult(ContractModel):
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
@@ -1606,12 +1621,8 @@ class StatsGetResult(ContractModel):
     limits: list[PlanLimit]
     unpriced_models: list[str]
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
-
-
-class ApiUse(TokenTotals):
-    """The model calls the API usage source paid for, priced where the model is known."""
-
-    cost: float | None = None
+    #: Each factory run with tokens in the range.
+    runs: list[RunTokens] = Field(default_factory=list)
 
 
 class StatsSummaryResult(ContractModel):
@@ -1633,6 +1644,59 @@ class StatsSummaryResult(ContractModel):
     #: Running instances that failed to answer, or did not answer in time.
     unreachable: list[UUID]
     #: Running instances on an older core, whose answer this hub cannot read.
+    outdated: list[UUID]
+
+
+class StatsRunsCommand(ContractModel):
+    """The run usage of the factory runs one instance handed in, created in the range."""
+
+    instance_id: UUID
+    since: AwareDatetime | None = None
+    until: AwareDatetime | None = None
+
+
+class StepAttempts(ContractModel):
+    step: StepId
+    attempts: int
+
+
+class RunUsage(ContractModel):
+    """One factory run's cost and rework, read from the hub and its instances, stored nowhere."""
+
+    run: FactoryRun
+    #: Input and output tokens across every usage source.
+    tokens: int
+    api: ApiUse
+    subscriptions: list[SubscriptionUse]
+    #: In the order the run first reached each step.
+    attempts: list[StepAttempts]
+    #: Failed attempts tried again, and attempts that sent the work back, by the tally rules.
+    retries: int
+    send_backs: int
+    #: From creation to done or cancelled. None until the run ends.
+    duration_seconds: float | None
+
+
+class RunWeek(ContractModel):
+    """The medians of the runs created in one UTC week, which starts on Monday."""
+
+    start: date
+    runs: int
+    tokens: float
+    attempts: float
+    #: None when no run of the week has ended.
+    duration_seconds: float | None
+
+
+class StatsRunsResult(ContractModel):
+    """Tokens leave out every instance in ``skipped``, ``unreachable``, or ``outdated``."""
+
+    #: Oldest first.
+    runs: list[RunUsage]
+    #: Oldest first, only weeks with runs.
+    weeks: list[RunWeek]
+    skipped: list[UUID]
+    unreachable: list[UUID]
     outdated: list[UUID]
 
 

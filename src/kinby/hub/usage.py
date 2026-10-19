@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import date
 from enum import StrEnum
+from statistics import median
 from uuid import UUID
 
 from kinby.contracts import (
     ApiUse,
+    FactoryRun,
+    FactoryRunStatus,
     PlanLimit,
     PlanUse,
+    RunTokens,
+    RunUsage,
+    RunWeek,
+    StatsBucketSize,
     StatsGetResult,
+    StatsRunsResult,
+    StatsSummary,
     StatsSummaryResult,
     SubscriptionUse,
     UsageSource,
 )
-from kinby.core.stats import PLAN_WINDOWS, SUBSCRIPTION_SOURCES
+from kinby.core.stats import PLAN_WINDOWS, SUBSCRIPTION_SOURCES, bucket_start
+from kinby.hub.runs import Rework
+
+_ENDED = frozenset({FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED})
 
 
 class Uncounted(StrEnum):
@@ -34,34 +47,94 @@ def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSum
         if isinstance(answer, StatsGetResult)
     }
     totals = [answer.total for answer in counted.values()]
-    uses = [use for total in totals for use in total.subscriptions]
     return StatsSummaryResult(
         buckets={instance_id: answer.buckets for instance_id, answer in counted.items()},
-        api=ApiUse(
-            input_tokens=sum(total.input_tokens for total in totals),
-            output_tokens=sum(total.output_tokens for total in totals),
-            cache_read_tokens=sum(total.cache_read_tokens for total in totals),
-            cache_creation_tokens=sum(total.cache_creation_tokens for total in totals),
-            cost=_known_cost(total.cost for total in totals),
-        ),
-        subscriptions=[
-            _summed_use(source, [use for use in uses if use.usage_source is source])
-            for source in SUBSCRIPTION_SOURCES
-        ],
+        api=_summed_api(totals),
+        subscriptions=_summed_uses([use for total in totals for use in total.subscriptions]),
         plan_use=_summed_plan_use([use for answer in counted.values() for use in answer.plan_use]),
         limits=_latest_resets(limit for answer in counted.values() for limit in answer.limits),
-        skipped=[
-            instance_id for instance_id, answer in answers.items() if answer is Uncounted.SKIPPED
-        ],
-        unreachable=[
-            instance_id
-            for instance_id, answer in answers.items()
-            if answer is Uncounted.UNREACHABLE
-        ],
-        outdated=[
-            instance_id for instance_id, answer in answers.items() if answer is Uncounted.OUTDATED
-        ],
+        skipped=_left_out(answers, Uncounted.SKIPPED),
+        unreachable=_left_out(answers, Uncounted.UNREACHABLE),
+        outdated=_left_out(answers, Uncounted.OUTDATED),
     )
+
+
+def run_usage(
+    reworked: Iterable[tuple[FactoryRun, Rework]],
+    answers: Mapping[UUID, StatsGetResult | Uncounted],
+) -> StatsRunsResult:
+    """Join each run's rework with its tokens in every counted instance, since a step can run
+    in an instance other than the one that handed the run in."""
+    tokens: dict[UUID, list[RunTokens]] = {}
+    for answer in answers.values():
+        if isinstance(answer, StatsGetResult):
+            for run in answer.runs:
+                tokens.setdefault(run.run_id, []).append(run)
+    usage = [_run_usage(run, rework, tokens.get(run.run_id, [])) for run, rework in reworked]
+    return StatsRunsResult(
+        runs=usage,
+        weeks=_weeks(usage),
+        skipped=_left_out(answers, Uncounted.SKIPPED),
+        unreachable=_left_out(answers, Uncounted.UNREACHABLE),
+        outdated=_left_out(answers, Uncounted.OUTDATED),
+    )
+
+
+def _run_usage(run: FactoryRun, rework: Rework, counted: list[RunTokens]) -> RunUsage:
+    api = _summed_api([tokens.api for tokens in counted])
+    subscriptions = _summed_uses([use for tokens in counted for use in tokens.subscriptions])
+    return RunUsage(
+        run=run,
+        tokens=api.total + sum(use.total for use in subscriptions),
+        api=api,
+        subscriptions=subscriptions,
+        attempts=rework.attempts,
+        retries=rework.retries,
+        send_backs=rework.send_backs,
+        duration_seconds=(
+            (run.updated_at - run.created_at).total_seconds() if run.status in _ENDED else None
+        ),
+    )
+
+
+def _weeks(usage: list[RunUsage]) -> list[RunWeek]:
+    by_week: dict[date, list[RunUsage]] = {}
+    for run in usage:
+        by_week.setdefault(bucket_start(run.run.created_at, StatsBucketSize.WEEK), []).append(run)
+    return [_week(start, runs) for start, runs in sorted(by_week.items())]
+
+
+def _week(start: date, runs: list[RunUsage]) -> RunWeek:
+    ended = [run.duration_seconds for run in runs if run.duration_seconds is not None]
+    return RunWeek(
+        start=start,
+        runs=len(runs),
+        tokens=median(run.tokens for run in runs),
+        attempts=median(sum(step.attempts for step in run.attempts) for run in runs),
+        duration_seconds=median(ended) if ended else None,
+    )
+
+
+def _left_out(answers: Mapping[UUID, StatsGetResult | Uncounted], why: Uncounted) -> list[UUID]:
+    return [instance_id for instance_id, answer in answers.items() if answer is why]
+
+
+def _summed_api(uses: Sequence[StatsSummary | ApiUse]) -> ApiUse:
+    return ApiUse(
+        input_tokens=sum(use.input_tokens for use in uses),
+        output_tokens=sum(use.output_tokens for use in uses),
+        cache_read_tokens=sum(use.cache_read_tokens for use in uses),
+        cache_creation_tokens=sum(use.cache_creation_tokens for use in uses),
+        cost=_known_cost(use.cost for use in uses),
+    )
+
+
+def _summed_uses(uses: list[SubscriptionUse]) -> list[SubscriptionUse]:
+    """One use per subscription source, summed."""
+    return [
+        _summed_use(source, [use for use in uses if use.usage_source is source])
+        for source in SUBSCRIPTION_SOURCES
+    ]
 
 
 def _known_cost(costs: Iterable[float | None]) -> float | None:

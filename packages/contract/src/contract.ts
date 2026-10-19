@@ -486,6 +486,10 @@ export interface Contract {
       command: StatsGetCommand;
       result: StatsGetResult;
     };
+    "stats.runs": {
+      command: StatsRunsCommand;
+      result: StatsRunsResult;
+    };
     "stats.summary": {
       command: StatsGetCommand;
       result: StatsSummaryResult;
@@ -1610,6 +1614,7 @@ export interface StatsGetResult {
   limits: PlanLimit[];
   plan_use: PlanUse[];
   records: TurnMetrics[];
+  runs?: RunTokens[];
   total: StatsSummary;
   unpriced_models: string[];
   warnings?: ModelCallMismatch[];
@@ -1820,6 +1825,25 @@ export interface TurnRated {
   type: "turn.rated";
   verdict: TurnVerdict;
 }
+/**
+ * One factory run's tokens in this instance: its agent steps' turns and its recap, priced,
+ * and its client steps' delegated runs, counted per subscription usage source.
+ */
+export interface RunTokens {
+  api: ApiUse;
+  run_id: string;
+  subscriptions: SubscriptionUse[];
+}
+/**
+ * The model calls the API usage source paid for, priced where the model is known.
+ */
+export interface ApiUse {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  cost?: number | null;
+  input_tokens: number;
+  output_tokens: number;
+}
 export interface StatsSummary {
   approvals_requested: number;
   bad_ratings: number;
@@ -1855,6 +1879,51 @@ export interface ModelCallMismatch {
   turn_id: string;
 }
 /**
+ * The run usage of the factory runs one instance handed in, created in the range.
+ */
+export interface StatsRunsCommand {
+  instance_id: string;
+  since?: string | null;
+  until?: string | null;
+}
+/**
+ * Tokens leave out every instance in ``skipped``, ``unreachable``, or ``outdated``.
+ */
+export interface StatsRunsResult {
+  outdated: string[];
+  runs: RunUsage[];
+  skipped: string[];
+  unreachable: string[];
+  weeks: RunWeek[];
+}
+/**
+ * One factory run's cost and rework, read from the hub and its instances, stored nowhere.
+ */
+export interface RunUsage {
+  api: ApiUse;
+  attempts: StepAttempts[];
+  duration_seconds: number | null;
+  retries: number;
+  run: FactoryRun;
+  send_backs: number;
+  subscriptions: SubscriptionUse[];
+  tokens: number;
+}
+export interface StepAttempts {
+  attempts: number;
+  step: StepId;
+}
+/**
+ * The medians of the runs created in one UTC week, which starts on Monday.
+ */
+export interface RunWeek {
+  attempts: number;
+  duration_seconds: number | null;
+  runs: number;
+  start: string;
+  tokens: number;
+}
+/**
  * Usage across the hub's running instances, read live from each one and stored nowhere.
  *
  * A total leaves out every instance in ``skipped``, ``unreachable``, or ``outdated``.
@@ -1870,16 +1939,6 @@ export interface StatsSummaryResult {
   skipped: string[];
   subscriptions: SubscriptionUse[];
   unreachable: string[];
-}
-/**
- * The model calls the API usage source paid for, priced where the model is known.
- */
-export interface ApiUse {
-  cache_creation_tokens?: number;
-  cache_read_tokens?: number;
-  cost?: number | null;
-  input_tokens: number;
-  output_tokens: number;
 }
 /**
  * Run one step of a factory run in this instance, and return its result.
