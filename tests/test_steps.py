@@ -998,6 +998,7 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "               'no_background':\n"
         "                   os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'),\n"
         "               'command_limit': os.environ.get('BASH_MAX_TIMEOUT_MS'),\n"
+        "               'command_default': os.environ.get('BASH_DEFAULT_TIMEOUT_MS'),\n"
         "               'instance': os.environ.get('KINBY_INSTANCE')},\n"
         "              calls)\n"
         "    calls.write('\\n')\n"
@@ -1010,6 +1011,7 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", raising=False)
     monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("BASH_DEFAULT_TIMEOUT_MS", raising=False)
     return calls
 
 
@@ -1033,6 +1035,8 @@ class ClientCall:
     no_background: str | None
     #: The longest Claude may wait for one command, in milliseconds.
     command_limit: str | None
+    #: How long Claude waits for a command that names no timeout, in milliseconds.
+    command_default: str | None
     #: The instance a `kinby` command in the client's shell finds.
     instance: str | None
 
@@ -1122,6 +1126,7 @@ def test_a_claude_step_runs_every_command_in_the_foreground_for_as_long_as_the_s
         [called] = recorded_calls(calls)
         assert called.no_background == "1"
         assert called.command_limit == "1000"
+        assert called.command_default == "1000"
 
     asyncio.run(scenario())
 
