@@ -1831,6 +1831,7 @@ export interface TurnRated {
  */
 export interface RunTokens {
   api: ApiUse;
+  recalled_fact?: boolean;
   run_id: string;
   subscriptions: SubscriptionUse[];
 }
@@ -1903,6 +1904,7 @@ export interface RunUsage {
   api: ApiUse;
   attempts: StepAttempts[];
   duration_seconds: number | null;
+  recalled_fact: boolean;
   retries: number;
   run: FactoryRun;
   send_backs: number;

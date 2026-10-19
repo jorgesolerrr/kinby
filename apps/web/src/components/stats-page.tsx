@@ -175,7 +175,15 @@ export function StatsPage({
               </TabsContent>
               <TabsContent value="quality">
                 <div className="flex flex-col gap-4 pt-4">
-                  <Quality stats={stats} by={by} starts={starts} />
+                  <Quality
+                    caller={caller}
+                    clock={clock}
+                    instanceId={instanceId}
+                    range={range}
+                    stats={stats}
+                    by={by}
+                    starts={starts}
+                  />
                 </div>
               </TabsContent>
               <TabsContent value="runs">

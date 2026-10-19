@@ -4,7 +4,7 @@ count each factory run's tokens."""
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
@@ -18,6 +18,7 @@ from kinby.contracts import (
     FactoryRunOrigin,
     MemoryCallCounts,
     NavigationMeans,
+    NodeId,
     Origin,
     OriginUse,
     PlanLimit,
@@ -39,7 +40,7 @@ from kinby.contracts import (
     TurnVerdict,
     UsageSource,
 )
-from kinby.core.turn_metrics import RunRecap, StepRun
+from kinby.core.turn_metrics import RunRecall, RunRecap, StepRun
 
 #: Every usage source that is counted, never priced, in the order results list them.
 SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
@@ -165,6 +166,7 @@ class _RunTotals:
     cache_creation_tokens: int = 0
     cost: float | None = None
     delegated_runs: list[DelegatedRun] = field(default_factory=list)
+    recalled_fact: bool = False
 
     def add(self, tokens: TokenTotals, cost: float | None) -> None:
         self.input_tokens += tokens.input_tokens
@@ -202,21 +204,30 @@ def stats_summary(records: Iterable[TurnMetrics], runs: Iterable[TurnRun]) -> St
 
 
 def run_tokens(
-    records: Iterable[TurnMetrics], step_runs: Iterable[StepRun], recaps: Iterable[RunRecap]
+    records: Iterable[TurnMetrics],
+    step_runs: Iterable[StepRun],
+    recaps: Iterable[RunRecap],
+    recalls: Iterable[RunRecall],
+    facts: Collection[NodeId],
 ) -> list[RunTokens]:
-    """Each factory run's tokens: its agent steps' turns, its client steps' runs and its recap."""
+    """Each factory run's tokens: its agent steps' turns, its client steps' runs and its recap.
+    A run recalled a fact when one of its turns or coding sessions read one of *facts*."""
     totals: dict[UUID, _RunTotals] = {}
     for record in records:
         if isinstance(record.origin, FactoryRunOrigin):
             run = totals.setdefault(record.origin.run_id, _RunTotals())
             run.add(record, record.cost)
             run.delegated_runs += (reported.run for reported in record.delegated_runs)
+            run.recalled_fact |= any(node in facts for node in record.recalled)
     for step_run in step_runs:
         totals.setdefault(step_run.run_id, _RunTotals()).delegated_runs.append(
             step_run.reported.run
         )
     for recap in recaps:
         totals.setdefault(recap.run_id, _RunTotals()).add(recap.tokens, recap.cost)
+    for recall in recalls:
+        if recall.run_id in totals:
+            totals[recall.run_id].recalled_fact |= any(node in facts for node in recall.nodes)
     return [
         RunTokens(
             run_id=run_id,
@@ -230,6 +241,7 @@ def run_tokens(
             subscriptions=[
                 _subscription_use(source, run.delegated_runs) for source in SUBSCRIPTION_SOURCES
             ],
+            recalled_fact=run.recalled_fact,
         )
         for run_id, run in totals.items()
     ]

@@ -106,6 +106,13 @@ export function tokens(count: number): string {
   return count.toLocaleString("en")
 }
 
+/** The middle of `values`, or the mean of the two middle ones. `values` holds at least one. */
+export function median(values: number[]): number {
+  const sorted = values.toSorted((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+}
+
 /** A length of time as its two largest units: "1h 30m", "1m 35s", "40s". */
 export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000)

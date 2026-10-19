@@ -1617,6 +1617,8 @@ class RunTokens(ContractModel):
     run_id: UUID
     api: ApiUse
     subscriptions: list[SubscriptionUse]
+    #: Whether an agent step's turn or a coding session recalled a fact for the run here.
+    recalled_fact: bool = False
 
 
 class RunTotals(ContractModel):
@@ -1695,6 +1697,8 @@ class RunUsage(ContractModel):
     send_backs: int
     #: From creation to done or cancelled. None until the run ends.
     duration_seconds: float | None
+    #: Whether the run recalled a fact in any instance.
+    recalled_fact: bool
 
 
 class RunWeek(ContractModel):

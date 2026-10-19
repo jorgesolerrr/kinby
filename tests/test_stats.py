@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
@@ -75,6 +75,8 @@ from kinby.core.turn_metrics import TurnKey
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnPreparation
 from kinby.instance import Budgets, ModelName, ModelPrice, init_instance, load_instance
+from kinby.memory import Episode, Fact, GraphStore, RecappedTurn
+from kinby.memory.facade import new_node_id
 from tests.helpers import (
     cannot_restore,
     does_not_park,
@@ -1136,6 +1138,97 @@ def test_stats_get_joins_a_factory_runs_turns_delegated_runs_and_recap_on_its_ru
             ],
         )
     ]
+
+
+def test_stats_get_marks_a_run_that_recalled_a_fact_in_a_step_turn_or_a_coding_session(
+    tmp_path: Path,
+) -> None:
+    graph = GraphStore(tmp_path)
+    day = date(2026, 8, 30)
+    fact, forgotten = (
+        graph.remember(
+            Fact(
+                node=new_node_id(day, description),
+                date=day,
+                description=description,
+                subjects=("deploys",),
+                body=f"{description}.",
+                thread=None,
+            )
+        )
+        for description in ("Deploys run from the hub", "Deploys run from a laptop")
+    )
+    graph.forget(forgotten, day)
+    episode = graph.remember(
+        Episode(
+            node=new_node_id(day, "Fixed the deployment"),
+            date=day,
+            description="Fixed the deployment",
+            subjects=("deploys",),
+            body="Fixed the deployment.",
+            recaps=RecappedTurn(uuid4(), uuid4()),
+            tools=(),
+        )
+    )
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    in_turn, in_session, episode_only = uuid4(), uuid4(), uuid4()
+
+    def step_turn(run_id: UUID, *recalls: MemoryRecalled) -> list[Event]:
+        return _turn_events(
+            uuid4(),
+            uuid4(),
+            now,
+            TurnStarted(
+                message="implement",
+                model="openai:gpt-5",
+                origin=FactoryRunOrigin(factory="software", run_id=run_id, step="review"),
+            ),
+            *recalls,
+            TurnCompleted(input_tokens=10, output_tokens=1),
+        )
+
+    def session_recall(run_id: UUID, node: NodeId) -> list[Event]:
+        coded = DelegatedRun(
+            usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+            client="claude",
+            models=["claude-opus-4-1"],
+            input_tokens=100,
+            output_tokens=10,
+            duration_ms=1000,
+            client_turns=1,
+            outcome=DelegatedRunOutcome.COMPLETED,
+        )
+        return [
+            _event(1, run_id, uuid4(), now, RunDelegated(run=coded, step="implement", attempt=1)),
+            _event(
+                2,
+                run_id,
+                uuid4(),
+                now,
+                MemoryRecalled(nodes=(node,), step="implement", attempt=1),
+            ),
+        ]
+
+    events = [
+        *step_turn(in_turn, MemoryRecalled(nodes=(episode, fact))),
+        *step_turn(in_session),
+        *session_recall(in_session, forgotten),
+        *step_turn(episode_only, MemoryRecalled(nodes=(episode,))),
+        *session_recall(episode_only, episode),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(
+            tmp_path, event_log=StaticEventLog(tmp_path, events), facts=graph.fact_ids
+        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert {run.run_id: run.recalled_fact for run in result.runs or []} == {
+        in_turn: True,
+        in_session: True,
+        episode_only: False,
+    }
 
 
 def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recaps() -> None:

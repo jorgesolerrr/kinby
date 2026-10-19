@@ -134,12 +134,22 @@ class RunRecap:
 
 
 @dataclass(frozen=True)
+class RunRecall:
+    """A recall no turn made: a factory run's coding session read *nodes*, under its run."""
+
+    run_id: UUID
+    timestamp: datetime
+    nodes: tuple[NodeId, ...]
+
+
+@dataclass(frozen=True)
 class TurnMetricsResult:
     records: list[TurnMetrics]
     unpriced_models_by_turn: Mapping[TurnKey, frozenset[UnpricedModel]]
     warnings: list[ModelCallMismatch]
     step_runs: list[StepRun]
     run_recaps: list[RunRecap]
+    run_recalls: list[RunRecall]
 
 
 def turn_metrics(
@@ -155,6 +165,7 @@ def turn_metrics(
     mismatches: list[ModelCallMismatch] = []
     step_runs: list[StepRun] = []
     run_recaps: list[RunRecap] = []
+    run_recalls: list[RunRecall] = []
     stopped_runs: set[UUID] = set()
     profile_sizes: dict[ProfileVersion, int] = {}
     #: Records that read a profile, each sized once every count has been read.
@@ -216,6 +227,8 @@ def turn_metrics(
         if isinstance(payload, MemoryRecalled):
             if turn is not None:
                 turn.recalled |= dict.fromkeys(payload.nodes)
+            else:
+                run_recalls.append(RunRecall(event.thread_id, event.timestamp, payload.nodes))
             continue
         if isinstance(payload, ApprovalRequested):
             if turn is not None:
@@ -344,6 +357,7 @@ def turn_metrics(
         mismatches,
         step_runs,
         run_recaps,
+        run_recalls,
     )
 
 

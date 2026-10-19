@@ -1,13 +1,6 @@
-import type {
-  Client,
-  Clock,
-  RunUsage,
-  RunWeek,
-  StatsGetResult,
-  StatsRunsResult,
-} from "@kinby/contract"
+import type { RunUsage, RunWeek, StatsRunsResult } from "@kinby/contract"
 import { TriangleAlertIcon } from "lucide-react"
-import { useEffect, useId, useState } from "react"
+import { useId } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -20,55 +13,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { type RunUsageRead, useRunUsage } from "@/hooks/use-run-usage"
 import { standing, workItem } from "@/lib/factory-runs"
-import { pace, retried } from "@/lib/operation"
-import {
-  dayLabel,
-  duration,
-  money,
-  type Range,
-  SOURCE_LABELS,
-  statsCommand,
-  tokens,
-} from "@/lib/stats"
+import { dayLabel, duration, money, SOURCE_LABELS, tokens } from "@/lib/stats"
 
 /**
  * The factory runs the instance handed in during the range, each with its run usage, and the
  * weekly medians. The hub joins them, so it reads them again with every stats read, and both
  * show the same moment.
  */
-export function Runs({
-  caller,
-  clock,
-  instanceId,
-  range,
-  stats,
-}: {
-  caller: Pick<Client, "call">
-  clock: Clock
-  instanceId: string
-  range: Range
-  stats: StatsGetResult
-}) {
-  const [usage, setUsage] = useState<StatsRunsResult>()
-  const [failure, setFailure] = useState<unknown>()
-
-  useEffect(() => {
-    const pacing = pace(clock)
-    const { since } = statsCommand(range, new Date())
-    retried(() => caller.call("stats.runs", { instance_id: instanceId, since }), pacing).then(
-      (read) => {
-        if (pacing.stopped) return
-        setUsage(read)
-        setFailure(undefined)
-      },
-      (error: unknown) => {
-        if (!pacing.stopped) setFailure(error)
-      },
-    )
-    return pacing.stop
-  }, [caller, clock, instanceId, range, stats])
-
+export function Runs(read: RunUsageRead) {
+  const { usage, failure } = useRunUsage(read)
   return (
     <>
       {failure !== undefined && <Failure error={failure} />}

@@ -73,6 +73,7 @@ from kinby.contracts import (
     InstanceProbeCommand,
     InstanceProbeResult,
     Method,
+    NodeId,
     PermissionMode,
     RunStop,
     RunStopped,
@@ -297,6 +298,7 @@ def build_dispatcher(
     event_log: EventLog | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
+    facts: Callable[[], Collection[NodeId]] = frozenset,
     clock: Callable[[], datetime] = utc_now,
 ) -> ScheduledDispatcher: ...
 
@@ -309,6 +311,7 @@ def build_dispatcher(
     event_log: EventLog | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
+    facts: Callable[[], Collection[NodeId]] = frozenset,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher: ...
 
@@ -320,6 +323,7 @@ def build_dispatcher(
     turns: TurnConfig | ScheduledTurnConfig | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
+    facts: Callable[[], Collection[NodeId]] = frozenset,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher:
     """The instance's contract methods."""
@@ -417,6 +421,8 @@ def build_dispatcher(
                 records,
                 step_runs,
                 (recap for recap in metrics.run_recaps if time_range.includes(recap.timestamp)),
+                (recall for recall in metrics.run_recalls if time_range.includes(recall.timestamp)),
+                facts(),
             ),
         )
 

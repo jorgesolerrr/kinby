@@ -489,7 +489,13 @@ def test_run_usage_joins_each_instances_tokens_with_the_runs_attempts(tmp_path):
             }
         )
         control.usage[_address(reviewer.instance_id)] = _answer(_used()).model_copy(
-            update={"runs": [_tokens(reworked.run_id, input_tokens=50, cost=0.25)]}
+            update={
+                "runs": [
+                    _tokens(reworked.run_id, input_tokens=50, cost=0.25).model_copy(
+                        update={"recalled_fact": True}
+                    )
+                ]
+            }
         )
 
         usage = await hub_client(hub, {Scope.HUB_READ}).call(
@@ -519,6 +525,7 @@ def test_run_usage_joins_each_instances_tokens_with_the_runs_attempts(tmp_path):
         assert (second.tokens, second.api.cost) == (11, None)
         assert (second.retries, second.send_backs) == (0, 0)
         assert [first.duration_seconds, second.duration_seconds] == durations
+        assert [first.recalled_fact, second.recalled_fact] == [True, False]
         created = reworked.created_at.astimezone(UTC).date()
         assert usage.weeks == [
             RunWeek(

@@ -244,6 +244,7 @@ def _contract_client(instance: Instance, clock: Callable[[], datetime]) -> Contr
         instance.manifest.state_dir,
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
+        facts=GraphStore(instance.path).fact_ids,
         clock=clock,
     )
     return _contract_client_for(dispatcher)
