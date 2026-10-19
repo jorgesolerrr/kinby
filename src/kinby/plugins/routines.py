@@ -49,10 +49,11 @@ class SharedCodeStep:
     name: str
 
 
-#: The code steps that make a routine dreaming's consolidation or reflection stage (ADR 0099).
+#: The code steps that make a routine one of dreaming's stages (ADR 0099, ADR 0101).
 CONSOLIDATION_STEP = SharedCodeStep("consolidate")
 REFLECTION_STEP = SharedCodeStep("reflect")
-DREAMING_STEPS = (CONSOLIDATION_STEP, REFLECTION_STEP)
+LEARNING_REVIEW_STEP = SharedCodeStep("review")
+DREAMING_STEPS = (CONSOLIDATION_STEP, REFLECTION_STEP, LEARNING_REVIEW_STEP)
 
 
 @dataclass(frozen=True)

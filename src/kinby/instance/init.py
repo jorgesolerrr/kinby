@@ -59,6 +59,12 @@ DEFAULT_REFLECTION_LENS = (
     "fact. Propose a few things the week clearly shows, through remember, skill_write or "
     "routine_write, rather than many guesses."
 )
+#: The body of a new instance's learning review routine: what that dreaming stage looks for.
+DEFAULT_LEARNING_REVIEW_LENS = (
+    "Look for mistakes memory should have prevented: a failure a fact already described that "
+    "the work never searched for, and a fact the work read and then went against. Name only "
+    "what the turns, runs and facts show, and leave the rest of a bad week alone."
+)
 _PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
 _FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir")
 
@@ -296,6 +302,18 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "run: reflect\n"
             "---\n"
             f"{DEFAULT_REFLECTION_LENS}\n"
+        ),
+        encoding="utf-8",
+    )
+    (directory / ROUTINES_DIR / "learning-review").mkdir()
+    (directory / ROUTINES_DIR / "learning-review" / ROUTINE_FILE).write_text(
+        (
+            "---\n"
+            "description: Review the week's work that went badly against what memory held.\n"
+            "schedule: 0 5 * * 0\n"
+            "run: review\n"
+            "---\n"
+            f"{DEFAULT_LEARNING_REVIEW_LENS}\n"
         ),
         encoding="utf-8",
     )
