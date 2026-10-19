@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 from kinby.contracts import CodingSessionId
+from kinby.core.coding_clients import claude_tokens
 from kinby.jsonl import whole_lines
 
 _FAILED_OUTPUT_TAIL_CHARS = 400
@@ -26,6 +28,25 @@ class FailedCommand:
 
 
 @dataclass(frozen=True)
+class MemorySearch:
+    """A ``kinby memory search`` the session ran."""
+
+    query: str
+    #: What its result added to the session's context, from the transcript's usage. None when the
+    #: transcript cannot tell.
+    tokens: int | None
+
+
+@dataclass
+class _ModelCall:
+    message: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    #: The characters of each tool result that came back before the next call, by call id.
+    results: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SessionDigest:
     """The path a session took and its prose. Tool outputs and file contents are left out."""
 
@@ -34,8 +55,7 @@ class SessionDigest:
     read: tuple[Path, ...]
     changed: tuple[Path, ...]
     failed: tuple[FailedCommand, ...]
-    #: The query of each ``kinby memory search`` the session ran.
-    searches: tuple[str, ...]
+    searches: tuple[MemorySearch, ...]
     said: tuple[str, ...]
     tools: tuple[str, ...]
 
@@ -62,14 +82,27 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
     files: dict[str, tuple[Path, list[Path]]] = {}
     commands: dict[str, str] = {}
     failed: list[FailedCommand] = []
-    searches: list[str] = []
+    # The query of each memory search, by its call id.
+    searches: dict[str, str] = {}
+    calls: list[_ModelCall] = []
     said: list[str] = []
     tools: list[str] = []
     for line in whole_lines(transcript):
         entry = json.loads(line)
         message = entry.get("message")
+        match entry.get("type"), message:
+            case "assistant", {"id": str(message_id), "usage": dict(usage)}:
+                # Claude records a call in parts, each with the usage counted so far.
+                if not calls or calls[-1].message != message_id:
+                    calls.append(_ModelCall(message_id))
+                counted = claude_tokens(usage)
+                calls[-1].input_tokens = counted.input_tokens
+                calls[-1].output_tokens = counted.output_tokens
         content = message.get("content") if isinstance(message, dict) else None
         for block in content if isinstance(content, list) else ():
+            match block:
+                case {"type": "tool_result", "tool_use_id": str(call)} if calls:
+                    calls[-1].results[call] = len(str(block.get("content")))
             match block:
                 case {"type": "text", "text": str(text)} if entry.get("type") == "assistant":
                     said.append(text.strip())
@@ -84,7 +117,7 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
                             # The rest of a command can be a heredoc holding a whole file.
                             commands[call] = next(iter(command.splitlines()), "")
                             if (query := _memory_search_query(command)) is not None:
-                                searches.append(query)
+                                searches[call] = query
                 case {
                     "type": "tool_result",
                     "tool_use_id": str(call),
@@ -98,15 +131,30 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
                 ):
                     path, touched = files[call]
                     touched.append(path)
+    tokens = _result_tokens(calls)
     return SessionDigest(
         session=session,
         read=tuple(dict.fromkeys(read)),
         changed=tuple(dict.fromkeys(changed)),
         failed=tuple(failed),
-        searches=tuple(searches),
+        searches=tuple(MemorySearch(query, tokens.get(call)) for call, query in searches.items()),
         said=tuple(text for text in said if text),
         tools=tuple(dict.fromkeys(tools)),
     )
+
+
+def _result_tokens(calls: list[_ModelCall]) -> dict[str, int]:
+    """Each tool result's tokens by its call id, counted as a turn's memory tokens are: how much
+    the next call's input grew, split among one step's results by their characters."""
+    tokens: dict[str, int] = {}
+    for call, following in pairwise(calls):
+        grown = following.input_tokens - call.input_tokens - call.output_tokens
+        characters = sum(call.results.values())
+        if grown < 0 or not characters:
+            continue
+        for result, size in call.results.items():
+            tokens[result] = round(grown * size / characters)
+    return tokens
 
 
 def _memory_search_query(command: str) -> str | None:

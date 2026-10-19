@@ -12,7 +12,7 @@ from kinby.memory.facade import (
 )
 from kinby.memory.graph import GraphStore, InvalidNodeId, MemoryNodeError, NodeNotFound
 from kinby.memory.recap import RecapDraft, RecapWriter
-from kinby.memory.tools import memory_tools, open_memory, search_memory
+from kinby.memory.tools import hits_json, memory_tools, open_memory
 
 __all__ = [
     "Episode",
@@ -29,7 +29,7 @@ __all__ = [
     "RecapWriter",
     "RecappedRun",
     "RecappedTurn",
+    "hits_json",
     "memory_tools",
     "open_memory",
-    "search_memory",
 ]

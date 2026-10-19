@@ -3793,13 +3793,46 @@
     },
     "MemoryRecalled": {
       "additionalProperties": false,
-      "description": "A memory search or open returned these facts and episodes to the turn.",
+      "description": "A memory search or open returned these facts and episodes to the turn.\n\nA ``kinby memory search`` in a factory run's coding session is recorded on the run's thread\ninstead, naming the step, the attempt and the session.",
       "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "nodes": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "type": {
           "const": "memory.recalled",

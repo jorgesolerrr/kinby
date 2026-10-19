@@ -2311,9 +2311,15 @@ export interface MemoryRecapped {
 }
 /**
  * A memory search or open returned these facts and episodes to the turn.
+ *
+ * A ``kinby memory search`` in a factory run's coding session is recorded on the run's thread
+ * instead, naming the step, the attempt and the session.
  */
 export interface MemoryRecalled {
+  attempt?: number | null;
   nodes: string[];
+  session?: string | null;
+  step?: StepId | null;
   type: "memory.recalled";
 }
 /**

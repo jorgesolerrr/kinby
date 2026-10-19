@@ -447,10 +447,17 @@ class MemoryRecapped(TokenTotals):
 
 
 class MemoryRecalled(ContractModel):
-    """A memory search or open returned these facts and episodes to the turn."""
+    """A memory search or open returned these facts and episodes to the turn.
+
+    A ``kinby memory search`` in a factory run's coding session is recorded on the run's thread
+    instead, naming the step, the attempt and the session.
+    """
 
     type: Literal[EventType.MEMORY_RECALLED] = EventType.MEMORY_RECALLED
     nodes: tuple[NodeId, ...]
+    step: StepId | None = None
+    attempt: int | None = None
+    session: CodingSessionId | None = None
 
 
 class MemoryConsolidated(ContractModel):

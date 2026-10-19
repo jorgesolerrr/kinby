@@ -44,7 +44,7 @@ def memory_tools(
         hits = memory.recall(query, after=after, before=before)
         if hits:
             await context.report_recall(tuple(hit.node for hit in hits))
-        return _hits_json(hits)
+        return hits_json(hits)
 
     @tool(write=False)
     async def memory_open(node: NodeId, context: ToolContext) -> str:
@@ -83,18 +83,8 @@ def memory_tools(
     return memory_search, memory_open, remember, forget
 
 
-def search_memory(
-    memory: Memory,
-    query: str,
-    *,
-    after: date | None = None,
-    before: date | None = None,
-) -> str:
+def hits_json(hits: tuple[MemoryHit, ...]) -> str:
     """The hits of a memory search as JSON, for the model and for a coding session's shell."""
-    return _hits_json(memory.recall(query, after=after, before=before))
-
-
-def _hits_json(hits: tuple[MemoryHit, ...]) -> str:
     return json.dumps(
         [
             {

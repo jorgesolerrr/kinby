@@ -29,6 +29,7 @@ from kinby.core.coding_clients import own_tokens, run_coding_client
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.prompt import render_client_message, render_step_message
+from kinby.core.session_recalls import take_recalls
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, repository_commands
 from kinby.instance.permissions import PermissionsError
@@ -108,7 +109,8 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
 async def _run_client_step(
     step: ClientStepRun, command: StepRunCommand, instance: Instance, log: EventLog
 ) -> StepResult:
-    """Run the coding client in the workspace, and record its delegated run.
+    """Run the coding client in the workspace, and record its delegated run and its session's
+    recalls.
 
     What the client said last is only the summary.
     """
@@ -121,6 +123,8 @@ async def _run_client_step(
         instance.manifest.workspace.path,
         instance=instance.path,
         state_dir=instance.manifest.state_dir,
+        origin=command.origin,
+        attempt=command.attempt,
         resume=step.resume,
         timeout_seconds=step.timeout_seconds,
         model=step.model,
@@ -141,6 +145,10 @@ async def _run_client_step(
                 step=command.origin.step,
                 attempt=command.attempt,
             ),
+        )
+    for recall in take_recalls(instance.manifest.state_dir, command.origin.run_id):
+        await log.append(
+            command.origin.run_id, uuid4(), recall.model_copy(update={"session": ran.session})
         )
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 
