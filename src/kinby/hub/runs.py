@@ -127,9 +127,6 @@ BACKOFF_SECONDS = 5.0
 BACKOFF_CAP_SECONDS = 300.0
 #: How long a client step's coding client runs when the step declares no timeout.
 _CLIENT_TIMEOUT: Duration = "60m"
-_INTERRUPTED = StepResult(
-    ending=StepEnding.INTERRUPTED, summary="The hub stopped while this attempt ran."
-)
 
 
 @dataclass(frozen=True)
@@ -351,18 +348,12 @@ class FactoryRuns:
     def resume(self) -> None:
         """Pick the runs up where the previous process left them.
 
-        An attempt it left running counts as failed, and its run follows the step's retry. A run
-        parked at a wait keeps its deadline, counted from when it parked. A needs_human report or
-        a run's stop queued but not delivered before the hub stopped is queued again.
-
-        The runs still unreported and the stops still untold from before this pass are collected
-        first, so settling an unfinished attempt into a stop below, which queues that fresh
-        stop's own report and telling, never queues a second one for the same stop.
+        An attempt it left running is no attempt (ADR 0102), and its step is offered again. A
+        run parked at a wait keeps its deadline, counted from when it parked. A needs_human
+        report or a run's stop queued but not delivered before the hub stopped is queued again.
         """
-        pending = self._registry.unreported_runs()
-        untold = self._registry.untold_stops()
         for run_id in self._registry.unfinished_attempts():
-            self._settle(run_id, _INTERRUPTED)
+            self._registry.drop_attempt(run_id)
         for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
             self._enqueue(run)
         for run in self._registry.runs_in(FactoryRunStatus.PARKED):
@@ -372,13 +363,13 @@ class FactoryRuns:
             )
             if isinstance(step, WaitStep):
                 self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
-        for run in pending:
+        for run in self._registry.unreported_runs():
             factory = self._factory(run.factory)
             if factory is not None and factory.needs_human is not None:
                 attempts = self._registry.attempts(run.run_id)
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
-        for stop in untold:
+        for stop in self._registry.untold_stops():
             self._put_stop(_QueuedStop(stop))
 
     def needing_human(self, record: ManagedInstance) -> int:

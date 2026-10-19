@@ -464,16 +464,38 @@ def test_ten_runs_for_one_instance_take_their_steps_one_at_a_time_in_order(tmp_p
     asyncio.run(scenario())
 
 
-def test_an_attempt_running_when_the_hub_stopped_counts_as_failed_and_follows_its_retry(
-    tmp_path,
+NEEDS_HUMAN_TOOL = '''\
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def notify_human() -> dict[str, int]:
+    """Record that this run needs a human."""
+    return {}
+'''
+NEEDS_HUMAN_FILES = FILES | {
+    "factory.yaml": FACTORY + "needs_human: { in: coder, call: notify_human }\n",
+    "instances/coder/tools/notify.py": NEEDS_HUMAN_TOOL,
+}
+CODE_STEP_FILES = FILES | {
+    "factory.yaml": FACTORY.replace(
+        '    kind: command\n    in: coder\n    run: ["uv run pytest", "uv run ruff check ."]\n'
+        "    timeout: 10m\n",
+        "    kind: code\n    in: coder\n    call: notify_human\n",
+    ),
+    "instances/coder/tools/notify.py": NEEDS_HUMAN_TOOL,
+}
+
+
+@pytest.mark.parametrize("files", [FILES, CODE_STEP_FILES], ids=["command", "code"])
+def test_an_attempt_the_hub_stopped_during_is_no_attempt_and_its_step_is_offered_again(
+    tmp_path, files
 ):
     control = FakeControl()
     control.step_release.clear()
     runtime = FakeRuntime()
     directory = tmp_path / "hub"
-    hub = factory_hub(
-        directory, control, runtime, FILES | {"factory.yaml": FACTORY + "    retry: 1\n"}
-    )
+    hub = factory_hub(directory, control, runtime, files)
 
     async def before_the_restart() -> tuple[UUID, UUID]:
         coder = await started_coder(hub, runtime)
@@ -497,34 +519,21 @@ def test_an_attempt_running_when_the_hub_stopped_counts_as_failed_and_follows_it
 
     async def after_the_restart() -> None:
         await restarted.recover()
-        retried = await settled(restarted, held)
+        offered_again = await settled(restarted, held)
         waited = await settled(restarted, queued)
 
-        assert retried.run.status is FactoryRunStatus.DONE
-        assert [(attempt.attempt, attempt.ending) for attempt in retried.attempts] == [
-            (1, StepEnding.INTERRUPTED),
-            (2, StepEnding.CLEAN),
+        assert offered_again.run.status is FactoryRunStatus.DONE
+        assert [(attempt.attempt, attempt.ending) for attempt in offered_again.attempts] == [
+            (1, StepEnding.CLEAN)
         ]
-        assert retried.attempts[0].summary == "The hub stopped while this attempt ran."
         assert waited.run.status is FactoryRunStatus.DONE
-        assert [command.work_item["issue"] for _, command in control.steps] == [7, 8, 7]
+        assert [(command.work_item["issue"], command.attempt) for _, command in control.steps] == [
+            (7, 1),
+            (8, 1),
+            (7, 1),
+        ]
 
     asyncio.run(after_the_restart())
-
-
-NEEDS_HUMAN_TOOL = '''\
-from kinby.plugins.tools import tool
-
-
-@tool(write=True)
-def notify_human() -> dict[str, int]:
-    """Record that this run needs a human."""
-    return {}
-'''
-NEEDS_HUMAN_FILES = FILES | {
-    "factory.yaml": FACTORY + "needs_human: { in: coder, call: notify_human }\n",
-    "instances/coder/tools/notify.py": NEEDS_HUMAN_TOOL,
-}
 
 
 def test_a_needs_human_report_queued_but_not_delivered_is_sent_after_a_restart(tmp_path):
@@ -753,53 +762,6 @@ def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_pat
         assert endpoint.address == f"http://kinby-{replacement}:8787"
 
     asyncio.run(scenario())
-
-
-def test_an_attempt_that_needs_a_human_once_settled_on_resume_is_reported_only_once(tmp_path):
-    """Recovery already queues the report for a run its own settling sends to needs_human.
-
-    The pass over runs left unreported from before the restart must not queue a second one for
-    that same run: resume() has to collect that pass before it settles any unfinished attempt.
-    """
-    control = FakeControl()
-    control.step_release.clear()
-    runtime = FakeRuntime()
-    directory = tmp_path / "hub"
-    hub = factory_hub(directory, control, runtime, NEEDS_HUMAN_FILES)
-
-    async def before_the_restart() -> UUID:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
-        async with asyncio.timeout(5):
-            while not control.steps:
-                await asyncio.sleep(0.01)
-        return run.run_id
-
-    run_id = asyncio.run(before_the_restart())
-    hub.close()
-    control.step_release.set()
-    restarted = Hub(
-        directory,
-        runtime=runtime,
-        images=FakeImages(),
-        control=control,
-        shipped_factories=directory / "shipped",
-    )
-
-    async def after_the_restart() -> None:
-        await restarted.recover()
-        stopped = await settled(restarted, run_id)
-        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
-        await asyncio.sleep(0.05)
-        reports = [
-            command
-            for _, command in control.steps
-            if isinstance(command.step, CodeStepRun) and command.step.call == "notify_human"
-        ]
-        assert len(reports) == 1
-        restarted.close()
-
-    asyncio.run(after_the_restart())
 
 
 def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
