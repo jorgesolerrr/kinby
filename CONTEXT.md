@@ -166,6 +166,25 @@ _Avoid_: credentials, env vars
 A named value the **hub** keeps so that several **instances** can take it for a secret **setup field** instead of the user typing it again. The hub keeps it in a protected file of its own, never in the **instance registry** or its own environment, and never shows it back. An instance that takes one stays linked to it: the value is written into that instance's **instance secrets**, and replacing the hub secret rewrites them, which reaches the instance as a **recreate reason**.
 _Avoid_: secret repository, vault, credentials
 
+### Channel
+
+A place outside kinby where the **hub** sends the user **notifications**: a Telegram chat, a Discord channel, an email inbox. The hub owns every channel, for all its **instances**, and sends each notification to every channel that has not muted its instance. A channel answers only to the user it was paired with, and some channels carry the user's **reply** back.
+_Avoid_: destination
+
+### Channel kind
+
+The sort of service a **channel** talks to, such as Telegram, Discord or email. A new kind is added without changing kinby's core. A channel is one configured use of a kind.
+
+### Notification
+
+What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits or a **routine notice**, an **instance notice**, or a **factory run** that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run. It can offer options to **reply** with.
+_Avoid_: message, alert, push
+
+### Reply
+
+The user's answer to a **notification**, sent back through its **channel**: for now, one of the options the notification offered. A reply to kinby's own notification answers the **approval** or the **factory run** it was about. A reply to an **instance**'s notification starts a user **turn** in the **thread** that sent it. A reply to something already settled changes nothing.
+_Avoid_: pick (a **pick** is a library choice), response
+
 ### Lifecycle operation
 
 One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects. One the **home instance** asked for records it as the operation's requester.
