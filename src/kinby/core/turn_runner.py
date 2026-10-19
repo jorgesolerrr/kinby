@@ -105,6 +105,7 @@ from kinby.instance.permissions import (
 )
 from kinby.memory import GraphStore
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
+from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
@@ -112,6 +113,7 @@ from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
     CONSOLIDATION_STEP,
     DREAMING_STEPS,
+    LEARNING_REVIEW_STEP,
     REFLECTION_STEP,
     Routine,
     SharedCodeStep,
@@ -596,6 +598,12 @@ class LangGraphRunner:
                 code_step = reflection_step(
                     GraphStore(self._instance.path), self._event_log, routine.name
                 )
+            elif declared == LEARNING_REVIEW_STEP:
+                code_step = learning_review_step(
+                    GraphStore(self._instance.path), self._event_log, today=self._today
+                )
+                # The review only reports, so it is offered nothing that writes (ADR 0101).
+                tools = ToolSnapshot(tuple(tool for tool in tools.tools if not tool.write))
             else:
                 try:
                     code_step = resolve_code_step(declared, tools)
