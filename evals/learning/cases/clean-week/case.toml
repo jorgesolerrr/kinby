@@ -1,0 +1,6 @@
+name = "clean-week"
+today = 2026-10-18
+reference_verdicts = """
+No repeated mistake and no ignored lesson. Nothing went badly in the week, so the review has \
+no work and its report is empty.
+"""

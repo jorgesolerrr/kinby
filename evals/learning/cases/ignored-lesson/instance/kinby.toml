@@ -1,0 +1,11 @@
+id = "learning-eval-ignored-lesson"
+
+[models]
+main = "inspect:active"
+recap = "inspect:active"
+
+[memory]
+recap = "off"
+
+[tools]
+defaults = false
