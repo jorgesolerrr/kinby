@@ -5476,6 +5476,10 @@
         "api": {
           "$ref": "#/$defs/ApiUse"
         },
+        "recalled_fact": {
+          "default": false,
+          "type": "boolean"
+        },
         "run_id": {
           "format": "uuid",
           "type": "string"
@@ -5547,6 +5551,9 @@
             }
           ]
         },
+        "recalled_fact": {
+          "type": "boolean"
+        },
         "retries": {
           "type": "integer"
         },
@@ -5574,7 +5581,8 @@
         "attempts",
         "retries",
         "send_backs",
-        "duration_seconds"
+        "duration_seconds",
+        "recalled_fact"
       ],
       "title": "RunUsage",
       "type": "object"

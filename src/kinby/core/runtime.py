@@ -25,7 +25,7 @@ from kinby.core.pricing import instance_prices
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.instance import Instance
 from kinby.instance.permissions import load_permissions
-from kinby.memory import RecapWriter
+from kinby.memory import GraphStore, RecapWriter
 
 
 class InstanceRuntime:
@@ -99,6 +99,7 @@ async def boot_instance(
         turns=ScheduledTurnConfig(turns, SchedulerConfig(instance, clock)),
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
+        facts=GraphStore(instance.path).fact_ids,
         clock=clock,
     )
     runtime = InstanceRuntime(dispatcher, turns.recap)

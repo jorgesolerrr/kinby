@@ -161,6 +161,10 @@ class GraphStore:
             if frontmatter.tombstone and isinstance(memory, Fact)
         ]
 
+    def fact_ids(self) -> frozenset[NodeId]:
+        """Every fact's id, a forgotten one's too, since it was a fact when it was recalled."""
+        return frozenset(memory.node for memory, _ in self._read_all() if isinstance(memory, Fact))
+
     def _read_all(self) -> Iterator[tuple[MemoryNode, _Frontmatter]]:
         """Each readable node with its frontmatter, skipping invalid files."""
         if not self._path.is_dir():

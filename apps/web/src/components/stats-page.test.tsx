@@ -164,6 +164,7 @@ function runUsage(run: FactoryRun, fields: Partial<RunUsage> = {}): RunUsage {
     retries: 0,
     send_backs: 0,
     duration_seconds: null,
+    recalled_fact: false,
     ...fields,
   }
 }
@@ -792,6 +793,54 @@ describe("the Quality tab", () => {
       ["Good", "3"],
       ["Bad", "1"],
     ])
+  })
+  it("puts the runs that recalled a fact next to the runs that did not, by their medians", async () => {
+    openStats(undefined, {
+      "stats.runs": () =>
+        runsResult({
+          runs: [
+            runUsage(factoryRun(7), { tokens: 1000, send_backs: 0, recalled_fact: true }),
+            runUsage(factoryRun(8), { tokens: 3001, send_backs: 1, recalled_fact: true }),
+            runUsage(factoryRun(9), { tokens: 500, send_backs: 2 }),
+          ],
+        }),
+    })
+
+    await openTab("Quality")
+
+    const memory = screen.getByRole("region", { name: "Memory" })
+    expect(rows(await within(memory).findByRole("table"))).toEqual([
+      ["Recalled a fact", "2", "2,001", "0.5"],
+      ["Recalled none", "1", "500", "2"],
+    ])
+    expect(within(memory).getByText(/need not come from memory/)).toBeTruthy()
+  })
+  it("splits no runs by recall while an instance's recalls are left out", async () => {
+    openStats(undefined, {
+      "stats.runs": () =>
+        runsResult({
+          runs: [runUsage(factoryRun(7), { recalled_fact: true }), runUsage(factoryRun(8))],
+          unreachable: ["hub-bob"],
+        }),
+    })
+
+    await openTab("Quality")
+
+    const memory = screen.getByRole("region", { name: "Memory" })
+    expect(
+      await within(memory).findByText(
+        "Runs are not split by recall while 1 instance is left out: it is not running, did not answer, or runs an older core.",
+      ),
+    ).toBeTruthy()
+    expect(within(memory).queryByRole("table")).toBeNull()
+  })
+  it("says so on the Memory card when no run started in the range", async () => {
+    openStats()
+
+    await openTab("Quality")
+
+    const memory = screen.getByRole("region", { name: "Memory" })
+    expect(await within(memory).findByText("No factory run started in this range.")).toBeTruthy()
   })
   it("says when the range's memory tokens mix measured and estimated turns", async () => {
     openStats({

@@ -116,6 +116,7 @@ def _run_usage(run: FactoryRun, rework: Rework, counted: list[RunTokens]) -> Run
         duration_seconds=(
             (run.updated_at - run.created_at).total_seconds() if run.status in _ENDED else None
         ),
+        recalled_fact=any(tokens.recalled_fact for tokens in counted),
     )
 
 
