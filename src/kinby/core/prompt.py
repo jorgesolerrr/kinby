@@ -120,16 +120,14 @@ def assemble_system_prompt(
             text="\n".join(catalogue),
         )
     )
-    profile = profile_section(instance)
+    profile = _file_section(
+        PromptSectionName.PROFILE,
+        instance.path / MEMORY_DIR / PROFILE_NAME,
+    )
     if profile is not None:
         sections.append(profile)
     sections.append(_environment(instance, today))
     return tuple(sections)
-
-
-def profile_section(instance: Instance) -> PromptSection | None:
-    """The profile as it goes into the prompt, None when the instance has none."""
-    return _file_section(PromptSectionName.PROFILE, instance.path / MEMORY_DIR / PROFILE_NAME)
 
 
 def render_system_prompt(sections: Sequence[PromptSection]) -> SystemPrompt:

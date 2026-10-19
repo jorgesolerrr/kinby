@@ -8,7 +8,7 @@ from functools import cached_property
 from langchain.chat_models import init_chat_model
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from kinby.instance import ModelName
 
@@ -50,8 +50,13 @@ def init_model(name: ModelName) -> BaseChatModel:
 
 
 def count_tokens(name: ModelName, text: str) -> int:
-    """Count *text* with *name*'s provider tokenizer.
+    """Count the tokens *text* adds to a system prompt with *name*'s provider tokenizer.
 
-    Anthropic counts through its count endpoint, and OpenAI locally with tiktoken.
+    Anthropic counts through its count endpoint, and OpenAI locally with tiktoken. Both count
+    whole messages, so the text's share is how much a system prompt grows when it joins.
     """
-    return init_model(name).get_num_tokens_from_messages([HumanMessage(text)])
+    model = init_model(name)
+    question = HumanMessage(".")
+    without = model.get_num_tokens_from_messages([SystemMessage("."), question])
+    joined = model.get_num_tokens_from_messages([SystemMessage(f".\n\n{text}"), question])
+    return joined - without
