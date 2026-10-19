@@ -302,8 +302,13 @@ def _memory_use(turn: _TurnEvents, price: ModelPrice | None) -> _MemoryUse:
     """Count each step's memory by how much the next model call's input grew."""
     tokens = carried = 0.0
     calls = turn.model_calls
+    measured = bool(calls) or not turn.returned_memory
     for index, (call, following) in enumerate(pairwise(calls)):
         grown = following.input_tokens - call.input_tokens - call.output_tokens
+        if grown < 0:
+            # The next input left out some of this call's output, such as hidden reasoning.
+            measured = False
+            continue
         step = grown * _memory_share(call.results)
         tokens += step
         carried += step * (len(calls) - index - 2)
@@ -311,7 +316,7 @@ def _memory_use(turn: _TurnEvents, price: ModelPrice | None) -> _MemoryUse:
         tokens=tokens,
         carried_tokens=carried,
         carried_cost=cache_read_cost(carried, price) if price is not None else None,
-        measured=bool(calls) or not turn.returned_memory,
+        measured=measured,
     )
 
 

@@ -573,6 +573,36 @@ def test_stats_get_measures_memory_tokens_from_model_call_deltas(tmp_path: Path)
     assert result.total.memory_estimated_turns == 1
 
 
+def test_stats_get_counts_no_memory_from_a_step_its_input_shrank_across(tmp_path: Path) -> None:
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    events = _turn_events(
+        uuid4(),
+        uuid4(),
+        started_at,
+        TurnStarted(message="reason", model="anthropic:claude-haiku-4-5"),
+        _model_call(1000, 500),
+        _tool_result("memory_search", "found"),
+        _model_call(1200, 40),
+        _model_call(1300, 20),
+        TurnCompleted(input_tokens=3500, output_tokens=560),
+    )
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    record = result.records[0]
+    assert record.memory_tokens == 0
+    assert record.memory_carried_tokens == 0
+    assert record.memory_carried_cost == 0
+    assert record.memory_measured is False
+
+
 def test_a_turn_metrics_record_from_a_core_that_estimated_memory_reads_as_estimated() -> None:
     record = turn_metrics(
         _turn_events(
