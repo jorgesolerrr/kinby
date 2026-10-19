@@ -41,6 +41,7 @@ from kinby.contracts import (
     FactoryRunOrigin,
     GateDecider,
     GateOutcome,
+    MemoryRecalled,
     MessageDelta,
     PermissionMode,
     ProfileCounted,
@@ -119,7 +120,7 @@ from kinby.plugins.routines import (
     strip_signal_credentials,
 )
 from kinby.plugins.skills import load_skills
-from kinby.plugins.tools import RunReporter, Tool, ToolContext
+from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -499,6 +500,7 @@ class LangGraphRunner:
                                 ),
                                 dreaming_stage=self._opened_with_dreaming_step(turn),
                                 run_reporter=_run_reporter(emit),
+                                recall_reporter=_recall_reporter(emit),
                             ),
                             user_message=HumanMessage(
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)
@@ -1026,6 +1028,10 @@ def _elapsed_ms(started_at: float) -> int:
 
 def _run_reporter(emit: Emit) -> RunReporter:
     return lambda run: emit(RunDelegated(run=run))
+
+
+def _recall_reporter(emit: Emit) -> RecallReporter:
+    return lambda nodes: emit(MemoryRecalled(nodes=nodes))
 
 
 def _denial(gate: ToolGated) -> str:

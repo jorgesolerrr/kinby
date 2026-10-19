@@ -17,10 +17,12 @@ from kinby.contracts import (
     Event,
     GateOutcome,
     MemoryCallCounts,
+    MemoryRecalled,
     MemoryRecapped,
     ModelCallMismatch,
     ModelCompleted,
     Navigation,
+    NodeId,
     Origin,
     ProfileCounted,
     ProfileVersion,
@@ -104,6 +106,7 @@ class _TurnEvents:
     read_call_ids: set[str] = field(default_factory=set)
     tokens_before_first_write: int = 0
     delegated_runs: list[ReportedRun] = field(default_factory=list)
+    recalled: dict[NodeId, None] = field(default_factory=dict)
 
 
 def closing_day(record: TurnMetrics) -> date:
@@ -186,6 +189,10 @@ def turn_metrics(
                 if payload.call_id in turn.read_call_ids and payload.duration_ms is not None:
                     turn.read_duration_ms += payload.duration_ms
             continue
+        if isinstance(payload, MemoryRecalled):
+            if turn is not None:
+                turn.recalled |= dict.fromkeys(payload.nodes)
+            continue
         if isinstance(payload, ApprovalRequested):
             if turn is not None:
                 turn.approvals_requested += 1
@@ -262,6 +269,7 @@ def turn_metrics(
                 rating=None,
                 navigation=_navigation(turn) if turn else Navigation(),
                 delegated_runs=turn.delegated_runs if turn else [],
+                recalled=list(turn.recalled) if turn else [],
             )
             records.append(record)
             if turn is not None and turn.model_calls and turn.profile_version is not None:

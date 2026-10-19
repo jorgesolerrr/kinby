@@ -8,7 +8,15 @@ from datetime import date
 
 from kinby.contracts import NodeId
 from kinby.core.clock import utc_today
-from kinby.memory.facade import Episode, Fact, Memory, RecappedRun, RecappedTurn, new_node_id
+from kinby.memory.facade import (
+    Episode,
+    Fact,
+    Memory,
+    MemoryHit,
+    RecappedRun,
+    RecappedTurn,
+    new_node_id,
+)
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
@@ -20,10 +28,12 @@ def memory_tools(
     """Build the core tools for one memory facade."""
 
     @tool(write=False)
-    def memory_search(
+    async def memory_search(
         query: str,
         after: date | None = None,
         before: date | None = None,
+        *,
+        context: ToolContext,
     ) -> str:
         """Search the facts you learned by their descriptions and subjects, and by those of the
         episodes each fact was learned from.
@@ -31,12 +41,17 @@ def memory_tools(
         A search with an inclusive after or before date also returns the episodes in that range,
         and a search no fact matches returns the matching episodes instead.
         """
-        return search_memory(memory, query, after=after, before=before)
+        hits = memory.recall(query, after=after, before=before)
+        if hits:
+            await context.report_recall(tuple(hit.node for hit in hits))
+        return _hits_json(hits)
 
     @tool(write=False)
-    def memory_open(node: NodeId) -> str:
+    async def memory_open(node: NodeId, context: ToolContext) -> str:
         """Open one memory node by the id returned from memory_search."""
-        return open_memory(memory, node)
+        opened = open_memory(memory, node)
+        await context.report_recall((node,))
+        return opened
 
     @tool(write=True)
     def remember(
@@ -76,6 +91,10 @@ def search_memory(
     before: date | None = None,
 ) -> str:
     """The hits of a memory search as JSON, for the model and for a coding session's shell."""
+    return _hits_json(memory.recall(query, after=after, before=before))
+
+
+def _hits_json(hits: tuple[MemoryHit, ...]) -> str:
     return json.dumps(
         [
             {
@@ -83,7 +102,7 @@ def search_memory(
                 "date": hit.date.isoformat(),
                 "description": hit.description,
             }
-            for hit in memory.recall(query, after=after, before=before)
+            for hit in hits
         ],
         ensure_ascii=False,
     )

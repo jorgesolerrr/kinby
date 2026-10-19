@@ -15,6 +15,7 @@ from kinby.contracts import (
     Event,
     GateDecider,
     GateOutcome,
+    MemoryRecalled,
     MessageDelta,
     Payload,
     PermissionMode,
@@ -204,6 +205,58 @@ def test_model_walks_search_then_open_without_approval(
         assert MessageDelta(text="The deployment was fixed on August 30.") in payloads
 
     asyncio.run(scenario())
+
+
+def test_a_memory_search_or_open_that_returns_nodes_records_their_recall(tmp_path: Path) -> None:
+    def call(name: str, args: dict[str, str]) -> AIMessageChunk:
+        return AIMessageChunk(
+            content="",
+            tool_calls=[{"name": name, "args": args, "id": name, "type": "tool_call"}],
+        )
+
+    async def scenario() -> list[Payload]:
+        instance = _instance_with_episode(tmp_path)
+        model = ScriptedModel(
+            [
+                call("memory_search", {"query": "deployment"}),
+                call("memory_search", {"query": "weather"}),
+                call("memory_open", {"node": _NODE}),
+                AIMessageChunk(content="Done."),
+            ]
+        )
+        runner = LangGraphRunner(instance, model_factory=lambda _: model)
+        preparation = runner.prepare_for_turn()
+        payloads: list[Payload] = []
+
+        async def emit(payload: Payload) -> Event:
+            payloads.append(payload)
+            return Event(
+                sequence=len(payloads),
+                thread_id=uuid4(),
+                turn_id=uuid4(),
+                payload=payload,
+                timestamp=datetime.now(UTC),
+            )
+
+        await runner.run(
+            PreparedTurnRequest(
+                thread_id=uuid4(),
+                turn_id=uuid4(),
+                message="What happened with the deployment?",
+                model=preparation.model,
+                permission_mode=PermissionMode.ASK,
+                system_prompt=SystemPrompt("System prompt"),
+            ),
+            TurnContext(preparation.budgets, emit),
+        )
+        return payloads
+
+    payloads = asyncio.run(scenario())
+
+    assert [payload for payload in payloads if isinstance(payload, MemoryRecalled)] == [
+        MemoryRecalled(nodes=(NodeId(_NODE),)),
+        MemoryRecalled(nodes=(NodeId(_NODE),)),
+    ]
 
 
 def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None:

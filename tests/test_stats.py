@@ -21,11 +21,13 @@ from kinby.contracts import (
     Event,
     GateDecider,
     GateOutcome,
+    MemoryRecalled,
     MemoryRecapped,
     ModelCallMismatch,
     ModelCompleted,
     Navigation,
     NavigationMeans,
+    NodeId,
     Origin,
     OriginUse,
     Payload,
@@ -748,6 +750,41 @@ def test_a_turn_whose_profile_version_was_never_counted_reads_as_estimated() -> 
 
     assert record.memory_tokens == 0
     assert record.memory_measured is False
+
+
+def test_stats_get_lists_the_nodes_each_turn_recalled(tmp_path: Path) -> None:
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    fact = NodeId("2026-09-02-deploys-run-from-the-hub")
+    episode = NodeId("2026-08-30-fixed-the-deployment")
+    events = [
+        *_turn_events(
+            uuid4(),
+            uuid4(),
+            started_at,
+            TurnStarted(message="recall", model="openai:gpt-5"),
+            MemoryRecalled(nodes=(fact, episode)),
+            MemoryRecalled(nodes=(fact,)),
+            TurnCompleted(input_tokens=10, output_tokens=2),
+        ),
+        *_turn_events(
+            uuid4(),
+            uuid4(),
+            started_at,
+            TurnStarted(message="no recall", model="openai:gpt-5"),
+            TurnCompleted(input_tokens=10, output_tokens=2),
+        ),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+            "stats.get",
+            {},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert [record.recalled for record in result.records] == [[fact, episode], []]
 
 
 def test_a_turn_metrics_record_from_a_core_that_estimated_memory_reads_as_estimated() -> None:

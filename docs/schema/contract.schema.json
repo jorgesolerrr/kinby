@@ -922,6 +922,7 @@
             "mapping": {
               "approval.requested": "#/$defs/ApprovalRequested",
               "memory.consolidated": "#/$defs/MemoryConsolidated",
+              "memory.recalled": "#/$defs/MemoryRecalled",
               "memory.recapped": "#/$defs/MemoryRecapped",
               "message.delta": "#/$defs/MessageDelta",
               "mode.pinned": "#/$defs/ModePinned",
@@ -993,6 +994,9 @@
             },
             {
               "$ref": "#/$defs/MemoryRecapped"
+            },
+            {
+              "$ref": "#/$defs/MemoryRecalled"
             },
             {
               "$ref": "#/$defs/MemoryConsolidated"
@@ -3785,6 +3789,29 @@
         "tools"
       ],
       "title": "MemoryOpenResult",
+      "type": "object"
+    },
+    "MemoryRecalled": {
+      "additionalProperties": false,
+      "description": "A memory search or open returned these facts and episodes to the turn.",
+      "properties": {
+        "nodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "memory.recalled",
+          "default": "memory.recalled",
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodes",
+        "type"
+      ],
+      "title": "MemoryRecalled",
       "type": "object"
     },
     "MemoryRecapped": {
@@ -7876,6 +7903,12 @@
               "type": "null"
             }
           ]
+        },
+        "recalled": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "recap_input_tokens": {
           "type": "integer"

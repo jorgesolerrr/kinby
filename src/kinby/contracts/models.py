@@ -160,6 +160,7 @@ class EventType(StrEnum):
     RUN_DELEGATED = "run.delegated"
     RUN_STOPPED = "run.stopped"
     MEMORY_RECAPPED = "memory.recapped"
+    MEMORY_RECALLED = "memory.recalled"
     MEMORY_CONSOLIDATED = "memory.consolidated"
     PROFILE_COUNTED = "profile.counted"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
@@ -441,6 +442,13 @@ class MemoryRecapped(TokenTotals):
     model: str | None = None
 
 
+class MemoryRecalled(ContractModel):
+    """A memory search or open returned these facts and episodes to the turn."""
+
+    type: Literal[EventType.MEMORY_RECALLED] = EventType.MEMORY_RECALLED
+    nodes: tuple[NodeId, ...]
+
+
 class MemoryConsolidated(ContractModel):
     """A consolidation finished its writes. Every episode it lists is covered."""
 
@@ -511,6 +519,7 @@ Payload = Annotated[
     | RunDelegated
     | RunStopped
     | MemoryRecapped
+    | MemoryRecalled
     | MemoryConsolidated
     | ProfileCounted
     | RoutineFailureHandled
@@ -1487,6 +1496,8 @@ class TurnMetrics(TokenTotals):
     rating: TurnRated | None
     navigation: Navigation = Field(default_factory=Navigation)
     delegated_runs: list[ReportedRun] = Field(default_factory=list)
+    #: The facts and episodes the turn's memory searches and opens returned, each listed once.
+    recalled: list[NodeId] = Field(default_factory=list)
 
 
 class SubscriptionUse(TokenTotals):
