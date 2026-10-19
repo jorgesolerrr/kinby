@@ -35,6 +35,7 @@ from kinby.core.turns import (
 from kinby.instance import init_instance, load_instance
 from kinby.memory import Episode, Fact, GraphStore, NodeId, RecappedTurn, memory_tools
 from kinby.plugins import ToolContext
+from tests.test_routines import RoutineModel, fire, routine_file
 
 _MODEL = "openai:gpt-5"
 _NODE = "2026-08-30-fixed-deployment"
@@ -256,6 +257,19 @@ def test_a_memory_search_or_open_that_returns_nodes_records_their_recall(tmp_pat
     assert [payload for payload in payloads if isinstance(payload, MemoryRecalled)] == [
         MemoryRecalled(nodes=(NodeId(_NODE),)),
         MemoryRecalled(nodes=(NodeId(_NODE),)),
+    ]
+
+
+def test_a_routine_whose_code_step_searches_memory_records_its_recall(tmp_path: Path) -> None:
+    instance = _instance_with_episode(tmp_path)
+    routine_file(
+        instance, 'description: Deploys\nrun: memory_search\narguments: {"query": "deployment"}'
+    )
+
+    events = asyncio.run(fire(instance, RoutineModel()))
+
+    assert [event.payload for event in events if isinstance(event.payload, MemoryRecalled)] == [
+        MemoryRecalled(nodes=(NodeId(_NODE),))
     ]
 
 

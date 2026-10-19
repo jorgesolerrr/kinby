@@ -721,6 +721,7 @@ class LangGraphRunner:
                     thread_id=thread_id,
                     routine=routine.name,
                     run_reporter=_run_reporter(emit),
+                    recall_reporter=_recall_reporter(emit),
                 )
                 output = await code_step.ainvoke_raw(call.arguments, context)
         except Exception as exc:
