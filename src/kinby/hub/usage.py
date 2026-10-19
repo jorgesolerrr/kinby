@@ -15,6 +15,7 @@ from kinby.contracts import (
     PlanLimit,
     PlanUse,
     RunTokens,
+    RunTotals,
     RunUsage,
     RunWeek,
     StatsBucketSize,
@@ -53,6 +54,8 @@ def summed_usage(answers: Mapping[UUID, StatsGetResult | Uncounted]) -> StatsSum
         subscriptions=_summed_uses([use for total in totals for use in total.subscriptions]),
         plan_use=_summed_plan_use([use for answer in counted.values() for use in answer.plan_use]),
         limits=_latest_resets(limit for answer in counted.values() for limit in answer.limits),
+        runs={instance_id: _run_totals(answer.runs or []) for instance_id, answer in counted.items()},
+        run_total=_run_totals([run for answer in counted.values() for run in answer.runs or []]),
         skipped=_left_out(answers, Uncounted.SKIPPED),
         unreachable=_left_out(answers, Uncounted.UNREACHABLE),
         outdated=_left_out(answers, Uncounted.OUTDATED),
@@ -93,7 +96,7 @@ def _run_usage(run: FactoryRun, rework: Rework, counted: list[RunTokens]) -> Run
     subscriptions = _summed_uses([use for tokens in counted for use in tokens.subscriptions])
     return RunUsage(
         run=run,
-        tokens=api.total + sum(use.total for use in subscriptions),
+        tokens=_tokens(api, subscriptions),
         api=api,
         subscriptions=subscriptions,
         attempts=rework.attempts,
@@ -103,6 +106,19 @@ def _run_usage(run: FactoryRun, rework: Rework, counted: list[RunTokens]) -> Run
             (run.updated_at - run.created_at).total_seconds() if run.status in _ENDED else None
         ),
     )
+
+
+def _run_totals(runs: list[RunTokens]) -> RunTotals:
+    return RunTotals(
+        runs=len({run.run_id for run in runs}),
+        tokens=sum(_tokens(run.api, run.subscriptions) for run in runs),
+        cost=_known_cost(run.api.cost for run in runs),
+    )
+
+
+def _tokens(api: ApiUse, subscriptions: list[SubscriptionUse]) -> int:
+    """Input and output tokens across every usage source."""
+    return api.total + sum(use.total for use in subscriptions)
 
 
 def _weeks(usage: list[RunUsage]) -> list[RunWeek]:
