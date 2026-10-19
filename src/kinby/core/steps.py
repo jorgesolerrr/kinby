@@ -117,6 +117,8 @@ async def _run_client_step(
     skills, warnings = load_skills(instance)
     for warning in warnings:
         await log.append(command.origin.run_id, uuid4(), warning)
+    # What an execution the instance abandoned kept belongs to no recorded run.
+    take_recalls(instance.manifest.state_dir, command.origin.run_id)
     ran = await run_coding_client(
         step.client,
         render_client_message(step.prompt, command.work_item, command.results, skills),
@@ -148,7 +150,7 @@ async def _run_client_step(
         )
     for recall in take_recalls(instance.manifest.state_dir, command.origin.run_id):
         await log.append(
-            command.origin.run_id, uuid4(), recall.model_copy(update={"session": ran.session})
+            command.origin.run_id, uuid4(), recall.model_copy(update={"session": ran.transcript})
         )
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 

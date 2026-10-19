@@ -63,11 +63,15 @@ class CodingRun:
     #: What the client said last, then why the run did not end clean and whether the session it
     #: resumed was lost.
     summary: str
-    #: The session the run went on in. None when the stream does not name it.
+    #: The session the run went on in. None when the stream does not name it, or when Claude's
+    #: was cut off before its result.
     session: CodingSessionId | None
     #: The run as the client reports it, None when it never started. A run in a session counts
     #: the session's running total.
     reported: DelegatedRun | None
+    #: The session whose transcript holds the run, named from the stream's start, so a run cut
+    #: off before its end has one too.
+    transcript: CodingSessionId | None
 
 
 async def run_coding_client(
@@ -157,7 +161,8 @@ async def _run(
                 start_new_session=True,
             )
         except OSError as exc:
-            return CodingRun(StepEnding.FAILED, f"{client} could not start: {exc}", None, None), ""
+            ran = CodingRun(StepEnding.FAILED, f"{client} could not start: {exc}", None, None, None)
+            return ran, ""
         started = monotonic()
         timed_out = False
         try:
@@ -178,7 +183,9 @@ async def _run(
         )
     events = _json_events(output)
     said, reported = (_claude if client is CodingClient.CLAUDE else _codex)(events, duration_ms)
-    ran = CodingRun(StepEnding.CLEAN, said, reported.session, reported)
+    ran = CodingRun(
+        StepEnding.CLEAN, said, reported.session, reported, reported.session or _started(events)
+    )
     if timed_out:
         reason = f"{client} ran past its {timeout_seconds}-second timeout and was killed."
         return _ended(ran, StepEnding.TIMED_OUT, reason), errors
@@ -269,7 +276,7 @@ def _environment(
 def _ended(ran: CodingRun, ending: StepEnding, reason: str) -> CodingRun:
     """*ran* ending as *ending*, with *reason* after what the client said."""
     summary = f"{ran.summary}\n{reason}" if ran.summary else reason
-    return CodingRun(ending, summary, ran.session, ran.reported)
+    return CodingRun(ending, summary, ran.session, ran.reported, ran.transcript)
 
 
 def _claude(events: list[dict[str, object]], duration_ms: int) -> tuple[str, DelegatedRun]:
@@ -329,6 +336,21 @@ def _claude(events: list[dict[str, object]], duration_ms: int) -> tuple[str, Del
         succeeded=succeeded,
         resets_at=resets_at,
         session=session,
+    )
+
+
+def _started(events: list[dict[str, object]]) -> CodingSessionId | None:
+    """The session Claude's init event names, which a stream cut off before its result holds."""
+    return next(
+        (
+            CodingSessionId(session)
+            for event in events
+            if event.get("type") == "system"
+            and event.get("subtype") == "init"
+            and isinstance(session := event.get("session_id"), str)
+            and session
+        ),
+        None,
     )
 
 
