@@ -1614,7 +1614,7 @@ export interface StatsGetResult {
   limits: PlanLimit[];
   plan_use: PlanUse[];
   records: TurnMetrics[];
-  runs?: RunTokens[];
+  runs?: RunTokens[] | null;
   total: StatsSummary;
   unpriced_models: string[];
   warnings?: ModelCallMismatch[];

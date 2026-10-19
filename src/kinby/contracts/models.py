@@ -1621,8 +1621,8 @@ class StatsGetResult(ContractModel):
     limits: list[PlanLimit]
     unpriced_models: list[str]
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
-    #: Each factory run with tokens in the range.
-    runs: list[RunTokens] = Field(default_factory=list)
+    #: Each factory run with tokens in the range. None from a core older than run usage.
+    runs: list[RunTokens] | None = None
 
 
 class StatsSummaryResult(ContractModel):

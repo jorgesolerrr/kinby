@@ -557,3 +557,27 @@ def test_a_failure_that_stopped_the_run_is_no_retry(tmp_path):
         )
 
     asyncio.run(scenario())
+
+
+def test_run_usage_counts_a_core_without_run_tokens_as_outdated(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        older = await started_instance(hub_client(hub), hub, name="bob")
+        await settled(hub, (await handed_in(hub, coder, 7)).run_id)
+        control.usage[_address(coder)] = _answer(_used()).model_copy(update={"runs": []})
+        control.usage[_address(older.instance_id)] = StatsGetResult.model_validate(
+            _answer(_used()).model_dump(exclude={"runs"})
+        )
+
+        usage = await hub_client(hub, {Scope.HUB_READ}).call(
+            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+        )
+
+        assert isinstance(usage, StatsRunsResult), usage
+        assert usage.outdated == [older.instance_id]
+
+    asyncio.run(scenario())

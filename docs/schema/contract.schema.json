@@ -6231,10 +6231,18 @@
           "type": "array"
         },
         "runs": {
-          "items": {
-            "$ref": "#/$defs/RunTokens"
-          },
-          "type": "array"
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RunTokens"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "total": {
           "$ref": "#/$defs/StatsSummary"

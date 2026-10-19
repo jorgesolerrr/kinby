@@ -65,19 +65,27 @@ def run_usage(
 ) -> StatsRunsResult:
     """Join each run's rework with its tokens in every counted instance, since a step can run
     in an instance other than the one that handed the run in."""
+    read = {instance_id: _run_tokens(answer) for instance_id, answer in answers.items()}
     tokens: dict[UUID, list[RunTokens]] = {}
-    for answer in answers.values():
-        if isinstance(answer, StatsGetResult):
-            for run in answer.runs:
+    for runs in read.values():
+        if not isinstance(runs, Uncounted):
+            for run in runs:
                 tokens.setdefault(run.run_id, []).append(run)
     usage = [_run_usage(run, rework, tokens.get(run.run_id, [])) for run, rework in reworked]
     return StatsRunsResult(
         runs=usage,
         weeks=_weeks(usage),
-        skipped=_left_out(answers, Uncounted.SKIPPED),
-        unreachable=_left_out(answers, Uncounted.UNREACHABLE),
-        outdated=_left_out(answers, Uncounted.OUTDATED),
+        skipped=_left_out(read, Uncounted.SKIPPED),
+        unreachable=_left_out(read, Uncounted.UNREACHABLE),
+        outdated=_left_out(read, Uncounted.OUTDATED),
     )
+
+
+def _run_tokens(answer: StatsGetResult | Uncounted) -> list[RunTokens] | Uncounted:
+    """The instance's run tokens. A core older than run usage answers without them."""
+    if isinstance(answer, Uncounted):
+        return answer
+    return Uncounted.OUTDATED if answer.runs is None else answer.runs
 
 
 def _run_usage(run: FactoryRun, rework: Rework, counted: list[RunTokens]) -> RunUsage:
@@ -115,7 +123,7 @@ def _week(start: date, runs: list[RunUsage]) -> RunWeek:
     )
 
 
-def _left_out(answers: Mapping[UUID, StatsGetResult | Uncounted], why: Uncounted) -> list[UUID]:
+def _left_out(answers: Mapping[UUID, object], why: Uncounted) -> list[UUID]:
     return [instance_id for instance_id, answer in answers.items() if answer is why]
 
 
