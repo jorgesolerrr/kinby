@@ -311,7 +311,7 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "---\n"
             "description: Review the week's work that went badly against what memory held.\n"
             "schedule: 0 5 * * 0\n"
-            "run: review\n"
+            "run: learning_review\n"
             "---\n"
             f"{DEFAULT_LEARNING_REVIEW_LENS}\n"
         ),

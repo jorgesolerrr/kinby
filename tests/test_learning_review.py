@@ -42,10 +42,10 @@ from kinby.core.turns import Turns
 from kinby.instance import Instance, init_from_template, init_instance, load_instance
 from kinby.instance.init import DEFAULT_LEARNING_REVIEW_LENS
 from kinby.memory import GraphStore
-from kinby.memory.facade import Episode, RecappedRun, RecappedTurn, new_node_id
+from kinby.memory.facade import Episode, Fact, RecappedRun, RecappedTurn, new_node_id
 from kinby.plugins.routines import load_routine
 from tests.test_consolidation import fact
-from tests.test_routines import instance_at, no_recap, routine_file
+from tests.test_routines import RoutineModel, fire, instance_at, no_recap, routine_file
 from tests.test_scheduler import FakeClock, call, runtime
 
 _LENS = "Look for lessons the instance keeps forgetting."
@@ -79,7 +79,10 @@ class ReviewingModel:
 
 def review_stage(instance: Instance) -> None:
     routine_file(
-        instance, "description: Review the week's learning\nrun: review", _LENS, name="review"
+        instance,
+        "description: Review the week's learning\nrun: learning_review",
+        _LENS,
+        name="review",
     )
 
 
@@ -118,6 +121,19 @@ def work_turn(
 
 def failed_tool(output: str) -> ToolResult:
     return ToolResult(call_id=str(uuid4()), name="bash", output=output, error=True)
+
+
+def learned_on(instance: Instance, day: date, description: str, subject: str) -> NodeId:
+    return GraphStore(instance.path).remember(
+        Fact(
+            node=new_node_id(day, description),
+            date=day,
+            description=description,
+            subjects=(subject,),
+            body=f"{description}.",
+            thread=None,
+        )
+    )
 
 
 def rated(verdict: TurnVerdict, reason: str | None = None) -> TurnRated:
@@ -357,3 +373,40 @@ def test_a_new_instance_ships_a_weekly_learning_review_after_reflection(
     assert routine.is_dreaming_stage
     assert routine.budgets.tokens is None
     assert routine.prompt.strip() == DEFAULT_LEARNING_REVIEW_LENS
+
+
+def test_a_fact_learned_on_or_after_the_day_of_the_work_does_not_match_it(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    review_stage(instance)
+    before = learned_on(instance, date(2026, 9, 1), "Deploys need the staging key", "deploys")
+    same_day = learned_on(instance, _IN_THE_WEEK.date(), "Deploys run from main", "deploys")
+    later = learned_on(instance, date(2026, 9, 3), "Deploys need a tag", "deploys")
+    thread_id, turn_id = work_turn(instance, "Deploy the site.", failed_tool("denied"))
+    turn_episode(instance, thread_id, turn_id, "Deployed without the key", "deploys")
+    model = ReviewingModel()
+
+    review(instance, model)
+
+    assert before in model.wake
+    assert same_day not in model.wake
+    assert later not in model.wake
+
+
+def test_an_instance_tool_named_review_still_runs_as_a_routine_code_step(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: Review pull requests\nrun: review")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "review.py").write_text('''from kinby.plugins import tool
+@tool(write=False)
+def review() -> str:
+    """Review the open pull requests."""
+    return "Two pull requests wait on review"
+''')
+    model = RoutineModel()
+
+    asyncio.run(fire(instance, model))
+
+    assert "Two pull requests wait on review" in str(model.messages[0][-1].content)

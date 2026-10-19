@@ -52,7 +52,7 @@ class SharedCodeStep:
 #: The code steps that make a routine one of dreaming's stages (ADR 0099, ADR 0101).
 CONSOLIDATION_STEP = SharedCodeStep("consolidate")
 REFLECTION_STEP = SharedCodeStep("reflect")
-LEARNING_REVIEW_STEP = SharedCodeStep("review")
+LEARNING_REVIEW_STEP = SharedCodeStep("learning_review")
 DREAMING_STEPS = (CONSOLIDATION_STEP, REFLECTION_STEP, LEARNING_REVIEW_STEP)
 
 

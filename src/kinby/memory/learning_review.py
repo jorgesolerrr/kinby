@@ -42,7 +42,7 @@ _RULES = (
     "Each turn and factory run below went badly this week: a tool failed, a step ran again "
     "after a retry or a send-back, or the user rated a turn bad.",
     "A repeated mistake: the turn or run went wrong in a way a matching fact already "
-    "described, and it did not recall that fact. A fact learned after the work is not one.",
+    "described, and it did not recall that fact.",
     "An ignored lesson: the turn or run recalled a fact and then did what the fact warned against.",
     "Name only these two verdicts, and only where the facts support them. A bad week may "
     "hold neither.",
@@ -98,6 +98,12 @@ class _RunLog:
         return [attempt for stop in self.stops for attempt in stop.attempts]
 
     @property
+    def started(self) -> datetime:
+        return min(
+            [turn.at for turn in self.turns] + [attempt.started_at for attempt in self.attempts]
+        )
+
+    @property
     def went_badly(self) -> bool:
         # A step's second attempt follows a retry or a send-back.
         ran_again = any(attempt.attempt > 1 for attempt in self.attempts)
@@ -144,7 +150,7 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
     badly, or report no work."""
 
     @tool(write=False)
-    def review() -> str | None:
+    def learning_review() -> str | None:
         """Frame the week's turns and factory runs that went badly, each with the facts a memory
         search matches for it and the facts it recalled."""
         until = today()
@@ -157,10 +163,14 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
         facts = {node.node: node for node in nodes if isinstance(node, Fact)}
         episodes = [node for node in nodes if isinstance(node, Episode)]
 
-        def matching(recaps: tuple[Episode, ...]) -> tuple[Fact, ...]:
+        def matching(recaps: tuple[Episode, ...], started: datetime) -> tuple[Fact, ...]:
+            # A fact holds only the day it was learned, so one from the work's own day may have
+            # come after it, and is left out.
             subjects = dict.fromkeys(subject for recap in recaps for subject in recap.subjects)
             hits = dict.fromkeys(hit.node for subject in subjects for hit in graph.recall(subject))
-            return tuple(facts[node] for node in hits if node in facts)
+            return tuple(
+                facts[node] for node in hits if node in facts and facts[node].date < started.date()
+            )
 
         def recalled(nodes: Iterable[NodeId]) -> tuple[Fact, ...]:
             return tuple(facts[node] for node in dict.fromkeys(nodes) if node in facts)
@@ -179,7 +189,7 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
                 failed_tools=tuple(turn.failed_tools),
                 rating=turn.bad_rating,
                 episodes=recaps,
-                matching_facts=matching(recaps),
+                matching_facts=matching(recaps, turn.at),
                 recalled_facts=recalled(turn.recalled),
             )
 
@@ -197,7 +207,7 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
                     rating for turn in run.turns if (rating := turn.bad_rating) is not None
                 ),
                 episodes=recaps,
-                matching_facts=matching(recaps),
+                matching_facts=matching(recaps, run.started),
                 recalled_facts=recalled(
                     [*(node for turn in run.turns for node in turn.recalled), *run.recalled]
                 ),
@@ -211,7 +221,7 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
         )
         return _FRAME.dump_json(frame, indent=2).decode()
 
-    return review
+    return learning_review
 
 
 def _read(
