@@ -19,6 +19,7 @@ import type {
   ResultFrame,
   RoutineOrigin,
   RunDelegated,
+  RunTotals,
   SourceRuns,
   ServerFrame,
   StatsBucket,
@@ -136,6 +137,8 @@ test("stats.summary takes stats.get's range and names each instance it counted o
   expectTypeOf<Summary["result"]["subscriptions"]>().toEqualTypeOf<SubscriptionUse[]>()
   expectTypeOf<Summary["result"]["plan_use"]>().toEqualTypeOf<PlanUse[]>()
   expectTypeOf<Summary["result"]["limits"]>().toEqualTypeOf<PlanLimit[]>()
+  expectTypeOf<Summary["result"]["runs"]>().toEqualTypeOf<Record<string, RunTotals>>()
+  expectTypeOf<Summary["result"]["run_total"]>().toEqualTypeOf<RunTotals>()
   expectTypeOf<Summary["result"]["skipped"]>().toEqualTypeOf<string[]>()
   expectTypeOf<Summary["result"]["unreachable"]>().toEqualTypeOf<string[]>()
   expectTypeOf<Summary["result"]["outdated"]>().toEqualTypeOf<string[]>()

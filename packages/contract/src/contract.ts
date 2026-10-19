@@ -1936,9 +1936,22 @@ export interface StatsSummaryResult {
   limits: PlanLimit[];
   outdated: string[];
   plan_use: PlanUse[];
+  run_total: RunTotals;
+  runs: {
+    [k: string]: RunTotals;
+  };
   skipped: string[];
   subscriptions: SubscriptionUse[];
   unreachable: string[];
+}
+/**
+ * Factory runs with tokens in a range, their input and output tokens across every usage
+ * source, and their API cost.
+ */
+export interface RunTotals {
+  cost: number | null;
+  runs: number;
+  tokens: number;
 }
 /**
  * Run one step of a factory run in this instance, and return its result.

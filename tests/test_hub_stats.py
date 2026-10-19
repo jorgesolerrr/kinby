@@ -26,6 +26,7 @@ from kinby.contracts import (
     ResultFrame,
     RoutineName,
     RunTokens,
+    RunTotals,
     RunWeek,
     Scope,
     SourceRuns,
@@ -143,6 +144,7 @@ def _answer(
         plan_use=plan_use or _plan_use((0, 0), (0, 0)),
         limits=limits or [],
         unpriced_models=[],
+        runs=[],
     )
 
 
@@ -581,3 +583,67 @@ def test_run_usage_counts_a_core_without_run_tokens_as_outdated(tmp_path):
         assert usage.outdated == [older.instance_id]
 
     asyncio.run(scenario())
+
+
+def test_the_summary_counts_each_instances_runs_and_a_run_in_two_instances_once(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl()
+        hub = hub_at(tmp_path / "hub", control=control)
+        client = hub_client(hub)
+        coder = await started_instance(client, hub)
+        reviewer = await started_instance(client, hub, name="bob")
+        stopped = await created_instance(client, name="carol")
+        shared, solo = uuid4(), uuid4()
+        control.usage[_address(coder.instance_id)] = _answer(_used()).model_copy(
+            update={
+                "runs": [
+                    _tokens(shared, input_tokens=100, cost=0.5, claude=1000),
+                    _tokens(solo, input_tokens=10, cost=None),
+                ]
+            }
+        )
+        control.usage[_address(reviewer.instance_id)] = _answer(_used()).model_copy(
+            update={"runs": [_tokens(shared, input_tokens=50, cost=0.25)]}
+        )
+
+        summary = await hub_client(hub, {Scope.HUB_READ}).call(STATS_SUMMARY, StatsGetCommand())
+
+        assert not isinstance(summary, ErrorEnvelope)
+        assert summary.runs == {
+            coder.instance_id: RunTotals(runs=2, tokens=1321, cost=0.5),
+            reviewer.instance_id: RunTotals(runs=1, tokens=55, cost=0.25),
+        }
+        assert summary.run_total == RunTotals(runs=2, tokens=1376, cost=0.75)
+        assert summary.skipped == [stopped.instance_id]
+
+    asyncio.run(scenario())
+
+
+def test_the_summary_prices_no_run_when_no_instance_priced_one():
+    counted = uuid4()
+
+    summary = summed_usage(
+        {
+            counted: _answer(_used()).model_copy(
+                update={"runs": [_tokens(uuid4(), input_tokens=10, cost=None)]}
+            ),
+            uuid4(): Uncounted.UNREACHABLE,
+        }
+    )
+
+    assert summary.runs == {counted: RunTotals(runs=1, tokens=11, cost=None)}
+    assert summary.run_total == RunTotals(runs=1, tokens=11, cost=None)
+
+
+def test_the_summary_counts_a_core_without_run_tokens_as_outdated():
+    counted, older = uuid4(), uuid4()
+
+    summary = summed_usage(
+        {
+            counted: _answer(_used()),
+            older: StatsGetResult.model_validate(_answer(_used()).model_dump(exclude={"runs"})),
+        }
+    )
+
+    assert summary.outdated == [older]
+    assert list(summary.runs) == [counted]

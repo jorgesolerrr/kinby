@@ -5462,6 +5462,35 @@
       "title": "RunTokens",
       "type": "object"
     },
+    "RunTotals": {
+      "additionalProperties": false,
+      "description": "Factory runs with tokens in a range, their input and output tokens across every usage\nsource, and their API cost.",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runs",
+        "tokens",
+        "cost"
+      ],
+      "title": "RunTotals",
+      "type": "object"
+    },
     "RunUsage": {
       "additionalProperties": false,
       "description": "One factory run's cost and rework, read from the hub and its instances, stored nowhere.",
@@ -6536,6 +6565,18 @@
           },
           "type": "array"
         },
+        "run_total": {
+          "$ref": "#/$defs/RunTotals"
+        },
+        "runs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RunTotals"
+          },
+          "propertyNames": {
+            "format": "uuid"
+          },
+          "type": "object"
+        },
         "skipped": {
           "items": {
             "format": "uuid",
@@ -6563,6 +6604,8 @@
         "subscriptions",
         "plan_use",
         "limits",
+        "runs",
+        "run_total",
         "skipped",
         "unreachable",
         "outdated"
