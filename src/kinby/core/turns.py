@@ -25,6 +25,7 @@ from kinby.contracts import (
     Origin,
     Payload,
     PermissionMode,
+    ProfileVersion,
     PromptVersion,
     RoutineOrigin,
     SystemPrompt,
@@ -125,6 +126,7 @@ class TurnPreparation:
     ceiling: PermissionMode
     prompt_version: PromptVersion
     system_prompt: SystemPrompt
+    profile_version: ProfileVersion | None = None
     daily_budget: DailyBudget | None = None
     budgets: Budgets = field(default_factory=Budgets)
 
@@ -639,6 +641,7 @@ class Turns:
                     model=turn.model,
                     permission_mode=turn.permission_mode,
                     prompt_version=preparation.prompt_version,
+                    profile_version=preparation.profile_version,
                     snapshot=snapshot,
                 ),
             )

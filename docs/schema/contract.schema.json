@@ -926,6 +926,7 @@
               "message.delta": "#/$defs/MessageDelta",
               "mode.pinned": "#/$defs/ModePinned",
               "model.completed": "#/$defs/ModelCompleted",
+              "profile.counted": "#/$defs/ProfileCounted",
               "routine.failure.handled": "#/$defs/RoutineFailureHandled",
               "routine.failures.reset": "#/$defs/RoutineFailuresReset",
               "run.delegated": "#/$defs/RunDelegated",
@@ -995,6 +996,9 @@
             },
             {
               "$ref": "#/$defs/MemoryConsolidated"
+            },
+            {
+              "$ref": "#/$defs/ProfileCounted"
             },
             {
               "$ref": "#/$defs/RoutineFailureHandled"
@@ -4551,6 +4555,30 @@
       "title": "ProcessState",
       "type": "string"
     },
+    "ProfileCounted": {
+      "additionalProperties": false,
+      "description": "The provider's tokenizer counted a profile version, once for every turn that ran with it.",
+      "properties": {
+        "tokens": {
+          "type": "integer"
+        },
+        "type": {
+          "const": "profile.counted",
+          "default": "profile.counted",
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "tokens",
+        "type"
+      ],
+      "title": "ProfileCounted",
+      "type": "object"
+    },
     "ProfileGetCommand": {
       "additionalProperties": false,
       "properties": {},
@@ -7818,6 +7846,17 @@
         "output_tokens": {
           "type": "integer"
         },
+        "profile_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "prompt_version": {
           "anyOf": [
             {
@@ -7965,6 +8004,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "profile_version": {
+          "anyOf": [
+            {
+              "type": "string"
             },
             {
               "type": "null"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -42,6 +43,7 @@ from kinby.contracts import (
     GateOutcome,
     MessageDelta,
     PermissionMode,
+    ProfileCounted,
     RoutineOrigin,
     RoutineTrigger,
     RunDelegated,
@@ -68,11 +70,13 @@ from kinby.core.errors import (
 from kinby.core.events import EventLog
 from kinby.core.gate import evaluate
 from kinby.core.model_calls import completed_model_call
-from kinby.core.models import init_model, is_anthropic_model
+from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import price_map
 from kinby.core.prompt import (
     PromptSection,
     assemble_system_prompt,
+    profile_section,
+    profile_version,
     prompt_version,
     render_system_prompt,
     render_wake,
@@ -115,6 +119,8 @@ from kinby.plugins.routines import (
 )
 from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import RunReporter, Tool, ToolContext
+
+logger = logging.getLogger(__name__)
 
 _TOOL_ARGUMENTS = TypeAdapter(dict[str, JsonValue])
 _CHECKPOINTS_NAME = "checkpoints.sqlite"
@@ -265,7 +271,9 @@ class LangGraphRunner:
         model_override: str | None = None,
         gate_policy: GatePolicy | None = None,
         today: Callable[[], date] = utc_today,
+        tokenizer: Tokenizer | None = None,
     ) -> None:
+        """Count each profile version with *tokenizer*. Without one, the profile goes uncounted."""
         self._instance = instance
         self._event_log = (
             event_log if event_log is not None else EventLog(instance.manifest.state_dir)
@@ -275,6 +283,7 @@ class LangGraphRunner:
         self._gate_policy_override = gate_policy
         self._gate_policy = gate_policy if gate_policy is not None else SHIPPED_POLICY
         self._today = today
+        self._tokenizer = tokenizer
         instance.manifest.state_dir.mkdir(parents=True, exist_ok=True)
         self._tools = ToolRegistry(
             instance.path,
@@ -297,6 +306,7 @@ class LangGraphRunner:
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
         sections = self._prompt_sections()
+        profile = profile_section(self._instance)
         limit = manifest.budgets.usd_per_day
         daily_budget = None
         if limit is not None:
@@ -320,6 +330,7 @@ class LangGraphRunner:
             ceiling=self._gate_policy.ceiling,
             prompt_version=prompt_version(sections),
             system_prompt=render_system_prompt(sections),
+            profile_version=profile_version(profile) if profile is not None else None,
             daily_budget=daily_budget,
             budgets=manifest.budgets,
         )
@@ -337,6 +348,7 @@ class LangGraphRunner:
         return self._gate_policy_override
 
     async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnResult:
+        await self._count_profile(turn.model, context.emit)
         config, start_step = await self._start_config(turn)
         progress = _BudgetProgress(context.budgets, start_step)
         return await self._invoke(
@@ -387,6 +399,25 @@ class LangGraphRunner:
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
         )
+
+    async def _count_profile(self, model: ModelName, emit: Emit) -> None:
+        """Count the profile the first time a turn runs with its version."""
+        profile = profile_section(self._instance)
+        if self._tokenizer is None or profile is None:
+            return
+        version = profile_version(profile)
+        if any(
+            isinstance(event.payload, ProfileCounted) and event.payload.version == version
+            for event in self._event_log.all_events()
+        ):
+            return
+        try:
+            tokens = await asyncio.to_thread(self._tokenizer, model, profile.text)
+        except Exception:
+            # Without a count the turn's memory tokens read as estimated, and the next turn retries.
+            logger.warning("The profile's tokens could not be counted.", exc_info=True)
+            return
+        await emit(ProfileCounted(version=version, tokens=tokens))
 
     def _prepare_restored_turn(self, turn: TurnRequest) -> PreparedTurnRequest:
         if isinstance(turn, PreparedTurnRequest):

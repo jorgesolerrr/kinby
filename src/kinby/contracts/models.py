@@ -161,6 +161,7 @@ class EventType(StrEnum):
     RUN_STOPPED = "run.stopped"
     MEMORY_RECAPPED = "memory.recapped"
     MEMORY_CONSOLIDATED = "memory.consolidated"
+    PROFILE_COUNTED = "profile.counted"
     ROUTINE_FAILURE_HANDLED = "routine.failure.handled"
     ROUTINE_FAILURES_RESET = "routine.failures.reset"
     SIGNAL_RECEIVED = "signal.received"
@@ -187,6 +188,7 @@ RoutineName = NewType("RoutineName", str)
 CronSchedule = NewType("CronSchedule", str)
 DeliveryId = NewType("DeliveryId", str)
 PromptVersion = NewType("PromptVersion", str)
+ProfileVersion = NewType("ProfileVersion", str)
 SystemPrompt = NewType("SystemPrompt", str)
 # The forty-character hex id of a git tree: one workspace snapshot.
 TreeId = NewType("TreeId", str)
@@ -247,6 +249,8 @@ class TurnStarted(ContractModel):
     permission_mode: PermissionMode | None = None
     origin: Origin = Field(default_factory=UserOrigin)
     prompt_version: PromptVersion | None = None
+    #: None when the instance has no profile.
+    profile_version: ProfileVersion | None = None
     snapshot: TreeId | None = None
 
 
@@ -445,6 +449,14 @@ class MemoryConsolidated(ContractModel):
     facts: tuple[NodeId, ...]
 
 
+class ProfileCounted(ContractModel):
+    """The provider's tokenizer counted a profile version, once for every turn that ran with it."""
+
+    type: Literal[EventType.PROFILE_COUNTED] = EventType.PROFILE_COUNTED
+    version: ProfileVersion
+    tokens: int
+
+
 class RoutineNoticeKind(StrEnum):
     FIRST_FAILURE = "first-failure"
     DISABLED = "disabled"
@@ -500,6 +512,7 @@ Payload = Annotated[
     | RunStopped
     | MemoryRecapped
     | MemoryConsolidated
+    | ProfileCounted
     | RoutineFailureHandled
     | RoutineFailuresReset
     | SignalReceived
@@ -1445,6 +1458,7 @@ class TurnMetrics(TokenTotals):
     turn_id: UUID
     model: str | None
     prompt_version: PromptVersion | None
+    profile_version: ProfileVersion | None = None
     origin: Origin | None
     closing_kind: TurnClosingKind
     #: Whether a completed turn did work. Always work for a failed or interrupted turn.

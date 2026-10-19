@@ -444,6 +444,10 @@ _Avoid_: exploration, workspace search
 
 A hash of the rendered **system prompt** without the **environment block**, recorded when a turn starts. Groups turns by the prompt the user wrote.
 
+### Profile version
+
+A hash of the **profile**'s text, recorded when a turn starts. The provider's tokenizer counts a version once, at the first turn that runs with it, and that count is the profile's size in every such turn's **memory tokens**.
+
 ### Eval arm
 
 One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph.
