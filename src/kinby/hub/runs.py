@@ -253,7 +253,11 @@ class FactoryRuns:
 
     async def get(self, command: FactoryRunGetCommand) -> FactoryRunDetail:
         run = self._existing(command.run_id)
-        return FactoryRunDetail(run=run, attempts=self._registry.attempts(run.run_id))
+        return FactoryRunDetail(
+            run=run,
+            attempts=self._registry.attempts(run.run_id),
+            earlier_steps=_earlier(self._factory(run.factory), run.step),
+        )
 
     async def retry(self, command: FactoryRunRetryCommand) -> FactoryRun:
         """Try the step the run stopped at again, with the step's retries reset."""

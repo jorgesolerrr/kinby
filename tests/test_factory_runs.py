@@ -2112,6 +2112,23 @@ def test_a_run_is_only_sent_back_to_an_earlier_step(tmp_path, step):
     asyncio.run(scenario())
 
 
+def test_a_run_names_the_steps_before_its_own_it_can_be_sent_back_to(tmp_path):
+    control = FakeControl()
+    control.step_results = [FIXED, reviewed("clean"), StepResult(ending=StepEnding.FAILED)]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "publish")
+        assert stopped.earlier_steps == ["fix", "review"]
+
+    asyncio.run(scenario())
+
+
 async def needing_human(hub: Hub) -> dict[UUID, int]:
     """Each listed instance's count of the factory runs that need a human at one of its steps."""
     listed = await hub_client(hub).call(INSTANCE_LIST, InstanceListCommand())

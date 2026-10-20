@@ -2802,6 +2802,8 @@ class FactoryRunDetail(ContractModel):
     run: FactoryRun
     #: Every attempt at every step, in the order they started.
     attempts: list[StepAttempt]
+    #: The steps before the run's step in its factory, which a send back can go to.
+    earlier_steps: list[StepId]
 
 
 class FactoryRunSubscribeCommand(ContractModel):
