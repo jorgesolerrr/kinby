@@ -267,9 +267,10 @@ def _environment(
         # `claude -p` exits when its turn ends, with whatever it left in the background still
         # running. So a suite longer than Claude's 10 minutes for one command ended the step
         # with the work uncommitted. Claude runs every command in the foreground instead, for
-        # as long as the step may take.
+        # as long as the step may take, even one that names no timeout of its own.
         environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
         environment["BASH_MAX_TIMEOUT_MS"] = str(timeout_seconds * 1000)
+        environment["BASH_DEFAULT_TIMEOUT_MS"] = str(timeout_seconds * 1000)
     return environment
 
 
