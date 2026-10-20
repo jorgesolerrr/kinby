@@ -1,6 +1,6 @@
 If the factory run's data holds no `results.feedback`, the pull request has no review threads to answer yet: change nothing and stop.
 
-Otherwise `results.feedback` is a JSON list of the review threads to answer on pull request `results.pr`, of the branch `results.branch`, each with its id, path, line and comments. If the workspace is on another branch, switch to `results.branch` before you start.
+Otherwise `results.feedback` is a JSON list of the review threads to answer on pull request `results.pr`, of the branch `results.branch`, each with its id, path, line and comments.
 
 A good result:
 

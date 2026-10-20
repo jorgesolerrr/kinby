@@ -51,6 +51,8 @@ type Duration = Annotated[str, Field(pattern=r"^[1-9][0-9]*[smhd]$")]
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3_600, "d": 86_400}
 #: A file in the factory's folder, by its path there.
 type FactoryPath = Annotated[str, Field(min_length=1)]
+#: One run value, as ``{{name}}``.
+type RunValue = Annotated[str, Field(pattern=r"^\{\{[a-z_][a-z0-9_]*\}\}$")]
 
 
 class ValueType(StrEnum):
@@ -137,6 +139,9 @@ class ClientStep(_Step):
     #: None leaves the client's default.
     model: CodingModel | None = None
     effort: ReasoningEffort | None = None
+    #: The git branch the instance puts the workspace on before the client starts, as the run
+    #: value that names it. None leaves the workspace as it is.
+    branch: RunValue | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -199,12 +204,17 @@ def run_value_name(expected: str | int) -> ValueName | None:
     return named[1] if named is not None else None
 
 
-def run_value_names(step: CommandStep) -> list[ValueName]:
-    """The run values the step's own commands name as ``{{name}}``. A list of repository
-    commands takes none."""
-    return [
-        name for entry in step.run if isinstance(entry, str) for name in _RUN_VALUE.findall(entry)
-    ]
+def run_value_names(step: Step) -> list[ValueName]:
+    """The run values a command step's own commands, or a client step's branch, name as
+    ``{{name}}``. A list of repository commands takes none."""
+    match step:
+        case CommandStep(run=run):
+            entries = [entry for entry in run if isinstance(entry, str)]
+        case ClientStep(branch=str() as branch):
+            entries = [branch]
+        case _:
+            entries = []
+    return [name for entry in entries for name in _RUN_VALUE.findall(entry)]
 
 
 def with_run_values(command: str, held: Mapping[ValueName, StepValue]) -> str:

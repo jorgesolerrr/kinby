@@ -1,4 +1,4 @@
-Work on the branch `results.branch`. If the workspace is on another branch, switch to it before you start.
+The workspace is on the branch `results.branch`.
 
 If the factory run's data holds no `results.failure` and .scratch/review.md does not exist, nothing failed: change nothing and stop.
 

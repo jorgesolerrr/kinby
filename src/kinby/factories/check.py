@@ -350,10 +350,10 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
                     f'Step "{step.id}" matches "{field}" against "{value}", which no earlier '
                     "step declares in its results and the work item does not carry."
                 )
-        for value in run_value_names(step) if isinstance(step, CommandStep) else ():
+        for value in run_value_names(step):
             if value not in held:
                 yield (
-                    f'Step "{step.id}" names "{value}" in a command, which no earlier step '
+                    f'Step "{step.id}" names "{value}", which no earlier step '
                     "declares in its results and the work item does not carry."
                 )
         held.update(step.results)

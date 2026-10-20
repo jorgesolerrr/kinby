@@ -2664,6 +2664,9 @@ class ClientStepRun(ContractModel):
     #: The model and reasoning effort the client runs with. None leaves the client's default.
     model: CodingModel | None = None
     effort: ReasoningEffort | None = None
+    #: The git branch the workspace is put on before the client starts. A workspace on another
+    #: branch with uncommitted changes fails the step instead. None leaves the workspace as it is.
+    branch: Annotated[str, Field(min_length=1)] | None = None
 
 
 class StepRunCommand(ContractModel):

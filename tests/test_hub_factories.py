@@ -473,7 +473,7 @@ def test_the_check_fails_a_command_naming_a_value_no_earlier_step_or_work_item_h
     )
 
     assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        'Step "checks" names "pr" in a command, which no earlier step declares in its results '
+        'Step "checks" names "pr", which no earlier step declares in its results '
         "and the work item does not carry."
     ]
 

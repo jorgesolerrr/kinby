@@ -1983,6 +1983,7 @@ export interface AgentStepRun {
  * No kinby turn runs around it. The client is killed once its timeout passes.
  */
 export interface ClientStepRun {
+  branch?: string | null;
   client: CodingClient;
   effort?: ReasoningEffort | null;
   kind: "client";

@@ -88,7 +88,8 @@ steps:
   # Every client step continues implement's session, so one coding session per issue writes the
   # change, answers its reviews and repairs its checks. It writes the pull request's title, body
   # and replies. Each step's hook records them as the run's values, and publish applies them
-  # (ADRs 0081 and 0083).
+  # (ADRs 0081 and 0083). Other runs' steps share the workspace, so each client step starts with
+  # it switched back to this run's branch (ADR 0104).
   - id: implement
     kind: client
     in: coder
@@ -97,6 +98,7 @@ steps:
     effort: high
     prompt: prompts/implement.md
     hook: check_implementation
+    branch: "{{branch}}"
     requires: [branch, base]
     results: { title: str, body: str }
     timeout: 60m
@@ -113,6 +115,7 @@ steps:
     resume: implement
     prompt: prompts/answer.md
     hook: check_answers
+    branch: "{{branch}}"
     requires: [branch, base]
     results: { replies: str, title: str, body: str }
     timeout: 60m
@@ -128,6 +131,7 @@ steps:
     resume: implement
     prompt: prompts/fix.md
     hook: check_implementation
+    branch: "{{branch}}"
     requires: [branch, base]
     results: { title: str, body: str }
     timeout: 30m
@@ -142,6 +146,7 @@ steps:
   #   effort: high
   #   prompt: prompts/review.md
   #   hook: read_review_verdict
+  #   branch: "{{branch}}"
   #   requires: [branch, base]
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
