@@ -1328,13 +1328,20 @@
           },
           "type": "array"
         },
+        "earlier_steps": {
+          "items": {
+            "$ref": "#/$defs/StepId"
+          },
+          "type": "array"
+        },
         "run": {
           "$ref": "#/$defs/FactoryRun"
         }
       },
       "required": [
         "run",
-        "attempts"
+        "attempts",
+        "earlier_steps"
       ],
       "title": "FactoryRunDetail",
       "type": "object"

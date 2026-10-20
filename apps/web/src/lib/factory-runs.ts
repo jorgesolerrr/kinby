@@ -20,3 +20,9 @@ export function workItem(run: FactoryRun): string {
 export function standing(run: FactoryRun): string {
   return run.step === null ? STATUSES[run.status] : `${STATUSES[run.status]} at ${run.step}`
 }
+
+/** The runs that need a human, then the others, each in the order given. */
+export function needingHumanFirst(runs: FactoryRun[]): FactoryRun[] {
+  const needing = (run: FactoryRun) => run.status === "needs-human"
+  return [...runs.filter(needing), ...runs.filter((run) => !needing(run))]
+}
