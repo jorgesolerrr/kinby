@@ -2592,7 +2592,8 @@ class StepEnding(StrEnum):
     FAILED = "failed"
     #: The step ran past its ``timeout``. The run never tries it again.
     TIMED_OUT = "timed-out"
-    #: The hub stopped while the attempt ran, so it counts as failed.
+    #: The hub stopped while the attempt ran, which only a hub before ADR 0102 recorded. It
+    #: counts as failed.
     INTERRUPTED = "interrupted"
     #: The step cannot run until the user supplies what it lacks. The run stops for them, and
     #: never tries the step again or sends its work back.
@@ -2801,6 +2802,8 @@ class FactoryRunDetail(ContractModel):
     run: FactoryRun
     #: Every attempt at every step, in the order they started.
     attempts: list[StepAttempt]
+    #: The steps before the run's step in its factory, which a send back can go to.
+    earlier_steps: list[StepId]
 
 
 class FactoryRunSubscribeCommand(ContractModel):

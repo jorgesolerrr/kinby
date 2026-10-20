@@ -53,7 +53,7 @@ ssh -o BatchMode=yes playground 'docker exec <id> git -C /instance/workspace bra
 
 ## Runs that need a human
 
-A run that stopped stays unfinished in `needs-human`. Putting `ready-for-agent` back on its issue starts nothing while that run exists, because the hub hands the scan the same run again. Restart the run through the hub instead. `factory.run.retry` tries the step it stopped at again, and `factory.run.send_back` sends it to an earlier step. `hub.sh cancel <run-id>` ends it, and then the label starts a new run, unless the issue already has an open agent pull request.
+A run that stopped stays unfinished in `needs-human`. Putting `ready-for-agent` back on its issue starts nothing while that run exists, because the hub hands the scan the same run again. Restart the run through the hub instead, by its run id or its issue number. `hub.sh retry 825` tries the step it stopped at again, and `hub.sh send-back 825 prepare` sends it to an earlier step. `hub.sh cancel 825` ends it, and then the label starts a new run, unless the issue already has an open agent pull request.
 
 The runs of one coder share its workspace. A run that stops with uncommitted work leaves it there, and the next run's coding step fails on it. Send the stopped run back to `prepare`, which cleans the workspace, before you retry any other.
 
