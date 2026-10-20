@@ -854,27 +854,58 @@ REVIEW_NOT_RUN = (
 )
 
 
-def test_needs_human_labels_the_issue_with_the_failing_steps_summary_and_keeps_the_branch(
+async def reported(
+    dispatcher: ScheduledDispatcher,
+    run: FactoryRunOrigin,
+    summary: str,
+    results: Mapping[str, StepValue] = BRANCH,
+) -> StepResult:
+    """Make the factory's needs_human call for issue 7's run, stopped at *run*'s step."""
+    return await run_in(
+        dispatcher,
+        StepRunCommand(
+            step=CodeStepRun(call="report_needs_human", summary=summary),
+            origin=run,
+            work_item={"issue": 7},
+            results=results,
+        ),
+    )
+
+
+def answer_blocked_behind(github: FakeGitHub) -> None:
+    """#8 and #11 are blocked by #7, and #9 by #8. Closed #10 is blocked by #7 and blocks #12."""
+    closed = {**issue(10, "Drop the light theme"), "state": "closed"}
+    for number, blocking in {
+        7: [issue(8, "Add a theme picker"), closed, issue(11, "Theme the emails")],
+        8: [issue(9, "Remember the chosen theme"), issue(11, "Theme the emails")],
+        9: [],
+        10: [issue(12, "Theme the docs")],
+        11: [],
+    }.items():
+        github.answer(ISSUE.format(number=number) + "/dependencies/blocking", output=[blocking])
+
+
+def stop_comments(github: FakeGitHub) -> list[str]:
+    comments = [arguments for arguments in github.calls if arguments[:2] == ["issue", "comment"]]
+    assert all(arguments[2:4] == ["7", "--body"] for arguments in comments)
+    return [arguments[4] for arguments in comments]
+
+
+def test_needs_human_pushes_a_branch_ahead_of_its_base_and_leaves_uncommitted_work_uncommitted(
     tmp_path, monkeypatch
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
     git(workspace, "switch", "-c", BRANCH["branch"])
     commit(workspace, "theme.py", "DARK = True\n")
+    (workspace / "theme.py").write_text("DARK = False\n")
+    (workspace / "notes.md").write_text("Half done.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_blocked_behind(github)
     dispatcher, _ = signal_runtime(instance, RoutineModel())
-    summary = 'Hook "check_implementation" failed: UncommittedWork: theme.py is not committed.'
 
     async def scenario() -> None:
-        result = await run_in(
-            dispatcher,
-            StepRunCommand(
-                step=CodeStepRun(call="report_needs_human", summary=summary),
-                origin=origin("implement"),
-                work_item={"issue": 7},
-                results=BRANCH,
-            ),
-        )
+        result = await reported(dispatcher, origin("implement"), "The session ran out of time.")
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert [
@@ -886,14 +917,96 @@ def test_needs_human_labels_the_issue_with_the_failing_steps_summary_and_keeps_t
             "--add-label",
             "ready-for-human",
         ] in github.calls
-        [comment] = [
-            arguments for arguments in github.calls if arguments[:2] == ["issue", "comment"]
-        ]
-        assert comment[2:4] == ["7", "--body"]
-        assert "implement" in comment[4]
-        assert summary in comment[4]
-        assert git(workspace, "branch", "--show-current") == BRANCH["branch"]
+        assert len(stop_comments(github)) == 1
+        pushed = git(workspace, "ls-remote", "origin", BRANCH["branch"]).split()
+        assert pushed == [git(workspace, "rev-parse", "HEAD"), f"refs/heads/{BRANCH['branch']}"]
         assert git(workspace, "log", "-1", "--format=%s") == "Write theme.py"
+        assert git(workspace, "diff", "--name-only") == "theme.py"
+        assert git(workspace, "ls-files", "--others", "--exclude-standard") == "notes.md"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("results", [BRANCH, {}], ids=["branch-at-its-base", "before-a-branch"])
+def test_needs_human_pushes_nothing_without_commits_ahead_of_the_base(
+    tmp_path, monkeypatch, results
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    git(workspace, "switch", "-c", BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_blocked_behind(github)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await reported(dispatcher, origin("prepare"), "GitHub is down.", results)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert len(stop_comments(github)) == 1
+        assert git(workspace, "ls-remote", "--heads", "origin").endswith("refs/heads/main")
+        assert len(git(workspace, "ls-remote", "--heads", "origin").splitlines()) == 1
+
+    asyncio.run(scenario())
+
+
+def test_needs_human_reports_a_push_that_failed_in_its_comment(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    git(workspace, "switch", "-c", BRANCH["branch"])
+    commit(workspace, "theme.py", "DARK = True\n")
+    git(workspace, "remote", "set-url", "--push", "origin", str(tmp_path / "gone.git"))
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_blocked_behind(github)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await reported(dispatcher, origin("publish"), "GitHub is down.")
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        [stopped] = stop_comments(github)
+        assert f"\n\nPushing `{BRANCH['branch']}` failed: git push exited with code" in stopped
+        assert any(arguments[:3] == ["issue", "edit", "7"] for arguments in github.calls)
+
+    asyncio.run(scenario())
+
+
+def test_each_stop_of_a_run_comments_its_step_cause_run_id_retry_and_the_issues_blocked_behind(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    git(workspace, "switch", "-c", BRANCH["branch"])
+    commit(workspace, "theme.py", "DARK = True\n")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_blocked_behind(github)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    run = origin("implement")
+
+    async def scenario() -> None:
+        await reported(dispatcher, run, "The session ran out of time.")
+        commit(workspace, "picker.py", "PICKER = True\n")
+        retried = await reported(
+            dispatcher,
+            run.model_copy(update={"step": "checks"}),
+            "`bun run check` exited with code 1.",
+        )
+
+        assert retried.ending is StepEnding.CLEAN, retried.summary
+        assert stop_comments(github) == [
+            f"The software factory stopped at step `{step}`: {cause}\n\n"
+            f"Run `{run.run_id}`. Add `ready-for-agent` to retry this step; send back or cancel "
+            "from the web app or `hub.sh`.\n\n"
+            "Blocked behind this issue:\n"
+            "- #8 Add a theme picker\n"
+            "- #11 Theme the emails\n"
+            "- #9 Remember the chosen theme"
+            for step, cause in [
+                ("implement", "The session ran out of time."),
+                ("checks", "`bun run check` exited with code 1."),
+            ]
+        ]
+        pushed = git(workspace, "ls-remote", "origin", BRANCH["branch"]).split()[0]
+        assert pushed == git(workspace, "rev-parse", "HEAD")
 
     asyncio.run(scenario())
 
