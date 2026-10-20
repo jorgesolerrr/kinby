@@ -351,7 +351,13 @@ class FactoryRuns:
         An attempt it left running is no attempt (ADR 0102), and its step is offered again. A
         run parked at a wait keeps its deadline, counted from when it parked. A needs_human
         report or a run's stop queued but not delivered before the hub stopped is queued again.
+
+        The runs still unreported and the stops still untold from before this pass are collected
+        first, so a run that stops as it is queued below, which queues that fresh stop's own
+        report and telling, never queues a second one for the same stop.
         """
+        pending = self._registry.unreported_runs()
+        untold = self._registry.untold_stops()
         for run_id in self._registry.unfinished_attempts():
             self._registry.drop_attempt(run_id)
         for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
@@ -363,13 +369,13 @@ class FactoryRuns:
             )
             if isinstance(step, WaitStep):
                 self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
-        for run in self._registry.unreported_runs():
+        for run in pending:
             factory = self._factory(run.factory)
             if factory is not None and factory.needs_human is not None:
                 attempts = self._registry.attempts(run.run_id)
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
-        for stop in self._registry.untold_stops():
+        for stop in untold:
             self._put_stop(_QueuedStop(stop))
 
     def needing_human(self, record: ManagedInstance) -> int:

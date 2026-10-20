@@ -764,6 +764,52 @@ def test_a_report_backing_off_goes_to_the_instance_that_replaced_its_own(tmp_pat
     asyncio.run(scenario())
 
 
+def test_a_run_its_resume_cannot_queue_is_reported_and_told_once(tmp_path):
+    """Resume reads the reports and stops left from before the restart ahead of queueing runs.
+
+    A recovered run whose step is gone stops while resume queues it, which queues that fresh
+    stop's report and telling, so the pass over leftovers must not queue them a second time.
+    """
+    control = FakeControl()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime, NEEDS_HUMAN_FILES)
+
+    async def before_the_restart() -> UUID:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while not control.steps:
+                await asyncio.sleep(0.01)
+        return run.run_id
+
+    run_id = asyncio.run(before_the_restart())
+    hub.close()
+    control.step_release.set()
+    renamed = NEEDS_HUMAN_FILES["factory.yaml"].replace("  - id: test\n", "  - id: tests\n")
+    write_factory(directory / "factories" / "checks", {"factory.yaml": renamed})
+    restarted = Hub(
+        directory,
+        runtime=runtime,
+        images=FakeImages(),
+        control=control,
+        shipped_factories=directory / "shipped",
+    )
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        stopped = await settled(restarted, run_id)
+        stops = await told(control, 1)
+
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert reports(control) == ['Factory "checks" has no step "test" any more.']
+        assert [stop.run_id for stop in stops] == [run_id]
+        restarted.close()
+
+    asyncio.run(after_the_restart())
+
+
 def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
     """A report that completes late never marks a fresher, still-undelivered stop as reported.
 
