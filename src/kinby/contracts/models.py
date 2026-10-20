@@ -2598,6 +2598,9 @@ class StepEnding(StrEnum):
     #: The step cannot run until the user supplies what it lacks. The run stops for them, and
     #: never tries the step again or sends its work back.
     NEEDS_HUMAN = "needs-human"
+    #: The subscription's limit stopped the step's coding client. The run parks until the plan
+    #: window resets, then tries the step again without spending a retry.
+    LIMITED = "limited"
 
 
 #: One of an instance's lists of repository commands, by name.
@@ -2698,6 +2701,17 @@ class StepResult(ContractModel):
     summary: str = ""
     #: The coding client session a client step ran in, for a later step to resume.
     session: CodingSessionId | None = None
+    #: When the plan window of a limited step resets. Only a limited step has one.
+    resets_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _resets_at_only_when_limited(self) -> Self:
+        limited = self.ending is StepEnding.LIMITED
+        if limited and self.resets_at is None:
+            raise ValueError("A limited step needs resets_at, the time its plan window resets.")
+        if not limited and self.resets_at is not None:
+            raise ValueError(f"A {self.ending} step has no resets_at; only a limited step has one.")
+        return self
 
 
 class FactoryRun(ContractModel):
@@ -2711,6 +2725,8 @@ class FactoryRun(ContractModel):
     status: FactoryRunStatus
     #: The step the run is at. None once it is done.
     step: StepId | None
+    #: When a run parked until its plan window resets tries its step again. None for any other.
+    wakes_at: AwareDatetime | None = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 

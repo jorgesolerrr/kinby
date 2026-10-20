@@ -1530,7 +1530,10 @@ def test_a_resumed_codex_thread_reports_its_own_tokens_not_the_threads_running_t
     asyncio.run(scenario())
 
 
-def test_a_client_run_the_plan_refused_names_when_its_window_resets(tmp_path, monkeypatch):
+@pytest.mark.parametrize("hook", [None, "missing"])
+def test_a_client_run_the_plan_refused_ends_limited_and_names_when_its_window_resets(
+    tmp_path, monkeypatch, hook
+):
     runtime, _ = step_instance(tmp_path)
     resets_at = datetime(2030, 1, 1, 12, tzinfo=UTC)
     refused = [
@@ -1543,11 +1546,11 @@ def test_a_client_run_the_plan_refused_names_when_its_window_resets(tmp_path, mo
     stub_client(tmp_path, monkeypatch, "claude", streaming(refused) + "sys.exit(1)")
 
     async def scenario() -> None:
-        result = await run_client_step(runtime.dispatcher, "claude")
+        result = await run_client_step(runtime.dispatcher, "claude", hook=hook)
         stats = await call(runtime.dispatcher, "stats.get")
 
         assert isinstance(result, StepResult)
-        assert result.ending is StepEnding.FAILED
+        assert (result.ending, result.resets_at) == (StepEnding.LIMITED, resets_at)
         assert isinstance(stats, StatsGetResult)
         assert stats.limits == [
             PlanLimit(usage_source=UsageSource.CLAUDE_SUBSCRIPTION, resets_at=resets_at)

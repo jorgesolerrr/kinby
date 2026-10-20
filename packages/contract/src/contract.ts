@@ -35,7 +35,7 @@ export type StepValue = boolean | number | string;
 /**
  * How one attempt at a step ended.
  */
-export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human";
+export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human" | "limited";
 export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -726,6 +726,7 @@ export interface FactoryRun {
   status: FactoryRunStatus;
   step: StepId | null;
   updated_at: string;
+  wakes_at?: string | null;
   work_item: {
     [k: string]: StepValue;
   };
@@ -2033,6 +2034,7 @@ export interface CodeStepRun {
 export interface StepResult {
   ending: StepEnding;
   outcome?: string | null;
+  resets_at?: string | null;
   session?: string | null;
   summary?: string;
   values?: {

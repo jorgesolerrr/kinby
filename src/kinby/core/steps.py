@@ -13,6 +13,7 @@ from kinby.contracts import (
     ClientStepRun,
     CodeStepRun,
     CommandStepRun,
+    DelegatedRunOutcome,
     Event,
     HookName,
     MessageDelta,
@@ -112,7 +113,8 @@ async def _run_client_step(
     """Run the coding client in the workspace, and record its delegated run and its session's
     recalls.
 
-    What the client said last is only the summary. A step with a branch fails before the client
+    What the client said last is only the summary. A run the plan refused ends the step limited,
+    whatever the client exited with. A step with a branch fails before the client
     starts when the workspace cannot be put on it.
     """
     if step.branch is not None:
@@ -156,6 +158,13 @@ async def _run_client_step(
     for recall in take_recalls(instance.manifest.state_dir, command.origin.run_id):
         await log.append(
             command.origin.run_id, uuid4(), recall.model_copy(update={"session": ran.transcript})
+        )
+    if ran.reported is not None and ran.reported.outcome is DelegatedRunOutcome.LIMITED:
+        return StepResult(
+            ending=StepEnding.LIMITED,
+            summary=ran.summary,
+            session=ran.session,
+            resets_at=ran.reported.resets_at,
         )
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 
@@ -352,12 +361,13 @@ async def _recorded(
 def _failed(reason: str, ended: StepResult | None = None) -> StepResult:
     """A failed result that says why, after the summary of the step as it *ended*.
 
-    A step that ended otherwise than clean keeps its ending, so a timeout is never tried again.
+    A step that ended otherwise than clean keeps its ending, so a timeout is never tried again,
+    and a limited one keeps when its plan window resets.
     """
     summary = reason if ended is None or not ended.summary else f"{ended.summary}\n{reason}"
     if ended is None or ended.ending is StepEnding.CLEAN:
         return StepResult(ending=StepEnding.FAILED, summary=summary)
-    return StepResult(ending=ended.ending, summary=summary)
+    return StepResult(ending=ended.ending, summary=summary, resets_at=ended.resets_at)
 
 
 async def _run_command(command: str, workspace: Path) -> StepResult | None:
