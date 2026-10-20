@@ -233,8 +233,12 @@ async def _run_code_step(
         return _failed(f'Tool "{step.call}" is not one of this instance\'s tools.')
     held = {**command.work_item, **command.results}
     if step.summary is not None:
-        # The factory's needs_human call: the step the run stopped at, and how it ended.
-        held |= {"step": command.origin.step, "summary": step.summary}
+        # The factory's needs_human call: the run, the step it stopped at, and how it ended.
+        held |= {
+            "run_id": str(command.origin.run_id),
+            "step": command.origin.step,
+            "summary": step.summary,
+        }
     arguments = {name: value for name, value in held.items() if name in tool.runnable.args}
     # A code step runs on no thread, so its tool's context names one no turn opens.
     context = ToolContext(instance=instance, thread_id=uuid4())

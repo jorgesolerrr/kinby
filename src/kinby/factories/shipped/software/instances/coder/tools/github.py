@@ -324,12 +324,40 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
 
 
 @tool(write=True)
-def report_needs_human(issue: int, step: str, summary: str, context: ToolContext) -> None:
-    """Hand the issue to a human: label it ready-for-human and comment why the run stopped.
+def report_needs_human(
+    issue: int,
+    step: str,
+    summary: str,
+    run_id: str,
+    context: ToolContext,
+    *,
+    branch: str | None = None,
+    base: str | None = None,
+) -> None:
+    """Hand the issue to a human: push the agent branch if it has commits ahead of its base, label
+    the issue ready-for-human, and comment why the run stopped, how to get it going again, and
+    which open issues are blocked behind it.
 
-    The agent branch stays as it is, with everything committed on it.
+    Uncommitted work stays uncommitted in the workspace. A push that fails is said in the
+    comment, so the report still reaches the human.
     """
     workspace = context.workspace
+    body = [
+        f"The software factory stopped at step `{step}`: {summary}",
+        f"Run `{run_id}`. Add `{READY_LABEL}` to retry this step; send back or cancel from the "
+        "web app or `hub.sh`.",
+    ]
+    if branch is not None and base is not None:
+        try:
+            if _git(workspace, "rev-list", "--count", f"origin/{base}..{branch}").strip() != "0":
+                _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
+        except CommandFailed as failed:
+            body.append(f"Pushing `{branch}` failed: {failed}")
+    if blocked := _blocked_behind(workspace, issue):
+        body.append(
+            "Blocked behind this issue:"
+            + "".join(f"\n- #{found['number']} {found['title']}" for found in blocked)
+        )
     _gh(
         workspace,
         "issue",
@@ -340,8 +368,7 @@ def report_needs_human(issue: int, step: str, summary: str, context: ToolContext
         "--add-label",
         READY_FOR_HUMAN_LABEL,
     )
-    body = f"The software factory stopped at step `{step}` and needs a human.\n\n{summary}"
-    _gh(workspace, "issue", "comment", str(issue), "--body", body)
+    _gh(workspace, "issue", "comment", str(issue), "--body", "\n\n".join(body))
 
 
 def _open_pull_request(
@@ -561,6 +588,19 @@ def _open_blockers(workspace: Path, number: int) -> list[dict]:
         workspace, f"repos/{{owner}}/{{repo}}/issues/{number}/dependencies/blocked_by"
     )
     return [blocker for blocker in blocking if blocker["state"] == "open"]
+
+
+def _blocked_behind(workspace: Path, number: int) -> list[dict]:
+    """The open issues the issue blocks, directly or through other open issues, nearest first."""
+    found: dict[int, dict] = {}
+    waiting = [number]
+    while waiting:
+        endpoint = f"repos/{{owner}}/{{repo}}/issues/{waiting.pop(0)}/dependencies/blocking"
+        for blocked in _pages(workspace, endpoint):
+            if blocked["state"] == "open" and blocked["number"] not in {number, *found}:
+                found[blocked["number"]] = blocked
+                waiting.append(blocked["number"])
+    return list(found.values())
 
 
 def _ready_issue(workspace: Path, number: int) -> Issue | None:

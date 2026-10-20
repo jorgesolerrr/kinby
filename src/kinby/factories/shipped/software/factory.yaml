@@ -209,6 +209,7 @@ steps:
       checks-failed: { back: answer, max: 2 }
       waiting: { back: babysit, max: 30 }
 done_requires: [merge_ready]
-# Labels the issue ready-for-human with the summary of the step the run stopped at. The branch
-# stays, with everything committed on it.
+# Pushes the branch if it has commits ahead of its base, and leaves uncommitted work as it is.
+# Then labels the issue ready-for-human and comments the step the run stopped at and why, the run
+# id, how to retry, and the open issues blocked behind it.
 needs_human: { in: coder, call: report_needs_human }
