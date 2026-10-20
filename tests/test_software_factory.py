@@ -782,6 +782,10 @@ class FakeGitHub:
         answers.append([list(needles), text, error])
         self._answers.write_text(json.dumps(answers))
 
+    def forget(self) -> None:
+        """Drop every answer, once what GitHub holds has changed, and keep the calls."""
+        self._answers.write_text("[]")
+
     @property
     def calls(self) -> list[list[str]]:
         if not self._calls.exists():
@@ -1459,6 +1463,7 @@ def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
     implemented(workspace, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
     dispatcher, _ = signal_runtime(instance, RoutineModel())
@@ -1602,6 +1607,7 @@ def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to
     implemented(workspace, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode", labels=["ready-for-human"]))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
     dispatcher, _ = signal_runtime(instance, RoutineModel())
@@ -1621,6 +1627,7 @@ def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_pa
     implemented(workspace, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
     dispatcher, _ = signal_runtime(instance, RoutineModel())
@@ -1631,6 +1638,87 @@ def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_pa
         assert result.ending is StepEnding.CLEAN, result.summary
         created = created_pull_request(github)
         assert created[created.index("--title") + 1] == "Add a dark mode toggle"
+
+    asyncio.run(scenario())
+
+
+def test_publish_run_twice_opens_one_pull_request_and_updates_it_the_second_time(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        first = await opened(dispatcher, 7, BRANCH | BODY)
+        github.forget()
+        answer_issue(github, issue(7, "Add dark mode"))
+        github.answer(
+            "repos/{owner}/{repo}/pulls",
+            output=[[pull_request(43, BRANCH["branch"], closes=7)]],
+        )
+        github.answer("repo", "view", output=REPOSITORY)
+        second = await opened(dispatcher, 7, BRANCH | BODY)
+
+        assert second.ending is StepEnding.CLEAN, second.summary
+        assert first.values == second.values == {"pr": 43}
+        assert created_pull_request(github)
+        edited = [arguments for arguments in github.calls if arguments[:2] == ["pr", "edit"]]
+        assert edited == [
+            [
+                "pr",
+                "edit",
+                "43",
+                "--base",
+                "main",
+                "--title",
+                "Add dark mode",
+                "--body",
+                f"Closes #7\n\nAdds dark mode.{REVIEW_NOT_RUN}",
+            ]
+        ]
+        assert git(tmp_path / "origin.git", "rev-parse", BRANCH["branch"]) == git(
+            workspace, "rev-parse", "HEAD"
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("stack", "stacks"), [(3, 0), (None, 1)], ids=["stacked", "unstacked"])
+def test_publish_run_again_stacks_its_pull_request_only_when_it_is_in_no_stack(
+    tmp_path, monkeypatch, stack, stacks
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, "agent/8-dark-theme")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(8, "Dark theme", parent=5))
+    github.answer(
+        "repos/{owner}/{repo}/pulls",
+        output=[
+            [
+                pull_request(43, "agent/8-dark-theme", closes=8, stack=stack),
+                pull_request(41, "agent/7-light-theme", closes=7, stack=3),
+            ]
+        ],
+    )
+    github.answer("repo", "view", output=REPOSITORY)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        branch = {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
+        result = await opened(dispatcher, 8, branch | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.values == {"pr": 43}
+        assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
+        assert sum("POST" in arguments for arguments in github.calls) == stacks
 
     asyncio.run(scenario())
 
@@ -1921,6 +2009,8 @@ PULL = {
     "state": "open",
     "head": {"ref": BRANCH["branch"], "sha": "head2"},
     "user": {"login": "coder"},
+    "labels": [],
+    "requested_reviewers": [],
 }
 
 
@@ -1981,11 +2071,14 @@ def answer_pull_request(
     runs: Sequence[dict] = (),
     threads: Sequence[dict[str, object]] = (),
     reviews: Sequence[dict[str, object]] = (),
+    comments: Sequence[dict[str, object]] = (),
 ) -> None:
     """Answer what assess reads of pull request 42 as the coder: its check runs, one successful
-    for each of *checks* by its status and then *runs*, its review threads and its reviews."""
+    for each of *checks* by its status and then *runs*, its review threads, its reviews and its
+    comments."""
     runs = [*(check_run(status) for status in checks), *runs]
     github.answer("repos/{owner}/{repo}/pulls/42/reviews", output=[list(reviews)])
+    github.answer("repos/{owner}/{repo}/issues/42/comments", output=[list(comments)])
     github.answer("repos/{owner}/{repo}/pulls/42", output=pull)
     github.answer(
         "repos/{owner}/{repo}/commits/head2/check-runs",
@@ -2134,6 +2227,38 @@ def test_assess_after_a_quiet_wait_stops_waiting_for_a_reviewer_once_no_check_ru
         [(*_, said)] = commented
         assert said.startswith("No reviewer answered on this head")
         assert len(labelled(github)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_assess_run_twice_comments_labels_and_asks_for_the_review_once(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        await assessed(dispatcher, quiet=True)
+        [(*_, said)] = [
+            arguments for arguments in github.calls if arguments[:2] == ["pr", "comment"]
+        ]
+        github.forget()
+        answer_pull_request(
+            github,
+            pull=PULL
+            | {"labels": [{"name": "merge-ready"}], "requested_reviewers": [{"login": "owner"}]},
+            comments=[{"body": said, "user": {"login": "coder", "type": "User"}}],
+        )
+        result = await assessed(dispatcher, quiet=True)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert (result.outcome, result.values) == ("merge-ready", {"merge_ready": True})
+        assert [arguments for arguments in github.calls if arguments[:2] == ["pr", "comment"]] == [
+            ["pr", "comment", "42", "--body", said]
+        ]
+        assert labelled(github) == [
+            ["pr", "edit", "42", "--add-label", "merge-ready", "--add-reviewer", "owner"]
+        ]
 
     asyncio.run(scenario())
 

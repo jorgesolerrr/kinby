@@ -225,12 +225,13 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
 
     Merged, the run is done; closed without a merge, it stops. Merge-ready, once a trusted
     reviewer reviewed its head with no thread left to answer and no check still running or
-    failed: it gets the merge-ready label and a review request for the maintainer. A trusted
-    review app's successful check run on the head is a review of it, and its failed one is no
-    failed check. After a *quiet* wait, one no reviewer reviewed is merge-ready too, and a
-    comment says so. Threads only trusted authors wrote are feedback for a fix round. Another
-    author's thread needs a human. With no thread to answer, checks that failed or timed out go
-    to a check repair. Anything else waits for the next wake. Nothing here ever merges.
+    failed: it gets the merge-ready label and a review request for the maintainer, unless it holds
+    them already. A trusted review app's successful check run on the head is a review of it, and
+    its failed one is no failed check. After a *quiet* wait, one no reviewer reviewed is
+    merge-ready too, and a comment says so, unless one already does. Threads only trusted authors
+    wrote are feedback for a fix round. Another author's thread needs a human. With no thread to
+    answer, checks that failed or timed out go to a check repair. Anything else waits for the next
+    wake. Nothing here ever merges.
     """
     workspace = context.workspace
     pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
@@ -305,10 +306,18 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
     if not reviewed:
         if not quiet:
             return HookResult(outcome="waiting")
-        _gh(workspace, "pr", "comment", str(pr), "--body", NO_REVIEW)
+        comments = _pages(workspace, f"repos/{{owner}}/{{repo}}/issues/{pr}/comments")
+        if all(comment["body"] != NO_REVIEW for comment in comments):
+            _gh(workspace, "pr", "comment", str(pr), "--body", NO_REVIEW)
     maintainer = _repository(workspace).maintainer
-    asked = () if maintainer in {None, pull["user"]["login"]} else ("--add-reviewer", maintainer)
-    _gh(workspace, "pr", "edit", str(pr), "--add-label", MERGE_READY_LABEL, *asked)
+    labels = {label["name"] for label in pull["labels"]}
+    asked = {pull["user"]["login"], *(user["login"] for user in pull["requested_reviewers"])}
+    edits = [
+        *(() if MERGE_READY_LABEL in labels else ("--add-label", MERGE_READY_LABEL)),
+        *(() if maintainer is None or maintainer in asked else ("--add-reviewer", maintainer)),
+    ]
+    if edits:
+        _gh(workspace, "pr", "edit", str(pr), *edits)
     return HookResult(values={"merge_ready": True}, outcome="merge-ready")
 
 
@@ -337,7 +346,8 @@ def _open_pull_request(
     workspace: Path, issue: int, branch: str, base: str, title: str, body: str, *, reviewed: bool
 ) -> dict[str, int]:
     """Push the branch and open its pull request, which closes the issue, with the title and body
-    the coding client wrote. With no title written, it takes the issue's.
+    the coding client wrote. With no title written, it takes the issue's. A pull request the
+    branch already has takes the base, title and body instead, so opening twice opens one.
 
     A pull request based on another agent pull request's branch joins that pull request's stack,
     whatever the label on the issue it closes. The repository's maintainer reviews it. An issue an
@@ -346,29 +356,27 @@ def _open_pull_request(
     if not body:
         raise MissingPullRequestBody("The coding session wrote no pull request body.")
     found = _issue(workspace, issue)
-    under = (
-        next((pull for pull in _agent_pull_requests(workspace) if pull.branch == base), None)
-        if base.startswith(AGENT_BRANCH_PREFIX)
-        else None
-    )
+    pulls = _agent_pull_requests(workspace)
+    existing = next((pull for pull in pulls if pull.branch == branch), None)
+    under = next((pull for pull in pulls if pull.branch == base), None)
     maintainer = _repository(workspace).maintainer
     _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
-    url = _gh(
-        workspace,
-        "pr",
-        "create",
-        "--head",
-        branch,
+    fields = (
         "--base",
         base,
         "--title",
         title or found.title,
         "--body",
         _body(issue, body, reviewed=reviewed),
-        *(() if maintainer is None else ("--reviewer", maintainer)),
     )
-    number = int(url.strip().rsplit("/", 1)[1])
-    if under is not None:
+    if existing is None:
+        reviewer = () if maintainer is None else ("--reviewer", maintainer)
+        url = _gh(workspace, "pr", "create", "--head", branch, *fields, *reviewer)
+        number = int(url.strip().rsplit("/", 1)[1])
+    else:
+        number = existing.number
+        _gh(workspace, "pr", "edit", str(number), *fields)
+    if under is not None and (existing is None or existing.stack is None):
         _stack(workspace, under, number)
     if READY_FOR_HUMAN_LABEL in found.labels:
         _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
