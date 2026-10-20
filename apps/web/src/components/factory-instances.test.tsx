@@ -194,6 +194,26 @@ describe("the factory's instances", () => {
     )
   })
 
+  it("closes the cancel dialog on confirming, so a refusal shows under the run", async () => {
+    const caller = hub(() => {
+      throw new CallError({
+        code: "INVALID_ARGUMENT",
+        message: 'Factory run "run-1" is queued, so it needs no human.',
+        retryable: false,
+      })
+    })
+    const user = userEvent.setup()
+    render(<FactoryInstances client={caller} clock={fakeClock()} factory="software" />)
+
+    const row = await stoppedRun()
+    await user.click(row.getByRole("button", { name: "Cancel" }))
+    const dialog = await screen.findByRole("alertdialog", { name: "Cancel the run of issue 12?" })
+    await user.click(within(dialog).getByRole("button", { name: "Cancel run" }))
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    expect(row.getByText('Factory run "run-1" is queued, so it needs no human.')).toBeDefined()
+  })
+
   it("says so when no instance holds one of its roles", async () => {
     render(<FactoryInstances client={hub()} clock={fakeClock()} factory="research" />)
 

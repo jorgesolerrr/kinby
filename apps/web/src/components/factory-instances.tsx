@@ -139,6 +139,7 @@ function StoppedRunActions({
 }) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<unknown>()
+  const [cancelling, setCancelling] = useState(false)
   const { run_id } = run
   const act = async (action: () => Promise<FactoryRun>) => {
     setBusy(true)
@@ -185,7 +186,7 @@ function StoppedRunActions({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-        <AlertDialog>
+        <AlertDialog open={cancelling} onOpenChange={setCancelling}>
           <AlertDialogTrigger render={<Button variant="destructive" size="sm" disabled={busy} />}>
             Cancel
           </AlertDialogTrigger>
@@ -198,7 +199,10 @@ function StoppedRunActions({
               <AlertDialogCancel>Keep it</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
-                onClick={() => void act(() => client.call("factory.run.cancel", { run_id }))}
+                onClick={() => {
+                  setCancelling(false)
+                  void act(() => client.call("factory.run.cancel", { run_id }))
+                }}
               >
                 Cancel run
               </AlertDialogAction>
