@@ -2338,11 +2338,13 @@ def answer_pull_request(
     threads: Sequence[dict[str, object]] = (),
     reviews: Sequence[dict[str, object]] = (),
     comments: Sequence[dict[str, object]] = (),
+    labels: Sequence[str] = ("merge-ready",),
 ) -> None:
     """Answer what assess reads of pull request 42 as the coder: its check runs, one successful
-    for each of *checks* by its status and then *runs*, its review threads, its reviews and its
-    comments."""
+    for each of *checks* by its status and then *runs*, its review threads, its reviews, its
+    comments, and the repository's *labels*."""
     runs = [*(check_run(status) for status in checks), *runs]
+    github.answer("repos/{owner}/{repo}/labels", output=[[{"name": name} for name in labels]])
     github.answer("repos/{owner}/{repo}/pulls/42/reviews", output=[list(reviews)])
     github.answer("repos/{owner}/{repo}/issues/42/comments", output=[list(comments)])
     github.answer("repos/{owner}/{repo}/pulls/42", output=pull)
@@ -2375,6 +2377,10 @@ def labelled(github: FakeGitHub) -> list[list[str]]:
     return [arguments for arguments in github.calls if arguments[:2] == ["pr", "edit"]]
 
 
+def created_labels(github: FakeGitHub) -> list[list[str]]:
+    return [arguments for arguments in github.calls if arguments[:2] == ["label", "create"]]
+
+
 def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_merge_ready(
     tmp_path, monkeypatch
 ):
@@ -2399,6 +2405,28 @@ def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_me
             ["pr", "edit", "42", "--add-label", "merge-ready", "--add-reviewer", "owner"]
         ]
         assert not any("merge" in arguments for arguments in github.calls)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("labels", "created"), [((), 1), (("merge-ready",), 0)], ids=["missing", "present"]
+)
+def test_assess_creates_the_merge_ready_label_only_when_the_repository_lacks_it(
+    tmp_path, monkeypatch, labels, created
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, reviews=[submitted("owner", "OWNER")], labels=labels)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert (result.ending, result.outcome) == (StepEnding.CLEAN, "merge-ready"), result.summary
+        assert len(created_labels(github)) == created
+        writes = [arguments[:2] for arguments in github.calls if arguments[0] in {"label", "pr"}]
+        assert writes == [["label", "create"]] * created + [["pr", "edit"]]
 
     asyncio.run(scenario())
 
@@ -2497,10 +2525,12 @@ def test_assess_after_a_quiet_wait_stops_waiting_for_a_reviewer_once_no_check_ru
     asyncio.run(scenario())
 
 
-def test_assess_run_twice_comments_labels_and_asks_for_the_review_once(tmp_path, monkeypatch):
+def test_assess_run_twice_comments_creates_the_label_labels_and_asks_for_the_review_once(
+    tmp_path, monkeypatch
+):
     instance = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_pull_request(github)
+    answer_pull_request(github, labels=())
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
@@ -2525,6 +2555,7 @@ def test_assess_run_twice_comments_labels_and_asks_for_the_review_once(tmp_path,
         assert labelled(github) == [
             ["pr", "edit", "42", "--add-label", "merge-ready", "--add-reviewer", "owner"]
         ]
+        assert len(created_labels(github)) == 1
 
     asyncio.run(scenario())
 

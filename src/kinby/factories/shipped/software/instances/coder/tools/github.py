@@ -23,6 +23,8 @@ from kinby.plugins.tools import ToolContext, tool
 READY_LABEL = "ready-for-agent"
 READY_FOR_HUMAN_LABEL = "ready-for-human"
 MERGE_READY_LABEL = "merge-ready"
+#: What the merge-ready label says, when assess creates it in a repository that lacks it.
+MERGE_READY_DESCRIPTION = "Checks passed and reviewed; ready for the maintainer to merge"
 #: Every agent pull request's branch starts with it.
 AGENT_BRANCH_PREFIX = "agent/"
 #: Where the coding client writes what the factory reads, kept out of every commit.
@@ -239,12 +241,12 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
     Merged, the run is done; closed without a merge, it stops. Merge-ready, once a trusted
     reviewer reviewed its head with no thread left to answer and no check still running or
     failed: it gets the merge-ready label and a review request for the maintainer, unless it holds
-    them already. A trusted review app's successful check run on the head is a review of it, and
-    its failed one is no failed check. After a *quiet* wait, one no reviewer reviewed is
-    merge-ready too, and a comment says so, unless one already does. Threads only trusted authors
-    wrote are feedback for a fix round. Another author's thread needs a human. With no thread to
-    answer, checks that failed or timed out go to a check repair. Anything else waits for the next
-    wake. Nothing here ever merges.
+    them already, the label created first in a repository that lacks it. A trusted review app's
+    successful check run on the head is a review of it, and its failed one is no failed check.
+    After a *quiet* wait, one no reviewer reviewed is merge-ready too, and a comment says so,
+    unless one already does. Threads only trusted authors wrote are feedback for a fix round.
+    Another author's thread needs a human. With no thread to answer, checks that failed or timed
+    out go to a check repair. Anything else waits for the next wake. Nothing here ever merges.
     """
     workspace = context.workspace
     pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
@@ -324,6 +326,12 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
             _gh(workspace, "pr", "comment", str(pr), "--body", NO_REVIEW)
     maintainer = _repository(workspace).maintainer
     labels = {label["name"] for label in pull["labels"]}
+    if MERGE_READY_LABEL not in labels and all(
+        label["name"] != MERGE_READY_LABEL
+        for label in _pages(workspace, "repos/{owner}/{repo}/labels")
+    ):
+        described = ("--description", MERGE_READY_DESCRIPTION)
+        _gh(workspace, "label", "create", MERGE_READY_LABEL, *described)
     asked = {pull["user"]["login"], *(user["login"] for user in pull["requested_reviewers"])}
     edits = [
         *(() if MERGE_READY_LABEL in labels else ("--add-label", MERGE_READY_LABEL)),
