@@ -164,7 +164,8 @@ async def _put_on_branch(workspace: Path, branch: str) -> StepResult | None:
     """Switch the workspace to *branch*, and return the failed step result unless it is on it.
 
     Runs of one instance share its workspace. Changes no commit holds stay where they are: a
-    workspace on another branch with any keeps them there, and the switch never happens.
+    workspace on another branch with any keeps them there, and the switch never happens. A switch
+    that leaves the workspace on anything but *branch*, as an option-like name can, fails too.
     """
     current = await _git(workspace, "branch", "--show-current")
     if isinstance(current, StepResult):
@@ -181,7 +182,17 @@ async def _put_on_branch(workspace: Path, branch: str) -> StepResult | None:
             f"so it stays there instead of switching to {branch}:\n{changes}",
         )
     switched = await _git(workspace, "switch", branch)
-    return switched if isinstance(switched, StepResult) else None
+    if isinstance(switched, StepResult):
+        return switched
+    now = await _git(workspace, "branch", "--show-current")
+    if isinstance(now, StepResult):
+        return now
+    if now == branch:
+        return None
+    return StepResult(
+        ending=StepEnding.FAILED,
+        summary=f'"git switch {branch}" left the workspace on {now or "no branch"}.',
+    )
 
 
 async def _git(workspace: Path, *arguments: str) -> str | StepResult:

@@ -1115,6 +1115,30 @@ def test_a_fix_never_switches_away_from_another_runs_uncommitted_changes(tmp_pat
     assert (workspace / "notes.md").exists()
 
 
+def test_a_fix_fails_when_the_switch_leaves_the_workspace_off_its_branch(tmp_path, monkeypatch):
+    instance = on_another_runs_branch(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    step = coding("fix", 30, resume="claude-1").model_copy(update={"branch": "--detach"})
+
+    result = asyncio.run(
+        run_in(
+            dispatcher,
+            StepRunCommand(
+                step=step,
+                hook="check_implementation",
+                origin=origin("fix"),
+                work_item={"issue": 7},
+                results=BRANCH,
+            ),
+        )
+    )
+
+    assert result.ending is StepEnding.FAILED
+    assert result.summary.startswith('"git switch --detach" left the workspace on no branch.\n')
+    assert not calls.exists()
+
+
 def client_step(prompt: str, step: str = "implement") -> StepRunCommand:
     return StepRunCommand(
         step=ClientStepRun(client=CodingClient.CLAUDE, prompt=prompt, timeout_seconds=30),
