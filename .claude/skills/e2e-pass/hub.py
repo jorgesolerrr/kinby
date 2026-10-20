@@ -4,7 +4,11 @@
     hub.py update <revision> [<instance-id>]   update instances behind that revision or their
                                                factory's template
     hub.py secrets <instance-id>               NAME=value lines on stdin, then recreate
-    hub.py cancel <run-id>                     end a factory run that is parked or needs a human
+    hub.py retry <run>                         try a stopped factory run's step again
+    hub.py send-back <run> <step>              send a stopped factory run back to an earlier step
+    hub.py cancel <run>                        end a factory run that is parked or needs a human
+
+A <run> is a run id, or an issue number for the issue's unfinished run.
 
 It talks to the hub on loopback with the access token in KINBY_TOKEN, and never prints
 a secret value.
@@ -24,7 +28,11 @@ from kinby.cli.client import ContractClient, format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, contract_client
 from kinby.cli.hub_update import follow_operation
 from kinby.contracts import (
+    FACTORY_LIST,
     FACTORY_RUN_CANCEL,
+    FACTORY_RUN_LIST,
+    FACTORY_RUN_RETRY,
+    FACTORY_RUN_SEND_BACK,
     INSTANCE_LIST,
     INSTANCE_RECREATE,
     INSTANCE_SECRETS_SET,
@@ -32,7 +40,13 @@ from kinby.contracts import (
     AccessToken,
     ContractModel,
     ErrorEnvelope,
+    FactoryListCommand,
+    FactoryRun,
     FactoryRunCancelCommand,
+    FactoryRunListCommand,
+    FactoryRunRetryCommand,
+    FactoryRunSendBackCommand,
+    FactoryRunStatus,
     HubRouteMissing,
     InstanceListCommand,
     InstanceRecreateCommand,
@@ -128,13 +142,71 @@ async def seed_secrets(client: ContractClient, instance_id: UUID) -> int:
     return await _operate(client, INSTANCE_RECREATE, recreate)
 
 
-async def cancel(client: ContractClient, run_id: UUID) -> int:
-    cancelled = await client.call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run_id))
-    if isinstance(cancelled, ErrorEnvelope):
-        print(format_error(cancelled), file=sys.stderr)
+FINISHED = {FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED}
+
+
+def run_reference(argument: str) -> UUID | int:
+    """A run id, or an issue number."""
+    if argument.isdigit():
+        return int(argument)
+    return UUID(argument)
+
+
+async def _run_id(client: ContractClient, run: UUID | int) -> UUID | None:
+    """The run id itself, or the id of the issue's unfinished run, found in every factory."""
+    if isinstance(run, UUID):
+        return run
+    factories = await client.call(FACTORY_LIST, FactoryListCommand())
+    if isinstance(factories, ErrorEnvelope):
+        raise SystemExit(format_error(factories))
+    unfinished = []
+    for factory in factories.factories:
+        listed = await client.call(FACTORY_RUN_LIST, FactoryRunListCommand(factory=factory.name))
+        if isinstance(listed, ErrorEnvelope):
+            raise SystemExit(format_error(listed))
+        unfinished += [
+            r for r in listed.runs if r.status not in FINISHED and r.work_item.get("issue") == run
+        ]
+    match unfinished:
+        case [found]:
+            return found.run_id
+        case []:
+            print(f"Issue #{run} has no unfinished factory run.", file=sys.stderr)
+        case _:
+            print(f"Issue #{run} has {len(unfinished)} unfinished factory runs:", file=sys.stderr)
+            for found in unfinished:
+                print(found.run_id, found.factory, found.instance_id, file=sys.stderr)
+    return None
+
+
+async def _move[Command: ContractModel](
+    client: ContractClient, method: Method[Command, FactoryRun], command: Command
+) -> int:
+    moved = await client.call(method, command)
+    if isinstance(moved, ErrorEnvelope):
+        print(format_error(moved), file=sys.stderr)
         return 1
-    print(cancelled.run_id, cancelled.status.value, cancelled.step)
+    print(moved.run_id, moved.status.value, moved.step)
     return 0
+
+
+async def retry(client: ContractClient, run: UUID | int) -> int:
+    if (run_id := await _run_id(client, run)) is None:
+        return 1
+    return await _move(client, FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run_id))
+
+
+async def send_back(client: ContractClient, run: UUID | int, step: str) -> int:
+    if (run_id := await _run_id(client, run)) is None:
+        return 1
+    command = FactoryRunSendBackCommand(run_id=run_id, step=step)
+    return await _move(client, FACTORY_RUN_SEND_BACK, command)
+
+
+async def cancel(client: ContractClient, run: UUID | int) -> int:
+    if (run_id := await _run_id(client, run)) is None:
+        return 1
+    return await _move(client, FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run_id))
 
 
 async def _main(args: argparse.Namespace, token: AccessToken) -> int:
@@ -144,8 +216,12 @@ async def _main(args: argparse.Namespace, token: AccessToken) -> int:
                 return await show_instances(client)
             case "update":
                 return await update(client, args.revision, args.instance_ids)
+            case "retry":
+                return await retry(client, args.run)
+            case "send-back":
+                return await send_back(client, args.run, args.step)
             case "cancel":
-                return await cancel(client, args.run_id)
+                return await cancel(client, args.run)
             case _:
                 return await seed_secrets(client, args.instance_id)
 
@@ -159,8 +235,14 @@ def main() -> int:
     update_parser.add_argument("instance_ids", type=UUID, nargs="*", help="default: all")
     secrets_parser = commands.add_parser("secrets", help="seed secrets from stdin")
     secrets_parser.add_argument("instance_id", type=UUID)
+    run_help = "a run id, or an issue number for its unfinished run"
+    retry_parser = commands.add_parser("retry", help="try a stopped factory run's step again")
+    retry_parser.add_argument("run", type=run_reference, help=run_help)
+    send_back_parser = commands.add_parser("send-back", help="send a stopped run back a step")
+    send_back_parser.add_argument("run", type=run_reference, help=run_help)
+    send_back_parser.add_argument("step", help="an earlier step of the run")
     cancel_parser = commands.add_parser("cancel", help="end a parked or stopped factory run")
-    cancel_parser.add_argument("run_id", type=UUID)
+    cancel_parser.add_argument("run", type=run_reference, help=run_help)
     args = parser.parse_args()
     token = os.environ.get(TOKEN_VARIABLE)
     if not token:
