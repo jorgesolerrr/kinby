@@ -288,6 +288,7 @@ def coding(step: str, minutes: int, resume: str | None = None) -> ClientStepRun:
         timeout_seconds=minutes * 60,
         model="claude-opus-5-5",
         effort=ReasoningEffort.HIGH,
+        branch="agent/7-add-dark-mode",
     )
 
 
@@ -1161,6 +1162,94 @@ def test_the_implement_hook_fails_on_an_untracked_file_git_is_set_to_hide(tmp_pa
         )
 
     asyncio.run(scenario())
+
+
+#: Another run of the same coder, whose steps share the workspace.
+OTHER_BRANCH = "agent/8-add-light-mode"
+
+
+def on_another_runs_branch(tmp_path: Path) -> Instance:
+    """The coder after run 7's answer, with the workspace moved on to run 8's branch since."""
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, BRANCH["branch"])
+    git(workspace, "switch", "-c", OTHER_BRANCH, "origin/main")
+    commit(workspace, "light.py", "LIGHT = True\n")
+    return instance
+
+
+async def fixed(dispatcher: ScheduledDispatcher) -> StepResult:
+    """Run 7's fix with nothing failed, as the hub asks for it."""
+    return await run_in(
+        dispatcher,
+        StepRunCommand(
+            step=coding("fix", 30, resume="claude-1"),
+            hook="check_implementation",
+            origin=origin("fix"),
+            work_item={"issue": 7},
+            results=BRANCH,
+        ),
+    )
+
+
+def test_a_fix_starts_on_its_runs_branch_where_another_run_left_the_workspace(
+    tmp_path, monkeypatch
+):
+    instance = on_another_runs_branch(tmp_path)
+    workspace = instance.manifest.workspace.path
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    result = asyncio.run(fixed(dispatcher))
+
+    assert result.ending is StepEnding.CLEAN, result.summary
+    assert calls.exists()
+    assert git(workspace, "branch", "--show-current") == BRANCH["branch"]
+
+
+def test_a_fix_never_switches_away_from_another_runs_uncommitted_changes(tmp_path, monkeypatch):
+    instance = on_another_runs_branch(tmp_path)
+    workspace = instance.manifest.workspace.path
+    (workspace / "light.py").write_text("LIGHT = False\n")
+    (workspace / "notes.md").write_text("Half done.\n")
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    result = asyncio.run(fixed(dispatcher))
+
+    assert result.ending is StepEnding.FAILED
+    assert result.summary.startswith(
+        f"The workspace is on {OTHER_BRANCH} with changes no commit holds, so it stays there "
+        f"instead of switching to {BRANCH['branch']}:\n M light.py\n?? notes.md\n"
+    )
+    assert not calls.exists()
+    assert git(workspace, "branch", "--show-current") == OTHER_BRANCH
+    assert (workspace / "light.py").read_text() == "LIGHT = False\n"
+    assert (workspace / "notes.md").exists()
+
+
+def test_a_fix_fails_when_the_switch_leaves_the_workspace_off_its_branch(tmp_path, monkeypatch):
+    instance = on_another_runs_branch(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    step = coding("fix", 30, resume="claude-1").model_copy(update={"branch": "--detach"})
+
+    result = asyncio.run(
+        run_in(
+            dispatcher,
+            StepRunCommand(
+                step=step,
+                hook="check_implementation",
+                origin=origin("fix"),
+                work_item={"issue": 7},
+                results=BRANCH,
+            ),
+        )
+    )
+
+    assert result.ending is StepEnding.FAILED
+    assert result.summary.startswith('"git switch --detach" left the workspace on no branch.\n')
+    assert not calls.exists()
 
 
 def client_step(prompt: str, step: str = "implement") -> StepRunCommand:

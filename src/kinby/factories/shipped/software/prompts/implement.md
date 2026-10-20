@@ -1,4 +1,4 @@
-Implement the GitHub issue numbered `work_item.issue` in the factory run's data. The factory checked out the branch `results.branch` for it, from `results.base`. If the workspace is on another branch, switch to `results.branch` before you start.
+Implement the GitHub issue numbered `work_item.issue` in the factory run's data. The factory checked out the branch `results.branch` for it, from `results.base`, and the workspace is on it.
 
 Follow the implement-ticket skill. A good result:
 

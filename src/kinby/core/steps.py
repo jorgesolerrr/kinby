@@ -112,8 +112,13 @@ async def _run_client_step(
     """Run the coding client in the workspace, and record its delegated run and its session's
     recalls.
 
-    What the client said last is only the summary.
+    What the client said last is only the summary. A step with a branch fails before the client
+    starts when the workspace cannot be put on it.
     """
+    if step.branch is not None:
+        refused = await _put_on_branch(instance.manifest.workspace.path, step.branch)
+        if refused is not None:
+            return refused
     skills, warnings = load_skills(instance)
     for warning in warnings:
         await log.append(command.origin.run_id, uuid4(), warning)
@@ -153,6 +158,60 @@ async def _run_client_step(
             command.origin.run_id, uuid4(), recall.model_copy(update={"session": ran.transcript})
         )
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
+
+
+async def _put_on_branch(workspace: Path, branch: str) -> StepResult | None:
+    """Switch the workspace to *branch*, and return the failed step result unless it is on it.
+
+    Runs of one instance share its workspace. Changes no commit holds stay where they are: a
+    workspace on another branch with any keeps them there, and the switch never happens. A switch
+    that leaves the workspace on anything but *branch*, as an option-like name can, fails too.
+    """
+    current = await _git(workspace, "branch", "--show-current")
+    if isinstance(current, StepResult):
+        return current
+    if current == branch:
+        return None
+    changes = await _git(workspace, "status", "--porcelain", "--untracked-files=normal")
+    if isinstance(changes, StepResult):
+        return changes
+    if changes:
+        return StepResult(
+            ending=StepEnding.FAILED,
+            summary=f"The workspace is on {current or 'no branch'} with changes no commit holds, "
+            f"so it stays there instead of switching to {branch}:\n{changes}",
+        )
+    switched = await _git(workspace, "switch", branch)
+    if isinstance(switched, StepResult):
+        return switched
+    now = await _git(workspace, "branch", "--show-current")
+    if isinstance(now, StepResult):
+        return now
+    if now == branch:
+        return None
+    return StepResult(
+        ending=StepEnding.FAILED,
+        summary=f'"git switch {branch}" left the workspace on {now or "no branch"}.',
+    )
+
+
+async def _git(workspace: Path, *arguments: str) -> str | StepResult:
+    """What a git command printed, or the failed step result that says how it failed."""
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        *arguments,
+        cwd=workspace,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    output, errors = await process.communicate()
+    if process.returncode != 0:
+        said = errors.decode(errors="replace").strip()[-_OUTPUT_TAIL:]
+        return StepResult(
+            ending=StepEnding.FAILED,
+            summary=f'"git {" ".join(arguments)}" exited with code {process.returncode}.\n{said}',
+        )
+    return output.decode(errors="replace").rstrip()
 
 
 def _last_message(events: Sequence[Event]) -> str:

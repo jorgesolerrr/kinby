@@ -181,6 +181,17 @@
       "additionalProperties": false,
       "description": "A coding client run directly in the instance's container, with no kinby turn around it.",
       "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "client": {
           "$ref": "#/$defs/CodingClient"
         },
@@ -668,6 +679,10 @@
     },
     "RoutineName": {
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "RunValue": {
+      "pattern": "^\\{\\{[a-z_][a-z0-9_]*\\}\\}$",
       "type": "string"
     },
     "SendBack": {

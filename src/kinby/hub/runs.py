@@ -511,7 +511,7 @@ class FactoryRuns:
                     return prompt
                 asked, hook = AgentStepRun(prompt=prompt), step.hook
             case ClientStep():
-                client_run = self._client_run(run, factory, step)
+                client_run = self._client_run(run, factory, step, held)
                 if isinstance(client_run, _Refused):
                     return client_run
                 asked, hook = client_run, step.hook
@@ -571,7 +571,11 @@ class FactoryRuns:
             return _Refused(step.id, f'Prompt "{step.prompt}" cannot be read: {exc}')
 
     def _client_run(
-        self, run: FactoryRun, factory: FactoryFile, step: ClientStep
+        self,
+        run: FactoryRun,
+        factory: FactoryFile,
+        step: ClientStep,
+        held: Mapping[ValueName, StepValue],
     ) -> ClientStepRun | _Refused:
         """What the client step asks its instance to run.
 
@@ -597,6 +601,7 @@ class FactoryRuns:
             timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
             model=step.model,
             effort=step.effort,
+            branch=None if step.branch is None else str(held[run_value_names(step)[0]]),
         )
 
     def _session(self, run_id: UUID, factory: FactoryFile, step: StepId) -> CodingSessionId | None:
@@ -981,11 +986,12 @@ def _unmet(
 ) -> _Refused | None:
     """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
 
-    A command step also requires each value its commands name. The lack is charged to the step
-    that should have produced the value: the last earlier step that declares it in its results. A
-    false work item value has no such step, so the requiring step itself fails.
+    A command step also requires each value its commands name, and a client step its branch. The
+    lack is charged to the step that should have produced the value: the last earlier step that
+    declares it in its results. A false work item value has no such step, so the requiring step
+    itself fails.
     """
-    named = run_value_names(step) if isinstance(step, CommandStep) else ()
+    named = run_value_names(step)
     lacking = _lacking(held, (*step.requires, *named))
     if lacking is None:
         return None
