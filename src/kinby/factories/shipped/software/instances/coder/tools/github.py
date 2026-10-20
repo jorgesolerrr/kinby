@@ -147,6 +147,8 @@ class AgentPullRequest:
     closes: int | None
     #: The stack GitHub keeps it in, if any.
     stack: int | None
+    #: Who it asks for a review and has not had one from yet.
+    requested: frozenset[str]
 
 
 @tool(write=True)
@@ -347,7 +349,8 @@ def _open_pull_request(
 ) -> dict[str, int]:
     """Push the branch and open its pull request, which closes the issue, with the title and body
     the coding client wrote. With no title written, it takes the issue's. A pull request the
-    branch already has takes the base, title and body instead, so opening twice opens one.
+    branch already has takes the base, title and body instead, and the maintainer's review request
+    when it lacks one, so opening twice opens one.
 
     A pull request based on another agent pull request's branch joins that pull request's stack,
     whatever the label on the issue it closes. The repository's maintainer reviews it. An issue an
@@ -375,7 +378,9 @@ def _open_pull_request(
         number = int(url.strip().rsplit("/", 1)[1])
     else:
         number = existing.number
-        _gh(workspace, "pr", "edit", str(number), *fields)
+        asked = maintainer is None or maintainer in existing.requested
+        reviewer = () if asked else ("--add-reviewer", maintainer)
+        _gh(workspace, "pr", "edit", str(number), *fields, *reviewer)
     if under is not None and (existing is None or existing.stack is None):
         _stack(workspace, under, number)
     if READY_FOR_HUMAN_LABEL in found.labels:
@@ -642,6 +647,7 @@ def _agent_pull_requests(workspace: Path) -> list[AgentPullRequest]:
             if (closes := _CLOSES_ISSUE.search(value["body"] or ""))
             else None,
             stack=value["stack"]["number"] if value.get("stack") else None,
+            requested=frozenset(user["login"] for user in value["requested_reviewers"]),
         )
         for value in listed
         if value["head"]["ref"].startswith(AGENT_BRANCH_PREFIX)

@@ -1161,8 +1161,9 @@ def pull_request(
     stack: int | None = None,
     *,
     head_repository: str | None = "owner/project",
+    requested: Sequence[str] = (),
 ) -> dict[str, object]:
-    """An open agent pull request, as GitHub's REST API lists it.
+    """An open agent pull request, as GitHub's REST API lists it, asking *requested* for reviews.
 
     A fork's has another *head_repository*, and one whose fork is gone has None.
     """
@@ -1177,6 +1178,7 @@ def pull_request(
         "base": {"repo": {"full_name": "owner/project"}},
         "body": f"Closes #{closes}\n\nWhat changed.",
         "stack": None if stack is None else {"number": stack},
+        "requested_reviewers": [{"login": login} for login in requested],
     }
 
 
@@ -1661,7 +1663,7 @@ def test_publish_run_twice_opens_one_pull_request_and_updates_it_the_second_time
         answer_issue(github, issue(7, "Add dark mode"))
         github.answer(
             "repos/{owner}/{repo}/pulls",
-            output=[[pull_request(43, BRANCH["branch"], closes=7)]],
+            output=[[pull_request(43, BRANCH["branch"], closes=7, requested=["owner"])]],
         )
         github.answer("repo", "view", output=REPOSITORY)
         second = await opened(dispatcher, 7, BRANCH | BODY)
@@ -1686,6 +1688,29 @@ def test_publish_run_twice_opens_one_pull_request_and_updates_it_the_second_time
         assert git(tmp_path / "origin.git", "rev-parse", BRANCH["branch"]) == git(
             workspace, "rev-parse", "HEAD"
         )
+
+    asyncio.run(scenario())
+
+
+def test_publish_run_again_asks_the_maintainer_for_a_review_an_earlier_run_never_asked_for(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    implemented(instance.manifest.workspace.path, BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer(
+        "repos/{owner}/{repo}/pulls", output=[[pull_request(43, BRANCH["branch"], closes=7)]]
+    )
+    github.answer("repo", "view", output=REPOSITORY)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await opened(dispatcher, 7, BRANCH | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        [edited] = [arguments for arguments in github.calls if arguments[:2] == ["pr", "edit"]]
+        assert edited[-2:] == ["--add-reviewer", "owner"]
 
     asyncio.run(scenario())
 
