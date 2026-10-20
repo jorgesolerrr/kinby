@@ -2061,6 +2061,45 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
     asyncio.run(scenario())
 
 
+def test_a_relabel_retries_the_run_that_needs_human_takes_its_label_off_and_holds_no_scan(
+    tmp_path, monkeypatch
+):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="GitHub is down.")]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    relabeled = issue(6, "Relabeled", labels=("ready-for-agent", "ready-for-human"))
+    github.answer("repos/{owner}/{repo}/issues", output=[[relabeled, issue(8, "Younger")]])
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    for found in (relabeled, issue(8, "Younger")):
+        number = found["number"]
+        github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blockers())
+        github.answer(ISSUE.format(number=number), output=found)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 6)
+        stopped = await settled(hub, run.run_id)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+        control.step_release.clear()
+        runs, _ = await scanned(hub, monkeypatch)
+
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        by_issue = {found.work_item["issue"]: found for found in runs}
+        assert set(by_issue) == {6, 8}
+        assert by_issue[6].run_id == run.run_id
+        assert by_issue[6].status is not FactoryRunStatus.NEEDS_HUMAN
+        assert by_issue[6].step == "prepare"
+        assert [arguments for arguments in github.calls if arguments[:2] == ["issue", "edit"]] == [
+            ["issue", "edit", "6", "--remove-label", "ready-for-human"]
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_the_scan_reads_an_issue_just_labeled_that_the_issue_list_does_not_show_yet(
     tmp_path, monkeypatch
 ):

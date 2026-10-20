@@ -26,8 +26,8 @@ def intake_tools() -> tuple[Tool, ...]:
 async def hand_to_factory(work_item: dict[str, StepValue], context: ToolContext) -> str:
     """Hand a work item to the factory this routine is the intake of, which starts a run.
 
-    A work item that matches a run still open returns that run. The values are the ones the
-    factory's work item declares, such as {"issue": 42}.
+    A work item that matches a run still open returns that run, and retries one that needs a
+    human. The values are the ones the factory's work item declares, such as {"issue": 42}.
     """
     if context.routine is None:
         raise ValueError("Only a factory's intake routine hands it work items.")
@@ -38,7 +38,8 @@ async def hand_to_factory(work_item: dict[str, StepValue], context: ToolContext)
 async def hand_over(routine: RoutineName, work_item: Mapping[ValueName, StepValue]) -> FactoryRun:
     """Hand a work item to the factory *routine* is the intake of, on this instance's hub route.
 
-    A work item that matches a run still open returns that run.
+    A work item that matches a run still open returns that run, and retries one that needs a
+    human.
     """
     command = FactoryRunIntakeCommand(routine=routine, work_item=dict(work_item))
     run = await call_hub(FACTORY_RUN_INTAKE.name, command.model_dump(mode="json"), "the intake")
