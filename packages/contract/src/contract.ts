@@ -741,6 +741,7 @@ export interface FactoryRunGetCommand {
 }
 export interface FactoryRunDetail {
   attempts: StepAttempt[];
+  earlier_steps: StepId[];
   run: FactoryRun;
 }
 /**
