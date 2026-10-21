@@ -13,4 +13,6 @@ Follow the implement-ticket skill. A good result:
 
 If the ticket is ambiguous or contradicts the code, make no commit. End with one paragraph that says what is unclear; the maintainer reads it on the issue.
 
+If the code already does what the ticket asks, make no commit and write why in .scratch/no-change.md; the maintainer reads it on the issue.
+
 The factory pushes the branch and opens the pull request.

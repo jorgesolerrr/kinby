@@ -767,7 +767,7 @@ _Avoid_: stopped run (a **stop** also ends a run as done or cancelled), restart
 
 ### Run stop
 
-A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the **instance** that handed the run in about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again.
+A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the **instance** that handed the run in about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again. Once a run ends done or cancelled, the **factory** can act on it once, as the **software factory** says on the issue why a run made no change.
 
 ### Factory check
 

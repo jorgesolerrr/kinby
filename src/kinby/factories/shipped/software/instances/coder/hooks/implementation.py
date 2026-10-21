@@ -2,7 +2,8 @@
 it wrote for the pull request.
 
 The client's own report never counts (ADR 0076). A client that committed its work and then
-wrote a malformed stream passes. One that says it is done with nothing committed fails.
+wrote a malformed stream passes. One that says it is done with nothing committed fails, unless
+it wrote why the ticket needs no change.
 """
 
 import json
@@ -16,6 +17,9 @@ REPLIES = ".scratch/review-replies.json"
 #: Where the coding client writes the pull request's title and body, by the value each is
 #: recorded as (ADR 0083).
 WORDS = {"title": ".scratch/pr-title.txt", "body": ".scratch/pr-body.md"}
+#: Where the coding client writes why the ticket needs no change, which it records as
+#: ``no_change``.
+NO_CHANGE = ".scratch/no-change.md"
 #: How many uncommitted paths the check names before it counts the rest.
 _NAMED_CHANGES = 20
 
@@ -32,10 +36,17 @@ class UnansweredThreads(RuntimeError):
 def check_implementation(end: StepEnd) -> HookResult | None:
     """Fail the step unless the workspace is on the run's branch, the branch has commits ahead
     of its base, and nothing is left uncommitted. Record the pull request title and body the
-    step wrote."""
+    step wrote.
+
+    A step that wrote why the ticket needs no change ends with the outcome ``no-change`` and
+    needs no commits.
+    """
     words = _taken_words(end.workspace)
+    reason = _taken(end.workspace / NO_CHANGE)
     branch, base = str(end.results["branch"]), str(end.results["base"])
     _check_committed(end.workspace, branch)
+    if reason:
+        return HookResult(values={**words, "no_change": reason}, outcome="no-change")
     if _git(end.workspace, "rev-list", "--count", f"origin/{base}..{branch}") == "0":
         raise UncommittedWork(f"Branch {branch} has no commits ahead of {base}.")
     return HookResult(values=words) if words else None
@@ -100,13 +111,17 @@ def _taken_words(workspace: Path) -> dict[str, str]:
     Each file is read once and removed, whatever the step's checks say next. Runs share the
     workspace, so a file left behind would become another run's words.
     """
-    words = {}
-    for name, path in WORDS.items():
-        file = workspace / path
-        if file.is_file():
-            words[name] = file.read_text(encoding="utf-8").strip()
-            file.unlink()
+    words = {name: _taken(workspace / path) for name, path in WORDS.items()}
     return {name: written for name, written in words.items() if written}
+
+
+def _taken(file: Path) -> str:
+    """What *file* holds, stripped, once it is removed. Empty when there is no file."""
+    if not file.is_file():
+        return ""
+    written = file.read_text(encoding="utf-8").strip()
+    file.unlink()
+    return written
 
 
 def _check_committed(workspace: Path, branch: str) -> None:

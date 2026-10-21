@@ -202,17 +202,17 @@ def test_a_step_may_name_one_of_kinbys_default_hooks_and_a_command_step_a_hook(t
     ]
 
 
-def test_needs_human_calls_a_tool_of_one_of_the_factorys_instances(tmp_path):
+@pytest.mark.parametrize("key", ["needs_human", "ended"])
+def test_a_run_call_calls_a_tool_of_one_of_the_factorys_instances(tmp_path, key):
     def calling(instance: str, tool: str) -> dict[str, str]:
-        needs_human = f"needs_human: {{ in: {instance}, call: {tool} }}\n"
-        return FILES | {"factory.yaml": FACTORY + needs_human}
+        return FILES | {"factory.yaml": FACTORY + f"{key}: {{ in: {instance}, call: {tool} }}\n"}
 
     assert problems(tmp_path / "declared", calling("coder", "open_pull_request")) == []
     assert problems(tmp_path / "missing", calling("coder", "label_issue")) == [
-        'needs_human calls tool "label_issue", which instance "coder" does not have.'
+        f'{key} calls tool "label_issue", which instance "coder" does not have.'
     ]
     assert problems(tmp_path / "undeclared", calling("triager", "open_pull_request")) == [
-        'needs_human runs in instance "triager", which the factory does not declare.'
+        f'{key} runs in instance "triager", which the factory does not declare.'
     ]
 
 

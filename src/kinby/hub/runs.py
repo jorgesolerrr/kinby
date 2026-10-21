@@ -80,6 +80,7 @@ from kinby.factories.file import (
     CodeStep,
     CommandStep,
     Duration,
+    EndedCall,
     FactoryFile,
     InstanceName,
     InvalidFactoryFile,
@@ -128,6 +129,8 @@ BACKOFF_SECONDS = 5.0
 BACKOFF_CAP_SECONDS = 300.0
 #: How long a client step's coding client runs when the step declares no timeout.
 _CLIENT_TIMEOUT: Duration = "60m"
+#: The statuses a run ends in, which the factory's ended call follows.
+_ENDS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED)
 
 
 @dataclass(frozen=True)
@@ -149,18 +152,26 @@ class _QueuedStep:
 
 @dataclass(frozen=True)
 class _QueuedReport:
-    """The factory's needs_human call for a run that stopped, waiting for its instance.
+    """The factory's call for a run that stopped, waiting for its instance: its needs_human call,
+    or its ended call once the run ends done or cancelled.
 
-    It is no step of the run, so it records no attempt. *generation* ties it to the stop that
-    queued it, so delivering it marks only that stop reported, not a later one. *instance* names
-    the role that makes the call, so a retry finds the instance that holds it by then.
+    It is no step of the run, so it records no attempt. *status* and *generation* tie it to the
+    stop that queued it, so delivering it marks only that stop reported, not a later one.
+    *instance* names the role that makes the call, so a retry finds the instance that holds it by
+    then.
     """
 
     run_id: UUID
     instance: InstanceName
     command: StepRunCommand
+    status: FactoryRunStatus
     generation: int
     waited: float = 0.0
+
+    @property
+    def key(self) -> str:
+        """The factory file's key that declares the call."""
+        return "needs_human" if self.status is FactoryRunStatus.NEEDS_HUMAN else "ended"
 
 
 @dataclass(frozen=True)
@@ -188,7 +199,8 @@ class FactoryRuns:
         self._factories = factories
         self._run_step = run_step
         self._tell_stop = tell_stop
-        #: The steps, needs_human calls and run stops waiting for each instance, by instance id.
+        #: The steps, needs_human and ended calls and run stops waiting for each instance, by
+        #: instance id.
         self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         #: The quiet time or deadline of each run parked at a wait that has one, and the reset of
@@ -359,14 +371,15 @@ class FactoryRuns:
 
         An attempt it left running is no attempt (ADR 0102), and its step is offered again. A
         run parked at a wait keeps its deadline, counted from when it parked, and one parked
-        until its plan window resets still wakes at the reset. A needs_human report or a run's
-        stop queued but not delivered before the hub stopped is queued again.
+        until its plan window resets still wakes at the reset. A needs_human report, an ended
+        call or a run's stop queued but not delivered before the hub stopped is queued again.
 
-        The runs still unreported and the stops still untold from before this pass are collected
-        first, so a run that stops as it is queued below, which queues that fresh stop's own
-        report and telling, never queues a second one for the same stop.
+        The runs still unreported or uncalled and the stops still untold from before this pass
+        are collected first, so a run that stops as it is queued below, which queues that fresh
+        stop's own report and telling, never queues a second one for the same stop.
         """
         pending = self._registry.unreported_runs()
+        uncalled = self._registry.uncalled_ends()
         untold = self._registry.untold_stops()
         for run_id in self._registry.unfinished_attempts():
             self._registry.drop_attempt(run_id)
@@ -387,6 +400,10 @@ class FactoryRuns:
                 attempts = self._registry.attempts(run.run_id)
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
+        for run in uncalled:
+            factory = self._factory(run.factory)
+            if factory is not None and factory.ended is not None:
+                self._report(factory, factory.ended, run)
         for stop in untold:
             self._put_stop(_QueuedStop(stop))
 
@@ -719,6 +736,9 @@ class FactoryRuns:
         if self._stale(report):
             return
         match await self._run_step(instance_id, report.command):
+            case StepResult(ending=StepEnding.CLEAN) if report.status in _ENDS:
+                self._registry.mark_ended_called(report.run_id)
+                return
             case StepResult(ending=StepEnding.CLEAN):
                 self._registry.mark_reported(report.run_id, report.generation)
                 return
@@ -726,7 +746,8 @@ class FactoryRuns:
                 pass
         backoff = _next_backoff(report.waited)
         _logger.warning(
-            "The needs_human call for factory run %s failed, trying again in %s seconds: %s",
+            "The %s call for factory run %s failed, trying again in %s seconds: %s",
+            report.key,
             report.run_id,
             backoff,
             reason,
@@ -737,7 +758,7 @@ class FactoryRuns:
         run = self._registry.run(report.run_id)
         return (
             run is None
-            or run.status is not FactoryRunStatus.NEEDS_HUMAN
+            or run.status is not report.status
             or self._registry.stop_generation(run.run_id) != report.generation
         )
 
@@ -855,12 +876,16 @@ class FactoryRuns:
 
     def _move(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
         """Put the run in *status* at *step*, and tell the instance that handed it in when that
-        stops it."""
-        moved = self._registry.move_run(run_id, status, step)
+        stops it. A run that ends done or cancelled gets the factory's ended call."""
+        factory = self._factory(self._existing(run_id).factory)
+        ended = factory.ended if factory is not None and status in _ENDS else None
+        moved = self._registry.move_run(run_id, status, step, ended_call=ended is not None)
         self._publish(moved)
         if moved.status in STOPS:
             stop = self._registry.run_stop(run_id, self._registry.stop_generation(run_id))
             self._put_stop(_QueuedStop(stop))
+        if factory is not None and ended is not None:
+            self._report(factory, ended, moved)
         return moved
 
     def _put_stop(self, queued: _QueuedStop) -> None:
@@ -894,30 +919,38 @@ class FactoryRuns:
         self._put_stop(queued)
 
     def _report(
-        self, factory: FactoryFile, call: NeedsHumanCall, run: FactoryRun, summary: str
+        self,
+        factory: FactoryFile,
+        call: NeedsHumanCall | EndedCall,
+        run: FactoryRun,
+        summary: str | None = None,
     ) -> None:
-        """Queue the factory's needs_human call for the run, which stopped with this *summary*."""
-        if run.step is None:
-            raise ValueError(f'Factory run "{run.run_id}" is at no step to report.')
+        """Queue the factory's call for the run as it stopped: the needs_human call, with the
+        *summary* it stopped with, or the ended call.
+
+        A run that ended done is at no step, so the call names the step of its last attempt.
+        """
+        step = run.step if run.step is not None else self._registry.attempts(run.run_id)[-1].step
         command = StepRunCommand(
             step=CodeStepRun(call=call.call, summary=summary),
-            origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=run.step),
+            origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step),
             work_item=run.work_item,
             results=self._results(run.run_id, factory),
         )
         generation = self._registry.stop_generation(run.run_id)
-        self._put_report(_QueuedReport(run.run_id, call.instance, command, generation))
+        self._put_report(_QueuedReport(run.run_id, call.instance, command, run.status, generation))
 
     def _put_report(self, report: _QueuedReport) -> None:
         factory = report.command.origin.factory
         instance_id = self._holder(self._existing(report.run_id), report.instance)
         if instance_id is None:
             _logger.warning(
-                "Factory run %s needs a human, and no instance holds role %s of factory %s "
-                "to report it.",
+                "Factory run %s stopped, and no instance holds role %s of factory %s to make its "
+                "%s call.",
                 report.run_id,
                 report.instance,
                 factory,
+                report.key,
             )
             return
         self._queue(instance_id).put_nowait(report)

@@ -2,10 +2,10 @@
 
 It validates the factory file against its schema and each instance's setup declarations,
 resolves every instance template, image recipe, routine, prompt, tool and hook the file names,
-its needs_human call's among them, and checks that each step's inputs come from an earlier step
-or the work item. It runs each template's tool and hook files to learn their names, as an
-instance does, and initializes an instance from each template with its defaults, as a creation
-does.
+its needs_human and ended calls' among them, and checks that each step's inputs come from an
+earlier step or the work item. It runs each template's tool and hook files to learn their names,
+as an instance does, and initializes an instance from each template with its defaults, as a
+creation does.
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def check_factory(folder: Path) -> tuple[str, ...]:
         *(problem for template in templates.values() for problem in template.problems),
         *_intake(factory, folder),
         *_steps(factory, folder, templates),
-        *_needs_human(factory, templates),
+        *_run_calls(factory, templates),
         *_inputs(factory),
         *_order(factory),
         *_resumes(factory),
@@ -315,20 +315,17 @@ def _steps(
             )
 
 
-def _needs_human(factory: FactoryFile, templates: dict[InstanceName, _Template]) -> Iterator[str]:
-    call = factory.needs_human
-    if call is None:
-        return
-    if call.instance not in factory.instances:
-        yield (
-            f'needs_human runs in instance "{call.instance}", which the factory does not declare.'
-        )
-        return
-    template = templates.get(call.instance)
-    if template is not None and call.call not in template.tools:
-        yield (
-            f'needs_human calls tool "{call.call}", which instance "{call.instance}" does not have.'
-        )
+def _run_calls(factory: FactoryFile, templates: dict[InstanceName, _Template]) -> Iterator[str]:
+    """The needs_human and ended calls each name a tool of an instance the factory declares."""
+    for key, call in (("needs_human", factory.needs_human), ("ended", factory.ended)):
+        if call is None:
+            continue
+        if call.instance not in factory.instances:
+            yield f'{key} runs in instance "{call.instance}", which the factory does not declare.'
+            continue
+        template = templates.get(call.instance)
+        if template is not None and call.call not in template.tools:
+            yield f'{key} calls tool "{call.call}", which instance "{call.instance}" does not have.'
 
 
 def _inputs(factory: FactoryFile) -> Iterator[str]:

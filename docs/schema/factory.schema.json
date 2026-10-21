@@ -537,6 +537,24 @@
       "pattern": "^[1-9][0-9]*[smhd]$",
       "type": "string"
     },
+    "EndedCall": {
+      "additionalProperties": false,
+      "description": "An instance tool the hub calls once when a run ends done or cancelled.\n\nThe tool's parameters named like a value of the run receive that value.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "in": {
+          "$ref": "#/$defs/InstanceName"
+        }
+      },
+      "required": [
+        "in",
+        "call"
+      ],
+      "title": "EndedCall",
+      "type": "object"
+    },
     "FactoryName": {
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "type": "string"
@@ -1084,6 +1102,17 @@
       },
       "title": "Done Requires",
       "type": "array"
+    },
+    "ended": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EndedCall"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "instances": {
       "additionalProperties": {
