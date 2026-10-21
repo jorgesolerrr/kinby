@@ -15,14 +15,16 @@ from kinby.instance import Instance
 
 #: How long one git command may run, in seconds.
 _GIT_TIMEOUT = 900
+#: The file in a run worktree's own git directory that names the run it belongs to.
+_OWNER = "kinby-run"
 
 
 class RunWorktreeError(CoreError):
     """A run worktree could not be cut, found or removed."""
 
 
-def run_worktree(instance: Instance, branch: str) -> Path:
-    """The run worktree of *branch*, cut again when it is missing.
+def run_worktree(instance: Instance, branch: str, run_id: str) -> Path:
+    """The run worktree of *branch*, cut again for run *run_id* when it is missing.
 
     A missing one is cut from the local branch, or from origin's when there is none. It fails
     unless the run worktree is on *branch*.
@@ -32,32 +34,41 @@ def run_worktree(instance: Instance, branch: str) -> Path:
     if worktree not in _worktrees(workspace):
         _move_off(workspace, branch)
         _git(workspace, "worktree", "add", str(worktree), branch)
+        _owner(worktree).write_text(run_id, encoding="utf-8")
     current = _git(worktree, "branch", "--show-current")
     if current != branch:
         raise RunWorktreeError(f"The run worktree of {branch} is on {current or 'no branch'}.")
     return worktree
 
 
-def cut_run_worktree(instance: Instance, branch: str, start: str) -> Path:
-    """A fresh run worktree of *branch*, at *start*. One already there goes, with all it held."""
+def cut_run_worktree(instance: Instance, branch: str, start: str, run_id: str) -> Path:
+    """A fresh run worktree of *branch* for run *run_id*, at *start*. One already there goes,
+    with all it held."""
     worktree = _path(instance, branch)
     workspace = instance.manifest.workspace.path
     if worktree in _worktrees(workspace):
         _git(workspace, "worktree", "remove", "--force", str(worktree))
     _move_off(workspace, branch)
     _git(workspace, "worktree", "add", "-B", branch, str(worktree), start)
+    _owner(worktree).write_text(run_id, encoding="utf-8")
     return worktree
 
 
-def remove_run_worktree(instance: Instance, branch: str) -> None:
-    """Remove *branch*'s run worktree and its local branch, whichever exist.
+def remove_run_worktree(instance: Instance, branch: str, run_id: str) -> None:
+    """Remove *branch*'s run worktree and its local branch, whichever exist, once run *run_id*
+    ended.
 
-    A branch another checkout is on stays.
+    A run worktree another run cut since stays, with its branch, and so does a branch another
+    checkout is on.
     """
     worktree = _path(instance, branch)
     workspace = instance.manifest.workspace.path
     held = _worktrees(workspace)
-    if held.pop(worktree, None) is not None:
+    if worktree in held:
+        owner = _owner(worktree)
+        if not owner.is_file() or owner.read_text(encoding="utf-8") != run_id:
+            return
+        del held[worktree]
         _git(workspace, "worktree", "remove", "--force", str(worktree))
     if branch not in held.values() and _git(workspace, "branch", "--list", branch):
         _git(workspace, "branch", "-D", branch)
@@ -67,6 +78,11 @@ def _path(instance: Instance, branch: str) -> Path:
     if branch.startswith("-") or Path(branch).is_absolute() or ".." in Path(branch).parts:
         raise RunWorktreeError(f'"{branch}" names no run worktree.')
     return (instance.path / "worktrees" / branch).resolve()
+
+
+def _owner(worktree: Path) -> Path:
+    """The file that names the run *worktree* belongs to. It goes with the worktree."""
+    return worktree / _git(worktree, "rev-parse", "--git-path", _OWNER)
 
 
 def _worktrees(workspace: Path) -> dict[Path, str]:

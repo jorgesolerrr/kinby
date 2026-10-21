@@ -186,7 +186,7 @@ async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> 
 
 
 @tool(write=True)
-def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
+def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, str]:
     """Cut a fresh run worktree on the issue's agent branch, once a trusted author wrote all its
     text.
 
@@ -206,7 +206,7 @@ def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
     _exclude_scratch(workspace)
     _git(workspace, "fetch", "--prune", "origin")
     base = _base(workspace, found)
-    cut_run_worktree(context.instance, branch, f"origin/{base}")
+    cut_run_worktree(context.instance, branch, f"origin/{base}", run_id)
     return {"branch": branch, "base": base}
 
 
@@ -395,15 +395,20 @@ def report_needs_human(
 
 @tool(write=True)
 def report_ended(
-    issue: int, context: ToolContext, *, branch: str | None = None, no_change: str | None = None
+    issue: int,
+    run_id: str,
+    context: ToolContext,
+    *,
+    branch: str | None = None,
+    no_change: str | None = None,
 ) -> None:
-    """Remove the run's run worktree and local branch. Then say on the issue why a run that ended
-    made no change, and take ready-for-agent off it.
+    """Remove the run's run worktree and local branch, unless a later run cut them again. Then
+    say on the issue why a run that ended made no change, and take ready-for-agent off it.
 
     The issue stays open: closing it is the maintainer's call.
     """
     if branch is not None:
-        remove_run_worktree(context.instance, branch)
+        remove_run_worktree(context.instance, branch, run_id)
     if no_change is None:
         return
     workspace = context.workspace

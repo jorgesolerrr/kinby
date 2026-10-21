@@ -61,7 +61,9 @@ async def run_step(
     workspace = instance.manifest.workspace.path
     if isinstance(command.step, ClientStepRun | CommandStepRun) and command.step.branch is not None:
         try:
-            workspace = await asyncio.to_thread(run_worktree, instance, command.step.branch)
+            workspace = await asyncio.to_thread(
+                run_worktree, instance, command.step.branch, str(command.origin.run_id)
+            )
         except RunWorktreeError as exc:
             return _failed(str(exc))
     match command.step:
@@ -241,7 +243,7 @@ def _commands(step: CommandStepRun, instance: Path) -> list[str] | StepResult:
 async def _run_code_step(
     step: CodeStepRun, command: StepRunCommand, instance: Instance
 ) -> StepResult:
-    """Call the step's tool as a routine's code step is called, with the run's values.
+    """Call the step's tool as a routine's code step is called, with the run's values and its id.
 
     A mapping the tool returns is the result's values. A HookResult also names its outcome.
     """
@@ -250,14 +252,10 @@ async def _run_code_step(
         tool = resolve_code_step(SharedCodeStep(step.call), tools)
     except ValueError:
         return _failed(f'Tool "{step.call}" is not one of this instance\'s tools.')
-    held = {**command.work_item, **command.results}
+    held = {**command.work_item, **command.results, "run_id": str(command.origin.run_id)}
     if step.summary is not None:
-        # The factory's needs_human call: the run, the step it stopped at, and how it ended.
-        held |= {
-            "run_id": str(command.origin.run_id),
-            "step": command.origin.step,
-            "summary": step.summary,
-        }
+        # The factory's needs_human call: the step the run stopped at, and how it ended.
+        held |= {"step": command.origin.step, "summary": step.summary}
     arguments = {name: value for name, value in held.items() if name in tool.runnable.args}
     # A code step runs on no thread, so its tool's context names one no turn opens.
     context = ToolContext(instance=instance, thread_id=uuid4())

@@ -13,7 +13,7 @@ ADR 0104 kept one shared workspace and switched it to a run's branch before each
 - The software factory's `prepare` cuts it from `origin/<base>`, removing one already at that path, so a send back to `prepare` starts over. The workspace stays on the default branch and only fetches.
 - A step whose run worktree is missing gets one from the local branch, or from `origin/<branch>`. When the workspace is on that branch, the instance first detaches it at `origin/HEAD`. When the workspace also has uncommitted changes, the step fails and names them, as ADR 0104 does. This carries the runs that were unfinished when run worktrees shipped.
 - ADR 0104's switch becomes a check: a step fails before it starts when its run worktree is on another branch. It runs no hook, since nothing ran.
-- The factory's ended call removes the run worktree and its local branch when the run ends done or cancelled. A branch the workspace is still on stays.
+- The factory's ended call removes the run worktree and its local branch when the run ends done or cancelled. Each run worktree records the run that cut it, so an ended call tried again after a later run of the same issue cut the branch's run worktree leaves that one and its branch alone. A branch the workspace is still on stays. Code steps get the run's id as `run_id` for this.
 - Each run worktree installs its own `.venv` and `node_modules`. The coder recipe puts the uv and bun caches under `/instance/.state/cache`, so installs stay fast and survive an image update.
 
 Steps still run one at a time per instance. Running several runs at once is #657, and sweeping run worktrees that outlive their run is #852.
