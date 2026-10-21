@@ -325,7 +325,7 @@ The portable description of an instance's identity and configuration. It contain
 
 ### Workspace
 
-The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's **conventions** as an additional behavior source.
+The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's **conventions** as an additional behavior source. The **software factory**'s runs never work in it directly: each works in its own **run worktree** cut from it.
 
 ### Conventions
 
@@ -738,6 +738,11 @@ The unit of work a **factory** carries, such as one issue.
 ### Factory run
 
 One **work item**'s trip through a **factory**'s **steps**. It belongs to the **instance** that handed the work item in. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+
+### Run worktree
+
+The checkout of the **workspace** that one **factory run** works in, on that run's branch. Its run's first step cuts it from the base, and it lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
+_Avoid_: workspace (the shared clone run worktrees are cut from), worktree (git's mechanism, not the concept)
 
 ### Run usage
 
