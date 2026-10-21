@@ -326,12 +326,13 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
             _gh(workspace, "pr", "comment", str(pr), "--body", NO_REVIEW)
     maintainer = _repository(workspace).maintainer
     labels = {label["name"] for label in pull["labels"]}
-    if MERGE_READY_LABEL not in labels and all(
-        label["name"] != MERGE_READY_LABEL
-        for label in _pages(workspace, "repos/{owner}/{repo}/labels")
-    ):
+    if MERGE_READY_LABEL not in labels and not _has_merge_ready_label(workspace):
         described = ("--description", MERGE_READY_DESCRIPTION)
-        _gh(workspace, "label", "create", MERGE_READY_LABEL, *described)
+        try:
+            _gh(workspace, "label", "create", MERGE_READY_LABEL, *described)
+        except CommandFailed:
+            if not _has_merge_ready_label(workspace):
+                raise
     asked = {pull["user"]["login"], *(user["login"] for user in pull["requested_reviewers"])}
     edits = [
         *(() if MERGE_READY_LABEL in labels else ("--add-label", MERGE_READY_LABEL)),
@@ -800,6 +801,11 @@ def _repository(workspace: Path) -> Repository:
         default_branch=found["defaultBranchRef"]["name"],
         maintainer=None if found["isInOrganization"] else found["owner"]["login"],
     )
+
+
+def _has_merge_ready_label(workspace: Path) -> bool:
+    labels = _pages(workspace, "repos/{owner}/{repo}/labels")
+    return any(label["name"] == MERGE_READY_LABEL for label in labels)
 
 
 def _clean(workspace: Path) -> None:

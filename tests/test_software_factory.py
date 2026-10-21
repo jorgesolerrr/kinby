@@ -760,8 +760,12 @@ class FakeGitHub:
             f"with open({str(self._calls)!r}, 'a') as calls:\n"
             "    calls.write(json.dumps(arguments) + '\\n')\n"
             f"answers = Path({str(self._answers)!r})\n"
-            "for needles, output, error in json.loads(answers.read_text()):\n"
+            "listed = json.loads(answers.read_text())\n"
+            "for index, (needles, output, error, once) in enumerate(listed):\n"
             "    if all(needle in arguments for needle in needles):\n"
+            "        if once:\n"
+            "            del listed[index]\n"
+            "            answers.write_text(json.dumps(listed))\n"
             "        if error is not None:\n"
             "            sys.exit(error)\n"
             "        print(output)\n"
@@ -773,14 +777,16 @@ class FakeGitHub:
             "PATH", f"{executable.parent}:{Path(sys.executable).parent}:/usr/bin:/bin"
         )
 
-    def answer(self, *needles: str, output: object = "", error: str | None = None) -> None:
+    def answer(
+        self, *needles: str, output: object = "", error: str | None = None, once: bool = False
+    ) -> None:
         """Answer a call whose arguments hold every one of *needles*, the first answer that fits.
 
-        An *error* fails the call with that message.
+        An *error* fails the call with that message. A *once* answer answers one call only.
         """
         answers = json.loads(self._answers.read_text())
         text = output if isinstance(output, str) else json.dumps(output)
-        answers.append([list(needles), text, error])
+        answers.append([list(needles), text, error, once])
         self._answers.write_text(json.dumps(answers))
 
     def forget(self) -> None:
@@ -2427,6 +2433,34 @@ def test_assess_creates_the_merge_ready_label_only_when_the_repository_lacks_it(
         assert len(created_labels(github)) == created
         writes = [arguments[:2] for arguments in github.calls if arguments[0] in {"label", "pr"}]
         assert writes == [["label", "create"]] * created + [["pr", "edit"]]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("appeared", [True, False], ids=["created-meanwhile", "still-missing"])
+def test_assess_whose_label_create_fails_goes_on_only_once_the_label_exists(
+    tmp_path, monkeypatch, appeared
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    github.answer("repos/{owner}/{repo}/labels", output=[[]], once=True)
+    github.answer("label", "create", error="label with name already exists")
+    answer_pull_request(
+        github, reviews=[submitted("owner", "OWNER")], labels=("merge-ready",) if appeared else ()
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert len(created_labels(github)) == 1
+        if appeared:
+            assert (result.ending, result.outcome) == (StepEnding.CLEAN, "merge-ready")
+            assert len(labelled(github)) == 1
+            return
+        assert result.ending is StepEnding.FAILED
+        assert "label with name already exists" in str(result.summary)
+        assert labelled(github) == []
 
     asyncio.run(scenario())
 
