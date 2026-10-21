@@ -1264,25 +1264,36 @@ WRITES_NO_CHANGE = (
 
 
 @pytest.mark.parametrize(
-    ("then", "ending", "outcome", "values"),
+    ("then", "ending", "outcome", "values", "reason"),
     [
         (
             WRITES_NO_CHANGE + streaming(CLAUDE_STREAM),
             StepEnding.CLEAN,
             "no-change",
             {"no_change": NO_CHANGE_REASON},
+            None,
         ),
         (
             WRITES_NO_CHANGE + LEAVES_CHANGES + streaming(CLAUDE_STREAM),
             StepEnding.FAILED,
             None,
             {},
+            "UncommittedWork: The workspace has changes no commit on agent/7-add-dark-mode "
+            "holds:\n?? notes.md",
+        ),
+        (
+            COMMITS + WRITES_NO_CHANGE + streaming(CLAUDE_STREAM),
+            StepEnding.FAILED,
+            None,
+            {},
+            "ChangeAndNoChange: .scratch/no-change.md says the ticket needs no change, but "
+            "branch agent/7-add-dark-mode has commits ahead of main.",
         ),
     ],
-    ids=["no-change", "no-change-with-an-untracked-file"],
+    ids=["no-change", "no-change-with-an-untracked-file", "no-change-with-commits"],
 )
 def test_the_implement_hook_passes_a_branch_with_no_commits_only_under_no_change(
-    tmp_path, monkeypatch, then, ending, outcome, values
+    tmp_path, monkeypatch, then, ending, outcome, values, reason
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
@@ -1306,11 +1317,8 @@ def test_the_implement_hook_passes_a_branch_with_no_commits_only_under_no_change
 
         assert (result.ending, result.outcome, result.values) == (ending, outcome, values)
         assert not (workspace / ".scratch" / "no-change.md").exists()
-        if ending is StepEnding.FAILED:
-            assert result.summary.endswith(
-                "UncommittedWork: The workspace has changes no commit on agent/7-add-dark-mode "
-                "holds:\n?? notes.md"
-            )
+        if reason is not None:
+            assert result.summary.endswith(reason)
 
     asyncio.run(scenario())
 

@@ -28,6 +28,10 @@ class UncommittedWork(RuntimeError):
     """The step's work is not committed on the run's branch."""
 
 
+class ChangeAndNoChange(RuntimeError):
+    """The coding client says the ticket needs no change, and committed a change."""
+
+
 class UnansweredThreads(RuntimeError):
     """The coding client left a review thread without a reply."""
 
@@ -38,16 +42,23 @@ def check_implementation(end: StepEnd) -> HookResult | None:
     of its base, and nothing is left uncommitted. Record the pull request title and body the
     step wrote.
 
-    A step that wrote why the ticket needs no change ends with the outcome ``no-change`` and
-    needs no commits.
+    A step that wrote why the ticket needs no change ends with the outcome ``no-change``, and
+    fails when the branch has commits ahead of its base, which the cancelled run would never
+    publish.
     """
     words = _taken_words(end.workspace)
     reason = _taken(end.workspace / NO_CHANGE)
     branch, base = str(end.results["branch"]), str(end.results["base"])
     _check_committed(end.workspace, branch)
+    ahead = _git(end.workspace, "rev-list", "--count", f"origin/{base}..{branch}") != "0"
+    if reason and ahead:
+        raise ChangeAndNoChange(
+            f"{NO_CHANGE} says the ticket needs no change, but branch {branch} has commits "
+            f"ahead of {base}."
+        )
     if reason:
         return HookResult(values={**words, "no_change": reason}, outcome="no-change")
-    if _git(end.workspace, "rev-list", "--count", f"origin/{base}..{branch}") == "0":
+    if not ahead:
         raise UncommittedWork(f"Branch {branch} has no commits ahead of {base}.")
     return HookResult(values=words) if words else None
 
