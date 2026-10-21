@@ -871,6 +871,150 @@ def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
     assert registry.unreported_runs() == []
 
 
+ENDED_TOOL = '''\
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def report_ended() -> dict[str, int]:
+    """Record that this run ended."""
+    return {}
+'''
+ENDED_FILES = NEEDS_HUMAN_FILES | {
+    "factory.yaml": FACTORY
+    + "    outcomes: { nothing: stop }\n"
+    + "needs_human: { in: coder, call: notify_human }\n"
+    + "ended: { in: coder, call: report_ended }\n",
+    "instances/coder/tools/ended.py": ENDED_TOOL,
+}
+
+
+def ended_calls(control: FakeControl) -> list[StepRunCommand]:
+    return [
+        command for _, command in control.steps if command.step == CodeStepRun(call="report_ended")
+    ]
+
+
+async def called_ended(hub: Hub, control: FakeControl) -> list[StepRunCommand]:
+    """The factory's ended calls, once the hub holds none still to make."""
+    async with asyncio.timeout(5):
+        while not ended_calls(control) or hub.registry.uncalled_ends():
+            await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    return ended_calls(control)
+
+
+@pytest.mark.parametrize(
+    ("result", "status"),
+    [
+        (StepResult(ending=StepEnding.CLEAN, values={"pr": 12}), FactoryRunStatus.DONE),
+        (
+            StepResult(ending=StepEnding.CLEAN, outcome="nothing", values={"pr": 12}),
+            FactoryRunStatus.CANCELLED,
+        ),
+    ],
+    ids=["done", "stop-outcome"],
+)
+def test_a_run_that_ends_gets_the_factorys_ended_call_once_with_its_values(
+    tmp_path, result, status
+):
+    control = FakeControl()
+    control.step_results = [result]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, ENDED_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+        [ended] = await called_ended(hub, control)
+
+        assert finished.run.status is status
+        assert (ended.origin.run_id, ended.origin.step) == (run.run_id, "test")
+        assert (ended.work_item, ended.results) == ({"issue": 7}, {"pr": 12})
+        assert (ended.hook, ended.attempt) == (None, None)
+
+    asyncio.run(scenario())
+
+
+def test_a_run_cancelled_after_needing_a_human_gets_the_ended_call_only_once_it_ends(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="Tests failed.")]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, ENDED_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await settled(hub, run.run_id)
+        await reported(hub)
+
+        assert reports(control) == ["Tests failed."]
+        assert ended_calls(control) == []
+
+        await hub_client(hub).call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id))
+        [ended] = await called_ended(hub, control)
+
+        assert (ended.origin.run_id, ended.origin.step) == (run.run_id, "test")
+
+    asyncio.run(scenario())
+
+
+def test_an_ended_call_not_made_before_the_hub_stopped_is_made_after_a_restart(tmp_path):
+    control = FakeControl()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime, ENDED_FILES)
+
+    def new_hub() -> Hub:
+        return Hub(
+            directory,
+            runtime=runtime,
+            images=FakeImages(),
+            control=control,
+            shipped_factories=directory / "shipped",
+        )
+
+    async def before_the_restart() -> UUID:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 1:
+                await asyncio.sleep(0.01)
+            # Let the test step through, and hold the ended call it queues right behind it.
+            control.step_release.set()
+            control.step_release.clear()
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+        return run.run_id
+
+    run_id = asyncio.run(before_the_restart())
+    hub.close()
+    control.step_release.set()
+    restarted = new_hub()
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        first, again = await called_ended(restarted, control)
+
+        assert first == again
+        assert again.origin.run_id == run_id
+        restarted.close()
+
+    asyncio.run(after_the_restart())
+    once_more = new_hub()
+
+    async def after_the_second_restart() -> None:
+        await once_more.recover()
+        await asyncio.sleep(0.05)
+
+        assert len(ended_calls(control)) == 2
+        once_more.close()
+
+    asyncio.run(after_the_second_restart())
+
+
 async def told(control: FakeControl, count: int) -> list[RunStop]:
     """The run stops the hub told once *count* of them reached their instance, and no more."""
     async with asyncio.timeout(5):

@@ -443,8 +443,10 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
             "assess",
         ]
         asked = {}
+        # The ended call that follows the run's end is no attempt at a step.
         for _, command in control.steps:
-            asked.setdefault(command.origin.step, []).append(command)
+            if command.attempt is not None:
+                asked.setdefault(command.origin.step, []).append(command)
         assert [command.step for command in asked["assess"]] == [
             CodeStepRun(call="assess_pull_request")
         ] * 2
@@ -744,6 +746,39 @@ def test_opening_the_pull_request_is_never_retried_and_needs_human_reports_on_th
     asyncio.run(scenario())
 
 
+#: Why the ticket needs no change, as the implement step records it.
+NO_CHANGE_REASON = "Dark mode shipped in #6."
+
+
+def test_an_implement_with_no_change_ends_the_run_cancelled_and_makes_the_ended_call(tmp_path):
+    control = FakeControl()
+    unchanged = StepResult(
+        ending=StepEnding.CLEAN, outcome="no-change", values={"no_change": NO_CHANGE_REASON}
+    )
+    control.step_results = [PREPARED, SET_UP, unchanged]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 4:
+                await asyncio.sleep(0.01)
+
+        assert (finished.run.status, finished.run.step) == (
+            FactoryRunStatus.CANCELLED,
+            "implement",
+        )
+        _, ended = control.steps[-1]
+        assert ended.step == CodeStepRun(call="report_ended")
+        assert (ended.origin.run_id, ended.origin.step) == (run.run_id, "implement")
+        assert ended.results == {**PREPARED.values, "no_change": NO_CHANGE_REASON}
+
+    asyncio.run(scenario())
+
+
 class FakeGitHub:
     """A gh first on PATH that records each call and answers from what the test told it."""
 
@@ -1018,6 +1053,56 @@ def test_each_stop_of_a_run_comments_its_step_cause_run_id_retry_and_the_issues_
     asyncio.run(scenario())
 
 
+async def ended(dispatcher: ScheduledDispatcher, results: Mapping[str, StepValue]) -> StepResult:
+    """Make the factory's ended call for issue 7's run, which recorded *results*."""
+    return await run_in(
+        dispatcher,
+        StepRunCommand(
+            step=CodeStepRun(call="report_ended"),
+            origin=origin("implement"),
+            work_item={"issue": 7},
+            results=results,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("results", "calls"),
+    [
+        (
+            {**BRANCH, "no_change": NO_CHANGE_REASON},
+            [
+                ["issue", "edit", "7", "--remove-label", "ready-for-agent"],
+                [
+                    "issue",
+                    "comment",
+                    "7",
+                    "--body",
+                    f"The software factory made no change for this issue: {NO_CHANGE_REASON}\n\n"
+                    "Close it if you agree, or add `ready-for-agent` to try again.",
+                ],
+            ],
+        ),
+        ({**BRANCH, "pr": 42, "merge_ready": True}, []),
+    ],
+    ids=["no-change", "merge-ready"],
+)
+def test_the_ended_call_comments_why_a_run_made_no_change_and_never_closes_the_issue(
+    tmp_path, monkeypatch, results, calls
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await ended(dispatcher, results)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert github.calls == calls
+
+    asyncio.run(scenario())
+
+
 #: What the stub client runs to commit its work on the branch it is on.
 COMMITS = (
     "import subprocess\n"
@@ -1166,6 +1251,74 @@ def test_the_implement_hook_fails_on_an_untracked_file_git_is_set_to_hide(tmp_pa
             "UncommittedWork: The workspace has changes no commit on agent/7-add-dark-mode "
             "holds:\n?? notes.md"
         )
+
+    asyncio.run(scenario())
+
+
+#: What the stub client runs to record that the ticket needs no change, and why.
+WRITES_NO_CHANGE = (
+    "import os\n"
+    "os.makedirs('.scratch', exist_ok=True)\n"
+    f"open('.scratch/no-change.md', 'w').write({NO_CHANGE_REASON + chr(10)!r})\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("then", "ending", "outcome", "values", "reason"),
+    [
+        (
+            WRITES_NO_CHANGE + streaming(CLAUDE_STREAM),
+            StepEnding.CLEAN,
+            "no-change",
+            {"no_change": NO_CHANGE_REASON},
+            None,
+        ),
+        (
+            WRITES_NO_CHANGE + LEAVES_CHANGES + streaming(CLAUDE_STREAM),
+            StepEnding.FAILED,
+            None,
+            {},
+            "UncommittedWork: The workspace has changes no commit on agent/7-add-dark-mode "
+            "holds:\n?? notes.md",
+        ),
+        (
+            COMMITS + WRITES_NO_CHANGE + streaming(CLAUDE_STREAM),
+            StepEnding.FAILED,
+            None,
+            {},
+            "ChangeAndNoChange: .scratch/no-change.md says the ticket needs no change, but "
+            "branch agent/7-add-dark-mode has commits ahead of main.",
+        ),
+    ],
+    ids=["no-change", "no-change-with-an-untracked-file", "no-change-with-commits"],
+)
+def test_the_implement_hook_passes_a_branch_with_no_commits_only_under_no_change(
+    tmp_path, monkeypatch, then, ending, outcome, values, reason
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    git(workspace, "switch", "-c", BRANCH["branch"], "origin/main")
+    stub_client(tmp_path, monkeypatch, "claude", then)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=ClientStepRun(
+                    client=CodingClient.CLAUDE, prompt="Implement it.", timeout_seconds=30
+                ),
+                hook="check_implementation",
+                origin=origin("implement"),
+                work_item={"issue": 7},
+                results=BRANCH,
+            ),
+        )
+
+        assert (result.ending, result.outcome, result.values) == (ending, outcome, values)
+        assert not (workspace / ".scratch" / "no-change.md").exists()
+        if reason is not None:
+            assert result.summary.endswith(reason)
 
     asyncio.run(scenario())
 

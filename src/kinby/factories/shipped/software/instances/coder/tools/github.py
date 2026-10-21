@@ -391,6 +391,23 @@ def report_needs_human(
     _gh(workspace, "issue", "comment", str(issue), "--body", "\n\n".join(body))
 
 
+@tool(write=True)
+def report_ended(issue: int, context: ToolContext, *, no_change: str | None = None) -> None:
+    """Say on the issue why a run that ended made no change, and take ready-for-agent off it.
+
+    The issue stays open: closing it is the maintainer's call. Any other ending does nothing.
+    """
+    if no_change is None:
+        return
+    workspace = context.workspace
+    _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_LABEL)
+    body = (
+        f"The software factory made no change for this issue: {no_change}\n\n"
+        f"Close it if you agree, or add `{READY_LABEL}` to try again."
+    )
+    _gh(workspace, "issue", "comment", str(issue), "--body", body)
+
+
 def _open_pull_request(
     workspace: Path, issue: int, branch: str, base: str, title: str, body: str, *, reviewed: bool
 ) -> dict[str, int]:

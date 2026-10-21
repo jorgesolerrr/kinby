@@ -250,6 +250,17 @@ class NeedsHumanCall:
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class EndedCall:
+    """An instance tool the hub calls once when a run ends done or cancelled.
+
+    The tool's parameters named like a value of the run receive that value.
+    """
+
+    instance: InstanceName = Field(alias="in")
+    call: ToolName
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class FactoryFile:
     """A factory: the instances its steps run in, its intake, and its line of steps."""
 
@@ -262,6 +273,7 @@ class FactoryFile:
     #: Values the run must hold once its last step's hook has run.
     done_requires: tuple[ValueName, ...] = ()
     needs_human: NeedsHumanCall | None = None
+    ended: EndedCall | None = None
 
 
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)

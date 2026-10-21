@@ -280,6 +280,9 @@ class HubRegistry:
                     "instance_id": "TEXT",
                     # When a run parked until its plan window resets tries its step again.
                     "wakes_at": "TEXT",
+                    # Set while the factory's ended call for the run is still to make. A run
+                    # that ended before the call existed owes none.
+                    "ended_call": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
             # A run that stopped before stops were recorded gets its latest stop as told, so its
@@ -1784,8 +1787,11 @@ class HubRegistry:
         status: FactoryRunStatus,
         step: StepId | None,
         wakes_at: datetime | None = None,
+        *,
+        ended_call: bool = False,
     ) -> FactoryRun:
-        """Put the run in *status* at *step*, waking at *wakes_at* when it parks until then.
+        """Put the run in *status* at *step*, waking at *wakes_at* when it parks until then and
+        owing the factory's ended call when *ended_call*.
 
         Moving it to done, cancelled or needs_human is a stop: it bumps the run's stop generation
         and records the stop for its instance, so each stop is told once and an earlier stop's
@@ -1795,7 +1801,8 @@ class HubRegistry:
         with self._connect() as connection:
             connection.execute(
                 """
-                UPDATE factory_runs SET status = ?, step = ?, wakes_at = ?, updated_at = ?
+                UPDATE factory_runs
+                SET status = ?, step = ?, wakes_at = ?, updated_at = ?, ended_call = ?
                 WHERE id = ?
                 """,
                 (
@@ -1803,6 +1810,7 @@ class HubRegistry:
                     step,
                     wakes_at.isoformat() if wakes_at is not None else None,
                     _now(),
+                    int(ended_call),
                     str(run_id),
                 ),
             )
@@ -1858,6 +1866,25 @@ class HubRegistry:
                 ORDER BY updated_at, rowid
                 """,
                 (FactoryRunStatus.NEEDS_HUMAN.value,),
+            ).fetchall()
+        return [_factory_run(row) for row in rows]
+
+    def mark_ended_called(self, run_id: UUID) -> None:
+        """Record that the factory's ended call for the run was made."""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE factory_runs SET ended_call = 0 WHERE id = ?", (str(run_id),)
+            )
+
+    def uncalled_ends(self) -> list[FactoryRun]:
+        """The runs that ended and still owe the factory's ended call, in the order they ended."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT {_RUN_COLUMNS} FROM factory_runs
+                WHERE ended_call = 1
+                ORDER BY updated_at, rowid
+                """
             ).fetchall()
         return [_factory_run(row) for row in rows]
 

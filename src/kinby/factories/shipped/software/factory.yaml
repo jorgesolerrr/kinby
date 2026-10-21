@@ -89,7 +89,8 @@ steps:
   # change, answers its reviews and repairs its checks. It writes the pull request's title, body
   # and replies. Each step's hook records them as the run's values, and publish applies them
   # (ADRs 0081 and 0083). Other runs' steps share the workspace, so each client step starts with
-  # it switched back to this run's branch (ADR 0104).
+  # it switched back to this run's branch (ADR 0104). A ticket with nothing to do ends the run
+  # cancelled with no commit, once the session wrote why as no_change.
   - id: implement
     kind: client
     in: coder
@@ -100,7 +101,8 @@ steps:
     hook: check_implementation
     branch: "{{branch}}"
     requires: [branch, base]
-    results: { title: str, body: str }
+    results: { title: str, body: str, no_change: str }
+    outcomes: { no-change: stop }
     timeout: 60m
   # A fix round: the coding client answers the review threads trusted authors left on the pull
   # request, commits its fixes, and rewrites the title and body where the round changed them.
@@ -218,3 +220,6 @@ done_requires: [merge_ready]
 # Then labels the issue ready-for-human and comments the step the run stopped at and why, the run
 # id, how to retry, and the open issues blocked behind it.
 needs_human: { in: coder, call: report_needs_human }
+# Once a run ends done or cancelled: after no change, comments why on the issue and takes
+# ready-for-agent off. It never closes the issue (ADR 0105).
+ended: { in: coder, call: report_ended }

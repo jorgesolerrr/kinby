@@ -2681,7 +2681,8 @@ class StepRunCommand(ContractModel):
     ]
     #: The run and step this is. A turn the step runs records it as its origin.
     origin: FactoryRunOrigin
-    #: The attempt at the step this is. None for the factory's needs_human call, which is none.
+    #: The attempt at the step this is. None for the factory's needs_human and ended calls,
+    #: which are none.
     attempt: int | None = None
     #: The hook that records the step result once the step ends, however it ended.
     hook: HookName | None = None
