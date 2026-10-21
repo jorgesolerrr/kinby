@@ -200,8 +200,9 @@ class FactoryRuns:
     async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
         """Start a run of the factory whose intake is this instance and routine.
 
-        A work item that matches an unfinished run this instance handed in returns that run. An
-        instance lacking a list of repository commands its role's steps name takes no work.
+        A work item that matches an unfinished run this instance handed in returns that run, and
+        retries the step of one that needs a human. An instance lacking a list of repository
+        commands its role's steps name takes no work.
         """
         record = self._registry.instance(instance_id)
         member, factory = self._membership(instance_id) or (None, None)
@@ -226,6 +227,8 @@ class FactoryRuns:
         if started:
             self._publish(run)
             self._enqueue(run)
+        elif run.status is FactoryRunStatus.NEEDS_HUMAN:
+            return self._restart(run, run.step)
         return run
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:

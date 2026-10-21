@@ -1374,7 +1374,7 @@
     },
     "FactoryRunIntakeCommand": {
       "additionalProperties": false,
-      "description": "Hand a work item to the factory whose intake is this instance and routine.\n\nA work item that matches an unfinished run this instance handed in returns that run instead.",
+      "description": "Hand a work item to the factory whose intake is this instance and routine.\n\nA work item that matches an unfinished run this instance handed in returns that run instead,\nand retries the step of one that needs a human.",
       "properties": {
         "routine": {
           "type": "string"

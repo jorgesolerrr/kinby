@@ -274,6 +274,39 @@ def test_handing_in_the_work_item_of_an_unfinished_run_returns_that_run(tmp_path
     asyncio.run(scenario())
 
 
+def test_handing_in_the_work_item_of_a_run_that_needs_a_human_retries_it_with_its_retries_reset(
+    tmp_path,
+):
+    control = FakeControl()
+    failed = StepResult(ending=StepEnding.FAILED)
+    control.step_results = [failed, failed, failed, StepResult(ending=StepEnding.CLEAN)]
+    runtime = FakeRuntime()
+    factory = FACTORY + "    retry: 1\n"
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        stopped = await settled(hub, run.run_id)
+        async with run_events(hub) as events:
+            again = await handed_in(hub, coder, 7)
+            finished = await settled(hub, run.run_id)
+
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert again.run_id == run.run_id
+        assert (again.status, again.step) == (FactoryRunStatus.QUEUED, "test")
+        assert events[0] == again
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.attempt, a.ending) for a in finished.attempts] == [
+            (1, StepEnding.FAILED),
+            (2, StepEnding.FAILED),
+            (3, StepEnding.FAILED),
+            (4, StepEnding.CLEAN),
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_only_the_factorys_intake_routine_hands_in_work_items_the_factory_declares(tmp_path):
     runtime = FakeRuntime()
     hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)

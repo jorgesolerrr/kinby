@@ -14,6 +14,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from kinby.contracts import FactoryRunStatus
 from kinby.factories.file import FAILURE
 from kinby.plugins.hooks import HookResult
 from kinby.plugins.intake import hand_over
@@ -159,14 +160,24 @@ async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> 
     open issue that blocks it has one in the same stack. The oldest stays eligible until its pull
     request opens or it goes to a human, and handing it again returns its run, so the factory
     implements one issue at a time. Runs babysitting their pull requests go on meanwhile.
+
+    An eligible issue a human labeled ready-for-agent again while it is still ready-for-human is
+    handed over too, which retries its run, and loses its ready-for-human label once the retry
+    starts. It is never the oldest, so younger issues don't wait behind it.
     """
     if context.routine is None:
         raise ValueError("Only the factory's intake routine scans for its work.")
     if not _can_change_eligibility(signal):
         return
-    eligible = await asyncio.to_thread(
-        _oldest_eligible_issue, context.workspace, _labeled_issue(signal)
+    workspace = context.workspace
+    relabeled, eligible = await asyncio.to_thread(
+        _eligible_issues, workspace, _labeled_issue(signal)
     )
+    for number in relabeled:
+        run = await hand_over(context.routine, {"issue": number})
+        if run.status is not FactoryRunStatus.NEEDS_HUMAN:
+            removed = ("--remove-label", READY_FOR_HUMAN_LABEL)
+            await asyncio.to_thread(_gh, workspace, "issue", "edit", str(number), *removed)
     if eligible is not None:
         await hand_over(context.routine, {"issue": eligible})
 
@@ -554,11 +565,12 @@ def _names_ready_label(body: dict) -> bool:
     return isinstance(label, dict) and label.get("name") == READY_LABEL
 
 
-def _oldest_eligible_issue(workspace: Path, labeled: int | None) -> int | None:
-    """The oldest eligible issue, among those labeled ready-for-agent and *labeled*.
+def _eligible_issues(workspace: Path, labeled: int | None) -> tuple[list[int], int | None]:
+    """The eligible issues still labeled ready-for-human, and the oldest other eligible issue,
+    among those labeled ready-for-agent and *labeled*.
 
-    GitHub's issue list can lag a label, a close or a merge, so the issue is read again on its
-    own before it is chosen.
+    GitHub's issue list can lag a label, a close or a merge, so an issue is read again on its own
+    before it is chosen. Past the oldest, only the issues the list shows ready-for-human are read.
     """
     issues = _ready_issues(workspace)
     confirmed: set[int] = set()
@@ -568,8 +580,12 @@ def _oldest_eligible_issue(workspace: Path, labeled: int | None) -> int | None:
             issues = sorted([*issues, fetched], key=lambda issue: issue.number)
             confirmed.add(labeled)
     covered = {pull.closes for pull in _agent_pull_requests(workspace)}
+    relabeled: list[int] = []
+    oldest: int | None = None
     for issue in issues:
-        if issue.number in covered:
+        if issue.number in covered or (
+            oldest is not None and READY_FOR_HUMAN_LABEL not in issue.labels
+        ):
             continue
         stack = issue.parent or issue.number
         if not all(
@@ -577,9 +593,14 @@ def _oldest_eligible_issue(workspace: Path, labeled: int | None) -> int | None:
             for blocker in _open_blockers(workspace, issue.number)
         ):
             continue
-        if issue.number in confirmed or _ready_issue(workspace, issue.number) is not None:
-            return issue.number
-    return None
+        found = issue if issue.number in confirmed else _ready_issue(workspace, issue.number)
+        if found is None:
+            continue
+        if READY_FOR_HUMAN_LABEL in found.labels:
+            relabeled.append(found.number)
+        elif oldest is None:
+            oldest = found.number
+    return relabeled, oldest
 
 
 def _open_blockers(workspace: Path, number: int) -> list[dict]:

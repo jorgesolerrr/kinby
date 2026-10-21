@@ -763,7 +763,8 @@ export interface StepAttempt {
 /**
  * Hand a work item to the factory whose intake is this instance and routine.
  *
- * A work item that matches an unfinished run this instance handed in returns that run instead.
+ * A work item that matches an unfinished run this instance handed in returns that run instead,
+ * and retries the step of one that needs a human.
  */
 export interface FactoryRunIntakeCommand {
   routine: string;
