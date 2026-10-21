@@ -2,7 +2,8 @@
 
 The hub queues each step for the instance it runs in. An instance takes one step at a time,
 first in, first out, across every factory. A wait or approve step parks its run, which holds no
-instance until a signal, its quiet time, its deadline or the user moves it on.
+instance until a signal, its quiet time, its deadline or the user moves it on. A client step the
+subscription's limit stopped parks its run until the plan window resets.
 """
 
 from __future__ import annotations
@@ -190,7 +191,8 @@ class FactoryRuns:
         #: The steps, needs_human calls and run stops waiting for each instance, by instance id.
         self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
-        #: The quiet time or deadline of each run parked at a wait that has one, by run id.
+        #: The quiet time or deadline of each run parked at a wait that has one, and the reset of
+        #: each run parked until its plan window resets, by run id.
         self._deadlines: dict[UUID, asyncio.Task[None]] = {}
         #: The waits a signal matched while the run was still on its way to them, by run id.
         self._woken: dict[UUID, set[StepId]] = {}
@@ -356,8 +358,9 @@ class FactoryRuns:
         """Pick the runs up where the previous process left them.
 
         An attempt it left running is no attempt (ADR 0102), and its step is offered again. A
-        run parked at a wait keeps its deadline, counted from when it parked. A needs_human
-        report or a run's stop queued but not delivered before the hub stopped is queued again.
+        run parked at a wait keeps its deadline, counted from when it parked, and one parked
+        until its plan window resets still wakes at the reset. A needs_human report or a run's
+        stop queued but not delivered before the hub stopped is queued again.
 
         The runs still unreported and the stops still untold from before this pass are collected
         first, so a run that stops as it is queued below, which queues that fresh stop's own
@@ -374,7 +377,9 @@ class FactoryRuns:
             step = (
                 _step(factory, run.step) if factory is not None and run.step is not None else None
             )
-            if isinstance(step, WaitStep):
+            if run.wakes_at is not None:
+                self._wake_at(run.run_id, run.step, run.wakes_at)
+            elif isinstance(step, WaitStep):
                 self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
         for run in pending:
             factory = self._factory(run.factory)
@@ -783,8 +788,25 @@ class FactoryRuns:
 
         self._deadlines[run_id] = asyncio.create_task(expire())
 
+    def _park_until(self, run_id: UUID, step: StepId, wakes_at: datetime) -> FactoryRun:
+        """Park the run at *step*, holding no instance, until its plan window resets."""
+        parked = self._registry.move_run(run_id, FactoryRunStatus.PARKED, step, wakes_at)
+        self._publish(parked)
+        self._wake_at(run_id, step, wakes_at)
+        return parked
+
+    def _wake_at(self, run_id: UUID, step: StepId | None, wakes_at: datetime) -> None:
+        """Queue the run's *step* again once *wakes_at* passes."""
+
+        async def wake() -> None:
+            await asyncio.sleep((wakes_at - datetime.now(UTC)).total_seconds())
+            del self._deadlines[run_id]
+            self._enqueue(self._move(run_id, FactoryRunStatus.QUEUED, step))
+
+        self._deadlines[run_id] = asyncio.create_task(wake())
+
     def _disarm(self, run_id: UUID) -> None:
-        """Drop the quiet time or deadline of a run that leaves its wait."""
+        """Drop the quiet time, deadline or reset of a run that leaves its park."""
         armed = self._deadlines.pop(run_id, None)
         if armed is not None:
             armed.cancel()
@@ -801,11 +823,15 @@ class FactoryRuns:
 
         A clean step goes where its outcome sends it, but fails when it records a value of
         another type than it declares. A failed one goes where the step sends its failures, or is
-        tried again while its retries last, and leaves the run for a human after that.
+        tried again while its retries last, and leaves the run for a human after that. A limited
+        one parks the run until its plan window resets.
         """
         run = self._registry.run(run_id)
         if run is None or run.step is None:
             raise FactoryRunNotFound(f'Factory run "{run_id}" has no step to settle.')
+        if result.resets_at is not None:
+            self._registry.end_attempt(run_id, result)
+            return self._park_until(run_id, run.step, result.resets_at)
         factory = self._factory(run.factory)
         step = _step(factory, run.step) if factory is not None else None
         if step is not None and result.ending is StepEnding.CLEAN:
@@ -1096,7 +1122,7 @@ def _tally(factory: FactoryFile, attempts: Iterable[StepAttempt]) -> _Tally:
                 tally.sent_back[attempt.step, outcome.back] += 1
         elif (failed_to := _failed_to(factory, attempt)) is not None:
             tally.sent_back[attempt.step, failed_to.back] += 1
-        elif attempt.ending is not None:
+        elif attempt.ending not in (None, StepEnding.LIMITED):
             tally.failures[attempt.step] += 1
     return tally
 

@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import aiohttp
@@ -12,6 +13,7 @@ from aiohttp import web
 from kinby.contracts import (
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
+    FACTORY_RUN_LIST,
     FACTORY_RUN_SEND_BACK,
     ErrorCode,
     ErrorEnvelope,
@@ -19,13 +21,17 @@ from kinby.contracts import (
     FactoryRunApproveCommand,
     FactoryRunCancelCommand,
     FactoryRunDetail,
+    FactoryRunListCommand,
+    FactoryRunListResult,
     FactoryRunSendBackCommand,
     FactoryRunStatus,
     StepEnding,
+    StepResult,
 )
 from kinby.hub import Hub
 from kinby.instance import Serve
 from tests.test_factory_runs import (
+    CLIENT_FILES,
     FILES,
     created_in,
     detail,
@@ -598,3 +604,118 @@ def test_a_parked_run_never_blocks_another_runs_step_on_its_instance(tmp_path):
         assert await needing_human(hub) == {coder: 1}
 
     asyncio.run(scenario())
+
+
+def limited(after: timedelta) -> StepResult:
+    """A client step's result once the plan refused its coding run, resetting *after* from now."""
+    return StepResult(
+        ending=StepEnding.LIMITED,
+        summary="You've hit your limit.",
+        resets_at=datetime.now(UTC) + after,
+    )
+
+
+def test_a_limited_client_step_parks_its_run_until_its_plan_window_resets(tmp_path):
+    control = FakeControl()
+    refused = limited(timedelta(hours=1))
+    control.step_results = [refused]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await parked(hub, run.run_id)
+        found = await detail(hub, run.run_id)
+        listed = await hub_client(hub).call(
+            FACTORY_RUN_LIST, FactoryRunListCommand(factory="checks")
+        )
+        cancelled = await hub_client(hub).call(
+            FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id)
+        )
+
+        assert (found.run.status, found.run.step) == (FactoryRunStatus.PARKED, "implement")
+        assert found.run.wakes_at == refused.resets_at
+        assert [(a.step, a.ending, a.summary) for a in found.attempts] == [
+            ("implement", StepEnding.LIMITED, "You've hit your limit.")
+        ]
+        assert listed == FactoryRunListResult(runs=[found.run])
+        assert len(control.steps) == 1
+        assert isinstance(cancelled, FactoryRun)
+        assert (cancelled.status, cancelled.wakes_at) == (FactoryRunStatus.CANCELLED, None)
+
+    asyncio.run(scenario())
+
+
+def test_a_run_parked_by_its_plan_window_runs_its_step_again_at_the_reset_spending_no_retry(
+    tmp_path,
+):
+    control = FakeControl()
+    refused = limited(timedelta(seconds=1))
+    control.step_results = [
+        refused,
+        StepResult(ending=StepEnding.FAILED),
+        StepResult(ending=StepEnding.CLEAN, session="claude-1"),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await stopped(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.attempt, a.ending) for a in finished.attempts] == [
+            ("implement", 1, StepEnding.LIMITED),
+            ("implement", 2, StepEnding.FAILED),
+            ("implement", 3, StepEnding.CLEAN),
+            ("fix", 1, StepEnding.CLEAN),
+        ]
+        assert refused.resets_at is not None
+        assert finished.attempts[1].started_at >= refused.resets_at
+
+    asyncio.run(scenario())
+
+
+def test_a_run_parked_by_its_plan_window_wakes_at_the_reset_after_a_hub_restart(tmp_path):
+    control = FakeControl()
+    refused = limited(timedelta(seconds=2))
+    control.step_results = [refused, StepResult(ending=StepEnding.CLEAN, session="claude-1")]
+    runtime = FakeRuntime()
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, control, runtime, CLIENT_FILES)
+
+    async def before_the_restart() -> UUID:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await parked(hub, run.run_id)
+        return run.run_id
+
+    run_id = asyncio.run(before_the_restart())
+    hub.close()
+    restarted = Hub(
+        directory,
+        runtime=runtime,
+        images=FakeImages(),
+        control=control,
+        shipped_factories=directory / "shipped",
+    )
+
+    async def after_the_restart() -> None:
+        await restarted.recover()
+        still = await detail(restarted, run_id)
+        finished = await stopped(restarted, run_id)
+
+        assert (still.run.status, still.run.wakes_at) == (
+            FactoryRunStatus.PARKED,
+            refused.resets_at,
+        )
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.ending) for a in finished.attempts] == [
+            ("implement", StepEnding.LIMITED),
+            ("implement", StepEnding.CLEAN),
+            ("fix", StepEnding.CLEAN),
+        ]
+
+    asyncio.run(after_the_restart())

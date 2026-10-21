@@ -1278,6 +1278,18 @@
           "format": "date-time",
           "type": "string"
         },
+        "wakes_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "work_item": {
           "additionalProperties": {
             "$ref": "#/$defs/StepValue"
@@ -6779,7 +6791,8 @@
         "failed",
         "timed-out",
         "interrupted",
-        "needs-human"
+        "needs-human",
+        "limited"
       ],
       "title": "StepEnding",
       "type": "string"
@@ -6798,6 +6811,18 @@
         "outcome": {
           "anyOf": [
             {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
               "type": "string"
             },
             {

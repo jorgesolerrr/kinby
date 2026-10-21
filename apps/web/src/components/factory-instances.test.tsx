@@ -214,6 +214,29 @@ describe("the factory's instances", () => {
     expect(row.getByText('Factory run "run-1" is queued, so it needs no human.')).toBeDefined()
   })
 
+  it("shows a run parked until its plan window resets with the time it wakes", async () => {
+    const parked = run({
+      run_id: "run-3",
+      instance_id: "billing",
+      status: "parked",
+      step: "implement",
+      wakes_at: new Date(2026, 9, 20, 15, 0).toISOString(),
+    })
+    const caller = stubCaller({
+      "instance.list": () => ({ instances }),
+      "factory.run.list": ({ instance_id }) => ({
+        runs: instance_id === "billing" ? [parked] : [],
+      }),
+    })
+    render(<FactoryInstances client={caller} clock={fakeClock()} factory="software" />)
+
+    const billing = within(await screen.findByRole("region", { name: "billing-coder" }))
+    const row = await billing.findByRole("listitem", {
+      name: "issue 12: Parked at implement until Oct 20, 2026, 3:00 PM",
+    })
+    expect(within(row).queryByRole("button")).toBeNull()
+  })
+
   it("says so when no instance holds one of its roles", async () => {
     render(<FactoryInstances client={hub()} clock={fakeClock()} factory="research" />)
 

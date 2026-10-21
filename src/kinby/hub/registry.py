@@ -278,6 +278,8 @@ class HubRegistry:
                     # earlier stop can never mark a later stop as reported.
                     "stop_generation": "INTEGER NOT NULL DEFAULT 0",
                     "instance_id": "TEXT",
+                    # When a run parked until its plan window resets tries its step again.
+                    "wakes_at": "TEXT",
                 },
             )
             # A run that stopped before stops were recorded gets its latest stop as told, so its
@@ -1686,20 +1688,25 @@ class HubRegistry:
             if open_run is not None:
                 return _factory_run(open_run), False
             now = _now()
-            row = (
-                str(uuid4()),
-                factory,
-                str(instance_id),
-                key,
-                FactoryRunStatus.QUEUED.value,
-                step,
-                now,
-                now,
-            )
+            run_id = uuid4()
             connection.execute(
-                f"INSERT INTO factory_runs ({_RUN_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", row
+                """
+                INSERT INTO factory_runs (
+                    id, factory, instance_id, work_item, status, step, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run_id),
+                    factory,
+                    str(instance_id),
+                    key,
+                    FactoryRunStatus.QUEUED.value,
+                    step,
+                    now,
+                    now,
+                ),
             )
-        return _factory_run(row), True
+        return self._existing_run(run_id), True
 
     def attribute_runs(self, intake: Callable[[FactoryName], InstanceName | None]) -> None:
         """Give each run stored before runs recorded their instance to its factory's intake.
@@ -1771,8 +1778,14 @@ class HubRegistry:
             ).fetchall()
         return [_factory_run(row) for row in rows]
 
-    def move_run(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
-        """Put the run in *status* at *step*.
+    def move_run(
+        self,
+        run_id: UUID,
+        status: FactoryRunStatus,
+        step: StepId | None,
+        wakes_at: datetime | None = None,
+    ) -> FactoryRun:
+        """Put the run in *status* at *step*, waking at *wakes_at* when it parks until then.
 
         Moving it to done, cancelled or needs_human is a stop: it bumps the run's stop generation
         and records the stop for its instance, so each stop is told once and an earlier stop's
@@ -1781,8 +1794,17 @@ class HubRegistry:
         """
         with self._connect() as connection:
             connection.execute(
-                "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
-                (status.value, step, _now(), str(run_id)),
+                """
+                UPDATE factory_runs SET status = ?, step = ?, wakes_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status.value,
+                    step,
+                    wakes_at.isoformat() if wakes_at is not None else None,
+                    _now(),
+                    str(run_id),
+                ),
             )
             if status is FactoryRunStatus.NEEDS_HUMAN:
                 connection.execute(
@@ -2034,7 +2056,7 @@ class HubRegistry:
         return run
 
 
-_RUN_COLUMNS = "id, factory, instance_id, work_item, status, step, created_at, updated_at"
+_RUN_COLUMNS = "id, factory, instance_id, work_item, status, step, wakes_at, created_at, updated_at"
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
 #: The statuses a run stops in, which the hub tells the instance that handed it in.
@@ -2051,7 +2073,7 @@ def _work_item_key(work_item: Mapping[ValueName, StepValue]) -> str:
 
 
 def _factory_run(row: tuple[str, ...]) -> FactoryRun:
-    run_id, factory, instance_id, work_item, status, step, created_at, updated_at = row
+    run_id, factory, instance_id, work_item, status, step, wakes_at, created_at, updated_at = row
     return FactoryRun(
         run_id=UUID(run_id),
         factory=factory,
@@ -2059,6 +2081,7 @@ def _factory_run(row: tuple[str, ...]) -> FactoryRun:
         work_item=json.loads(work_item),
         status=FactoryRunStatus(status),
         step=step,
+        wakes_at=datetime.fromisoformat(wakes_at) if wakes_at is not None else None,
         created_at=datetime.fromisoformat(created_at),
         updated_at=datetime.fromisoformat(updated_at),
     )
