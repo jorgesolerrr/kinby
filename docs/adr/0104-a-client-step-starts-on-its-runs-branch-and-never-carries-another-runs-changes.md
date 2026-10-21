@@ -1,6 +1,6 @@
 # A client step starts on its run's branch and never carries another run's changes
 
-Amends [ADR 0075](0075-factories-are-hub-run-and-own-their-runs-state.md).
+Amends [ADR 0075](0075-factories-are-hub-run-and-own-their-runs-state.md). Amended by [ADR 0106](0106-each-factory-run-works-in-its-own-run-worktree.md): each run works in its own run worktree, and the switch is a check that the run worktree is on its branch.
 
 All runs of one instance share its workspace and run one step at a time. Between two steps of a run, another run's steps can move the workspace to their own branch. The software factory's command steps `setup` and `checks` start with `git switch {{branch}}`, but its client steps asked the model to switch in their prompts. When the prompt also said "nothing failed: change nothing and stop", the model skipped the switch. Then `check_implementation` found the workspace on the other run's branch and the run needed a human. This stopped #818 and #820 at `fix` on the playground.
 

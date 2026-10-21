@@ -31,3 +31,6 @@ RUN apt-get update \
 # Claude Code must not update itself inside a pinned image. Bun has no background updater;
 # only `bun upgrade` replaces it, and nothing in the factory runs that.
 ENV DISABLE_AUTOUPDATER=1
+# Each run worktree installs its own .venv and node_modules. The caches they install from live on
+# the instance directory's mount, so they survive an update of the image.
+ENV UV_CACHE_DIR=/instance/.state/cache/uv BUN_INSTALL_CACHE_DIR=/instance/.state/cache/bun

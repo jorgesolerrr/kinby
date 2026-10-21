@@ -30,8 +30,8 @@ Read `factory.list`, then `factory.get` for the factory to change or the one clo
 Every step has an `id`. It may declare `requires`, the values it needs from the work item or an earlier step, and `results`, the values it hands on by name and type. A step whose required value no earlier step produces fails the check.
 
 - `agent`: a kinby turn on a new thread `in` an instance, with a `prompt` file and a `hook`.
-- `client`: a coding client run (`claude` or `codex`) in the instance's container, with a `prompt`, a `hook`, and optionally `model`, `effort`, and `resume` to continue an earlier client step's session.
-- `command`: commands in the instance's workspace, each without a shell. `{{name}}` stands for a run value, and an entry `{ commands: <list> }` runs the instance's own list of repository commands. Exit code zero passes.
+- `client`: a coding client run (`claude` or `codex`) in the instance's container, with a `prompt`, a `hook`, and optionally `model`, `effort`, `resume` to continue an earlier client step's session, and `branch: "{{name}}"` to run it in the run worktree of the branch that run value names.
+- `command`: commands in the instance's workspace, each without a shell. `{{name}}` stands for a run value, and an entry `{ commands: <list> }` runs the instance's own list of repository commands. Exit code zero passes. `branch: "{{name}}"` runs them in that branch's run worktree.
 - `code`: a tool of the template the model never sees, named in `call`. A mapping it returns is the step's values.
 - `wait`: parks the run until a signal matches one of its `signal` filters, or until `quiet` or `deadline` passes. A filter reads `routine`, `headers.<Name>` or `body.<key>`.
 - `approve`: parks the run until the user approves it or sends it back, showing its `summary`.
@@ -40,7 +40,7 @@ What happens next: `retry` sets how often a failed attempt runs again. `failed: 
 
 ## Hooks
 
-A step's result comes from the world, never from what the agent says it did. A hook records it. It is a function in the template's `hooks/`, decorated with `hook` from `kinby.plugins.hooks`. It takes a `StepEnd` (the instance, how the step ended, the work item, the run's values so far) and returns a `HookResult` with `values` and, when the step has outcomes, an `outcome`, or None to record nothing. Raise to fail the step. kinby's default hooks `record_branch` and `find_pull_request` are there without a file.
+A step's result comes from the world, never from what the agent says it did. A hook records it. It is a function in the template's `hooks/`, decorated with `hook` from `kinby.plugins.hooks`. It takes a `StepEnd` (the instance, the `workspace` the step ran in, how the step ended, the work item, the run's values so far) and returns a `HookResult` with `values` and, when the step has outcomes, an `outcome`, or None to record nothing. Raise to fail the step. kinby's default hooks `record_branch` and `find_pull_request` are there without a file.
 
 ## Write it
 

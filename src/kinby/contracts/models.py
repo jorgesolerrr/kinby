@@ -2627,6 +2627,8 @@ class CommandStepRun(ContractModel):
     run: list[Annotated[str, Field(min_length=1)] | RepositoryCommands] = Field(min_length=1)
     #: How long the commands may run in all before the step fails. None lets them run.
     timeout_seconds: int | None = Field(default=None, ge=1)
+    #: The branch whose run worktree the commands run in. None runs them in the workspace.
+    branch: Annotated[str, Field(min_length=1)] | None = None
 
 
 class CodeStepRun(ContractModel):
@@ -2668,8 +2670,7 @@ class ClientStepRun(ContractModel):
     #: The model and reasoning effort the client runs with. None leaves the client's default.
     model: CodingModel | None = None
     effort: ReasoningEffort | None = None
-    #: The git branch the workspace is put on before the client starts. A workspace on another
-    #: branch with uncommitted changes fails the step instead. None leaves the workspace as it is.
+    #: The branch whose run worktree the client runs in. None runs it in the workspace.
     branch: Annotated[str, Field(min_length=1)] | None = None
 
 

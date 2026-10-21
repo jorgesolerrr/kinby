@@ -25,14 +25,12 @@ class StepEnd:
     """
 
     instance: Instance
+    #: Where the step ran: its run worktree when it names a branch, else the instance's workspace.
+    workspace: Path
     ending: StepEnding
     work_item: Mapping[ValueName, StepValue]
     #: Every value the run's earlier steps recorded, by name.
     results: Mapping[ValueName, StepValue]
-
-    @property
-    def workspace(self) -> Path:
-        return self.instance.manifest.workspace.path
 
 
 @dataclass(frozen=True)

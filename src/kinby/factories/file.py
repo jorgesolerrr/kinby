@@ -139,8 +139,8 @@ class ClientStep(_Step):
     #: None leaves the client's default.
     model: CodingModel | None = None
     effort: ReasoningEffort | None = None
-    #: The git branch the instance puts the workspace on before the client starts, as the run
-    #: value that names it. None leaves the workspace as it is.
+    #: The branch whose run worktree the client runs in, as the run value that names it. None
+    #: runs it in the workspace.
     branch: RunValue | None = None
 
 
@@ -157,6 +157,9 @@ class CommandStep(_Step):
     run: tuple[Annotated[str, Field(min_length=1)] | RepositoryCommands, ...] = Field(min_length=1)
     #: Records the values the step declares, which commands alone hand on none of.
     hook: HookName | None = None
+    #: The branch whose run worktree the commands run in, as the run value that names it. None
+    #: runs them in the workspace.
+    branch: RunValue | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -205,11 +208,11 @@ def run_value_name(expected: str | int) -> ValueName | None:
 
 
 def run_value_names(step: Step) -> list[ValueName]:
-    """The run values a command step's own commands, or a client step's branch, name as
-    ``{{name}}``. A list of repository commands takes none."""
+    """The run values a command step's own commands, or a client or command step's branch, name
+    as ``{{name}}``. A list of repository commands takes none."""
     match step:
-        case CommandStep(run=run):
-            entries = [entry for entry in run if isinstance(entry, str)]
+        case CommandStep(run=run, branch=branch):
+            entries = [entry for entry in (*run, branch) if isinstance(entry, str)]
         case ClientStep(branch=str() as branch):
             entries = [branch]
         case _:

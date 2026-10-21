@@ -30,6 +30,7 @@ from kinby.core.coding_clients import own_tokens, run_coding_client
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.prompt import render_client_message, render_step_message
+from kinby.core.run_worktrees import RunWorktreeError, run_worktree
 from kinby.core.session_recalls import take_recalls
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, repository_commands
@@ -52,18 +53,28 @@ _RESULT_BYTES = 1024 * 1024
 async def run_step(
     command: StepRunCommand, instance: Instance, turns: Turns, log: EventLog
 ) -> StepResult:
-    """Run the step, then its hook however the step ended. The hook's values are the result's."""
+    """Run the step, then its hook however the step ended. The hook's values are the result's.
+
+    A step that names a branch runs in that branch's run worktree, and its hook reads it there.
+    When the run worktree cannot be had, the step fails before it starts and runs no hook.
+    """
+    workspace = instance.manifest.workspace.path
+    if isinstance(command.step, ClientStepRun | CommandStepRun) and command.step.branch is not None:
+        try:
+            workspace = await asyncio.to_thread(run_worktree, instance, command.step.branch)
+        except RunWorktreeError as exc:
+            return _failed(str(exc))
     match command.step:
         case AgentStepRun() as step:
             result = await _run_agent_step(step, command, turns)
         case ClientStepRun() as step:
-            result = await _run_client_step(step, command, instance, log)
+            result = await _run_client_step(step, command, instance, workspace, log)
         case CommandStepRun() as step:
-            result = await run_command_step(step, instance)
+            result = await run_command_step(step, instance, workspace)
         case CodeStepRun() as step:
             result = await _run_code_step(step, command, instance)
     if command.hook is not None:
-        result = await _recorded(command.hook, result, command, instance)
+        result = await _recorded(command.hook, result, command, instance, workspace)
     return _bounded(result)
 
 
@@ -108,19 +119,14 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
 
 
 async def _run_client_step(
-    step: ClientStepRun, command: StepRunCommand, instance: Instance, log: EventLog
+    step: ClientStepRun, command: StepRunCommand, instance: Instance, workspace: Path, log: EventLog
 ) -> StepResult:
-    """Run the coding client in the workspace, and record its delegated run and its session's
+    """Run the coding client in *workspace*, and record its delegated run and its session's
     recalls.
 
     What the client said last is only the summary. A run the plan refused ends the step limited,
-    whatever the client exited with. A step with a branch fails before the client
-    starts when the workspace cannot be put on it.
+    whatever the client exited with.
     """
-    if step.branch is not None:
-        refused = await _put_on_branch(instance.manifest.workspace.path, step.branch)
-        if refused is not None:
-            return refused
     skills, warnings = load_skills(instance)
     for warning in warnings:
         await log.append(command.origin.run_id, uuid4(), warning)
@@ -129,7 +135,7 @@ async def _run_client_step(
     ran = await run_coding_client(
         step.client,
         render_client_message(step.prompt, command.work_item, command.results, skills),
-        instance.manifest.workspace.path,
+        workspace,
         instance=instance.path,
         state_dir=instance.manifest.state_dir,
         origin=command.origin,
@@ -169,60 +175,6 @@ async def _run_client_step(
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 
 
-async def _put_on_branch(workspace: Path, branch: str) -> StepResult | None:
-    """Switch the workspace to *branch*, and return the failed step result unless it is on it.
-
-    Runs of one instance share its workspace. Changes no commit holds stay where they are: a
-    workspace on another branch with any keeps them there, and the switch never happens. A switch
-    that leaves the workspace on anything but *branch*, as an option-like name can, fails too.
-    """
-    current = await _git(workspace, "branch", "--show-current")
-    if isinstance(current, StepResult):
-        return current
-    if current == branch:
-        return None
-    changes = await _git(workspace, "status", "--porcelain", "--untracked-files=normal")
-    if isinstance(changes, StepResult):
-        return changes
-    if changes:
-        return StepResult(
-            ending=StepEnding.FAILED,
-            summary=f"The workspace is on {current or 'no branch'} with changes no commit holds, "
-            f"so it stays there instead of switching to {branch}:\n{changes}",
-        )
-    switched = await _git(workspace, "switch", branch)
-    if isinstance(switched, StepResult):
-        return switched
-    now = await _git(workspace, "branch", "--show-current")
-    if isinstance(now, StepResult):
-        return now
-    if now == branch:
-        return None
-    return StepResult(
-        ending=StepEnding.FAILED,
-        summary=f'"git switch {branch}" left the workspace on {now or "no branch"}.',
-    )
-
-
-async def _git(workspace: Path, *arguments: str) -> str | StepResult:
-    """What a git command printed, or the failed step result that says how it failed."""
-    process = await asyncio.create_subprocess_exec(
-        "git",
-        *arguments,
-        cwd=workspace,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    output, errors = await process.communicate()
-    if process.returncode != 0:
-        said = errors.decode(errors="replace").strip()[-_OUTPUT_TAIL:]
-        return StepResult(
-            ending=StepEnding.FAILED,
-            summary=f'"git {" ".join(arguments)}" exited with code {process.returncode}.\n{said}',
-        )
-    return output.decode(errors="replace").rstrip()
-
-
 def _last_message(events: Sequence[Event]) -> str:
     """What the agent said after its last tool call."""
     text = ""
@@ -235,9 +187,8 @@ def _last_message(events: Sequence[Event]) -> str:
     return text.strip()
 
 
-async def run_command_step(step: CommandStepRun, instance: Instance) -> StepResult:
-    """Run each command in the instance's workspace without a shell. The first that exits
-    non-zero fails.
+async def run_command_step(step: CommandStepRun, instance: Instance, workspace: Path) -> StepResult:
+    """Run each command in *workspace* without a shell. The first that exits non-zero fails.
 
     A command still running when the step's timeout passes is killed, and the step times out.
     """
@@ -247,7 +198,7 @@ async def run_command_step(step: CommandStepRun, instance: Instance) -> StepResu
     try:
         async with asyncio.timeout(step.timeout_seconds):
             for command in commands:
-                failed = await _run_command(command, instance.manifest.workspace.path)
+                failed = await _run_command(command, workspace)
                 if failed is not None:
                     return failed
     except TimeoutError:
@@ -328,9 +279,9 @@ async def _run_code_step(
 
 
 async def _recorded(
-    name: HookName, result: StepResult, command: StepRunCommand, instance: Instance
+    name: HookName, result: StepResult, command: StepRunCommand, instance: Instance, workspace: Path
 ) -> StepResult:
-    """The step's result with the values and outcome its hook records.
+    """The step's result with the values and outcome its hook records, reading *workspace*.
 
     A hook that records nothing leaves the result as the step ended. One that fails, or that
     the instance does not have, fails a step that ended clean and keeps any other ending.
@@ -342,6 +293,7 @@ async def _recorded(
         return _failed(f'Hook "{name}" is not one of this instance\'s hooks.{unloaded}', result)
     end = StepEnd(
         instance=instance,
+        workspace=workspace,
         ending=result.ending,
         work_item=command.work_item,
         results=command.results,

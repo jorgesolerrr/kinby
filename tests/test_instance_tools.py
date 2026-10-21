@@ -1398,7 +1398,7 @@ def test_a_command_step_runs_the_repository_commands_the_tool_records(tmp_path: 
             ToolContext(instance=instance, thread_id=uuid4()),
         )
         step = await run_command_step(
-            CommandStepRun(run=[RepositoryCommands(commands="setup")]), instance
+            CommandStepRun(run=[RepositoryCommands(commands="setup")]), instance, workspace
         )
 
         assert result == 'Recorded the repository commands "setup", 2 commands.'

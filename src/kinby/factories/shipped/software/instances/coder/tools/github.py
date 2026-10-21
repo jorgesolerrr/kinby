@@ -1,20 +1,21 @@
 """The software factory's work on GitHub: the scan, the agent branch, the pull request, and
 babysitting it through review.
 
-Every command runs in the workspace, the repository's clone. gh runs as the GH_TOKEN the
-instance holds.
+Every command runs in the workspace, the repository's clone, which stays on the default branch.
+Each run works in its own run worktree of it, which shares its branches and remotes. gh runs as
+the GH_TOKEN the instance holds.
 """
 
 import asyncio
 import json
 import re
-import shutil
 import subprocess
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from kinby.contracts import FactoryRunStatus
+from kinby.core.run_worktrees import cut_run_worktree, remove_run_worktree
 from kinby.factories.file import FAILURE
 from kinby.plugins.hooks import HookResult
 from kinby.plugins.intake import hand_over
@@ -186,11 +187,12 @@ async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> 
 
 @tool(write=True)
 def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
-    """Check out a fresh agent branch for the issue, once a trusted author wrote all its text.
+    """Cut a fresh run worktree on the issue's agent branch, once a trusted author wrote all its
+    text.
 
     The branch starts from one that holds every open blocker's agent branch, so its pull request
     stacks on the blockers' work. With no blocker open, it starts from the default branch.
-    Whatever an earlier run left uncommitted in the workspace goes.
+    Whatever a run worktree already on the branch held goes. The workspace only fetches.
     """
     workspace = context.workspace
     found = _issue(workspace, issue)
@@ -201,10 +203,10 @@ def prepare_branch(issue: int, context: ToolContext) -> dict[str, str]:
         )
     words = re.findall(r"[a-z0-9]+", found.title.lower())
     branch = f"{AGENT_BRANCH_PREFIX}{issue}-{'-'.join(words) or 'issue'}"
-    _clean(workspace)
+    _exclude_scratch(workspace)
     _git(workspace, "fetch", "--prune", "origin")
     base = _base(workspace, found)
-    _git(workspace, "switch", "--discard-changes", "-C", branch, f"origin/{base}")
+    cut_run_worktree(context.instance, branch, f"origin/{base}")
     return {"branch": branch, "base": base}
 
 
@@ -358,7 +360,7 @@ def report_needs_human(
     the issue ready-for-human, and comment why the run stopped, how to get it going again, and
     which open issues are blocked behind it.
 
-    Uncommitted work stays uncommitted in the workspace. A push that fails is said in the
+    Uncommitted work stays uncommitted in the run worktree. A push that fails is said in the
     comment, so the report still reaches the human.
     """
     workspace = context.workspace
@@ -392,11 +394,16 @@ def report_needs_human(
 
 
 @tool(write=True)
-def report_ended(issue: int, context: ToolContext, *, no_change: str | None = None) -> None:
-    """Say on the issue why a run that ended made no change, and take ready-for-agent off it.
+def report_ended(
+    issue: int, context: ToolContext, *, branch: str | None = None, no_change: str | None = None
+) -> None:
+    """Remove the run's run worktree and local branch. Then say on the issue why a run that ended
+    made no change, and take ready-for-agent off it.
 
-    The issue stays open: closing it is the maintainer's call. Any other ending does nothing.
+    The issue stays open: closing it is the maintainer's call.
     """
+    if branch is not None:
+        remove_run_worktree(context.instance, branch)
     if no_change is None:
         return
     workspace = context.workspace
@@ -825,17 +832,14 @@ def _has_merge_ready_label(workspace: Path) -> bool:
     return any(label["name"] == MERGE_READY_LABEL for label in labels)
 
 
-def _clean(workspace: Path) -> None:
-    """Drop whatever the workspace holds beyond its commits, the scratch files among it, and
-    keep scratch files out of every commit from now on."""
+def _exclude_scratch(workspace: Path) -> None:
+    """Keep scratch files out of every commit of the workspace's clone, its run worktrees'
+    included."""
     exclude = workspace / ".git" / "info" / "exclude"
     excluded = exclude.read_text(encoding="utf-8").splitlines() if exclude.exists() else []
     if f"{SCRATCH}/" not in excluded:
         exclude.parent.mkdir(parents=True, exist_ok=True)
         exclude.write_text("\n".join([*excluded, f"{SCRATCH}/", ""]), encoding="utf-8")
-    _git(workspace, "reset", "--hard")
-    _git(workspace, "clean", "-fd")
-    shutil.rmtree(workspace / SCRATCH, ignore_errors=True)
 
 
 def _api(workspace: Path, endpoint: str) -> dict:

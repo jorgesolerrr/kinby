@@ -546,7 +546,9 @@ class FactoryRuns:
                     for entry in step.run
                 ]
                 timeout = duration_seconds(step.timeout) if step.timeout is not None else None
-                asked = CommandStepRun(run=commands, timeout_seconds=timeout)
+                asked = CommandStepRun(
+                    run=commands, timeout_seconds=timeout, branch=_branch(step, held)
+                )
                 hook = step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
@@ -626,7 +628,7 @@ class FactoryRuns:
             timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
             model=step.model,
             effort=step.effort,
-            branch=None if step.branch is None else str(held[run_value_names(step)[0]]),
+            branch=_branch(step, held),
         )
 
     def _session(self, run_id: UUID, factory: FactoryFile, step: StepId) -> CodingSessionId | None:
@@ -1041,6 +1043,12 @@ def _earlier(factory: FactoryFile | None, step_id: StepId | None) -> list[StepId
     """The ids of the steps before *step_id* in *factory*."""
     ids = [step.id for step in factory.steps] if factory is not None else []
     return ids[: ids.index(step_id)] if step_id in ids else []
+
+
+def _branch(step: ClientStep | CommandStep, held: Mapping[ValueName, StepValue]) -> str | None:
+    """The run's value of the branch the step names, or None when it names none."""
+    name = None if step.branch is None else run_value_name(step.branch)
+    return None if name is None else str(held[name])
 
 
 def _unmet(

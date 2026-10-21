@@ -462,6 +462,18 @@
       "additionalProperties": false,
       "description": "Run each command in the instance's workspace without a shell, in order.\n\nThe step passes when every command exits with code zero, and stops at the first that does not.",
       "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "kind": {
           "const": "command",
           "default": "command",

@@ -2001,6 +2001,7 @@ export interface ClientStepRun {
  * The step passes when every command exits with code zero, and stops at the first that does not.
  */
 export interface CommandStepRun {
+  branch?: string | null;
   kind: "command";
   /**
    * @minItems 1
