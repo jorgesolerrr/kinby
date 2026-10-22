@@ -425,6 +425,17 @@
       "additionalProperties": false,
       "description": "Commands in the instance's workspace, each run without a shell. Exit code zero passes.\n\nA ``{{name}}`` in a command stands for the run's value of that name, as one argument. An\nentry ``{ commands: <name> }`` runs the instance's list of repository commands of that name.",
       "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "failed": {
           "anyOf": [
             {

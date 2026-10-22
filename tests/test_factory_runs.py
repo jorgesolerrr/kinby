@@ -1466,6 +1466,38 @@ def test_a_command_names_a_value_of_the_run_as_one_argument(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_command_step_that_names_a_branch_is_sent_with_the_runs_value_and_requires_it(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"committed": True}),
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+    ]
+    runtime = FakeRuntime()
+    factory = HANDOFF.replace(
+        "  - id: open-pr\n    kind: code\n    in: coder\n    call: open_pull_request\n"
+        "    requires: [branch, committed]\n",
+        '  - id: open-pr\n    kind: command\n    in: coder\n    branch: "{{branch}}"\n'
+        '    run: ["make publish"]\n',
+    ).replace("    results: { pr: int }\ndone_requires: [pr]\n", "")
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert finished.attempts[1].summary == (
+            'Step "open-pr" requires "branch", which this step did not record.'
+        )
+        _, publish = control.steps[-1]
+        assert publish.step == CommandStepRun(run=["make publish"], branch="agent/7")
+
+    asyncio.run(scenario())
+
+
 def test_the_hub_passes_a_list_a_command_step_names_to_its_instance_as_named(tmp_path):
     control = FakeControl()
     runtime = FakeRuntime()

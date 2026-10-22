@@ -70,27 +70,29 @@ instances:
 intake: { instance: coder, routine: scan }
 work_item: { issue: int }
 steps:
-  # Checks who wrote the ticket (ADR 0073), then checks out a fresh agent branch from its base.
+  # Checks who wrote the ticket (ADR 0073), then cuts a fresh run worktree on an agent branch from
+  # its base. Sent back here, the run starts over from the base. The workspace only fetches.
   - id: prepare
     kind: code
     in: coder
     call: prepare_branch
     results: { branch: str, base: str }
-  # Runs the coder's setup list of repository commands on the branch. A coder that holds no
-  # setup or checks list takes no work: ask it in a thread for a repository survey.
+  # Runs the coder's setup list of repository commands in the run worktree, which has installs of
+  # its own. A coder that holds no setup or checks list takes no work: ask it in a thread for a
+  # repository survey.
   - id: setup
     kind: command
     in: coder
+    branch: "{{branch}}"
     requires: [branch]
     run:
-      - git switch {{branch}}
       - { commands: setup }
   # Every client step continues implement's session, so one coding session per issue writes the
   # change, answers its reviews and repairs its checks. It writes the pull request's title, body
   # and replies. Each step's hook records them as the run's values, and publish applies them
-  # (ADRs 0081 and 0083). Other runs' steps share the workspace, so each client step starts with
-  # it switched back to this run's branch (ADR 0104). A ticket with nothing to do ends the run
-  # cancelled with no commit, once the session wrote why as no_change.
+  # (ADRs 0081 and 0083). Every client step runs in the run's own run worktree, so the session
+  # resumes from the directory it started in, and no other run's steps touch it. A ticket with
+  # nothing to do ends the run cancelled with no commit, once the session wrote why as no_change.
   - id: implement
     kind: client
     in: coder
@@ -153,16 +155,15 @@ steps:
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
   #   timeout: 15m
-  # Runs the coder's setup list again, so a change to the dependencies is checked against fresh
-  # installs, then its checks list. Other runs' steps share the workspace, so the first command
-  # puts it back on this run's branch. A failure goes back to fix with the failing command and
-  # the tail of its output, at most twice.
+  # Runs the coder's setup list again in the run worktree, so a change to the dependencies is
+  # checked against fresh installs, then its checks list. A failure goes back to fix with the
+  # failing command and the tail of its output, at most twice.
   - id: checks
     kind: command
     in: coder
+    branch: "{{branch}}"
     requires: [branch]
     run:
-      - git switch {{branch}}
       - { commands: setup }
       - { commands: checks }
     failed: { back: fix, max: 2 }
@@ -216,10 +217,11 @@ steps:
       checks-failed: { back: answer, max: 2 }
       waiting: { back: babysit, max: 30 }
 done_requires: [merge_ready]
-# Pushes the branch if it has commits ahead of its base, and leaves uncommitted work as it is.
+# Pushes the branch if it has commits ahead of its base, and leaves the run worktree as it is.
 # Then labels the issue ready-for-human and comments the step the run stopped at and why, the run
 # id, how to retry, and the open issues blocked behind it.
 needs_human: { in: coder, call: report_needs_human }
-# Once a run ends done or cancelled: after no change, comments why on the issue and takes
-# ready-for-agent off. It never closes the issue (ADR 0105).
+# Once a run ends done or cancelled: removes its run worktree and local branch, and after no
+# change, comments why on the issue and takes ready-for-agent off. It never closes the issue
+# (ADR 0105).
 ended: { in: coder, call: report_ended }

@@ -2001,6 +2001,7 @@ export interface ClientStepRun {
  * The step passes when every command exits with code zero, and stops at the first that does not.
  */
 export interface CommandStepRun {
+  branch?: string | null;
   kind: "command";
   /**
    * @minItems 1
@@ -2020,8 +2021,8 @@ export interface RepositoryCommands {
 /**
  * Call one of the instance's tools, with no model turn around it.
  *
- * The tool's parameters named like a value of the run receive that value. A mapping the tool
- * returns is the step result's values.
+ * The tool's parameters named like a value of the run receive that value, and its ``run_id``
+ * parameter the run's id. A mapping the tool returns is the step result's values.
  */
 export interface CodeStepRun {
   call: ToolName;

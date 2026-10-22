@@ -119,8 +119,8 @@ def check_answers(end: StepEnd) -> HookResult | None:
 def _taken_words(workspace: Path) -> dict[str, str]:
     """The pull request title and body the coding client wrote, by value name.
 
-    Each file is read once and removed, whatever the step's checks say next. Runs share the
-    workspace, so a file left behind would become another run's words.
+    Each file is read once and removed, whatever the step's checks say next, so a file left
+    behind never becomes a later step's words.
     """
     words = {name: _taken(workspace / path) for name, path in WORDS.items()}
     return {name: written for name, written in words.items() if written}

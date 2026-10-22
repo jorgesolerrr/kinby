@@ -61,6 +61,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.dispatcher import ScheduledDispatcher
+from kinby.core.run_worktrees import cut_run_worktree
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.hub import Hub
 from kinby.instance import Instance, inspect_instance, load_instance
@@ -319,8 +320,8 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
             command for _, command in control.steps
         )
         assert prepare.step == CodeStepRun(call="prepare_branch")
-        installs = ["git switch agent/7-add-dark-mode", RepositoryCommands(commands="setup")]
-        assert setup.step == CommandStepRun(run=installs)
+        installs = [RepositoryCommands(commands="setup")]
+        assert setup.step == CommandStepRun(run=installs, branch="agent/7-add-dark-mode")
         assert implement.step == coding("implement", 60)
         assert implement.hook == "check_implementation"
         assert implement.results == PREPARED.values
@@ -328,7 +329,9 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
         assert answer.hook == "check_answers"
         assert fix.step == coding("fix", 30, resume="claude-1")
         assert fix.hook == "check_implementation"
-        assert checks.step == CommandStepRun(run=[*installs, RepositoryCommands(commands="checks")])
+        assert checks.step == CommandStepRun(
+            run=[*installs, RepositoryCommands(commands="checks")], branch="agent/7-add-dark-mode"
+        )
         assert publish.step == CodeStepRun(call="publish_pull_request")
         assert publish.work_item == {"issue": 7}
         assert publish.results == PREPARED.values
@@ -1053,13 +1056,17 @@ def test_each_stop_of_a_run_comments_its_step_cause_run_id_retry_and_the_issues_
     asyncio.run(scenario())
 
 
-async def ended(dispatcher: ScheduledDispatcher, results: Mapping[str, StepValue]) -> StepResult:
-    """Make the factory's ended call for issue 7's run, which recorded *results*."""
+async def ended(
+    dispatcher: ScheduledDispatcher,
+    results: Mapping[str, StepValue],
+    run: FactoryRunOrigin | None = None,
+) -> StepResult:
+    """Make the factory's ended call for issue 7's *run*, which recorded *results*."""
     return await run_in(
         dispatcher,
         StepRunCommand(
             step=CodeStepRun(call="report_ended"),
-            origin=origin("implement"),
+            origin=run or origin("implement"),
             work_item={"issue": 7},
             results=results,
         ),
@@ -1084,21 +1091,50 @@ async def ended(dispatcher: ScheduledDispatcher, results: Mapping[str, StepValue
             ],
         ),
         ({**BRANCH, "pr": 42, "merge_ready": True}, []),
+        ({}, []),
     ],
-    ids=["no-change", "merge-ready"],
+    ids=["no-change", "merge-ready", "before-a-branch"],
 )
 def test_the_ended_call_comments_why_a_run_made_no_change_and_never_closes_the_issue(
     tmp_path, monkeypatch, results, calls
 ):
     instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    run = origin("implement")
+    cut_run_worktree(instance, BRANCH["branch"], "origin/main", str(run.run_id))
+    (run_worktree(instance) / "notes.md").write_text("Half done.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
-        result = await ended(dispatcher, results)
+        result = await ended(dispatcher, results, run)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert github.calls == calls
+        removed = "branch" in results
+        assert run_worktree(instance).exists() is not removed
+        assert (git(workspace, "branch", "--list", BRANCH["branch"]) == "") is removed
+
+    asyncio.run(scenario())
+
+
+def test_an_earlier_runs_ended_call_never_removes_a_later_runs_run_worktree(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        await prepared(dispatcher, 7)
+        later = await prepared(dispatcher, 7)
+        (run_worktree(instance) / "notes.md").write_text("Half done.\n")
+        result = await ended(dispatcher, BRANCH)
+
+        assert later.ending is StepEnding.CLEAN, later.summary
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert (run_worktree(instance) / "notes.md").is_file()
+        assert git(workspace, "branch", "--list", BRANCH["branch"]) != ""
 
     asyncio.run(scenario())
 
@@ -1323,18 +1359,8 @@ def test_the_implement_hook_passes_a_branch_with_no_commits_only_under_no_change
     asyncio.run(scenario())
 
 
-#: Another run of the same coder, whose steps share the workspace.
-OTHER_BRANCH = "agent/8-add-light-mode"
-
-
-def on_another_runs_branch(tmp_path: Path) -> Instance:
-    """The coder after run 7's answer, with the workspace moved on to run 8's branch since."""
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
-    git(workspace, "switch", "-c", OTHER_BRANCH, "origin/main")
-    commit(workspace, "light.py", "LIGHT = True\n")
-    return instance
+def run_worktree(instance: Instance, branch: str = BRANCH["branch"]) -> Path:
+    return instance.path / "worktrees" / branch
 
 
 async def fixed(dispatcher: ScheduledDispatcher) -> StepResult:
@@ -1351,25 +1377,166 @@ async def fixed(dispatcher: ScheduledDispatcher) -> StepResult:
     )
 
 
-def test_a_fix_starts_on_its_runs_branch_where_another_run_left_the_workspace(
+def answer_prepare(github: FakeGitHub, number: int, title: str) -> None:
+    """Answer prepare's calls for issue *number*, which no open issue blocks."""
+    answer_issue(github, issue(number, title))
+    github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blockers())
+    github.answer("repo", "view", output=REPOSITORY)
+
+
+def test_a_step_that_names_a_branch_runs_in_its_run_worktree_and_its_hook_reads_it(
     tmp_path, monkeypatch
 ):
-    instance = on_another_runs_branch(tmp_path)
+    instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    calls = stub_client(
+        tmp_path, monkeypatch, "claude", COMMITS + WRITES_WORDS + streaming(CLAUDE_STREAM)
+    )
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        assert (await prepared(dispatcher, 7)).values == BRANCH
+        implemented = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=coding("implement", 60),
+                hook="check_implementation",
+                origin=origin("implement"),
+                work_item={"issue": 7},
+                results=BRANCH,
+            ),
+        )
+        set_up = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=CommandStepRun(run=["touch installed"], branch=BRANCH["branch"]),
+                origin=origin("checks"),
+                work_item={"issue": 7},
+                results=BRANCH,
+            ),
+        )
+        unlisted = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=CommandStepRun(run=["touch shared"]),
+                origin=origin("setup"),
+                work_item={"issue": 7},
+            ),
+        )
+
+        assert (implemented.ending, implemented.values) == (StepEnding.CLEAN, WORDS)
+        assert set_up.ending is StepEnding.CLEAN, set_up.summary
+        assert (run_worktree(instance) / "installed").is_file()
+        assert [called.cwd for called in recorded_calls(calls)] == [str(run_worktree(instance))]
+        assert git(run_worktree(instance), "log", "-1", "--format=%s") == "Add dark mode"
+        assert unlisted.ending is StepEnding.CLEAN, unlisted.summary
+        assert (workspace / "shared").is_file()
+        assert git(workspace, "branch", "--show-current") == "main"
+        assert not (workspace / "theme.py").exists()
+        assert not (workspace / "installed").exists()
+
+    asyncio.run(scenario())
+
+
+def test_two_runs_steps_interleaving_never_see_each_others_work(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    answer_prepare(github, 8, "Add light mode")
+    stub_client(tmp_path, monkeypatch, "claude", COMMITS + streaming(CLAUDE_STREAM))
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    other = {"branch": "agent/8-add-light-mode", "base": "main"}
+
+    async def implement(number: int, results: Mapping[str, StepValue]) -> StepResult:
+        return await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=coding("implement", 60).model_copy(update={"branch": results["branch"]}),
+                hook="check_implementation",
+                origin=origin("implement"),
+                work_item={"issue": number},
+                results=results,
+            ),
+        )
+
+    async def scenario() -> None:
+        await prepared(dispatcher, 7)
+        assert (await implement(7, BRANCH)).ending is StepEnding.CLEAN
+        stopped = run_worktree(instance)
+        (stopped / "notes.md").write_text("Half done.\n")
+        (stopped / ".scratch").mkdir()
+        (stopped / ".scratch" / "pr-title.txt").write_text("Add a dark mode toggle\n")
+        assert (await prepared(dispatcher, 8)).values == other
+        result = await implement(8, other)
+
+        assert (result.ending, result.values) == (StepEnding.CLEAN, {})
+        assert (
+            git(run_worktree(instance, other["branch"]), "rev-list", "--count", "origin/main..")
+            == "1"
+        )
+        assert (stopped / "notes.md").is_file()
+        assert (stopped / ".scratch" / "pr-title.txt").is_file()
+        assert git(stopped, "rev-list", "--count", "origin/main..") == "1"
+
+    asyncio.run(scenario())
+
+
+def test_prepare_again_starts_the_run_worktree_over_from_the_base(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        await prepared(dispatcher, 7)
+        commit(run_worktree(instance), "theme.py", "DARK = True\n")
+        (run_worktree(instance) / "notes.md").write_text("Half done.\n")
+        (run_worktree(instance) / ".scratch").mkdir()
+        (run_worktree(instance) / ".scratch" / "pr-body.md").write_text("The first body.\n")
+        result = await prepared(dispatcher, 7)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert git(run_worktree(instance), "rev-parse", "HEAD") == git(
+            workspace, "rev-parse", "origin/main"
+        )
+        assert git(run_worktree(instance), "status", "--porcelain", "--untracked-files=all") == ""
+        assert not (run_worktree(instance) / ".scratch").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("held", ["on-the-workspace", "pushed-only"])
+def test_a_step_whose_run_worktree_is_missing_gets_one_from_its_branch(tmp_path, monkeypatch, held):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, BRANCH["branch"])
+    if held == "pushed-only":
+        git(workspace, "push", "origin", BRANCH["branch"])
+        git(workspace, "switch", "main")
+        git(workspace, "branch", "-D", BRANCH["branch"])
     calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     result = asyncio.run(fixed(dispatcher))
 
     assert result.ending is StepEnding.CLEAN, result.summary
-    assert calls.exists()
-    assert git(workspace, "branch", "--show-current") == BRANCH["branch"]
+    assert [called.cwd for called in recorded_calls(calls)] == [str(run_worktree(instance))]
+    assert git(run_worktree(instance), "log", "-1", "--format=%s") == "Write theme.py"
+    if held == "on-the-workspace":
+        assert git(workspace, "branch", "--show-current") == ""
+        assert git(workspace, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/HEAD")
 
 
-def test_a_fix_never_switches_away_from_another_runs_uncommitted_changes(tmp_path, monkeypatch):
-    instance = on_another_runs_branch(tmp_path)
+def test_a_missing_run_worktree_is_never_cut_from_changes_the_workspace_holds_on_its_branch(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    (workspace / "light.py").write_text("LIGHT = False\n")
+    implemented(workspace, BRANCH["branch"])
+    (workspace / "theme.py").write_text("DARK = False\n")
     (workspace / "notes.md").write_text("Half done.\n")
     calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
     dispatcher, _ = signal_runtime(instance, RoutineModel())
@@ -1377,38 +1544,33 @@ def test_a_fix_never_switches_away_from_another_runs_uncommitted_changes(tmp_pat
     result = asyncio.run(fixed(dispatcher))
 
     assert result.ending is StepEnding.FAILED
-    assert result.summary.startswith(
-        f"The workspace is on {OTHER_BRANCH} with changes no commit holds, so it stays there "
-        f"instead of switching to {BRANCH['branch']}:\n M light.py\n?? notes.md\n"
+    assert result.summary == (
+        f"The workspace is on {BRANCH['branch']} with changes no commit holds, so no run worktree "
+        f"is cut from it:\n M theme.py\n?? notes.md"
     )
     assert not calls.exists()
-    assert git(workspace, "branch", "--show-current") == OTHER_BRANCH
-    assert (workspace / "light.py").read_text() == "LIGHT = False\n"
+    assert git(workspace, "branch", "--show-current") == BRANCH["branch"]
+    assert (workspace / "theme.py").read_text() == "DARK = False\n"
     assert (workspace / "notes.md").exists()
 
 
-def test_a_fix_fails_when_the_switch_leaves_the_workspace_off_its_branch(tmp_path, monkeypatch):
-    instance = on_another_runs_branch(tmp_path)
+def test_a_step_fails_when_its_run_worktree_is_off_its_branch(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
     calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
     dispatcher, _ = signal_runtime(instance, RoutineModel())
-    step = coding("fix", 30, resume="claude-1").model_copy(update={"branch": "--detach"})
 
-    result = asyncio.run(
-        run_in(
-            dispatcher,
-            StepRunCommand(
-                step=step,
-                hook="check_implementation",
-                origin=origin("fix"),
-                work_item={"issue": 7},
-                results=BRANCH,
-            ),
-        )
-    )
+    async def scenario() -> None:
+        await prepared(dispatcher, 7)
+        git(run_worktree(instance), "switch", "--detach")
+        result = await fixed(dispatcher)
 
-    assert result.ending is StepEnding.FAILED
-    assert result.summary.startswith('"git switch --detach" left the workspace on no branch.\n')
-    assert not calls.exists()
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == f"The run worktree of {BRANCH['branch']} is on no branch."
+        assert not calls.exists()
+
+    asyncio.run(scenario())
 
 
 def client_step(prompt: str, step: str = "implement") -> StepRunCommand:
@@ -1562,30 +1724,30 @@ async def prepared(dispatcher: ScheduledDispatcher, number: int) -> StepResult:
     )
 
 
-def test_prepare_checks_out_a_fresh_agent_branch_from_the_default_branch(tmp_path, monkeypatch):
+def test_prepare_cuts_a_run_worktree_from_the_default_branch_and_leaves_the_workspace_on_it(
+    tmp_path, monkeypatch
+):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    (workspace / "README.md").write_text("Left over from an earlier run.\n")
-    (workspace / ".scratch").mkdir()
-    (workspace / ".scratch" / "pr-body.md").write_text("An earlier run's body.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode!"), [comment("helper", "COLLABORATOR")])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
     dispatcher, _ = signal_runtime(instance, RoutineModel())
+    worktree = run_worktree(instance)
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 7)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"branch": "agent/7-add-dark-mode", "base": "main"}
-        assert git(workspace, "branch", "--show-current") == "agent/7-add-dark-mode"
-        assert git(workspace, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
-        assert git(workspace, "status", "--porcelain", "--untracked-files=all") == ""
-        assert not (workspace / ".scratch").exists()
-        (workspace / ".scratch").mkdir()
-        (workspace / ".scratch" / "pr-body.md").write_text("This run's body.\n")
-        assert git(workspace, "status", "--porcelain", "--untracked-files=all") == ""
+        assert git(worktree, "branch", "--show-current") == "agent/7-add-dark-mode"
+        assert git(worktree, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
+        assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
+        (worktree / ".scratch").mkdir()
+        (worktree / ".scratch" / "pr-body.md").write_text("This run's body.\n")
+        assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
+        assert git(workspace, "branch", "--show-current") == "main"
 
     asyncio.run(scenario())
 
@@ -1619,6 +1781,7 @@ def test_prepare_fails_on_ticket_text_an_untrusted_author_wrote_before_any_branc
             "Ticket text from untrusted authors needs a human: stranger."
         )
         assert git(workspace, "branch", "--show-current") == "main"
+        assert not (instance.path / "worktrees").exists()
 
     asyncio.run(scenario())
 
@@ -1707,7 +1870,9 @@ def test_prepare_starts_a_sub_issue_with_no_open_blocker_from_the_default_branch
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"branch": "agent/8-dark-theme", "base": "main"}
-        assert git(workspace, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
+        assert git(run_worktree(instance, "agent/8-dark-theme"), "rev-parse", "HEAD") == git(
+            workspace, "rev-parse", "origin/main"
+        )
 
     asyncio.run(scenario())
 
@@ -1726,7 +1891,7 @@ def test_prepare_stacks_a_sub_issue_on_the_top_of_its_blockers_linear_stack(tmp_
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"branch": "agent/9-dark-theme", "base": "agent/8-step"}
         assert (
-            git(workspace, "log", "--format=%s")
+            git(run_worktree(instance, "agent/9-dark-theme"), "log", "--format=%s")
             == "Write step8.py\nWrite step7.py\nWrite README.md"
         )
 

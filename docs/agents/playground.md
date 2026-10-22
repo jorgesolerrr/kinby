@@ -48,14 +48,14 @@ ssh -o BatchMode=yes playground 'docker exec kinby-hub-1 python -c "import sqlit
 ssh -o BatchMode=yes playground 'docker exec kinby-hub-1 python -c "import sqlite3; c=sqlite3.connect(\"/hub/registry.sqlite\"); [print(r) for r in c.execute(\"select id, factory, work_item, status, step, updated_at from factory_runs order by rowid desc limit 10\")]"'
 
 # What a coder is working on
-ssh -o BatchMode=yes playground 'docker exec <id> git -C /instance/workspace branch --show-current; docker top <id> -eo pid,etimes,args | cut -c1-160'
+ssh -o BatchMode=yes playground 'docker exec <id> git -C /instance/workspace worktree list; docker top <id> -eo pid,etimes,args | cut -c1-160'
 ```
 
 ## Runs that need a human
 
 A run that stopped stays unfinished in `needs-human`. Putting `ready-for-agent` back on its issue starts nothing while that run exists, because the hub hands the scan the same run again. Restart the run through the hub instead, by its run id or its issue number. `hub.sh retry 825` tries the step it stopped at again, and `hub.sh send-back 825 prepare` sends it to an earlier step. `hub.sh cancel 825` ends it, and then the label starts a new run, unless the issue already has an open agent pull request.
 
-The runs of one coder share its workspace. A run that stops with uncommitted work leaves it there, and the next run's coding step fails on it. Send the stopped run back to `prepare`, which cleans the workspace, before you retry any other.
+Each run works in its own run worktree, `/instance/worktrees/<branch>`, and the workspace stays on the default branch. A run that stops keeps its run worktree as it left it, uncommitted work included, until the run ends. Sending it back to `prepare` starts it over from the base in a fresh one.
 
 ## Run transcripts
 
