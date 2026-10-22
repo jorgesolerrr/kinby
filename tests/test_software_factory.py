@@ -1063,14 +1063,15 @@ async def ended(
     dispatcher: ScheduledDispatcher,
     results: Mapping[str, StepValue],
     run: FactoryRunOrigin | None = None,
+    number: int = 7,
 ) -> StepResult:
-    """Make the factory's ended call for issue 7's *run*, which recorded *results*."""
+    """Make the factory's ended call for issue *number*'s *run*, which recorded *results*."""
     return await run_in(
         dispatcher,
         StepRunCommand(
             step=CodeStepRun(call="report_ended"),
             origin=run or origin("implement"),
-            work_item={"issue": 7},
+            work_item={"issue": number},
             results=results,
         ),
     )
@@ -1472,6 +1473,7 @@ def test_another_runs_steps_never_touch_the_run_worktree_of_a_run_that_needs_hum
     )
     dispatcher, _ = signal_runtime(instance, RoutineModel())
     other = {"branch": "agent/8-add-light-mode", "base": "main"}
+    run = origin("implement")
     stopped = run_worktree(instance)
 
     async def scenario() -> None:
@@ -1482,7 +1484,7 @@ def test_another_runs_steps_never_touch_the_run_worktree_of_a_run_that_needs_hum
         (stopped / ".scratch" / "pr-title.txt").write_text("Add a dark mode toggle\n")
         head = git(stopped, "rev-parse", "HEAD")
         stub_client(tmp_path, monkeypatch, "claude", COMMITS + streaming(CLAUDE_STREAM))
-        assert (await prepared(dispatcher, 8)).values == other
+        assert (await prepared(dispatcher, 8, run)).values == other
         implemented = await implementing(dispatcher, 8, other)
         checked = await run_in(
             dispatcher,
@@ -1496,7 +1498,7 @@ def test_another_runs_steps_never_touch_the_run_worktree_of_a_run_that_needs_hum
         commits = git(
             run_worktree(instance, other["branch"]), "rev-list", "--count", "origin/main.."
         )
-        finished = await ended(dispatcher, other)
+        finished = await ended(dispatcher, other, run, 8)
 
         assert (implemented.ending, implemented.values) == (StepEnding.CLEAN, {})
         assert checked.ending is StepEnding.CLEAN, checked.summary
@@ -1795,12 +1797,14 @@ def answer_issue(
     github.answer(ISSUE.format(number=number), output=found)
 
 
-async def prepared(dispatcher: ScheduledDispatcher, number: int) -> StepResult:
+async def prepared(
+    dispatcher: ScheduledDispatcher, number: int, run: FactoryRunOrigin | None = None
+) -> StepResult:
     return await run_in(
         dispatcher,
         StepRunCommand(
             step=CodeStepRun(call="prepare_branch"),
-            origin=origin("prepare"),
+            origin=run or origin("prepare"),
             work_item={"issue": number},
         ),
     )
