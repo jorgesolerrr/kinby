@@ -749,6 +749,53 @@ def test_opening_the_pull_request_is_never_retried_and_needs_human_reports_on_th
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("event", "body", "status"),
+    [
+        (
+            "pull_request",
+            {"action": "closed", "pull_request": {"number": 42, "merged": True}},
+            FactoryRunStatus.DONE,
+        ),
+        (
+            "pull_request",
+            {"action": "closed", "pull_request": {"number": 42, "merged": False}},
+            FactoryRunStatus.CANCELLED,
+        ),
+        ("issues", {"action": "closed", "issue": {"number": 7}}, FactoryRunStatus.CANCELLED),
+    ],
+    ids=["merged", "closed-unmerged", "issue-closed"],
+)
+def test_finished_work_ends_a_run_that_needs_human_and_makes_the_ended_call(
+    tmp_path, event, body, status
+):
+    control = FakeControl()
+    broken = StepResult(ending=StepEnding.FAILED, summary="GitHub is down.")
+    control.step_results = [*CHECKED_CHANGE, OPENED, broken]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await babysitting(hub, run.run_id)
+        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        stopped = await settled(hub, run.run_id)
+        await woken(hub, runtime, coder, json.dumps(body).encode(), event)
+        async with asyncio.timeout(5):
+            while control.steps[-1][1].step != CodeStepRun(call="report_ended"):
+                await asyncio.sleep(0.01)
+        finished = await detail(hub, run.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "assess")
+        assert finished.run.status is status
+        _, ended = control.steps[-1]
+        assert ended.origin.run_id == run.run_id
+        assert ended.results["pr"] == 42
+
+    asyncio.run(scenario())
+
+
 #: Why the ticket needs no change, as the implement step records it.
 NO_CHANGE_REASON = "Dark mode shipped in #6."
 
@@ -1077,11 +1124,16 @@ async def ended(
     )
 
 
+#: What the ended call writes to take ready-for-human off issue 7.
+HUMAN_LABEL_OFF = ["issue", "edit", "7", "--remove-label", "ready-for-human"]
+
+
 @pytest.mark.parametrize(
-    ("results", "calls"),
+    ("results", "labels", "calls"),
     [
         (
             {**BRANCH, "no_change": NO_CHANGE_REASON},
+            ["ready-for-agent"],
             [
                 ["issue", "edit", "7", "--remove-label", "ready-for-agent"],
                 [
@@ -1094,13 +1146,21 @@ async def ended(
                 ],
             ],
         ),
-        ({**BRANCH, "pr": 42, "merge_ready": True}, []),
-        ({}, []),
+        ({**BRANCH, "pr": 42, "merge_ready": True}, ["ready-for-agent"], []),
+        ({}, ["ready-for-agent"], []),
+        ({**BRANCH, "pr": 42}, ["ready-for-human"], [HUMAN_LABEL_OFF]),
+        ({}, ["ready-for-human"], [HUMAN_LABEL_OFF]),
     ],
-    ids=["no-change", "merge-ready", "before-a-branch"],
+    ids=[
+        "no-change",
+        "merge-ready",
+        "before-a-branch",
+        "after-needing-a-human",
+        "needing-a-human-before-a-branch",
+    ],
 )
-def test_the_ended_call_comments_why_a_run_made_no_change_and_never_closes_the_issue(
-    tmp_path, monkeypatch, results, calls
+def test_the_ended_call_takes_ready_for_human_off_and_says_why_a_run_made_no_change(
+    tmp_path, monkeypatch, results, labels, calls
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
@@ -1108,13 +1168,15 @@ def test_the_ended_call_comments_why_a_run_made_no_change_and_never_closes_the_i
     cut_run_worktree(instance, BRANCH["branch"], "origin/main", str(run.run_id))
     (run_worktree(instance) / "notes.md").write_text("Half done.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode", labels=labels))
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     async def scenario() -> None:
         result = await ended(dispatcher, results, run)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert github.calls == calls
+        # The issue is never closed: only these writes reach it.
+        assert [arguments for arguments in github.calls if arguments[0] == "issue"] == calls
         removed = "branch" in results
         assert run_worktree(instance).exists() is not removed
         assert (git(workspace, "branch", "--list", BRANCH["branch"]) == "") is removed

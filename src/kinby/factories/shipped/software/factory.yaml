@@ -225,3 +225,20 @@ needs_human: { in: coder, call: report_needs_human }
 # change, comments why on the issue and takes ready-for-agent off. It never closes the issue
 # (ADR 0105).
 ended: { in: coder, call: report_ended }
+# A run that needs human ends once its work finished elsewhere: done when its pull request is
+# merged, cancelled when its issue is closed or its pull request is closed unmerged. The ended call
+# then takes ready-for-human off the issue. The repository's webhook must send issues events.
+closing:
+  done:
+    - headers.X-GitHub-Event: pull_request
+      body.action: closed
+      body.pull_request.number: "{{pr}}"
+      body.pull_request.merged: true
+  cancelled:
+    - headers.X-GitHub-Event: issues
+      body.action: closed
+      body.issue.number: "{{issue}}"
+    - headers.X-GitHub-Event: pull_request
+      body.action: closed
+      body.pull_request.number: "{{pr}}"
+      body.pull_request.merged: false

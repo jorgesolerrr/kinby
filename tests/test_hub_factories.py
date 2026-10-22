@@ -467,6 +467,19 @@ def test_the_check_fails_a_wait_filter_naming_a_value_no_earlier_step_or_work_it
     ]
 
 
+def test_the_check_fails_a_closing_filter_naming_a_value_no_step_or_work_item_holds(tmp_path):
+    factory = FACTORY + (
+        "closing:\n"
+        '  done: [{ body.pull_request.number: "{{pr}}", body.pull_request.merged: true }]\n'
+        '  cancelled: [{ body.issue.number: "{{issue}}" }, { body.issue.title: "{{title}}" }]\n'
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
+        'closing matches "body.issue.title" against "title", which no step declares in its '
+        "results and the work item does not carry."
+    ]
+
+
 def test_the_check_fails_a_command_naming_a_value_no_earlier_step_or_work_item_holds(tmp_path):
     factory = FACTORY.replace(
         'run: ["uv run pytest"]', 'run: ["git switch {{branch}}", "make {{pr}}"]'

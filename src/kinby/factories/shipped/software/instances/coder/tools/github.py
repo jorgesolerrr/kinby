@@ -402,16 +402,19 @@ def report_ended(
     branch: str | None = None,
     no_change: str | None = None,
 ) -> None:
-    """Remove the run's run worktree and local branch, unless a later run cut them again. Then
-    say on the issue why a run that ended made no change, and take ready-for-agent off it.
+    """Remove the run's run worktree and local branch, unless a later run cut them again, and
+    take ready-for-human off the issue. Then say on the issue why a run that ended made no change,
+    and take ready-for-agent off it.
 
     The issue stays open: closing it is the maintainer's call.
     """
     if branch is not None:
         remove_run_worktree(context.instance, branch, run_id)
+    workspace = context.workspace
+    if READY_FOR_HUMAN_LABEL in _issue(workspace, issue).labels:
+        _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
     if no_change is None:
         return
-    workspace = context.workspace
     _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_LABEL)
     body = (
         f"The software factory made no change for this issue: {no_change}\n\n"

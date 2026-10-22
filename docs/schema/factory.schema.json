@@ -317,6 +317,30 @@
       "title": "ClientStep",
       "type": "object"
     },
+    "Closing": {
+      "additionalProperties": false,
+      "description": "The signals that say a run's work finished elsewhere, which end a run that needs human.\n\nA signal matching one of the ``done`` filters ends it done, and one matching a ``cancelled``\nfilter ends it cancelled. A filter matches as a wait's does.",
+      "properties": {
+        "cancelled": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SignalFilter"
+          },
+          "title": "Cancelled",
+          "type": "array"
+        },
+        "done": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SignalFilter"
+          },
+          "title": "Done",
+          "type": "array"
+        }
+      },
+      "title": "Closing",
+      "type": "object"
+    },
     "CodeStep": {
       "additionalProperties": false,
       "description": "An instance tool the model never sees.\n\nA mapping the tool returns is the step's values. A HookResult also names its outcome.",
@@ -876,6 +900,9 @@
           },
           {
             "type": "integer"
+          },
+          {
+            "type": "boolean"
           }
         ]
       },
@@ -1106,6 +1133,9 @@
   "additionalProperties": false,
   "description": "A factory: the instances its steps run in, its intake, and its line of steps.",
   "properties": {
+    "closing": {
+      "$ref": "#/$defs/Closing"
+    },
     "done_requires": {
       "default": [],
       "items": {

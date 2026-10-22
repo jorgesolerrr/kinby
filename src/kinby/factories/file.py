@@ -179,7 +179,7 @@ class CodeStep(_Step):
 type SignalField = Annotated[
     str, Field(pattern=r"^(routine|headers\.[A-Za-z0-9-]+|body(\.[^.]+)+)$")
 ]
-type SignalFilter = Annotated[dict[SignalField, str | int], Field(min_length=1)]
+type SignalFilter = Annotated[dict[SignalField, str | int | bool], Field(min_length=1)]
 #: A filter value or a part of a command ``{{name}}`` stands for the run's value of that name.
 _RUN_VALUE = re.compile(r"\{\{([a-z_][a-z0-9_]*)\}\}")
 
@@ -264,6 +264,18 @@ class EndedCall:
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class Closing:
+    """The signals that say a run's work finished elsewhere, which end a run that needs human.
+
+    A signal matching one of the ``done`` filters ends it done, and one matching a ``cancelled``
+    filter ends it cancelled. A filter matches as a wait's does.
+    """
+
+    done: tuple[SignalFilter, ...] = ()
+    cancelled: tuple[SignalFilter, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class FactoryFile:
     """A factory: the instances its steps run in, its intake, and its line of steps."""
 
@@ -277,6 +289,7 @@ class FactoryFile:
     done_requires: tuple[ValueName, ...] = ()
     needs_human: NeedsHumanCall | None = None
     ended: EndedCall | None = None
+    closing: Closing = Field(default_factory=Closing)
 
 
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)

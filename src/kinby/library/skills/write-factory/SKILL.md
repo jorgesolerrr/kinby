@@ -24,6 +24,7 @@ Read `factory.list`, then `factory.get` for the factory to change or the one clo
 - `done_requires` lists the values a run must hold once its last step ends.
 - `needs_human` names a tool, `in` an instance, that the hub calls when a run stops for the user.
 - `ended` names a tool the same way, that the hub calls once when a run ends done or cancelled.
+- `closing` ends a run that needs the user once its work finished elsewhere: a signal matching one of its `done` filters ends it done, one matching a `cancelled` filter ends it cancelled. A filter reads as a `wait`'s does.
 
 ## Steps
 
