@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -1898,6 +1899,106 @@ def test_prepare_cuts_a_run_worktree_from_the_default_branch_and_leaves_the_work
         assert git(workspace, "branch", "--show-current") == "main"
 
     asyncio.run(scenario())
+
+
+#: The branch of a run worktree an earlier run left behind.
+LEFTOVER = "agent/5-drop-the-light-theme"
+
+
+def left_over(instance: Instance, branch: str = LEFTOVER) -> Path:
+    """A run worktree an earlier run left on *branch*, with one commit it pushed."""
+    worktree = cut_run_worktree(instance, branch, "origin/main", str(uuid4()))
+    commit(worktree, "theme.py", "LIGHT = False\n")
+    git(worktree, "push", "origin", branch)
+    return worktree
+
+
+def test_prepare_removes_a_clean_pushed_run_worktree_whose_issue_is_closed_and_its_branch(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    worktree = left_over(instance)
+    (worktree / ".scratch").mkdir()
+    (worktree / ".scratch" / "pr-body.md").write_text("The earlier run's body.\n")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    github.answer(ISSUE.format(number=5), output={**issue(5, "Drop it"), "state": "closed"})
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    result = asyncio.run(prepared(dispatcher, 7))
+
+    assert result.ending is StepEnding.CLEAN, result.summary
+    assert not worktree.exists()
+    assert git(workspace, "branch", "--list", LEFTOVER) == ""
+    assert str(worktree) not in git(workspace, "worktree", "list")
+    assert run_worktree(instance).is_dir()
+
+
+@pytest.mark.parametrize(
+    ("leaves", "why"),
+    [
+        ("open", None),
+        ("changes", "it holds changes no commit holds."),
+        ("commits", "its branch holds commits origin lacks."),
+    ],
+)
+def test_prepare_keeps_a_run_worktree_whose_issue_is_open_or_that_holds_work_nowhere_else(
+    tmp_path, monkeypatch, caplog, leaves, why
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    worktree = left_over(instance)
+    if leaves == "changes":
+        (worktree / "notes.md").write_text("Half done.\n")
+    if leaves == "commits":
+        commit(worktree, "picker.py", "PICKER = True\n")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    state = "open" if leaves == "open" else "closed"
+    github.answer(ISSUE.format(number=5), output={**issue(5, "Drop it"), "state": state})
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(prepared(dispatcher, 7))
+
+    assert result.ending is StepEnding.CLEAN, result.summary
+    assert git(worktree, "branch", "--show-current") == LEFTOVER
+    assert git(workspace, "branch", "--list", LEFTOVER) != ""
+    logged = [record.getMessage() for record in caplog.records]
+    assert [message for message in logged if LEFTOVER in message] == (
+        [] if why is None else [f"The run worktree of {LEFTOVER} stays: {why}"]
+    )
+
+
+def test_prepare_keeps_a_run_worktree_whose_branch_names_no_issue(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    worktree = left_over(instance, "agent/dark-mode-spike")
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    result = asyncio.run(prepared(dispatcher, 7))
+
+    assert result.ending is StepEnding.CLEAN, result.summary
+    assert git(worktree, "branch", "--show-current") == "agent/dark-mode-spike"
+
+
+def test_a_sweep_that_fails_leaves_prepare_to_go_on(tmp_path, monkeypatch, caplog):
+    instance = coder_at(tmp_path)
+    worktree = left_over(instance)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+    github.answer(ISSUE.format(number=5), error="GitHub is down.")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    result = asyncio.run(prepared(dispatcher, 7))
+
+    assert result.ending is StepEnding.CLEAN, result.summary
+    assert result.values == BRANCH
+    assert git(run_worktree(instance), "branch", "--show-current") == BRANCH["branch"]
+    assert worktree.is_dir()
+    assert "The sweep of run worktrees whose issue is closed failed." in caplog.text
 
 
 @pytest.mark.parametrize("written_by", ["issue", "comment", "parent"])

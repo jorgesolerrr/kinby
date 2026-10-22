@@ -7,7 +7,9 @@ remotes and excludes.
 
 from __future__ import annotations
 
+import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from kinby.core.errors import CoreError
@@ -17,6 +19,8 @@ from kinby.instance import Instance
 _GIT_TIMEOUT = 900
 #: The file in a run worktree's own git directory that names the run it belongs to.
 _OWNER = "kinby-run"
+
+_logger = logging.getLogger(__name__)
 
 
 class RunWorktreeError(CoreError):
@@ -72,6 +76,28 @@ def remove_run_worktree(instance: Instance, branch: str, run_id: str) -> None:
         _git(workspace, "worktree", "remove", "--force", str(worktree))
     if branch not in held.values() and _git(workspace, "branch", "--list", branch):
         _git(workspace, "branch", "-D", branch)
+
+
+def sweep_run_worktrees(instance: Instance, over: Callable[[str], bool]) -> None:
+    """Remove each run worktree whose branch's run is *over*, with its local branch, unless it
+    holds work that exists nowhere else: changes no commit holds, or commits origin lacks. One
+    that does stays, and the log says which.
+    """
+    workspace = instance.manifest.workspace.path
+    root = (instance.path / "worktrees").resolve()
+    for worktree, branch in _worktrees(workspace).items():
+        if not worktree.is_relative_to(root) or not branch or not over(branch):
+            continue
+        if _git(worktree, "status", "--porcelain", "--untracked-files=normal"):
+            _logger.info("The run worktree of %s stays: it holds changes no commit holds.", branch)
+        elif _git(worktree, "log", "--format=%h", branch, "--not", "--remotes=origin"):
+            _logger.info(
+                "The run worktree of %s stays: its branch holds commits origin lacks.", branch
+            )
+        else:
+            _git(workspace, "worktree", "remove", "--force", str(worktree))
+            _git(workspace, "branch", "-D", branch)
+    _git(workspace, "worktree", "prune")
 
 
 def _path(instance: Instance, branch: str) -> Path:
