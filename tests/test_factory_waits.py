@@ -32,6 +32,7 @@ from kinby.hub import Hub
 from kinby.instance import Serve
 from tests.test_factory_runs import (
     CLIENT_FILES,
+    FACTORY,
     FILES,
     created_in,
     detail,
@@ -719,3 +720,72 @@ def test_a_run_parked_by_its_plan_window_wakes_at_the_reset_after_a_hub_restart(
         ]
 
     asyncio.run(after_the_restart())
+
+
+CLOSING = (
+    FACTORY
+    + """\
+closing:
+  done:
+    - headers.X-GitHub-Event: pull_request
+      body.action: closed
+      body.pull_request.number: "{{issue}}"
+      body.pull_request.merged: true
+  cancelled:
+    - headers.X-GitHub-Event: issues
+      body.action: closed
+      body.issue.number: "{{issue}}"
+"""
+)
+
+
+@pytest.mark.parametrize(
+    ("event", "body", "status", "step"),
+    [
+        (
+            "pull_request",
+            b'{"action": "closed", "pull_request": {"number": 7, "merged": true}}',
+            FactoryRunStatus.DONE,
+            None,
+        ),
+        (
+            "issues",
+            b'{"action": "closed", "issue": {"number": 7}}',
+            FactoryRunStatus.CANCELLED,
+            "test",
+        ),
+        (
+            "pull_request",
+            b'{"action": "closed", "pull_request": {"number": 7, "merged": false}}',
+            FactoryRunStatus.NEEDS_HUMAN,
+            "test",
+        ),
+        (
+            "issues",
+            b'{"action": "closed", "issue": {"number": 8}}',
+            FactoryRunStatus.NEEDS_HUMAN,
+            "test",
+        ),
+    ],
+    ids=["done", "cancelled", "unmatched-value", "another-work-item"],
+)
+def test_a_closing_signal_ends_a_run_that_needs_a_human_done_or_cancelled(
+    tmp_path, event, body, status, step
+):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="Tests failed.")]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": CLOSING})
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        await stopped(hub, run.run_id)
+        await signalled(hub, runtime, coder, body, event=event)
+        await asyncio.sleep(0.05)
+        found = await detail(hub, run.run_id)
+
+        assert (found.run.status, found.run.step) == (status, step)
+        assert [(a.step, a.ending) for a in found.attempts] == [("test", StepEnding.FAILED)]
+
+    asyncio.run(scenario())

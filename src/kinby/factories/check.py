@@ -330,7 +330,7 @@ def _run_calls(factory: FactoryFile, templates: dict[InstanceName, _Template]) -
 
 def _inputs(factory: FactoryFile) -> Iterator[str]:
     """Each value a step requires, a wait or a command names is held: by the work item or an
-    earlier step."""
+    earlier step. Each value done_requires or a closing filter names is held by any step."""
     held = set(factory.work_item)
     for step in factory.steps:
         for value in step.requires:
@@ -359,6 +359,14 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
             yield (
                 f'done_requires names "{value}", which no step declares in its results '
                 "and the work item does not carry."
+            )
+    closing = (*factory.closing.done, *factory.closing.cancelled)
+    for field, expected in (item for fields in closing for item in fields.items()):
+        value = run_value_name(expected)
+        if value is not None and value not in held:
+            yield (
+                f'closing matches "{field}" against "{value}", which no step declares in its '
+                "results and the work item does not carry."
             )
 
 

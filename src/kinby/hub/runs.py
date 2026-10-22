@@ -314,8 +314,9 @@ class FactoryRuns:
         """Move on each run of the instance's factory whose parked wait the signal matches.
 
         A run still working toward a wait the signal matches moves on from it as soon as it
-        parks there, so a signal that lands between two steps is not lost. The instance of the
-        factory's intake moves on only the runs it handed in.
+        parks there, so a signal that lands between two steps is not lost. A run that needs a
+        human ends once one of the factory's closing signals says its work finished elsewhere.
+        The instance of the factory's intake moves on only the runs it handed in.
         """
         membership = self._membership(instance_id)
         if membership is None:
@@ -329,6 +330,7 @@ class FactoryRuns:
             *self._registry.runs(member.factory, FactoryRunStatus.QUEUED, owner),
             *self._registry.runs(member.factory, FactoryRunStatus.RUNNING, owner),
         )
+        stopped = self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN, owner)
         for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner):
             step = _step(factory, run.step) if run.step is not None else None
             held = run.work_item | self._results(run.run_id, factory)
@@ -343,6 +345,12 @@ class FactoryRuns:
             for wait in waits:
                 if any(_matches(fields, signal, body, held) for fields in wait.signal):
                     self._woken.setdefault(run.run_id, set()).add(wait.id)
+        for run in stopped:
+            held = run.work_item | self._results(run.run_id, factory)
+            if any(_matches(fields, signal, body, held) for fields in factory.closing.done):
+                self._move(run.run_id, FactoryRunStatus.DONE, None)
+            elif any(_matches(fields, signal, body, held) for fields in factory.closing.cancelled):
+                self._move(run.run_id, FactoryRunStatus.CANCELLED, run.step)
 
     async def cancel(self, command: FactoryRunCancelCommand) -> FactoryRun:
         """End the run at the step it stopped or is parked at. Nothing it did is undone."""
