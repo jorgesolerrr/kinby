@@ -277,8 +277,8 @@ def test_a_template_file_the_hub_cannot_read_leaves_the_list_whole(tmp_path, mon
 
 ROUTE_MISSING = HubRouteMissing(
     message=(
-        "The instance cannot reach the hub with the scopes it holds, factory:intake. "
-        "An instance update gives it the route."
+        "The instance cannot reach the hub with the scopes it holds, "
+        "factory:intake,notification:raise. An instance update gives it the route."
     )
 )
 
@@ -346,17 +346,24 @@ def test_an_instance_holding_other_scopes_than_the_registry_grants_says_so(tmp_p
     asyncio.run(scenario())
 
 
-def test_an_instance_the_registry_grants_no_scope_has_no_hub_route_notice(tmp_path):
+def test_a_vanilla_instance_without_its_hub_route_says_so(tmp_path):
     hub = routed_hub(tmp_path / "hub", FakeControl(), FakeRuntime())
 
     async def scenario() -> None:
         client = hub_client(hub)
         created = await created_instance(client)
         environment = instance_environment(hub, created.instance_id)
-        _rewrite_environment(
-            hub, created.instance_id, environment | {"KINBY_HUB_SCOPES": "factory:intake"}
-        )
+        del environment["KINBY_HUB_URL"]
+        del environment["KINBY_HUB_SCOPES"]
+        _rewrite_environment(hub, created.instance_id, environment)
 
-        assert await _notices(client) == []
+        assert await _notices(client) == [
+            HubRouteMissing(
+                message=(
+                    "The instance cannot reach the hub with the scopes it holds, "
+                    "notification:raise. An instance update gives it the route."
+                )
+            )
+        ]
 
     asyncio.run(scenario())

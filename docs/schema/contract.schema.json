@@ -317,6 +317,323 @@
       "title": "ChangeStatus",
       "type": "string"
     },
+    "Channel": {
+      "additionalProperties": false,
+      "description": "A channel as the hub shows it: never the value of a secret setting.",
+      "properties": {
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChannelKindName"
+        },
+        "last_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_sent_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "muted": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "paired": {
+          "type": "boolean"
+        },
+        "pairing_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pairing_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "channel_id",
+        "name",
+        "kind",
+        "settings",
+        "enabled",
+        "paired"
+      ],
+      "title": "Channel",
+      "type": "object"
+    },
+    "ChannelCreateCommand": {
+      "additionalProperties": false,
+      "description": "Set up a channel of one kind. The hub keeps its secret settings as hub secrets.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ChannelKindName"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "title": "ChannelCreateCommand",
+      "type": "object"
+    },
+    "ChannelDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Delete a channel, with its hub secrets and the notifications it has still to send.",
+      "properties": {
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id"
+      ],
+      "title": "ChannelDeleteCommand",
+      "type": "object"
+    },
+    "ChannelFailure": {
+      "additionalProperties": false,
+      "description": "The last send through a channel that failed.",
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "error"
+      ],
+      "title": "ChannelFailure",
+      "type": "object"
+    },
+    "ChannelKindDescription": {
+      "additionalProperties": false,
+      "description": "A channel kind the hub found, and what a channel of it asks for.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ChannelKindName"
+        },
+        "pairs": {
+          "type": "boolean"
+        },
+        "settings": {
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "settings",
+        "pairs"
+      ],
+      "title": "ChannelKindDescription",
+      "type": "object"
+    },
+    "ChannelKindName": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "ChannelKindsCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ChannelKindsCommand",
+      "type": "object"
+    },
+    "ChannelKindsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/ChannelKindDescription"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kinds"
+      ],
+      "title": "ChannelKindsResult",
+      "type": "object"
+    },
+    "ChannelListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ChannelListCommand",
+      "type": "object"
+    },
+    "ChannelListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/Channel"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "channels"
+      ],
+      "title": "ChannelListResult",
+      "type": "object"
+    },
+    "ChannelMuteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id",
+        "instance_id"
+      ],
+      "title": "ChannelMuteCommand",
+      "type": "object"
+    },
+    "ChannelTestCommand": {
+      "additionalProperties": false,
+      "description": "Send a test notification through a paired channel now.",
+      "properties": {
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel_id"
+      ],
+      "title": "ChannelTestCommand",
+      "type": "object"
+    },
+    "ChannelUpdateCommand": {
+      "additionalProperties": false,
+      "description": "Change what the command sends of one channel, and keep the rest.",
+      "properties": {
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "channel_id"
+      ],
+      "title": "ChannelUpdateCommand",
+      "type": "object"
+    },
     "ClientFrame": {
       "discriminator": {
         "mapping": {
@@ -4263,6 +4580,62 @@
         "source"
       ],
       "title": "NodeSummary",
+      "type": "object"
+    },
+    "NotificationRaiseCommand": {
+      "additionalProperties": false,
+      "description": "A notification an instance raises on its hub route. The hub adds its header and link.",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "type": "array"
+        },
+        "source": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "thread_id",
+        "source",
+        "title",
+        "text"
+      ],
+      "title": "NotificationRaiseCommand",
+      "type": "object"
+    },
+    "NotificationRaiseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "notification_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "notification_id"
+      ],
+      "title": "NotificationRaiseResult",
       "type": "object"
     },
     "OperationGetCommand": {
@@ -8714,6 +9087,134 @@
     "methods": {
       "additionalProperties": false,
       "properties": {
+        "channel.create": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelCreateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Channel"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ChannelListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.kinds": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelKindsCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ChannelKindsResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ChannelListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.mute": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelMuteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Channel"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.test": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelTestCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Channel"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.unmute": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelMuteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Channel"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "channel.update": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ChannelUpdateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Channel"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "config.history": {
           "additionalProperties": false,
           "properties": {
@@ -9594,6 +10095,22 @@
           ],
           "type": "object"
         },
+        "notification.raise": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/NotificationRaiseCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/NotificationRaiseResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "operation.get": {
           "additionalProperties": false,
           "properties": {
@@ -10364,7 +10881,16 @@
         "hub.secret.set",
         "hub.secret.delete",
         "stats.summary",
-        "stats.runs"
+        "stats.runs",
+        "channel.kinds",
+        "channel.list",
+        "channel.create",
+        "channel.update",
+        "channel.delete",
+        "channel.test",
+        "channel.mute",
+        "channel.unmute",
+        "notification.raise"
       ],
       "type": "object"
     },

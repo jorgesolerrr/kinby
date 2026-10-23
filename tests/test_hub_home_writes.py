@@ -773,8 +773,13 @@ def test_the_hub_writes_each_instance_the_scopes_its_hub_route_grants(tmp_path):
 
     home, coder = asyncio.run(scenario())
 
-    assert instance_environment(hub, home)[HUB_SCOPES_VARIABLE] == "hub:home,hub:read"
-    assert instance_environment(hub, coder)[HUB_SCOPES_VARIABLE] == "factory:intake"
+    assert (
+        instance_environment(hub, home)[HUB_SCOPES_VARIABLE]
+        == "hub:home,hub:read,notification:raise"
+    )
+    assert (
+        instance_environment(hub, coder)[HUB_SCOPES_VARIABLE] == "factory:intake,notification:raise"
+    )
 
 
 @pytest.mark.parametrize(

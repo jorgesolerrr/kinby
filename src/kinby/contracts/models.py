@@ -46,6 +46,9 @@ class Scope(StrEnum):
     #: Read another instance through the hub, and run the hub writes the user approved. Only the
     #: home instance holds it, on its hub route.
     HUB_HOME = "hub:home"
+    #: Raise a notification for the hub to send through its channels. Every instance holds it, on
+    #: its hub route.
+    NOTIFICATION_RAISE = "notification:raise"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -66,8 +69,10 @@ INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
 #: What the home instance holds on its hub route: the hub's reads, and the reads of an instance
 #: the hub relays to it.
 HOME_SCOPES = frozenset({Scope.HUB_READ, Scope.HUB_HOME})
+#: What every instance holds on its hub route (ADR 0103).
+NOTIFICATION_SCOPES = frozenset({Scope.NOTIFICATION_RAISE})
 #: What a client authenticated against the hub holds: a hub has one user.
-HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES - {Scope.HUB_HOME}
+HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES - NOTIFICATION_SCOPES - {Scope.HUB_HOME}
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
@@ -2537,6 +2542,134 @@ class HubSecretDeleteCommand(ContractModel):
 class HubSecretDeleteResult(ContractModel):
     #: Each instance's field keeps the value it held.
     unlinked: list[HubSecretLink]
+
+
+#: A channel kind, by its entry point's name in the ``kinby.channels`` group.
+type ChannelKindName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class ChannelKindsCommand(ContractModel):
+    pass
+
+
+class ChannelKindDescription(ContractModel):
+    """A channel kind the hub found, and what a channel of it asks for."""
+
+    kind: ChannelKindName
+    #: The value of a secret field is kept as a hub secret.
+    settings: list[SetupField]
+    #: A channel of it sends nothing until the user sends it the pairing code.
+    pairs: bool
+
+
+class ChannelKindsResult(ContractModel):
+    #: By name.
+    kinds: list[ChannelKindDescription]
+
+
+class ChannelFailure(ContractModel):
+    """The last send through a channel that failed."""
+
+    at: datetime
+    error: str
+
+
+class Channel(ContractModel):
+    """A channel as the hub shows it: never the value of a secret setting."""
+
+    channel_id: UUID
+    name: str
+    kind: ChannelKindName
+    #: Each setting, by field name. A secret field holds the name of the hub secret with its value.
+    settings: dict[str, SetupValue]
+    enabled: bool
+    paired: bool
+    #: What the user sends through the channel to pair it, until it is paired.
+    pairing_code: str | None = None
+    pairing_expires_at: datetime | None = None
+    #: The instances whose notifications it does not send.
+    muted: list[UUID] = Field(default_factory=list)
+    last_sent_at: datetime | None = None
+    last_failure: ChannelFailure | None = None
+
+
+class ChannelListCommand(ContractModel):
+    pass
+
+
+class ChannelListResult(ContractModel):
+    #: In creation order.
+    channels: list[Channel]
+
+
+class ChannelCreateCommand(ContractModel):
+    """Set up a channel of one kind. The hub keeps its secret settings as hub secrets."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    kind: ChannelKindName
+    #: The kind's configuration settings, by field name.
+    settings: dict[str, SetupValue] = Field(default_factory=dict)
+    #: The kind's secret settings, by field name.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
+class ChannelUpdateCommand(ContractModel):
+    """Change what the command sends of one channel, and keep the rest."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    channel_id: UUID
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    enabled: bool | None = None
+    settings: dict[str, SetupValue] = Field(default_factory=dict)
+    #: Each one replaces the value of the hub secret that holds it.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
+class ChannelDeleteCommand(ContractModel):
+    """Delete a channel, with its hub secrets and the notifications it has still to send."""
+
+    channel_id: UUID
+
+
+class ChannelTestCommand(ContractModel):
+    """Send a test notification through a paired channel now."""
+
+    channel_id: UUID
+
+
+class ChannelMuteCommand(ContractModel):
+    channel_id: UUID
+    instance_id: UUID
+
+
+class NotificationRaiseCommand(ContractModel):
+    """A notification an instance raises on its hub route. The hub adds its header and link."""
+
+    #: Unique among the instance's notifications. Raising a key again returns its notification.
+    key: Annotated[str, Field(min_length=1)]
+    #: The thread it came from, which its link opens.
+    thread_id: UUID
+    #: Where it came from: the routine, the step, or the thread's title.
+    source: Annotated[str, Field(min_length=1)]
+    title: Annotated[str, Field(min_length=1)]
+    text: str
+    #: What the user can reply with.
+    options: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list, max_length=4)
+
+
+class NotificationRaiseResult(ContractModel):
+    notification_id: UUID
 
 
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]

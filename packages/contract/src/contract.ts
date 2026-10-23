@@ -7,8 +7,7 @@
 
 export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
-export type ConfigActor = "app" | "agent" | "failure_policy";
-export type FactoryName = string;
+export type ChannelKindName = string;
 export type SetupValue = boolean | number | string;
 /**
  * Where a setup field's value lands: the instance's configuration, or its secrets.
@@ -22,6 +21,8 @@ export type TargetFile = "kinby.toml";
  * How a client asks for a setup field's value, and so what the value is.
  */
 export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
+export type ConfigActor = "app" | "agent" | "failure_policy";
+export type FactoryName = string;
 /**
  * Where the factory the hub serves under a name comes from.
  */
@@ -182,6 +183,38 @@ export type GateDecider = "policy" | "user";
 export interface Contract {
   client_frame: ClientFrame;
   methods: {
+    "channel.create": {
+      command: ChannelCreateCommand;
+      result: Channel;
+    };
+    "channel.delete": {
+      command: ChannelDeleteCommand;
+      result: ChannelListResult;
+    };
+    "channel.kinds": {
+      command: ChannelKindsCommand;
+      result: ChannelKindsResult;
+    };
+    "channel.list": {
+      command: ChannelListCommand;
+      result: ChannelListResult;
+    };
+    "channel.mute": {
+      command: ChannelMuteCommand;
+      result: Channel;
+    };
+    "channel.test": {
+      command: ChannelTestCommand;
+      result: Channel;
+    };
+    "channel.unmute": {
+      command: ChannelMuteCommand;
+      result: Channel;
+    };
+    "channel.update": {
+      command: ChannelUpdateCommand;
+      result: Channel;
+    };
     "config.history": {
       command: ConfigHistoryCommand;
       result: ConfigHistoryResult;
@@ -402,6 +435,10 @@ export interface Contract {
       command: MemoryOpenCommand;
       result: MemoryOpenResult;
     };
+    "notification.raise": {
+      command: NotificationRaiseCommand;
+      result: NotificationRaiseResult;
+    };
     "operation.get": {
       command: OperationGetCommand;
       result: OperationGetResult;
@@ -603,6 +640,111 @@ export interface CancelFrame {
   id: string;
   type: "cancel";
 }
+/**
+ * Set up a channel of one kind. The hub keeps its secret settings as hub secrets.
+ */
+export interface ChannelCreateCommand {
+  kind: ChannelKindName;
+  name: string;
+  secrets?: {
+    [k: string]: string;
+  };
+  settings?: {
+    [k: string]: SetupValue;
+  };
+}
+/**
+ * A channel as the hub shows it: never the value of a secret setting.
+ */
+export interface Channel {
+  channel_id: string;
+  enabled: boolean;
+  kind: ChannelKindName;
+  last_failure?: ChannelFailure | null;
+  last_sent_at?: string | null;
+  muted?: string[];
+  name: string;
+  paired: boolean;
+  pairing_code?: string | null;
+  pairing_expires_at?: string | null;
+  settings: {
+    [k: string]: SetupValue;
+  };
+}
+/**
+ * The last send through a channel that failed.
+ */
+export interface ChannelFailure {
+  at: string;
+  error: string;
+}
+/**
+ * Delete a channel, with its hub secrets and the notifications it has still to send.
+ */
+export interface ChannelDeleteCommand {
+  channel_id: string;
+}
+export interface ChannelListResult {
+  channels: Channel[];
+}
+export interface ChannelKindsCommand {}
+export interface ChannelKindsResult {
+  kinds: ChannelKindDescription[];
+}
+/**
+ * A channel kind the hub found, and what a channel of it asks for.
+ */
+export interface ChannelKindDescription {
+  kind: ChannelKindName;
+  pairs: boolean;
+  settings: SetupField[];
+}
+/**
+ * One value a prepared image or an instance template asks for before an instance exists.
+ */
+export interface SetupField {
+  choices?: string[] | null;
+  default?: SetupValue | null;
+  description: string;
+  kind: SetupFieldKind;
+  label: string;
+  name: string;
+  required: boolean;
+  target?: SetupTarget | null;
+  type: SetupFieldType;
+}
+/**
+ * Where a configuration value lands: a file, and a dotted key inside it.
+ */
+export interface SetupTarget {
+  file: TargetFile;
+  key: string;
+}
+export interface ChannelListCommand {}
+export interface ChannelMuteCommand {
+  channel_id: string;
+  instance_id: string;
+}
+/**
+ * Send a test notification through a paired channel now.
+ */
+export interface ChannelTestCommand {
+  channel_id: string;
+}
+/**
+ * Change what the command sends of one channel, and keep the rest.
+ */
+export interface ChannelUpdateCommand {
+  channel_id: string;
+  enabled?: boolean | null;
+  name?: string | null;
+  secrets?: {
+    [k: string]: string;
+  };
+  settings?: {
+    [k: string]: SetupValue;
+  };
+}
 export interface ConfigHistoryCommand {
   file?: string | null;
   limit: number;
@@ -656,27 +798,6 @@ export interface SubscriptionLogin {
   label: string;
   prompt_pattern: string;
   volume: string;
-}
-/**
- * One value a prepared image or an instance template asks for before an instance exists.
- */
-export interface SetupField {
-  choices?: string[] | null;
-  default?: SetupValue | null;
-  description: string;
-  kind: SetupFieldKind;
-  label: string;
-  name: string;
-  required: boolean;
-  target?: SetupTarget | null;
-  type: SetupFieldType;
-}
-/**
- * Where a configuration value lands: a file, and a dotted key inside it.
- */
-export interface SetupTarget {
-  file: TargetFile;
-  key: string;
 }
 /**
  * Write files of a factory's folder at once. The hub keeps them only if the check passes.
@@ -1393,6 +1514,23 @@ export interface MemoryOpenResult {
   thread: string | null;
   tools: string[] | null;
   turn: string | null;
+}
+/**
+ * A notification an instance raises on its hub route. The hub adds its header and link.
+ */
+export interface NotificationRaiseCommand {
+  key: string;
+  /**
+   * @maxItems 4
+   */
+  options?: [] | [string] | [string, string] | [string, string, string] | [string, string, string, string];
+  source: string;
+  text: string;
+  thread_id: string;
+  title: string;
+}
+export interface NotificationRaiseResult {
+  notification_id: string;
 }
 export interface OperationGetCommand {
   operation_id: string;

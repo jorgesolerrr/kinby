@@ -10,16 +10,20 @@ from kinby.contracts import (
     FactoryRun,
     FactoryRunIntakeCommand,
     RoutineName,
+    Scope,
     StepValue,
     ValueName,
 )
-from kinby.plugins.hub import HUB_URL_VARIABLE, call_hub
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, call_hub
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
 def intake_tools() -> tuple[Tool, ...]:
-    """The intake tool, in an instance its hub gave a hub route."""
-    return (hand_to_factory,) if os.environ.get(HUB_URL_VARIABLE) else ()
+    """The intake tool, in an instance its hub grants factory:intake on its hub route."""
+    granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
+    if not os.environ.get(HUB_URL_VARIABLE) or Scope.FACTORY_INTAKE not in granted:
+        return ()
+    return (hand_to_factory,)
 
 
 @tool(write=True)

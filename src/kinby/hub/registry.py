@@ -8,6 +8,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -16,6 +17,8 @@ from kinby.contracts import (
     Avatar,
     AvatarColor,
     AvatarShape,
+    ChannelFailure,
+    ChannelKindName,
     DeclaredSetup,
     FactoryName,
     FactoryRun,
@@ -31,6 +34,7 @@ from kinby.contracts import (
     OperationState,
     OperationStep,
     RunStop,
+    SetupValue,
     SkillName,
     StepAttempt,
     StepEnding,
@@ -42,7 +46,7 @@ from kinby.contracts import (
     ValueName,
 )
 from kinby.factories.file import InstanceName, RecipeName
-from kinby.hub.models import ImageArtifact
+from kinby.hub.models import ChannelNotification, ChannelUser, ImageArtifact, SentRef
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,60 @@ class ManagedInstance:
             IntendedState.STOPPED,
             IntendedState.RUNNING,
         }
+
+
+@dataclass(frozen=True)
+class Pairing:
+    """The code that pairs a channel with the first user who sends it, and until when."""
+
+    code: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class ChannelRecord:
+    """A channel the user set up, and what the hub last saw of its sends."""
+
+    channel_id: UUID
+    name: str
+    kind: ChannelKindName
+    #: Each setting, by field name. A secret field holds the name of the hub secret with its value.
+    settings: dict[str, SetupValue]
+    enabled: bool
+    #: Who the channel sends to and answers, once paired.
+    paired_user: ChannelUser | None
+    #: None once paired, and for a kind that does not pair.
+    pairing: Pairing | None
+    muted: tuple[UUID, ...]
+    last_sent_at: datetime | None
+    last_failure: ChannelFailure | None
+
+    @property
+    def sends(self) -> bool:
+        """Enabled, and not waiting for its pairing code."""
+        return self.enabled and self.pairing is None
+
+
+class DeliveryStatus(StrEnum):
+    """Where one notification stands on one channel."""
+
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    #: The channel mutes the notification's instance, so it is never sent.
+    MUTED = "muted"
+
+
+@dataclass(frozen=True)
+class PendingDelivery:
+    """A notification still to send through one channel."""
+
+    notification: ChannelNotification
+    channel_id: UUID
+    raised_at: datetime
+    #: The failed sends so far.
+    attempts: int
+    next_attempt: datetime
 
 
 class HubRegistry:
@@ -243,6 +301,47 @@ class HubRegistry:
                     last_attempt INTEGER NOT NULL,
                     told INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (run_id, generation)
+                );
+                CREATE TABLE IF NOT EXISTS channels (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    -- A secret setting holds the name of the hub secret with its value.
+                    settings TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    paired_user TEXT,
+                    pairing_code TEXT,
+                    pairing_expires_at TEXT,
+                    last_sent_at TEXT,
+                    last_error TEXT,
+                    last_error_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS channel_mutes (
+                    channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                    instance_id TEXT NOT NULL,
+                    PRIMARY KEY (channel_id, instance_id)
+                );
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id TEXT PRIMARY KEY,
+                    instance_id TEXT NOT NULL,
+                    source_key TEXT NOT NULL,
+                    header TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    link TEXT,
+                    options TEXT NOT NULL,
+                    raised_at TEXT NOT NULL,
+                    UNIQUE (instance_id, source_key)
+                );
+                CREATE TABLE IF NOT EXISTS notification_deliveries (
+                    notification_id TEXT NOT NULL REFERENCES notifications(id),
+                    channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt TEXT NOT NULL,
+                    sent_ref TEXT,
+                    last_error TEXT,
+                    PRIMARY KEY (notification_id, channel_id)
                 );
                 -- Kept when the user deletes the skill, so the hub never copies it again.
                 CREATE TABLE IF NOT EXISTS shipped_skills (
@@ -2082,8 +2181,228 @@ class HubRegistry:
             raise ValueError(f'Factory run "{run_id}" was not found.')
         return run
 
+    def create_channel(
+        self,
+        channel_id: UUID,
+        name: str,
+        kind: ChannelKindName,
+        settings: Mapping[str, SetupValue],
+        pairing: Pairing | None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO channels (
+                    id, name, kind, settings, enabled, pairing_code, pairing_expires_at
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    str(channel_id),
+                    name,
+                    kind,
+                    json.dumps(settings),
+                    pairing.code if pairing is not None else None,
+                    pairing.expires_at.isoformat() if pairing is not None else None,
+                ),
+            )
+
+    def channels(self) -> list[ChannelRecord]:
+        """Every channel, in the order the user set them up."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT {_CHANNEL_COLUMNS} FROM channels ORDER BY rowid"
+            ).fetchall()
+            mutes = connection.execute(
+                "SELECT channel_id, instance_id FROM channel_mutes ORDER BY rowid"
+            ).fetchall()
+        muted: dict[str, list[UUID]] = {}
+        for channel_id, instance_id in mutes:
+            muted.setdefault(channel_id, []).append(UUID(instance_id))
+        return [_channel(row, muted.get(row[0], [])) for row in rows]
+
+    def channel(self, channel_id: UUID) -> ChannelRecord | None:
+        return next(
+            (channel for channel in self.channels() if channel.channel_id == channel_id), None
+        )
+
+    def update_channel(
+        self,
+        channel_id: UUID,
+        *,
+        name: str,
+        enabled: bool,
+        settings: Mapping[str, SetupValue],
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE channels SET name = ?, enabled = ?, settings = ? WHERE id = ?",
+                (name, int(enabled), json.dumps(settings), str(channel_id)),
+            )
+
+    def delete_channel(self, channel_id: UUID) -> None:
+        """Delete the channel, with its mutes and its deliveries."""
+        with self._connect() as connection:
+            connection.execute("DELETE FROM channels WHERE id = ?", (str(channel_id),))
+
+    def pair_channel(self, channel_id: UUID, user: ChannelUser) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE channels
+                SET paired_user = ?, pairing_code = NULL, pairing_expires_at = NULL
+                WHERE id = ?
+                """,
+                (user, str(channel_id)),
+            )
+
+    def mute(self, channel_id: UUID, instance_id: UUID) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO channel_mutes (channel_id, instance_id) VALUES (?, ?)",
+                (str(channel_id), str(instance_id)),
+            )
+
+    def unmute(self, channel_id: UUID, instance_id: UUID) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM channel_mutes WHERE channel_id = ? AND instance_id = ?",
+                (str(channel_id), str(instance_id)),
+            )
+
+    def channel_sent(self, channel_id: UUID, at: datetime) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE channels SET last_sent_at = ? WHERE id = ?",
+                (at.isoformat(), str(channel_id)),
+            )
+
+    def channel_failed(self, channel_id: UUID, error: str, at: datetime) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE channels SET last_error = ?, last_error_at = ? WHERE id = ?",
+                (error, at.isoformat(), str(channel_id)),
+            )
+
+    def raise_notification(
+        self,
+        instance_id: UUID,
+        key: str,
+        notification: ChannelNotification,
+        raised_at: datetime,
+        deliveries: Mapping[UUID, DeliveryStatus],
+    ) -> UUID:
+        """Record the notification with a delivery on each channel, unless the instance raised
+        *key* before. The id of the notification the key names."""
+        with self._connect() as connection:
+            inserted = connection.execute(
+                """
+                INSERT INTO notifications (
+                    id, instance_id, source_key, header, title, text, link, options, raised_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (instance_id, source_key) DO NOTHING
+                """,
+                (
+                    str(notification.notification_id),
+                    str(instance_id),
+                    key,
+                    notification.header,
+                    notification.title,
+                    notification.text,
+                    notification.link,
+                    json.dumps(notification.options),
+                    raised_at.isoformat(),
+                ),
+            ).rowcount
+            if not inserted:
+                row = connection.execute(
+                    "SELECT id FROM notifications WHERE instance_id = ? AND source_key = ?",
+                    (str(instance_id), key),
+                ).fetchone()
+                return UUID(row[0])
+            connection.executemany(
+                """
+                INSERT INTO notification_deliveries (
+                    notification_id, channel_id, status, next_attempt
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(notification.notification_id),
+                        str(channel_id),
+                        status.value,
+                        raised_at.isoformat(),
+                    )
+                    for channel_id, status in deliveries.items()
+                ],
+            )
+        return notification.notification_id
+
+    def pending_deliveries(self, notification_id: UUID | None = None) -> list[PendingDelivery]:
+        """The deliveries still to send, of one notification or of all, oldest first."""
+        only = str(notification_id) if notification_id is not None else None
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT notifications.id, header, title, text, link, options, channel_id,
+                    raised_at, attempts, next_attempt
+                FROM notification_deliveries
+                JOIN notifications ON notifications.id = notification_deliveries.notification_id
+                WHERE status = ? AND (? IS NULL OR notifications.id = ?)
+                ORDER BY notification_deliveries.rowid
+                """,
+                (DeliveryStatus.PENDING.value, only, only),
+            ).fetchall()
+        return [_pending_delivery(row) for row in rows]
+
+    def delivery_sent(self, notification_id: UUID, channel_id: UUID, ref: SentRef) -> None:
+        self._end_delivery(notification_id, channel_id, DeliveryStatus.SENT, sent_ref=ref)
+
+    def delivery_failed(self, notification_id: UUID, channel_id: UUID, error: str) -> None:
+        """The delivery failed for good."""
+        self._end_delivery(notification_id, channel_id, DeliveryStatus.FAILED, error=error)
+
+    def delivery_retried(
+        self, notification_id: UUID, channel_id: UUID, error: str, next_attempt: datetime
+    ) -> None:
+        """Count a failed send, and when the next one is due."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE notification_deliveries
+                SET attempts = attempts + 1, last_error = ?, next_attempt = ?
+                WHERE notification_id = ? AND channel_id = ?
+                """,
+                (error, next_attempt.isoformat(), str(notification_id), str(channel_id)),
+            )
+
+    def _end_delivery(
+        self,
+        notification_id: UUID,
+        channel_id: UUID,
+        status: DeliveryStatus,
+        *,
+        sent_ref: SentRef | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE notification_deliveries
+                SET status = ?, sent_ref = ?, last_error = COALESCE(?, last_error)
+                WHERE notification_id = ? AND channel_id = ?
+                """,
+                (status.value, sent_ref, error, str(notification_id), str(channel_id)),
+            )
+
 
 _RUN_COLUMNS = "id, factory, instance_id, work_item, status, step, wakes_at, created_at, updated_at"
+_CHANNEL_COLUMNS = (
+    "id, name, kind, settings, enabled, paired_user, pairing_code, pairing_expires_at, "
+    "last_sent_at, last_error, last_error_at"
+)
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
 #: The statuses a run stops in, which the hub tells the instance that handed it in.
@@ -2111,4 +2430,69 @@ def _factory_run(row: tuple[str, ...]) -> FactoryRun:
         wakes_at=datetime.fromisoformat(wakes_at) if wakes_at is not None else None,
         created_at=datetime.fromisoformat(created_at),
         updated_at=datetime.fromisoformat(updated_at),
+    )
+
+
+def _channel(row: tuple[str, ...], muted: list[UUID]) -> ChannelRecord:
+    (
+        channel_id,
+        name,
+        kind,
+        settings,
+        enabled,
+        paired_user,
+        pairing_code,
+        pairing_expires_at,
+        last_sent_at,
+        last_error,
+        last_error_at,
+    ) = row
+    return ChannelRecord(
+        channel_id=UUID(channel_id),
+        name=name,
+        kind=kind,
+        settings=json.loads(settings),
+        enabled=bool(enabled),
+        paired_user=ChannelUser(paired_user) if paired_user is not None else None,
+        pairing=(
+            Pairing(pairing_code, datetime.fromisoformat(pairing_expires_at))
+            if pairing_code is not None
+            else None
+        ),
+        muted=tuple(muted),
+        last_sent_at=datetime.fromisoformat(last_sent_at) if last_sent_at is not None else None,
+        last_failure=(
+            ChannelFailure(at=datetime.fromisoformat(last_error_at), error=last_error)
+            if last_error_at is not None
+            else None
+        ),
+    )
+
+
+def _pending_delivery(row: tuple[str, ...]) -> PendingDelivery:
+    (
+        notification_id,
+        header,
+        title,
+        text,
+        link,
+        options,
+        channel_id,
+        raised_at,
+        attempts,
+        next_attempt,
+    ) = row
+    return PendingDelivery(
+        notification=ChannelNotification(
+            notification_id=UUID(notification_id),
+            header=header,
+            title=title,
+            text=text,
+            link=link,
+            options=tuple(json.loads(options)),
+        ),
+        channel_id=UUID(channel_id),
+        raised_at=datetime.fromisoformat(raised_at),
+        attempts=int(attempts),
+        next_attempt=datetime.fromisoformat(next_attempt),
     )
