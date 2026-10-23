@@ -93,12 +93,15 @@ class Sent:
 
 
 class FakeService:
-    """The service a fake channel talks to: what it took, and whether it is down."""
+    """The service a fake channel talks to: what it took, whether it is down, and the users whose
+    calls to the hub it holds until their event is set."""
 
     def __init__(self, *, down: bool = False) -> None:
         self.down = down
         self.attempts: list[ChannelNotification] = []
         self.sent: asyncio.Queue[Sent] = asyncio.Queue()
+        self.held: dict[str, asyncio.Event] = {}
+        self.receiving: asyncio.Queue[str] = asyncio.Queue()
 
     def kind(self) -> type:
         service = self
@@ -121,28 +124,33 @@ class FakeService:
 
             async def receive(self, request: web.Request) -> Inbound | None:
                 body = await request.json()
+                service.receiving.put_nowait(body["user"])
+                if body["user"] in service.held:
+                    await service.held[body["user"]].wait()
                 return Inbound(sender=ChannelUser(body["user"]), text=body["text"])
 
         return FakeChannel
 
 
 class FakeTime:
-    """A clock that a sleep moves forward at once. A held sleep never returns."""
+    """A clock that a sleep moves forward once its gate opens, at once without one."""
 
-    def __init__(self, *, held: bool = False) -> None:
+    def __init__(self, *, gate: asyncio.Event | None = None) -> None:
         self.now = _NOW
-        self.held = held
+        self.gate = gate
         self.slept: list[float] = []
+        self.woken = 0
 
     def clock(self) -> datetime:
         return self.now
 
     async def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
-        if self.held:
-            await asyncio.Event().wait()
+        if self.gate is not None:
+            await self.gate.wait()
         self.now += timedelta(seconds=seconds)
         await asyncio.sleep(0)
+        self.woken += 1
 
 
 def channel_hub(directory: Path, service: FakeService, time: FakeTime) -> Hub:
@@ -267,6 +275,32 @@ def test_a_channel_keeps_its_secrets_as_hub_secrets_and_pairs_with_the_first_sen
         assert not unpaired.paired
         assert paired.paired
         assert paired.pairing_code is None
+
+    asyncio.run(scenario())
+
+
+def test_a_second_sender_of_the_code_overlapping_the_first_pairs_nothing(tmp_path):
+    async def scenario() -> None:
+        service = FakeService()
+        hub = channel_hub(tmp_path / "hub", service, FakeTime())
+        client = hub_client(hub)
+        channel = await created_channel(client)
+        assert channel.pairing_code is not None
+        service.held = {"jorge": asyncio.Event(), "mallory": asyncio.Event()}
+        async with served(hub) as address:
+            first = asyncio.create_task(inbound(address, channel, "jorge", channel.pairing_code))
+            second = asyncio.create_task(inbound(address, channel, "mallory", channel.pairing_code))
+            assert {await service.receiving.get(), await service.receiving.get()} == {
+                "jorge",
+                "mallory",
+            }
+            service.held["jorge"].set()
+            await first
+            service.held["mallory"].set()
+            await second
+        await client.call(CHANNEL_TEST, ChannelTestCommand(channel_id=channel.channel_id))
+
+        assert (await next_sent(service)).to == "jorge"
 
     asyncio.run(scenario())
 
@@ -427,13 +461,37 @@ def test_a_failing_send_is_retried_with_backoff_for_a_day_and_then_fails_for_goo
     assert sum(time.slept[:-1]) < timedelta(days=1).total_seconds() <= sum(time.slept)
 
 
+def test_a_channel_disabled_while_a_delivery_waits_to_retry_does_not_send_it(tmp_path):
+    async def scenario() -> None:
+        service = FakeService(down=True)
+        time = FakeTime(gate=asyncio.Event())
+        hub = channel_hub(tmp_path / "hub", service, time)
+        client = hub_client(hub)
+        alice = raising(hub, (await created_instance(client)).instance_id)
+        async with served(hub) as address:
+            channel = await paired_channel(client, address)
+        await raised(alice, "news")
+        await until(lambda: len(service.attempts) == 1)
+        await client.call(
+            CHANNEL_UPDATE, ChannelUpdateCommand(channel_id=channel.channel_id, enabled=False)
+        )
+        service.down = False
+        assert time.gate is not None
+        time.gate.set()
+        await until(lambda: time.woken == 1)
+
+        assert [attempt.title for attempt in service.attempts] == ["news"]
+
+    asyncio.run(scenario())
+
+
 def test_pending_deliveries_resume_after_the_hub_is_rebuilt_on_the_same_directory(tmp_path):
     directory = tmp_path / "hub"
     later = FakeTime()
 
     async def interrupted() -> None:
         service = FakeService(down=True)
-        hub = channel_hub(directory, service, FakeTime(held=True))
+        hub = channel_hub(directory, service, FakeTime(gate=asyncio.Event()))
         client = hub_client(hub)
         alice = raising(hub, (await created_instance(client)).instance_id)
         async with served(hub) as address:

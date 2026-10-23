@@ -2245,15 +2245,16 @@ class HubRegistry:
         with self._connect() as connection:
             connection.execute("DELETE FROM channels WHERE id = ?", (str(channel_id),))
 
-    def pair_channel(self, channel_id: UUID, user: ChannelUser) -> None:
+    def pair_channel(self, channel_id: UUID, code: str, user: ChannelUser) -> None:
+        """Pair the channel with *user*, unless another sender of *code* paired it first."""
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE channels
                 SET paired_user = ?, pairing_code = NULL, pairing_expires_at = NULL
-                WHERE id = ?
+                WHERE id = ? AND pairing_code = ?
                 """,
-                (user, str(channel_id)),
+                (user, str(channel_id), code),
             )
 
     def mute(self, channel_id: UUID, instance_id: UUID) -> None:
