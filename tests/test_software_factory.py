@@ -2580,6 +2580,7 @@ async def scanned(
     events = []
     async with served(hub) as address:
         monkeypatch.setenv("KINBY_HUB_URL", url(address, f"/instances/{coder.instance_id}/hub"))
+        monkeypatch.setenv("KINBY_HUB_SCOPES", "factory:intake")
         accepted = await call(dispatcher, "routine.run", name="scan", payload=payload)
         assert isinstance(accepted, AcceptedResult), accepted
         await dispatcher.scheduler.tick()

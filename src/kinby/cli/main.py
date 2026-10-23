@@ -515,6 +515,7 @@ async def _run_hub(
     listen: Serve,
     web_app: Path | None,
     private_url: str,
+    public_url: str | None,
 ) -> int:
     from docker.errors import DockerException
 
@@ -536,6 +537,7 @@ async def _run_hub(
                 docker_host_directory,
                 network=network,
                 private_url=private_url,
+                public_url=public_url,
             )
         except (DockerException, HubAlreadyRunning) as exc:
             print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
@@ -544,7 +546,7 @@ async def _run_hub(
         print(f"directory: {hub.directory}")
         _announce(hub.access.issue())
         _announce_recovery(await hub.recover())
-        server = HubContractServer(hub.dispatcher, hub.access, hub, web_app)
+        server = HubContractServer(hub.dispatcher, hub.access, hub, hub.channels, web_app)
         address = await server.start(listen)
         print(f"listen: {address.host}:{address.port}")
         await stopping.wait()
@@ -815,6 +817,10 @@ def main(
         help="where the hub's instances reach it on the private network",
     )
     hub_parser.add_argument(
+        "--public-url",
+        help="where the user reaches the hub, which notifications link into",
+    )
+    hub_parser.add_argument(
         "--web-app",
         type=Path,
         help="directory holding the built web app (default: the one the hub image carries)",
@@ -1033,6 +1039,7 @@ def main(
                 listen,
                 args.web_app,
                 args.private_url,
+                args.public_url,
             )
         )
     try:

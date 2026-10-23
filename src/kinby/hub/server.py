@@ -20,6 +20,7 @@ from kinby.contracts import (
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
+from kinby.hub.channels import Channels
 from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
 from kinby.hub.relay import forward_signal, forwarded_headers, relay_socket, unreachable
 from kinby.instance import Serve
@@ -31,19 +32,22 @@ WEB_APP = Path("/usr/local/share/kinby/web")
 
 
 class HubContractServer:
-    """Serve the hub's contract at ``/ws``, the browser session's routes, and the web app."""
+    """Serve the hub's contract at ``/ws``, the browser session's routes, the channels' public
+    routes, and the web app."""
 
     def __init__(
         self,
         dispatcher: Dispatcher,
         access: HubAccess,
         routing: InstanceRouting,
+        channels: Channels,
         web_app: Path | None = None,
     ) -> None:
         """Serve ``web_app``, or else the app the hub image carries, when that directory exists."""
         self._dispatcher = dispatcher
         self._access = access
         self._routing = routing
+        self._channels = channels
         self._web_app = web_app or WEB_APP
         self._runner: web.AppRunner | None = None
 
@@ -89,6 +93,7 @@ class HubContractServer:
             allow_head=False,
         )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
+        application.router.add_post("/channels/{channel_id}/{kind}", self._channel)
         if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
 
@@ -154,6 +159,12 @@ class HubContractServer:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         scopes, dispatcher = self._routing.hub_route(instance_id)
         return await serve_contract(request, dispatcher, scopes)
+
+    async def _channel(self, request: web.Request) -> web.Response:
+        """A channel's service calls with what the user sent. Its kind authenticates the call."""
+        return await self._channels.receive(
+            request.match_info["channel_id"], request.match_info["kind"], request
+        )
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""

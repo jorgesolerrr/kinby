@@ -453,12 +453,14 @@ def hub_at(
     runtime: FakeRuntime | None = None,
     images: FakeImages | None = None,
     control: InstanceControl | None = None,
+    **options,
 ) -> Hub:
     return Hub(
         directory,
         runtime=runtime or FakeRuntime(),
         images=images or FakeImages(),
         control=control,
+        **options,
     )
 
 

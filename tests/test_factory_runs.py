@@ -1241,6 +1241,7 @@ def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_ro
         monkeypatch.setenv("KINBY_CONTROL_TOKEN", environment["KINBY_CONTROL_TOKEN"])
         async with served(hub) as address:
             monkeypatch.setenv("KINBY_HUB_URL", url(address, f"/instances/{coder}/{route}"))
+            monkeypatch.setenv("KINBY_HUB_SCOPES", environment["KINBY_HUB_SCOPES"])
             events = await fire(instance, RoutineModel())
             monkeypatch.setenv("KINBY_CONTROL_TOKEN", "another instance's token")
             refused = await fire(instance, RoutineModel())
@@ -1262,13 +1263,17 @@ def test_the_intake_routines_tool_hands_its_work_item_to_the_hub_over_its_own_ro
     asyncio.run(scenario())
 
 
-def test_an_instance_the_registry_grants_no_scope_gets_no_hub_url(tmp_path):
+def test_a_vanilla_instance_gets_a_hub_url_to_raise_notifications_only(tmp_path):
     hub = factory_hub(tmp_path / "hub", FakeControl(), FakeRuntime())
 
     async def scenario() -> None:
         created = await created_instance(hub_client(hub))
+        environment = instance_environment(hub, created.instance_id)
 
-        assert "KINBY_HUB_URL" not in instance_environment(hub, created.instance_id)
+        assert (
+            environment["KINBY_HUB_URL"] == f"http://hub:8080/instances/{created.instance_id}/hub"
+        )
+        assert environment["KINBY_HUB_SCOPES"] == "notification:raise"
 
     asyncio.run(scenario())
 
@@ -1297,12 +1302,19 @@ def test_a_factory_instance_created_before_its_hub_route_gets_it_on_recreation(t
 
 
 @pytest.mark.parametrize(
-    ("variable", "tools"),
-    [("KINBY_HUB_URL", (hand_to_factory,)), ("KINBY_INTAKE_URL", ())],
-    ids=["hub-url", "intake-url"],
+    ("variable", "scopes", "tools"),
+    [
+        ("KINBY_HUB_URL", "factory:intake,notification:raise", (hand_to_factory,)),
+        ("KINBY_HUB_URL", "notification:raise", ()),
+        ("KINBY_INTAKE_URL", "factory:intake", ()),
+    ],
+    ids=["intake-scope", "other-scope", "intake-url"],
 )
-def test_only_an_instance_the_hub_gave_a_hub_url_has_the_intake_tool(monkeypatch, variable, tools):
+def test_only_an_instance_its_hub_grants_factory_intake_has_the_intake_tool(
+    monkeypatch, variable, scopes, tools
+):
     monkeypatch.setenv(variable, "http://hub:8080/instances/x/hub")
+    monkeypatch.setenv("KINBY_HUB_SCOPES", scopes)
 
     assert intake_tools() == tools
 
