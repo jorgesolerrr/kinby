@@ -198,8 +198,8 @@ def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, s
     stacks on the blockers' work. With no blocker open, it starts from the default branch.
     Whatever a run worktree already on the branch held goes. The workspace only fetches.
 
-    First it sweeps the run worktrees whose issue is closed, which an end of run missed. A sweep
-    that fails is logged, and prepare goes on.
+    First it sweeps the run worktrees whose issue is closed and whose branch has no open pull
+    request, which an end of run missed. A sweep that fails is logged, and prepare goes on.
     """
     workspace = context.workspace
     found = _issue(workspace, issue)
@@ -213,7 +213,7 @@ def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, s
     _exclude_scratch(workspace)
     _git(workspace, "fetch", "--prune", "origin")
     try:
-        sweep_run_worktrees(context.instance, lambda branch: _issue_closed(workspace, branch))
+        sweep_run_worktrees(context.instance, lambda branch: _run_over(workspace, branch))
     except Exception:
         _logger.exception("The sweep of run worktrees whose issue is closed failed.")
     base = _base(workspace, found)
@@ -676,12 +676,17 @@ def _blocked_behind(workspace: Path, number: int) -> list[dict]:
     return list(found.values())
 
 
-def _issue_closed(workspace: Path, branch: str) -> bool:
-    """Whether *branch* is an agent branch whose issue is closed."""
+def _run_over(workspace: Path, branch: str) -> bool:
+    """Whether *branch* is an agent branch whose issue is closed and that has no open pull
+    request. A closed issue ends only a run that needs human, so one babysitting its pull request
+    goes on."""
     named = _AGENT_BRANCH.match(branch)
     if named is None:
         return False
-    return _api(workspace, f"repos/{{owner}}/{{repo}}/issues/{named[1]}")["state"] == "closed"
+    found = _api(workspace, f"repos/{{owner}}/{{repo}}/issues/{named[1]}")
+    if found["state"] != "closed":
+        return False
+    return all(pull.branch != branch for pull in _agent_pull_requests(workspace))
 
 
 def _ready_issue(workspace: Path, number: int) -> Issue | None:

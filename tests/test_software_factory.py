@@ -1924,6 +1924,7 @@ def test_prepare_removes_a_clean_pushed_run_worktree_whose_issue_is_closed_and_i
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_prepare(github, 7, "Add dark mode")
     github.answer(ISSUE.format(number=5), output={**issue(5, "Drop it"), "state": "closed"})
+    github.answer("repos/{owner}/{repo}/pulls", output=[[pull_request(43, "agent/6-other", 6)]])
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     result = asyncio.run(prepared(dispatcher, 7))
@@ -1939,11 +1940,12 @@ def test_prepare_removes_a_clean_pushed_run_worktree_whose_issue_is_closed_and_i
     ("leaves", "why"),
     [
         ("open", None),
+        ("pull-request", None),
         ("changes", "it holds changes no commit holds."),
         ("commits", "its branch holds commits origin lacks."),
     ],
 )
-def test_prepare_keeps_a_run_worktree_whose_issue_is_open_or_that_holds_work_nowhere_else(
+def test_prepare_keeps_a_run_worktree_whose_run_may_go_on_or_that_holds_work_nowhere_else(
     tmp_path, monkeypatch, caplog, leaves, why
 ):
     instance = coder_at(tmp_path)
@@ -1957,6 +1959,9 @@ def test_prepare_keeps_a_run_worktree_whose_issue_is_open_or_that_holds_work_now
     answer_prepare(github, 7, "Add dark mode")
     state = "open" if leaves == "open" else "closed"
     github.answer(ISSUE.format(number=5), output={**issue(5, "Drop it"), "state": state})
+    # A run babysitting its pull request goes on after its issue closed.
+    pulls = [pull_request(42, LEFTOVER, 5)] if leaves == "pull-request" else []
+    github.answer("repos/{owner}/{repo}/pulls", output=[pulls])
     dispatcher, _ = signal_runtime(instance, RoutineModel())
 
     with caplog.at_level(logging.INFO):
