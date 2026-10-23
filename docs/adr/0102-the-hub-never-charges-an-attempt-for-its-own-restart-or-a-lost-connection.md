@@ -11,7 +11,7 @@ Both happened on 2026-10-18. A hub restart stopped kinby #772 at `checks` with i
 **The instance says how a step ended, never the hub's own state.**
 
 - **A hub restart is no attempt.** An attempt the hub stopped during is not counted, like a call the instance never took. When the hub comes back, it offers the step again.
-- **A lost connection decides nothing.** When the control connection closes before the instance answers, the hub asks the instance for that call's outcome once it reaches it again. It takes the outcome the instance holds, and offers the step again only when the instance does not hold the call. How the instance keeps a call's outcome across a lost connection belongs to the control transport.
+- **A lost connection decides nothing.** When the control connection closes before the instance answers, the hub asks the instance for that call's outcome once it reaches it again. It takes the outcome the instance holds, and offers the step again only when the instance does not hold the call. How the instance keeps a call's outcome across a lost connection belongs to the control transport, settled in [ADR 0107](0107-a-control-step-call-is-answered-once-per-attempt.md).
 - **Steps with outside side effects are safe to run twice.** A step can now run again without the user deciding it, so `publish`, `assess` and any step like them check what already exists before they write: an open pull request, a posted comment, a label.
 
 Retry budgets are unchanged. A failed attempt still spends one, and a timed-out one is still never retried.

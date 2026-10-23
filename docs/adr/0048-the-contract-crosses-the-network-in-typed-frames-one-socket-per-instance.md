@@ -8,7 +8,7 @@ The hub serves its own contract at `GET /ws`. Each instance gets its own socket 
 
 The server answers every `subscribe` with `subscribed {id, head_sequence}` before the first item. Items up to `head_sequence` are replay and later ones are live. The marker is a frame and never an event, because events are a thread's history and catching up is not history.
 
-Closing a socket cancels its subscriptions and nothing else. Turns and lifecycle operations keep running. A client never retries a unary call that was in flight when the socket dropped. It learns the outcome from replayed events, or from `active_operation_id` on the instance's status. We chose that over idempotency keys.
+Closing a socket cancels its subscriptions and nothing else. Turns and lifecycle operations keep running. A client never retries a unary call that was in flight when the socket dropped. It learns the outcome from replayed events, or from `active_operation_id` on the instance's status. We chose that over idempotency keys. Amended by [ADR 0107](0107-a-control-step-call-is-answered-once-per-attempt.md): on the hub's control socket, `step.run` is answered once per attempt, and the hub sends it again after a drop.
 
 Each subscription has a bounded queue. On overflow the server ends that subscription with a retryable error, and the client resubscribes from its last sequence. The durable event log makes that lossless.
 
