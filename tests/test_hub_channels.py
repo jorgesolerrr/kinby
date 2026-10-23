@@ -44,7 +44,14 @@ from kinby.contracts import (
     SetupValue,
 )
 from kinby.hub import Hub
-from kinby.hub.channels import ChannelNotification, ChannelSetup, ChannelUser, Inbound, SentRef
+from kinby.hub.channels import (
+    ChannelNotification,
+    ChannelSetup,
+    ChannelUser,
+    Inbound,
+    Reply,
+    SentRef,
+)
 from kinby.instance import Serve
 from tests.test_hub import (
     FakeControl,
@@ -85,16 +92,18 @@ _SETTINGS = (
 
 @dataclass(frozen=True)
 class Sent:
-    """One notification the fake service took: to whom, with which token and settings."""
+    """One notification the fake service took: to whom, with which token and settings, and the
+    message it sent."""
 
     to: ChannelUser | None
     settings: Mapping[str, SetupValue]
     notification: ChannelNotification
+    ref: SentRef
 
 
 class FakeService:
-    """The service a fake channel talks to: what it took, whether it is down, and the users whose
-    calls to the hub it holds until their event is set."""
+    """The service a fake channel talks to: what it took and edited, whether it is down, and the
+    users whose calls to the hub it holds until their event is set."""
 
     def __init__(self, *, down: bool = False) -> None:
         self.down = down
@@ -102,6 +111,7 @@ class FakeService:
         self.sent: asyncio.Queue[Sent] = asyncio.Queue()
         self.held: dict[str, asyncio.Event] = {}
         self.receiving: asyncio.Queue[str] = asyncio.Queue()
+        self.edited: asyncio.Queue[tuple[SentRef, str]] = asyncio.Queue()
 
     def kind(self) -> type:
         service = self
@@ -119,15 +129,25 @@ class FakeService:
                 service.attempts.append(notification)
                 if service.down:
                     raise ConnectionError("the fake service is down")
-                service.sent.put_nowait(Sent(self._paired_user, self._settings, notification))
-                return SentRef(f"message-{len(service.attempts)}")
+                ref = SentRef(f"message-{len(service.attempts)}")
+                service.sent.put_nowait(Sent(self._paired_user, self._settings, notification, ref))
+                return ref
 
-            async def receive(self, request: web.Request) -> Inbound | None:
+            async def receive(self, request: web.Request) -> Inbound | Reply | None:
                 body = await request.json()
                 service.receiving.put_nowait(body["user"])
                 if body["user"] in service.held:
                     await service.held[body["user"]].wait()
+                if "message" in body:
+                    return Reply(
+                        sender=ChannelUser(body["user"]),
+                        message=SentRef(body["message"]),
+                        option=body["option"],
+                    )
                 return Inbound(sender=ChannelUser(body["user"]), text=body["text"])
+
+            async def edit(self, message: SentRef, outcome: str) -> None:
+                service.edited.put_nowait((message, outcome))
 
         return FakeChannel
 
@@ -153,10 +173,12 @@ class FakeTime:
         self.woken += 1
 
 
-def channel_hub(directory: Path, service: FakeService, time: FakeTime) -> Hub:
+def channel_hub(
+    directory: Path, service: FakeService, time: FakeTime, runtime: FakeRuntime | None = None
+) -> Hub:
     return hub_at(
         directory,
-        runtime=FakeRuntime(),
+        runtime=runtime or FakeRuntime(),
         control=FakeControl(),
         channel_kinds={"fake": service.kind()},
         clock=time.clock,
@@ -177,12 +199,14 @@ async def created_channel(client: ContractClient) -> Channel:
 
 
 async def inbound(address: Serve, channel: Channel, user: str, text: str) -> None:
+    await posted(address, channel, {"user": user, "text": text})
+
+
+async def posted(address: Serve, channel: Channel, body: Mapping[str, object]) -> None:
+    """Call the channel's public route as its fake service does."""
     async with (
         aiohttp.ClientSession() as session,
-        session.post(
-            url(address, f"/channels/{channel.channel_id}/fake"),
-            json={"user": user, "text": text},
-        ) as answer,
+        session.post(url(address, f"/channels/{channel.channel_id}/fake"), json=body) as answer,
     ):
         assert answer.status == 200, await answer.text()
 
@@ -352,7 +376,7 @@ def test_an_instance_raises_a_notification_on_its_hub_route_and_a_paired_channel
         assert sent.notification.title == "approval-1"
         assert sent.notification.text == long_text[: _LIMIT - 1] + "…"
         assert sent.notification.link == f"{_PUBLIC_URL}/instances/{alice}/threads/{UUID(int=1)}"
-        assert sent.notification.options == ("Rerun",)
+        assert sent.notification.options == ("Rerun", "Mute this instance")
         assert later.notification.title == "approval-2"
         assert [attempt.title for attempt in service.attempts] == ["approval-1", "approval-2"]
 

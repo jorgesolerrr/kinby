@@ -197,6 +197,16 @@ class ChannelUnpaired(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class NotificationNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class OptionNotOffered(CoreError):
+    """A reply named an option its notification does not offer."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class AdoptionBlocked(CoreError):
     """The adoption preflight found something the operator has to settle first."""
 

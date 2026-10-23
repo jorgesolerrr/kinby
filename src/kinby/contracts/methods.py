@@ -108,8 +108,12 @@ from kinby.contracts.models import (
     MemoryOpenCommand,
     MemoryOpenResult,
     MemoryWriteResult,
+    NotificationListCommand,
+    NotificationListResult,
     NotificationRaiseCommand,
     NotificationRaiseResult,
+    NotificationReply,
+    NotificationReplyCommand,
     OperationGetCommand,
     OperationGetResult,
     PermissionsGetCommand,
@@ -459,6 +463,12 @@ NOTIFICATION_RAISE = Method(
     NotificationRaiseCommand,
     NotificationRaiseResult,
 )
+NOTIFICATION_LIST = Method(
+    "notification.list", Scope.HUB_ADMIN, NotificationListCommand, NotificationListResult
+)
+NOTIFICATION_REPLY = Method(
+    "notification.reply", Scope.HUB_ADMIN, NotificationReplyCommand, NotificationReply
+)
 
 METHODS = (
     THREAD_CREATE,
@@ -567,6 +577,8 @@ METHODS = (
     CHANNEL_MUTE,
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
+    NOTIFICATION_LIST,
+    NOTIFICATION_REPLY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
 
