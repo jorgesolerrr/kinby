@@ -65,10 +65,11 @@ class HeldResults:
         self, run_id: UUID, called: _Held, run: Callable[[], Awaitable[StepResult]]
     ) -> StepResult:
         """Run the call and hold its result, unless a later call of the run replaced it. A call
-        that raised, as one a draining instance refuses, holds nothing."""
+        that raised, as one a draining instance refuses, holds nothing. One the instance's
+        shutdown cancelled keeps its start, so it answers failed after the restart."""
         try:
             result = await run()
-        except BaseException:
+        except Exception:
             if self._latest(run_id, called):
                 self._path(run_id).unlink(missing_ok=True)
             raise

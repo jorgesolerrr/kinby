@@ -495,6 +495,32 @@ def test_a_step_call_its_instance_restarted_during_answers_failed(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_step_call_its_instance_shut_down_during_answers_failed_after_the_restart(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    payload = attempt_at("test", "sh -c 'echo ran >> runs'", "sleep 5")
+
+    async def scenario() -> None:
+        cut_short = asyncio.create_task(call(runtime.dispatcher, "step.run", **payload))
+        async with asyncio.timeout(5):
+            while not (workspace / "runs").exists():
+                await asyncio.sleep(0.01)
+        # Cancel every task, as the event loop's shutdown does.
+        running = asyncio.all_tasks() - {asyncio.current_task()}
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        assert cut_short.cancelled()
+        restarted = booted(instance_at(tmp_path), WaitingRunner())
+        answer = await call(restarted.dispatcher, "step.run", **payload)
+
+        assert answer == StepResult(
+            ending=StepEnding.FAILED, summary="The instance restarted during the step."
+        )
+        assert (workspace / "runs").read_text() == "ran\n"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "next_call",
     [attempt_at("review", "true"), attempt_at("test", "true", attempt=None)],
