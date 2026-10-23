@@ -164,6 +164,8 @@ class ReceivedReply:
     channel_id: UUID | None
     #: The message it answered on that channel.
     message: SentRef | None
+    #: A previous process asked the instance to apply it and never heard back.
+    calling: bool
 
 
 class HubRegistry:
@@ -364,7 +366,9 @@ class HubRegistry:
                     option TEXT,
                     received_at TEXT NOT NULL,
                     status TEXT NOT NULL,
-                    outcome TEXT
+                    outcome TEXT,
+                    -- Set while the turn it starts is asked for, so no restart asks twice.
+                    calling INTEGER NOT NULL DEFAULT 0
                 );
                 -- Kept when the user deletes the skill, so the hub never copies it again.
                 CREATE TABLE IF NOT EXISTS shipped_skills (
@@ -2543,7 +2547,7 @@ class HubRegistry:
             rows = connection.execute(
                 """
                 SELECT replies.id, replies.notification_id, instance_id, thread_id, option,
-                    received_at, replies.channel_id, sent_ref
+                    received_at, replies.channel_id, sent_ref, calling
                 FROM replies
                 JOIN notifications ON notifications.id = replies.notification_id
                 LEFT JOIN notification_deliveries
@@ -2564,6 +2568,7 @@ class HubRegistry:
                 received_at=datetime.fromisoformat(row[5]),
                 channel_id=UUID(row[6]) if row[6] is not None else None,
                 message=SentRef(row[7]) if row[7] is not None else None,
+                calling=bool(row[8]),
             )
             for row in rows
         ]
@@ -2579,6 +2584,12 @@ class HubRegistry:
                 (str(notification_id), ReplyStatus.APPLIED.value),
             ).fetchone()
         return row is not None
+
+    def reply_calling(self, reply_id: UUID, *, calling: bool) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE replies SET calling = ? WHERE id = ?", (int(calling), str(reply_id))
+            )
 
     def settle_reply(self, reply_id: UUID, status: ReplyStatus, outcome: str) -> None:
         with self._connect() as connection:

@@ -16,13 +16,19 @@ from kinby.contracts import (
     ReplyStatus,
     ThreadTurnStartCommand,
 )
-from kinby.core.errors import CoreError, NotificationNotFound, OptionNotOffered
+from kinby.core.errors import (
+    CoreError,
+    InstanceAnswerLost,
+    NotificationNotFound,
+    OptionNotOffered,
+)
 from kinby.hub.channels import Channels, ReceivingKind
 from kinby.hub.outbox import GIVE_UP_AFTER, Sleep
 from kinby.hub.registry import HubRegistry, ReceivedReply
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 _logger = logging.getLogger(__name__)
+_UNKNOWN = "Not known whether the instance got this answer. Answer again from the web app."
 
 #: Start a user turn in one of an instance's threads.
 type StartTurn = Callable[[UUID, ThreadTurnStartCommand], Awaitable[object]]
@@ -139,10 +145,20 @@ class Replies:
             return ReplyStatus.APPLIED, "Muted this instance on this channel."
         if self._registry.answered(reply.notification_id):
             return ReplyStatus.STALE, "Already answered."
-        await self._start_turn(
-            reply.instance_id,
-            ThreadTurnStartCommand(thread_id=reply.thread_id, message=reply.option),
-        )
+        # A turn start is asked for at most once: one that may have landed is never repeated.
+        if reply.calling:
+            return ReplyStatus.FAILED, _UNKNOWN
+        self._registry.reply_calling(reply.reply_id, calling=True)
+        try:
+            await self._start_turn(
+                reply.instance_id,
+                ThreadTurnStartCommand(thread_id=reply.thread_id, message=reply.option),
+            )
+        except InstanceAnswerLost:
+            return ReplyStatus.FAILED, _UNKNOWN
+        except Exception:
+            self._registry.reply_calling(reply.reply_id, calling=False)
+            raise
         return ReplyStatus.APPLIED, f'Answered "{reply.option}".'
 
     async def _edit(self, reply: ReceivedReply, outcome: str) -> None:

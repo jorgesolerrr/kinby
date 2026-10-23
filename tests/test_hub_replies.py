@@ -1,9 +1,14 @@
 """The user's replies to notifications: recorded at once, then applied against what holds now."""
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+import json
+import queue
+import threading
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from uuid import UUID, uuid4
+
+from aiohttp import web
 
 from kinby.contracts import (
     CHANNEL_MUTE,
@@ -48,6 +53,8 @@ from tests.test_hub_channels import (
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import served
 
+_UNKNOWN = "Not known whether the instance got this answer. Answer again from the web app."
+
 
 class FakeThreads:
     """An instance's threads as the hub's relay reaches them: the turns they started, after
@@ -78,6 +85,66 @@ async def running(
     async with instance_served(threads.dispatcher(), control_token(hub, str(instance_id))) as at:
         runtime.addresses[str(instance_id)] = f"http://{at.host}:{at.port}"
         yield
+
+
+@asynccontextmanager
+async def hanging_up(
+    runtime: FakeRuntime, instance_id: UUID, taken: list[str]
+) -> AsyncIterator[None]:
+    """Stand in for an instance that hangs up on every call it takes, unanswered."""
+
+    async def socket(request: web.Request) -> web.WebSocketResponse:
+        answering = web.WebSocketResponse()
+        await answering.prepare(request)
+        taken.append(json.loads(await answering.receive_str())["method"])
+        await answering.close()
+        return answering
+
+    application = web.Application()
+    application.router.add_get("/ws", socket)
+    runner = web.AppRunner(application)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    runtime.addresses[str(instance_id)] = f"http://127.0.0.1:{site.port}"
+    try:
+        yield
+    finally:
+        await runner.cleanup()
+
+
+@contextmanager
+def holding(taken: queue.Queue[str]) -> Iterator[str]:
+    """Stand in for an instance that holds every call it takes unanswered, on a loop of its own,
+    so the hub's loop can stop while a call is out. Yields where it listens."""
+
+    async def socket(request: web.Request) -> web.WebSocketResponse:
+        answering = web.WebSocketResponse()
+        await answering.prepare(request)
+        taken.put(json.loads(await answering.receive_str())["method"])
+        await answering.receive()
+        return answering
+
+    async def serve() -> tuple[web.AppRunner, int]:
+        application = web.Application()
+        application.router.add_get("/ws", socket)
+        runner = web.AppRunner(application)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        return runner, site.port
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever)
+    thread.start()
+    runner, port = asyncio.run_coroutine_threadsafe(serve(), loop).result(timeout=5)
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        asyncio.run_coroutine_threadsafe(runner.cleanup(), loop).result(timeout=5)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join()
+        loop.close()
 
 
 async def replied(
@@ -288,6 +355,70 @@ def test_a_recorded_reply_that_was_not_applied_is_applied_after_the_hub_restarts
 
     assert started == ThreadTurnStartCommand(thread_id=UUID(int=1), message="Rerun")
     assert edited == (ref, 'Answered "Rerun".')
+
+
+def test_a_turn_start_whose_answer_was_lost_is_not_tried_again(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        service = FakeService()
+        time = FakeTime()
+        hub = channel_hub(tmp_path / "hub", service, time, runtime)
+        client = hub_client(hub)
+        alice_id = (await started_instance(client, hub)).instance_id
+        taken: list[str] = []
+        async with served(hub) as address, hanging_up(runtime, alice_id, taken):
+            channel = await paired_channel(client, address)
+            await raised(raising(hub, alice_id), "news")
+            sent = await next_sent(service)
+            await replied(address, channel, sent.ref, 0)
+            edited = await next_edit(service)
+
+        assert taken == ["thread.turn.start"]
+        assert time.slept == []
+        assert edited == (sent.ref, _UNKNOWN)
+        [reply] = await replies(hub, alice_id)
+        assert reply.status is ReplyStatus.FAILED
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_start_the_hub_stopped_waiting_for_is_not_made_again_after_a_restart(tmp_path):
+    directory = tmp_path / "hub"
+    runtime = FakeRuntime()
+    instances: list[UUID] = []
+
+    taken: queue.Queue[str] = queue.Queue()
+
+    async def interrupted(held_at: str) -> SentRef:
+        """Stop the hub, its loop with it, while the instance holds the turn start."""
+        service = FakeService()
+        hub = channel_hub(directory, service, FakeTime(), runtime)
+        client = hub_client(hub)
+        instances.append((await started_instance(client, hub)).instance_id)
+        runtime.addresses[str(instances[0])] = held_at
+        async with served(hub) as address:
+            channel = await paired_channel(client, address)
+            await raised(raising(hub, instances[0]), "news")
+            sent = await next_sent(service)
+            await replied(address, channel, sent.ref, 0)
+            assert await asyncio.to_thread(taken.get, timeout=5) == "thread.turn.start"
+        hub.close()
+        return sent.ref
+
+    async def resumed() -> tuple[tuple[SentRef, str], FakeThreads]:
+        service = FakeService()
+        hub = channel_hub(directory, service, FakeTime(), runtime)
+        threads = FakeThreads()
+        async with running(runtime, hub, instances[0], threads):
+            await hub.recover()
+            return await next_edit(service), threads
+
+    with holding(taken) as held_at:
+        ref = asyncio.run(interrupted(held_at))
+    edited, threads = asyncio.run(resumed())
+
+    assert edited == (ref, _UNKNOWN)
+    assert threads.started.empty()
 
 
 def test_notifications_are_listed_by_instance_or_thread_with_their_deliveries(tmp_path):

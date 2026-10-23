@@ -171,6 +171,10 @@ class InstanceUnavailable(CoreError):
     retryable = True
 
 
+class InstanceAnswerLost(InstanceUnavailable):
+    """The instance took the hub's call and its answer never came, so it may have acted."""
+
+
 class InstanceRefused(CoreError):
     """The instance answered a call the hub made for another with an error, which that caller
     hears as the instance said it."""
