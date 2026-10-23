@@ -27,6 +27,7 @@ from kinby.contracts import (
     TemplateBehind,
 )
 from kinby.hub import Hub
+from kinby.hub.channels import ChannelNotification
 from tests.test_factory_runs import factory_hub as routed_hub
 from tests.test_factory_runs import started_coder
 from tests.test_factory_templates import created_roles, factory_hub
@@ -41,10 +42,20 @@ from tests.test_hub import (
     instance_environment,
     started_instance,
 )
+from tests.test_hub_channels import (
+    FakeService,
+    next_sent,
+    paired_channel,
+    raised,
+    raising,
+    until,
+)
 from tests.test_hub_factories import read
+from tests.test_hub_server import served
 
 #: The revision FakeImages builds, which is the hub's own until a test moves the hub on.
 BUILT = "a" * 40
+PUBLIC_URL = "https://kinby.example"
 SKILL = "---\nname: ponytail\ndescription: Be lazy.\n---\nBe lazy.\n"
 CODER_BEHIND = TemplateBehind(
     message=(
@@ -365,5 +376,100 @@ def test_a_vanilla_instance_without_its_hub_route_says_so(tmp_path):
                 )
             )
         ]
+
+    asyncio.run(scenario())
+
+
+def _notifying_hub(directory: Path, images: FakeImages, service: FakeService) -> Hub:
+    return hub_at(
+        directory,
+        images=images,
+        control=FakeControl(),
+        channel_kinds={"fake": service.kind()},
+        public_url=PUBLIC_URL,
+    )
+
+
+def test_an_instance_notice_raises_one_notification_across_two_hub_starts(tmp_path):
+    directory = tmp_path / "hub"
+    images = FakeImages()
+
+    async def set_up() -> UUID:
+        hub = _notifying_hub(directory, images, FakeService())
+        client = hub_client(hub)
+        alice = await created_instance(client)
+        async with served(hub) as address:
+            await paired_channel(client, address)
+        hub.close()
+        return alice.instance_id
+
+    async def start(key: str) -> list[ChannelNotification]:
+        service = FakeService()
+        hub = _notifying_hub(directory, images, service)
+        await hub.recover()
+        await raised(raising(hub, alice), key)
+        await until(lambda: any(sent.title == key for sent in service.attempts))
+        hub.close()
+        return [sent for sent in service.attempts if sent.header.startswith("alice")]
+
+    alice = asyncio.run(set_up())
+    images.hub_revision = "b" * 40
+    first = asyncio.run(start("first start"))
+    second = asyncio.run(start("second start"))
+
+    assert {sent.title for sent in first} == {"Revision behind", "first start"}
+    [notice] = [sent for sent in first if sent.title == "Revision behind"]
+    assert notice.header == "alice · Instance notice"
+    assert notice.text.startswith("The instance runs kinby aaaaaaa")
+    assert notice.link == f"{PUBLIC_URL}/instances/{alice}"
+    assert notice.options == ()
+    assert [sent.title for sent in second] == ["second start"]
+
+
+def test_each_factory_write_that_moves_a_template_on_raises_a_notification(tmp_path):
+    async def scenario() -> None:
+        service = FakeService()
+        hub = factory_hub(tmp_path, channel_kinds={"fake": service.kind()}, public_url=PUBLIC_URL)
+        client = hub_client(hub)
+        coder = (await created_roles(client))["coder"]
+        async with served(hub) as address:
+            await paired_channel(client, address)
+
+        await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
+        first = await next_sent(service)
+        await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues better.\n"})
+        second = await next_sent(service)
+
+        for sent in (first, second):
+            assert sent.notification.header == "tickets-coder · Instance notice"
+            assert sent.notification.title == "Template behind"
+            assert sent.notification.text.startswith('Factory "tickets" changed template')
+            assert sent.notification.link == f"{PUBLIC_URL}/instances/{coder}"
+        assert len(service.attempts) == 2
+
+    asyncio.run(scenario())
+
+
+def test_an_instance_update_raises_the_notices_that_appeared_since(tmp_path):
+    async def scenario() -> None:
+        images = FakeImages()
+        service = FakeService()
+        hub = _notifying_hub(tmp_path / "hub", images, service)
+        client = hub_client(hub)
+        await created_instance(client)
+        bob = await created_instance(client, name="bob")
+        async with served(hub) as address:
+            await paired_channel(client, address)
+        images.hub_revision = "b" * 40
+
+        updated = await client.call(
+            INSTANCE_UPDATE, InstanceUpdateCommand(instance_id=bob.instance_id, revision=BUILT)
+        )
+        assert isinstance(updated, LifecycleOperationResult)
+        await finished_operation(client, updated)
+
+        await until(
+            lambda: any(sent.header == "alice · Instance notice" for sent in service.attempts)
+        )
 
     asyncio.run(scenario())

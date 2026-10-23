@@ -43,7 +43,31 @@ class Outbox:
     async def raise_notification(
         self, instance_id: UUID, command: NotificationRaiseCommand
     ) -> NotificationRaiseResult:
-        """Record the notification under the hub's header and link, once per key, and deliver it.
+        """Record the notification an instance raised, linked to its thread."""
+        raised = self.notify(
+            instance_id,
+            command.key,
+            source=command.source,
+            title=command.title,
+            text=command.text,
+            page=f"/instances/{instance_id}/threads/{command.thread_id}",
+            options=tuple(command.options),
+        )
+        return NotificationRaiseResult(notification_id=raised)
+
+    def notify(
+        self,
+        instance_id: UUID,
+        key: str,
+        *,
+        source: str,
+        title: str,
+        text: str,
+        page: str,
+        options: tuple[str, ...] = (),
+    ) -> UUID:
+        """Record the notification under the hub's header and a link to the web app's *page*, once
+        per key, and deliver it. The id of the notification the key names.
 
         A channel that mutes the instance records it as muted and never sends it.
         """
@@ -52,15 +76,11 @@ class Outbox:
             raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
         notification = ChannelNotification(
             notification_id=uuid4(),
-            header=f"{record.persona_name or record.manifest_id} · {command.source}",
-            title=command.title,
-            text=command.text,
-            link=(
-                f"{self._public_url}/instances/{instance_id}/threads/{command.thread_id}"
-                if self._public_url is not None
-                else None
-            ),
-            options=tuple(command.options),
+            header=f"{record.persona_name or record.manifest_id} · {source}",
+            title=title,
+            text=text,
+            link=f"{self._public_url}{page}" if self._public_url is not None else None,
+            options=options,
         )
         deliveries = {
             channel.channel_id: (
@@ -70,11 +90,11 @@ class Outbox:
             if channel.sends
         }
         raised = self._registry.raise_notification(
-            instance_id, command.key, notification, self._clock(), deliveries
+            instance_id, key, notification, self._clock(), deliveries
         )
         if raised == notification.notification_id:
             self._deliver_all(self._registry.pending_deliveries(raised))
-        return NotificationRaiseResult(notification_id=raised)
+        return raised
 
     def resume(self) -> None:
         """Deliver what the previous process left pending, each when its next try is due."""

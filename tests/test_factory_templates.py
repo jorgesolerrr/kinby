@@ -109,6 +109,7 @@ def factory_hub(
     *,
     images: FakeImages | None = None,
     runtime: FakeRuntime | None = None,
+    **options,
 ) -> Hub:
     """A hub whose factories hold the tickets factory, written from *files*."""
     write_factory(tmp_path / "hub" / "factories" / "tickets", files)
@@ -117,6 +118,7 @@ def factory_hub(
         runtime=runtime or FakeRuntime(),
         images=images or FakeImages(),
         shipped_factories=tmp_path / "shipped",
+        **options,
     )
 
 
