@@ -8,6 +8,7 @@ the GH_TOKEN the instance holds.
 
 import asyncio
 import json
+import logging
 import re
 import subprocess
 from contextlib import suppress
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kinby.contracts import FactoryRunStatus
-from kinby.core.run_worktrees import cut_run_worktree, remove_run_worktree
+from kinby.core.run_worktrees import cut_run_worktree, remove_run_worktree, sweep_run_worktrees
 from kinby.factories.file import FAILURE
 from kinby.plugins.hooks import HookResult
 from kinby.plugins.intake import hand_over
@@ -83,8 +84,11 @@ mutation($thread: ID!) {
   resolveReviewThread(input: {threadId: $thread}) { thread { id } }
 }
 """
+_AGENT_BRANCH = re.compile(rf"{AGENT_BRANCH_PREFIX}(\d+)-")
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
+
+_logger = logging.getLogger(__name__)
 
 
 class CommandFailed(RuntimeError):
@@ -193,6 +197,9 @@ def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, s
     The branch starts from one that holds every open blocker's agent branch, so its pull request
     stacks on the blockers' work. With no blocker open, it starts from the default branch.
     Whatever a run worktree already on the branch held goes. The workspace only fetches.
+
+    First it sweeps the run worktrees whose issue is closed and whose branch has no open pull
+    request, which an end of run missed. A sweep that fails is logged, and prepare goes on.
     """
     workspace = context.workspace
     found = _issue(workspace, issue)
@@ -205,6 +212,10 @@ def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, s
     branch = f"{AGENT_BRANCH_PREFIX}{issue}-{'-'.join(words) or 'issue'}"
     _exclude_scratch(workspace)
     _git(workspace, "fetch", "--prune", "origin")
+    try:
+        sweep_run_worktrees(context.instance, lambda branch: _run_over(workspace, branch))
+    except Exception:
+        _logger.exception("The sweep of run worktrees whose issue is closed failed.")
     base = _base(workspace, found)
     cut_run_worktree(context.instance, branch, f"origin/{base}", run_id)
     return {"branch": branch, "base": base}
@@ -663,6 +674,19 @@ def _blocked_behind(workspace: Path, number: int) -> list[dict]:
                 found[blocked["number"]] = blocked
                 waiting.append(blocked["number"])
     return list(found.values())
+
+
+def _run_over(workspace: Path, branch: str) -> bool:
+    """Whether *branch* is an agent branch whose issue is closed and that has no open pull
+    request. A closed issue ends only a run that needs human, so one babysitting its pull request
+    goes on."""
+    named = _AGENT_BRANCH.match(branch)
+    if named is None:
+        return False
+    found = _api(workspace, f"repos/{{owner}}/{{repo}}/issues/{named[1]}")
+    if found["state"] != "closed":
+        return False
+    return all(pull.branch != branch for pull in _agent_pull_requests(workspace))
 
 
 def _ready_issue(workspace: Path, number: int) -> Issue | None:
