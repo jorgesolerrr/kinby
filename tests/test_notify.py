@@ -1,9 +1,11 @@
-"""A turn tells the user something with notify: the instance records the notification, raises
-it on its hub route, and raises it again on each scheduler pass until the hub answers."""
+"""A turn tells the user something with notify, and the scheduler with each routine notice: the
+instance records the notification, raises it on its hub route, and raises it again on each
+scheduler pass until the hub answers."""
 
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,13 +32,22 @@ from kinby.contracts import (
 )
 from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
+from kinby.core.errors import CodeStepFailed
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from tests.test_gate import ScriptedModel, _instance, _run_turn
-from tests.test_routines import routine_file
+from tests.test_routines import instance_at, routine_file
+from tests.test_scheduler import (
+    FailingRunner,
+    FakeClock,
+    call,
+    events_for,
+    fail_routine,
+    runtime,
+)
 
 _CAP = "alice raised 20 notifications today, its daily cap. Raise no more until tomorrow."
 
@@ -255,5 +266,73 @@ def test_a_permissions_rule_for_notify_overrides_its_default(
         else:
             gated = next(payload for payload in payloads if isinstance(payload, ToolGated))
             assert (gated.action.value, gated.rule) == (rule, "tools.notify")
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_notice_raises_one_notification_per_failure_streak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nenabled: true")
+        runner = FailingRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), runner)
+        async with recording_hub(monkeypatch) as hub:
+            failed = await call(dispatcher, "routine.run", name="news")
+            await events_for(dispatcher, failed.thread_id)
+            await fail_routine(dispatcher, 2)
+            await dispatcher.scheduler.tick()
+            streak = list(hub.raised)
+            runner.result = TurnOutcome()
+            await fail_routine(dispatcher, 1)
+            runner.result = CodeStepFailed("feed unavailable")
+            await fail_routine(dispatcher, 2)
+            await dispatcher.scheduler.tick()
+
+        [first] = streak
+        assert (first.source, first.title, first.text, first.options) == (
+            "news",
+            'Routine "news" failed',
+            "kinby disables it after 10 failures in a row.",
+            [],
+        )
+        assert first.thread_id == failed.thread_id
+        assert len(hub.raised) == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_disabled_by_the_failure_policy_raises_a_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nenabled: true")
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), FailingRunner())
+        async with recording_hub(monkeypatch) as hub:
+            await fail_routine(dispatcher, 11)
+            await dispatcher.scheduler.tick()
+
+        assert [command.title for command in hub.raised] == [
+            'Routine "news" failed',
+            'Routine "news" disabled',
+        ]
+        assert hub.raised[-1].text == "It failed 10 times in a row, so kinby turned it off."
+        assert not any("feed unavailable" in command.text for command in hub.raised)
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_notice_without_a_hub_url_raises_nothing(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nenabled: true")
+        log = EventLog(instance.manifest.state_dir)
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)), FailingRunner())
+        await fail_routine(dispatcher, 1)
+        await dispatcher.scheduler.tick()
+
+        assert not any(isinstance(event.payload, NotificationRaised) for event in log.all_events())
 
     asyncio.run(scenario())

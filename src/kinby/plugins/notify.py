@@ -21,12 +21,15 @@ from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, call_hub
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
-def notify_tools() -> tuple[Tool, ...]:
-    """The notify tool, in an instance its hub grants notification:raise on its hub route."""
+def raises_notifications() -> bool:
+    """Whether the instance's hub grants it notification:raise on its hub route."""
     granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
-    if not os.environ.get(HUB_URL_VARIABLE) or Scope.NOTIFICATION_RAISE not in granted:
-        return ()
-    return (notify,)
+    return bool(os.environ.get(HUB_URL_VARIABLE)) and Scope.NOTIFICATION_RAISE in granted
+
+
+def notify_tools() -> tuple[Tool, ...]:
+    """The notify tool, in an instance that raises notifications."""
+    return (notify,) if raises_notifications() else ()
 
 
 @tool(write=True, notify=True)
