@@ -96,6 +96,11 @@ class Outbox:
             channel = self._registry.channel(delivery.channel_id)
             if channel is None:
                 return
+            if not channel.sends:
+                self._registry.delivery_failed(
+                    notification.notification_id, channel.channel_id, "The channel was disabled."
+                )
+                return
             try:
                 limit = self._channels.limit(channel)
                 sent = await self._channels.sender(channel).send(

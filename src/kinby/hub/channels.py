@@ -240,7 +240,7 @@ class Channels:
             and self._clock() < pairing.expires_at
             and hmac.compare_digest(inbound.text.strip().encode(), pairing.code.encode())
         ):
-            self._registry.pair_channel(record.channel_id, inbound.sender)
+            self._registry.pair_channel(record.channel_id, pairing.code, inbound.sender)
         return web.Response()
 
     def limit(self, record: ChannelRecord) -> int:
