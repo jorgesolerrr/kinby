@@ -441,7 +441,11 @@ def test_health_reports_the_drain_and_only_the_control_route_serves_it(
 
     reported, drained, denied = asyncio.run(scenario())
 
-    assert reported["capabilities"] == [Capability.WS.value, Capability.DRAIN.value]
+    assert reported["capabilities"] == [
+        Capability.WS.value,
+        Capability.DRAIN.value,
+        Capability.STEP_ONCE.value,
+    ]
     assert drained["type"] == FrameType.RESULT.value
     assert drained["result"] == InstanceDrainResult(state=DrainState.DRAINED).model_dump(
         mode="json"

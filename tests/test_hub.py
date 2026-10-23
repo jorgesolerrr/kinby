@@ -1946,9 +1946,10 @@ def test_a_control_socket_that_closes_after_the_drain_is_sent_is_a_lost_connecti
 def test_an_answer_over_the_control_sockets_frame_limit_says_it_was_too_large():
     async def scenario() -> None:
         async with control_server(_answer_too_large) as endpoint:
-            with pytest.raises(ControlConnectionLost) as raised:
+            with pytest.raises(ControlUnreachable) as raised:
                 await HttpInstanceControl().drain(endpoint, force=False)
 
+        assert not isinstance(raised.value, ControlConnectionLost | ControlUndelivered)
         assert str(raised.value) == (
             "The answer was larger than the control socket's 4,194,304-byte limit."
         )

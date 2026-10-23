@@ -60,9 +60,10 @@ class ControlUndelivered(ControlUnreachable):
 
 
 class ControlConnectionLost(ControlUnreachable):
-    """The control socket dropped after the drain was sent.
+    """The control socket dropped after the call was sent, so the instance may still run it.
 
-    The instance keeps that drain running, so the hub calls again and waits.
+    The instance keeps a drain running, and holds a step's answer when it reports
+    ``step_once``, so the hub calls again and waits.
     """
 
 
@@ -168,7 +169,7 @@ async def _answer(socket: aiohttp.ClientWebSocketResponse) -> str:
         case aiohttp.WSMsgType.ERROR, aiohttp.WebSocketError(
             code=aiohttp.WSCloseCode.MESSAGE_TOO_BIG
         ):
-            raise ControlConnectionLost(
+            raise ControlUnreachable(
                 f"The answer was larger than the control socket's {_FRAME_BYTES:,}-byte limit."
             )
         case aiohttp.WSMsgType.ERROR, error:

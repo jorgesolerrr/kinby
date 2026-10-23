@@ -109,8 +109,19 @@ class UndeliveredCall:
     reason: str
 
 
-#: Run one step in the instance with this id, and return its result or why it went undelivered.
-type StepCaller = Callable[[UUID, StepRunCommand], Awaitable[StepResult | UndeliveredCall]]
+@dataclass(frozen=True)
+class LostAnswer:
+    """A call the instance took, whose answer a lost connection kept from the hub. The instance
+    holds that answer, so the same call sent again gets it (ADR 0107)."""
+
+    reason: str
+
+
+#: Run one step in the instance with this id, and return its result, or why it went undelivered
+#: or its answer was lost.
+type StepCaller = Callable[
+    [UUID, StepRunCommand], Awaitable[StepResult | UndeliveredCall | LostAnswer]
+]
 
 
 @dataclass(frozen=True)
@@ -715,31 +726,40 @@ class FactoryRuns:
                     await self._send_stop(instance_id, stop)
 
     async def _deliver(self, instance_id: UUID, queued: _QueuedStep) -> None:
+        """Send the step until its instance answers it.
+
+        A call the instance did not take is no attempt. One whose answer was lost keeps its
+        attempt open and is sent again as it was, for the answer the instance holds.
+        """
         backoff = 0.0
+        command: StepRunCommand | None = None
         while True:
-            self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
-            attempt = self._registry.attempts(queued.run_id)[-1].attempt
-            command = queued.command.model_copy(update={"attempt": attempt})
-            match await self._run_step(instance_id, command):
-                case StepResult() as result:
-                    self._advance(queued.run_id, result)
-                    return
-                case UndeliveredCall(reason=reason):
-                    run = self._registry.drop_attempt(queued.run_id)
-                    self._publish(run)
+            if command is None:
+                self._publish(self._registry.begin_attempt(queued.run_id, queued.step))
+                attempt = self._registry.attempts(queued.run_id)[-1].attempt
+                command = queued.command.model_copy(update={"attempt": attempt})
+            answer = await self._run_step(instance_id, command)
+            if isinstance(answer, StepResult):
+                self._advance(queued.run_id, answer)
+                return
+            if isinstance(answer, UndeliveredCall):
+                self._publish(self._registry.drop_attempt(queued.run_id))
+                command = None
             backoff = _next_backoff(backoff)
             _logger.info(
-                "Step %s of factory run %s did not reach its instance, offering it again in %s "
-                "seconds: %s",
+                "Step %s of factory run %s got no answer from its instance, sending it again in "
+                "%s seconds: %s",
                 queued.step,
                 queued.run_id,
                 backoff,
-                reason,
+                answer.reason,
             )
             await asyncio.sleep(backoff)
             record = self._registry.instance(instance_id)
             if record is None or not record.active:
-                self._enqueue(run)
+                if command is not None:
+                    self._publish(self._registry.drop_attempt(queued.run_id))
+                self._enqueue(self._existing(queued.run_id))
                 return
 
     async def _send_report(self, instance_id: UUID, report: _QueuedReport) -> None:
@@ -752,7 +772,11 @@ class FactoryRuns:
             case StepResult(ending=StepEnding.CLEAN):
                 self._registry.mark_reported(report.run_id, report.generation)
                 return
-            case StepResult(summary=reason) | UndeliveredCall(reason=reason):
+            case (
+                StepResult(summary=reason)
+                | UndeliveredCall(reason=reason)
+                | LostAnswer(reason=reason)
+            ):
                 pass
         backoff = _next_backoff(report.waited)
         _logger.warning(

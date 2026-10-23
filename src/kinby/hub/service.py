@@ -212,7 +212,7 @@ from kinby.hub.models import (
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.relay import relayed_call
-from kinby.hub.runs import FactoryRuns, UndeliveredCall, Untold
+from kinby.hub.runs import FactoryRuns, LostAnswer, UndeliveredCall, Untold
 from kinby.hub.secrets import HubSecrets, replace_protected, write_protected
 from kinby.hub.setup import (
     ENVIRONMENT_NAME,
@@ -654,15 +654,25 @@ class Hub:
 
     async def _run_step(
         self, instance_id: UUID, command: StepRunCommand
-    ) -> StepResult | UndeliveredCall:
+    ) -> StepResult | UndeliveredCall | LostAnswer:
+        """A step attempt whose answer a lost connection kept from the hub fails, unless the
+        instance holds that answer to give when the hub calls again."""
         try:
             endpoint = await self._endpoint(self._active_instance(instance_id))
+            holds = (
+                command.attempt is not None
+                and Capability.STEP_ONCE in (await self._control.probe(endpoint)).capabilities
+            )
         except Exception as exc:
             return UndeliveredCall(str(exc) or type(exc).__name__)
         try:
             return await self._control.run_step(endpoint, command)
         except ControlUndelivered as exc:
             return UndeliveredCall(str(exc) or type(exc).__name__)
+        except ControlConnectionLost as exc:
+            if holds:
+                return LostAnswer(str(exc) or type(exc).__name__)
+            return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
         except Exception as exc:
             return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
 

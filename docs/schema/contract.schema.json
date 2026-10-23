@@ -301,7 +301,8 @@
       "description": "What an instance's contract server can do. A hub reads it before acting on the instance.",
       "enum": [
         "ws",
-        "drain"
+        "drain",
+        "step_once"
       ],
       "title": "Capability",
       "type": "string"
