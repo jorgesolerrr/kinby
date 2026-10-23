@@ -105,6 +105,7 @@ from kinby.core.clock import utc_now
 from kinby.core.config import InstanceConfig
 from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
+from kinby.core.held_results import HeldResults
 from kinby.core.memory import InstanceMemory
 from kinby.core.models import count_tokens
 from kinby.core.pricing import SHIPPED_PRICES
@@ -277,7 +278,11 @@ class Dispatcher:
 
 def instance_capabilities(dispatcher: Dispatcher) -> list[Capability]:
     """What a hub may ask of this instance: the socket, plus the lifecycle methods it serves."""
-    return [Capability.WS, *([Capability.DRAIN] if dispatcher.handles(INSTANCE_DRAIN) else [])]
+    return [
+        Capability.WS,
+        *([Capability.DRAIN] if dispatcher.handles(INSTANCE_DRAIN) else []),
+        *([Capability.STEP_ONCE] if dispatcher.handles(STEP_RUN) else []),
+    ]
 
 
 class ScheduledDispatcher(Dispatcher):
@@ -509,10 +514,14 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_RENAME, config.rename_routine)
     if isinstance(turns, ScheduledTurnConfig) and turn_service is not None:
         step_instance = turns.scheduler.instance
+        held_results = HeldResults(state_dir / "step-results")
 
         async def run_step_in_instance(command: StepRunCommand) -> StepResult:
-            async with turn_service.step():
-                return await run_step(command, step_instance, turn_service, event_log)
+            async def run() -> StepResult:
+                async with turn_service.step():
+                    return await run_step(command, step_instance, turn_service, event_log)
+
+            return await held_results.answer(command, run)
 
         dispatcher.register(STEP_RUN, run_step_in_instance)
     if isinstance(turns, ScheduledTurnConfig):

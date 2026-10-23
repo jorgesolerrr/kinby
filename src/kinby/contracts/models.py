@@ -1095,6 +1095,8 @@ class Capability(StrEnum):
 
     WS = "ws"
     DRAIN = "drain"
+    #: step.run answers once per run, step and attempt, however often it is sent (ADR 0107).
+    STEP_ONCE = "step_once"
 
 
 class InstanceProbeCommand(ContractModel):

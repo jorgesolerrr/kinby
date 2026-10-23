@@ -40,7 +40,7 @@ export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
  */
-export type Capability = "ws" | "drain";
+export type Capability = "ws" | "drain" | "step_once";
 /**
  * What an adoption preflight found. Each one is a decision the operator has to take.
  */

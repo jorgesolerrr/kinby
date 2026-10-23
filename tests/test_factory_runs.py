@@ -25,6 +25,7 @@ from kinby.contracts import (
     INSTANCE_REMOVE,
     INSTANCE_START,
     AgentStepRun,
+    Capability,
     ClientStepRun,
     CodeStepRun,
     CodingClient,
@@ -457,7 +458,38 @@ def test_a_step_waiting_for_an_unreachable_instance_stays_queued_across_a_restar
     asyncio.run(after_the_restart())
 
 
-def test_a_step_whose_socket_drops_after_the_call_was_sent_fails_its_attempt(tmp_path):
+def test_a_step_whose_answer_a_dropped_socket_lost_is_sent_again_for_the_instances_answer(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("kinby.hub.runs.BACKOFF_SECONDS", 0.01)
+    control = FakeControl(capabilities=[Capability.WS, Capability.DRAIN, Capability.STEP_ONCE])
+    control.step_results = [
+        ControlConnectionLost("The control socket closed before it answered (WSMsgType.CLOSED)."),
+        ControlConnectionLost("The control socket closed before it answered (WSMsgType.CLOSED)."),
+        StepResult(ending=StepEnding.FAILED, summary="Tests failed."),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        run = await handed_in(hub, coder, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert [(attempt.attempt, attempt.ending) for attempt in finished.attempts] == [
+            (1, StepEnding.FAILED)
+        ]
+        assert finished.attempts[0].summary == "Tests failed."
+        assert [command for _, command in control.steps] == [control.steps[0][1]] * 3
+        assert control.steps[0][1].attempt == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_step_whose_socket_drops_fails_its_attempt_on_an_instance_that_holds_no_answer(
+    tmp_path,
+):
     control = FakeControl()
     control.step_results = [
         ControlConnectionLost("The control socket closed before it answered (WSMsgType.CLOSED).")

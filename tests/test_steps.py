@@ -423,6 +423,123 @@ def test_a_step_call_that_cannot_connect_is_undelivered():
         asyncio.run(HttpInstanceControl().run_step(nobody, command))
 
 
+def attempt_at(step: str, *commands: str, attempt: int | None = 1) -> dict[str, object]:
+    """The payload of a step call for attempt *attempt* at *step* of the run in ORIGIN."""
+    command = StepRunCommand(
+        step=CommandStepRun(run=list(commands)),
+        origin=ORIGIN.model_copy(update={"step": step}),
+        attempt=attempt,
+        work_item={},
+    )
+    return command.model_dump(mode="json")
+
+
+def test_a_step_call_sent_again_while_it_runs_waits_for_it_and_runs_it_once(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    payload = attempt_at("test", "sh -c 'echo ran >> runs'", "sleep 0.3")
+
+    async def scenario() -> None:
+        first = asyncio.create_task(call(runtime.dispatcher, "step.run", **payload))
+        async with asyncio.timeout(5):
+            while not (workspace / "runs").exists():
+                await asyncio.sleep(0.01)
+        again = await call(runtime.dispatcher, "step.run", **payload)
+
+        assert isinstance(again, StepResult)
+        assert again.ending is StepEnding.CLEAN
+        assert again == await first
+        assert (workspace / "runs").read_text() == "ran\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_step_call_sent_again_after_it_finished_returns_its_result_also_after_a_restart(
+    tmp_path,
+):
+    runtime, workspace = step_instance(tmp_path)
+    payload = attempt_at("test", "sh -c 'echo ran >> runs; exit 3'")
+
+    async def scenario() -> None:
+        first = await call(runtime.dispatcher, "step.run", **payload)
+        again = await call(runtime.dispatcher, "step.run", **payload)
+        restarted = booted(instance_at(tmp_path), WaitingRunner())
+        after_the_restart = await call(restarted.dispatcher, "step.run", **payload)
+
+        assert isinstance(first, StepResult)
+        assert first.ending is StepEnding.FAILED
+        assert again == first
+        assert after_the_restart == first
+        assert (workspace / "runs").read_text() == "ran\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_step_call_its_instance_restarted_during_answers_failed(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    payload = attempt_at("test", "sh -c 'echo ran >> runs'", "sleep 0.3")
+
+    async def scenario() -> None:
+        cut_short = asyncio.create_task(call(runtime.dispatcher, "step.run", **payload))
+        async with asyncio.timeout(5):
+            while not (workspace / "runs").exists():
+                await asyncio.sleep(0.01)
+        restarted = booted(instance_at(tmp_path), WaitingRunner())
+        answer = await call(restarted.dispatcher, "step.run", **payload)
+        await cut_short
+
+        assert answer == StepResult(
+            ending=StepEnding.FAILED, summary="The instance restarted during the step."
+        )
+        assert (workspace / "runs").read_text() == "ran\n"
+
+    asyncio.run(scenario())
+
+
+def test_a_step_call_its_instance_shut_down_during_answers_failed_after_the_restart(tmp_path):
+    runtime, workspace = step_instance(tmp_path)
+    payload = attempt_at("test", "sh -c 'echo ran >> runs'", "sleep 5")
+
+    async def scenario() -> None:
+        cut_short = asyncio.create_task(call(runtime.dispatcher, "step.run", **payload))
+        async with asyncio.timeout(5):
+            while not (workspace / "runs").exists():
+                await asyncio.sleep(0.01)
+        # Cancel every task, as the event loop's shutdown does.
+        running = asyncio.all_tasks() - {asyncio.current_task()}
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        assert cut_short.cancelled()
+        restarted = booted(instance_at(tmp_path), WaitingRunner())
+        answer = await call(restarted.dispatcher, "step.run", **payload)
+
+        assert answer == StepResult(
+            ending=StepEnding.FAILED, summary="The instance restarted during the step."
+        )
+        assert (workspace / "runs").read_text() == "ran\n"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "next_call",
+    [attempt_at("review", "true"), attempt_at("test", "true", attempt=None)],
+    ids=["next-step", "ended-call"],
+)
+def test_a_runs_next_step_call_lets_go_of_the_answer_it_held(tmp_path, next_call):
+    runtime, workspace = step_instance(tmp_path)
+    payload = attempt_at("test", "sh -c 'echo ran >> runs'")
+
+    async def scenario() -> None:
+        await call(runtime.dispatcher, "step.run", **payload)
+        await call(runtime.dispatcher, "step.run", **next_call)
+        await call(runtime.dispatcher, "step.run", **payload)
+
+        assert (workspace / "runs").read_text() == "ran\nran\n"
+
+    asyncio.run(scenario())
+
+
 VERDICT_HOOK = """\
 from kinby.plugins.hooks import HookResult, StepEnd, hook
 
@@ -1522,7 +1639,7 @@ def test_a_resumed_codex_thread_reports_its_own_tokens_not_the_threads_running_t
         stub_client(tmp_path, monkeypatch, "codex", streaming(CODEX_STREAM))
         await run_client_step(runtime.dispatcher, "codex")
         stub_client(tmp_path, monkeypatch, "codex", streaming(resumed))
-        await run_client_step(runtime.dispatcher, "codex", resume="codex-1")
+        await run_client_step(runtime.dispatcher, "codex", resume="codex-1", attempt=2)
         stats = await call(runtime.dispatcher, "stats.get")
 
         assert subscription_use(stats, UsageSource.CHATGPT_SUBSCRIPTION) == (2, 260, 50, 80, 0)

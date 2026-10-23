@@ -206,7 +206,7 @@ def test_the_control_route_alone_grants_the_lifecycle_scope(tmp_path: Path) -> N
         }
         assert granted["result"] == {
             "contract_version": CONTRACT_VERSION,
-            "capabilities": [Capability.WS.value],
+            "capabilities": [Capability.WS.value, Capability.STEP_ONCE.value],
         }
 
     asyncio.run(scenario())
@@ -513,7 +513,7 @@ def test_health_reports_the_contract_version_and_what_the_instance_can_do(tmp_pa
     assert serving == {
         "id": "test",
         "contract_version": CONTRACT_VERSION,
-        "capabilities": [Capability.WS.value],
+        "capabilities": [Capability.WS.value, Capability.STEP_ONCE.value],
     }
     assert off == {"id": "test", "contract_version": CONTRACT_VERSION, "capabilities": []}
 
