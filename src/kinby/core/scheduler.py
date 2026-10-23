@@ -49,6 +49,7 @@ from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, inspect_instance
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import ROUTINES_DIR
+from kinby.plugins.notify import pending_notifications, raise_recorded
 from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
 
 
@@ -299,6 +300,7 @@ class Scheduler:
         async with self._pass:
             self._reread_manifest()
             await self._handle_failures()
+            await self._raise_notifications()
             routines, _ = load_routines(self._instance)
             histories = routine_history(self._log.all_events())
             history = histories.routines
@@ -363,6 +365,14 @@ class Scheduler:
                 return
             await self._turns.drain()
             await self._handle_failures()
+
+    async def _raise_notifications(self) -> None:
+        """Raise each notification the hub has not answered, until one finds it out of reach."""
+        for recorded in pending_notifications(self._log.all_events()):
+            answer = await raise_recorded(recorded)
+            if answer is None:
+                return
+            await self._log.append(recorded.thread_id, recorded.turn_id, answer)
 
     async def _reset_failures(self, routines: Sequence[Routine]) -> None:
         history = routine_history(self._log.all_events()).routines

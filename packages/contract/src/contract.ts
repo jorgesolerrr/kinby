@@ -2407,7 +2407,10 @@ export interface Event {
     | RoutineFailureHandled
     | RoutineFailuresReset
     | SignalReceived
-    | WorkspaceReverted;
+    | WorkspaceReverted
+    | NotificationRaised
+    | NotificationAccepted
+    | NotificationRefused;
   sequence: number;
   thread_id: string;
   timestamp: string;
@@ -2587,4 +2590,34 @@ export interface WorkspaceReverted {
   restored: string;
   target_turn_id: string;
   type: "workspace.reverted";
+}
+/**
+ * A notification the instance raises on its hub route, again on each scheduler pass, until
+ * the hub answers it.
+ */
+export interface NotificationRaised {
+  /**
+   * @maxItems 4
+   */
+  options?: [] | [string] | [string, string] | [string, string, string] | [string, string, string, string];
+  source: string;
+  text: string;
+  title: string;
+  type: "notification.raised";
+}
+/**
+ * The hub took the notification, and sends it through its channels.
+ */
+export interface NotificationAccepted {
+  notification_id: string;
+  raised: number;
+  type: "notification.accepted";
+}
+/**
+ * The hub refused the notification, so it is never sent.
+ */
+export interface NotificationRefused {
+  raised: number;
+  reason: string;
+  type: "notification.refused";
 }

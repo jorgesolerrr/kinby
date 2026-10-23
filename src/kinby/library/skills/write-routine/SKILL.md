@@ -171,6 +171,27 @@ interval or enabled-routine cap. Per-turn and daily budgets still apply.
 Use `catch_up: false` when late work would be unhelpful, such as a morning greeting
 after lunch. Omit `schedule` for work the user runs only by hand.
 
+## Notify the user
+
+A routine run is silent unless its turn calls `notify(title, text, options?)`. kinby
+sends the notification through every channel the hub has, such as the user's phone.
+When the user wants to hear about the result, say in the prompt when to notify, so
+the run decides each time:
+
+```markdown
+Check the build on main. If it fails, notify me with the failing job and the
+commit that broke it. Notify nothing when it passes.
+```
+
+Notify only when the user needs to know: something they asked to hear about
+happened, or something needs them. A run that found nothing new stays silent. kinby
+heads every notification with the instance's name and the routine's, so the title
+names the event, like "Build broken on main", and the text says what happened and
+why the user is being told. Give `options`, up to four short labels, only when the
+user's answer is the next step. A reply starts a turn in the run's thread with the
+option as its message. An instance sends at most 20 notifications a day, and
+`notify` fails past that, so never notify inside a loop.
+
 ## Change or remove a routine
 
 To change an existing routine, call `routine_read` first. Edit the text, then call

@@ -1269,6 +1269,9 @@
               "message.delta": "#/$defs/MessageDelta",
               "mode.pinned": "#/$defs/ModePinned",
               "model.completed": "#/$defs/ModelCompleted",
+              "notification.accepted": "#/$defs/NotificationAccepted",
+              "notification.raised": "#/$defs/NotificationRaised",
+              "notification.refused": "#/$defs/NotificationRefused",
               "profile.counted": "#/$defs/ProfileCounted",
               "routine.failure.handled": "#/$defs/RoutineFailureHandled",
               "routine.failures.reset": "#/$defs/RoutineFailuresReset",
@@ -1357,6 +1360,15 @@
             },
             {
               "$ref": "#/$defs/WorkspaceReverted"
+            },
+            {
+              "$ref": "#/$defs/NotificationRaised"
+            },
+            {
+              "$ref": "#/$defs/NotificationAccepted"
+            },
+            {
+              "$ref": "#/$defs/NotificationRefused"
             }
           ]
         },
@@ -4582,6 +4594,31 @@
       "title": "NodeSummary",
       "type": "object"
     },
+    "NotificationAccepted": {
+      "additionalProperties": false,
+      "description": "The hub took the notification, and sends it through its channels.",
+      "properties": {
+        "notification_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "raised": {
+          "type": "integer"
+        },
+        "type": {
+          "const": "notification.accepted",
+          "default": "notification.accepted",
+          "type": "string"
+        }
+      },
+      "required": [
+        "raised",
+        "notification_id",
+        "type"
+      ],
+      "title": "NotificationAccepted",
+      "type": "object"
+    },
     "NotificationRaiseCommand": {
       "additionalProperties": false,
       "description": "A notification an instance raises on its hub route. The hub adds its header and link.",
@@ -4615,11 +4652,11 @@
         }
       },
       "required": [
-        "key",
-        "thread_id",
         "source",
         "title",
-        "text"
+        "text",
+        "key",
+        "thread_id"
       ],
       "title": "NotificationRaiseCommand",
       "type": "object"
@@ -4636,6 +4673,68 @@
         "notification_id"
       ],
       "title": "NotificationRaiseResult",
+      "type": "object"
+    },
+    "NotificationRaised": {
+      "additionalProperties": false,
+      "description": "A notification the instance raises on its hub route, again on each scheduler pass, until\nthe hub answers it.",
+      "properties": {
+        "options": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "type": "array"
+        },
+        "source": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "notification.raised",
+          "default": "notification.raised",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "title",
+        "text",
+        "type"
+      ],
+      "title": "NotificationRaised",
+      "type": "object"
+    },
+    "NotificationRefused": {
+      "additionalProperties": false,
+      "description": "The hub refused the notification, so it is never sent.",
+      "properties": {
+        "raised": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "const": "notification.refused",
+          "default": "notification.refused",
+          "type": "string"
+        }
+      },
+      "required": [
+        "raised",
+        "reason",
+        "type"
+      ],
+      "title": "NotificationRefused",
       "type": "object"
     },
     "OperationGetCommand": {

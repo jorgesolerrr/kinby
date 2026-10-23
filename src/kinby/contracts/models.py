@@ -172,6 +172,9 @@ class EventType(StrEnum):
     ROUTINE_FAILURES_RESET = "routine.failures.reset"
     SIGNAL_RECEIVED = "signal.received"
     WORKSPACE_REVERTED = "workspace.reverted"
+    NOTIFICATION_RAISED = "notification.raised"
+    NOTIFICATION_ACCEPTED = "notification.accepted"
+    NOTIFICATION_REFUSED = "notification.refused"
 
 
 class UserOrigin(ContractModel):
@@ -518,6 +521,42 @@ class SignalReceived(ContractModel):
     delivery: Delivery
 
 
+class NotificationContent(ContractModel):
+    """What an instance's notification says. The hub adds its header and link."""
+
+    #: Where it came from: the routine, the step, or the thread's title.
+    source: Annotated[str, Field(min_length=1)]
+    title: Annotated[str, Field(min_length=1)]
+    text: str
+    #: What the user can reply with.
+    options: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list, max_length=4)
+
+
+class NotificationRaised(NotificationContent):
+    """A notification the instance raises on its hub route, again on each scheduler pass, until
+    the hub answers it."""
+
+    type: Literal[EventType.NOTIFICATION_RAISED] = EventType.NOTIFICATION_RAISED
+
+
+class NotificationAccepted(ContractModel):
+    """The hub took the notification, and sends it through its channels."""
+
+    type: Literal[EventType.NOTIFICATION_ACCEPTED] = EventType.NOTIFICATION_ACCEPTED
+    #: The sequence of the thread's notification.raised event.
+    raised: int
+    notification_id: UUID
+
+
+class NotificationRefused(ContractModel):
+    """The hub refused the notification, so it is never sent."""
+
+    type: Literal[EventType.NOTIFICATION_REFUSED] = EventType.NOTIFICATION_REFUSED
+    #: The sequence of the thread's notification.raised event.
+    raised: int
+    reason: str
+
+
 Payload = Annotated[
     ModePinned
     | TurnStarted
@@ -541,7 +580,10 @@ Payload = Annotated[
     | RoutineFailureHandled
     | RoutineFailuresReset
     | SignalReceived
-    | WorkspaceReverted,
+    | WorkspaceReverted
+    | NotificationRaised
+    | NotificationAccepted
+    | NotificationRefused,
     Field(discriminator="type"),
 ]
 
@@ -2653,19 +2695,13 @@ class ChannelMuteCommand(ContractModel):
     instance_id: UUID
 
 
-class NotificationRaiseCommand(ContractModel):
+class NotificationRaiseCommand(NotificationContent):
     """A notification an instance raises on its hub route. The hub adds its header and link."""
 
     #: Unique among the instance's notifications. Raising a key again returns its notification.
     key: Annotated[str, Field(min_length=1)]
     #: The thread it came from, which its link opens.
     thread_id: UUID
-    #: Where it came from: the routine, the step, or the thread's title.
-    source: Annotated[str, Field(min_length=1)]
-    title: Annotated[str, Field(min_length=1)]
-    text: str
-    #: What the user can reply with.
-    options: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list, max_length=4)
 
 
 class NotificationRaiseResult(ContractModel):
