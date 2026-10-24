@@ -51,7 +51,7 @@ export function initialInput(field: SetupField): FieldInput | undefined {
 }
 
 /** The value sent for a control's input. Text that is not a whole number goes as typed, and the hub marks it. */
-function setupValue(field: SetupField, input: FieldInput): SetupValue {
+export function setupValue(field: SetupField, input: FieldInput): SetupValue {
   if (field.type !== "integer" || typeof input !== "string" || input.trim() === "") return input
   const number = Number(input)
   return Number.isInteger(number) ? number : input

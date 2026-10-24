@@ -716,7 +716,7 @@ function SetupLabel({ field, htmlFor }: { field: SetupField; htmlFor: string }) 
   )
 }
 
-function SetupInput({
+export function SetupInput({
   field,
   value,
   error,
