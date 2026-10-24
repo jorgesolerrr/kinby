@@ -1113,6 +1113,17 @@
       "title": "Delivery",
       "type": "object"
     },
+    "DeliveryStatus": {
+      "description": "Where one notification stands on one channel.",
+      "enum": [
+        "pending",
+        "sent",
+        "failed",
+        "muted"
+      ],
+      "title": "DeliveryStatus",
+      "type": "string"
+    },
     "DenyCounts": {
       "additionalProperties": false,
       "properties": {
@@ -4594,6 +4605,80 @@
       "title": "NodeSummary",
       "type": "object"
     },
+    "Notification": {
+      "additionalProperties": false,
+      "description": "A notification an instance raised, where it was delivered, and how the user replied.",
+      "properties": {
+        "deliveries": {
+          "items": {
+            "$ref": "#/$defs/NotificationDelivery"
+          },
+          "type": "array"
+        },
+        "header": {
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notification_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "raised_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "replies": {
+          "items": {
+            "$ref": "#/$defs/NotificationReply"
+          },
+          "type": "array"
+        },
+        "text": {
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "notification_id",
+        "instance_id",
+        "thread_id",
+        "header",
+        "title",
+        "text",
+        "link",
+        "options",
+        "raised_at",
+        "deliveries",
+        "replies"
+      ],
+      "title": "Notification",
+      "type": "object"
+    },
     "NotificationAccepted": {
       "additionalProperties": false,
       "description": "The hub took the notification, and sends it through its channels.",
@@ -4617,6 +4702,72 @@
         "type"
       ],
       "title": "NotificationAccepted",
+      "type": "object"
+    },
+    "NotificationDelivery": {
+      "additionalProperties": false,
+      "properties": {
+        "channel_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/DeliveryStatus"
+        }
+      },
+      "required": [
+        "channel_id",
+        "status"
+      ],
+      "title": "NotificationDelivery",
+      "type": "object"
+    },
+    "NotificationListCommand": {
+      "additionalProperties": false,
+      "description": "The notifications of one instance or one thread, or every one without either.",
+      "properties": {
+        "instance_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "NotificationListCommand",
+      "type": "object"
+    },
+    "NotificationListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "notifications": {
+          "items": {
+            "$ref": "#/$defs/Notification"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "notifications"
+      ],
+      "title": "NotificationListResult",
       "type": "object"
     },
     "NotificationRaiseCommand": {
@@ -4735,6 +4886,77 @@
         "type"
       ],
       "title": "NotificationRefused",
+      "type": "object"
+    },
+    "NotificationReply": {
+      "additionalProperties": false,
+      "properties": {
+        "channel_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "option": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "received_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ReplyStatus"
+        }
+      },
+      "required": [
+        "option",
+        "channel_id",
+        "received_at",
+        "status"
+      ],
+      "title": "NotificationReply",
+      "type": "object"
+    },
+    "NotificationReplyCommand": {
+      "additionalProperties": false,
+      "description": "Answer a notification with one of its options, as a reply through a channel would.",
+      "properties": {
+        "notification_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "option": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "notification_id",
+        "option"
+      ],
+      "title": "NotificationReplyCommand",
       "type": "object"
     },
     "OperationGetCommand": {
@@ -5300,6 +5522,17 @@
         "secrets"
       ],
       "title": "RecreateReason",
+      "type": "string"
+    },
+    "ReplyStatus": {
+      "description": "What came of a reply.",
+      "enum": [
+        "received",
+        "applied",
+        "stale",
+        "failed"
+      ],
+      "title": "ReplyStatus",
       "type": "string"
     },
     "ReportedRun": {
@@ -10194,6 +10427,22 @@
           ],
           "type": "object"
         },
+        "notification.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/NotificationListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/NotificationListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "notification.raise": {
           "additionalProperties": false,
           "properties": {
@@ -10202,6 +10451,22 @@
             },
             "result": {
               "$ref": "#/$defs/NotificationRaiseResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "notification.reply": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/NotificationReplyCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/NotificationReply"
             }
           },
           "required": [
@@ -10989,7 +11254,9 @@
         "channel.test",
         "channel.mute",
         "channel.unmute",
-        "notification.raise"
+        "notification.raise",
+        "notification.list",
+        "notification.reply"
       ],
       "type": "object"
     },

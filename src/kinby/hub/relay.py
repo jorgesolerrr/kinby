@@ -21,7 +21,7 @@ from kinby.contracts import (
     parse_server_frame,
 )
 from kinby.core.contract_server import HEARTBEAT_SECONDS
-from kinby.core.errors import InstanceRefused, InstanceUnavailable
+from kinby.core.errors import InstanceAnswerLost, InstanceRefused, InstanceUnavailable
 from kinby.hub.approvals import HomeApprovals
 from kinby.hub.models import InstanceEndpoint, InstanceUnreachable
 
@@ -88,8 +88,13 @@ async def relayed_call(
     socket_path: str = "/ws",
 ) -> dict[str, JsonValue]:
     """Make one call on the instance's socket, the one the relay carries a client to unless
-    *socket_path* names another, and return what the instance answered."""
+    *socket_path* names another, and return what the instance answered.
+
+    Once the socket is open, a call that gets no answer raises InstanceAnswerLost: the instance
+    may have acted on it.
+    """
     call = CallFrame(id=FrameId("1"), method=method, params=params)
+    connected = False
     try:
         async with (
             asyncio.timeout(RELAYED_CALL_SECONDS),
@@ -100,10 +105,11 @@ async def relayed_call(
                 f"{endpoint.url}{socket_path}", heartbeat=HEARTBEAT_SECONDS
             ) as socket,
         ):
+            connected = True
             await socket.send_str(call.model_dump_json())
             answer = await socket.receive_str()
     except (aiohttp.ClientError, aiohttp.WSMessageTypeError, TimeoutError) as exc:
-        raise InstanceUnavailable(
+        raise (InstanceAnswerLost if connected else InstanceUnavailable)(
             f'Instance "{endpoint.instance_id}" did not answer "{method}": '
             f"{exc or type(exc).__name__}"
         ) from exc
@@ -113,7 +119,7 @@ async def relayed_call(
         case ErrorFrame(error=error) | (ErrorEnvelope() as error):
             raise InstanceRefused(error)
         case other:
-            raise InstanceUnavailable(
+            raise InstanceAnswerLost(
                 f'Instance "{endpoint.instance_id}" answered "{method}" with "{other.type.value}".'
             )
 

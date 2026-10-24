@@ -20,9 +20,9 @@ from kinby.contracts import (
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
-from kinby.hub.channels import Channels
 from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
 from kinby.hub.relay import forward_signal, forwarded_headers, relay_socket, unreachable
+from kinby.hub.replies import Replies
 from kinby.instance import Serve
 
 _UNAUTHORIZED = "authentication failed"
@@ -40,14 +40,14 @@ class HubContractServer:
         dispatcher: Dispatcher,
         access: HubAccess,
         routing: InstanceRouting,
-        channels: Channels,
+        replies: Replies,
         web_app: Path | None = None,
     ) -> None:
         """Serve ``web_app``, or else the app the hub image carries, when that directory exists."""
         self._dispatcher = dispatcher
         self._access = access
         self._routing = routing
-        self._channels = channels
+        self._replies = replies
         self._web_app = web_app or WEB_APP
         self._runner: web.AppRunner | None = None
 
@@ -162,7 +162,7 @@ class HubContractServer:
 
     async def _channel(self, request: web.Request) -> web.Response:
         """A channel's service calls with what the user sent. Its kind authenticates the call."""
-        return await self._channels.receive(
+        return await self._replies.receive(
             request.match_info["channel_id"], request.match_info["kind"], request
         )
 

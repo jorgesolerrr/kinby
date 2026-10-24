@@ -171,6 +171,10 @@ class InstanceUnavailable(CoreError):
     retryable = True
 
 
+class InstanceAnswerLost(InstanceUnavailable):
+    """The instance took the hub's call and its answer never came, so it may have acted."""
+
+
 class InstanceRefused(CoreError):
     """The instance answered a call the hub made for another with an error, which that caller
     hears as the instance said it."""
@@ -193,6 +197,16 @@ class ChannelNotFound(CoreError):
 
 class ChannelUnpaired(CoreError):
     """The channel waits for its pairing code, so it sends nothing yet."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class NotificationNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class OptionNotOffered(CoreError):
+    """A reply named an option its notification does not offer."""
 
     code = ErrorCode.INVALID_ARGUMENT
 

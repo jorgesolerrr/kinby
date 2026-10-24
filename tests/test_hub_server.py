@@ -42,7 +42,7 @@ def hub_at(directory: Path, runtime: FakeRuntime | None = None) -> Hub:
 
 @asynccontextmanager
 async def served(hub: Hub, *, web_app: Path | None = None) -> AsyncIterator[Serve]:
-    server = HubContractServer(hub.dispatcher, hub.access, hub, hub.channels, web_app)
+    server = HubContractServer(hub.dispatcher, hub.access, hub, hub.replies, web_app)
     address = await server.start(Serve("127.0.0.1", 0))
     try:
         yield address
