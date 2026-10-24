@@ -135,6 +135,9 @@ class TelegramBot:
                 return Inbound(sender=ChannelUser(str(sender)), text=text)
         return None
 
+    def answer(self, received: Inbound | Reply | None) -> web.Response:
+        return web.Response()
+
     async def _call(self, method: str, body: Mapping[str, object]) -> object:
         async with (
             aiohttp.ClientSession(
