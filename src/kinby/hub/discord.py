@@ -28,6 +28,7 @@ _CALL_TIMEOUT_SECONDS = 30
 #: The most characters of an embed's author name, and of its title.
 _HEADING_CHARACTERS = 256
 _LABEL_CHARACTERS = 80
+_CONTENT_CHARACTERS = 2_000
 # Interaction response types, from Discord's API.
 _PONG = 1
 _MESSAGE = 4
@@ -154,7 +155,11 @@ class DiscordBot:
         await self._call(
             "PATCH",
             f"channels/{self._dm}/messages/{message}",
-            {"content": outcome, "embeds": [], "components": []},
+            {
+                "content": _cut(outcome, _CONTENT_CHARACTERS),
+                "embeds": [],
+                "components": [],
+            },
         )
 
     async def receive(self, request: web.Request) -> Inbound | Reply | None:
