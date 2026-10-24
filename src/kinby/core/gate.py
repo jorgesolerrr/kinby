@@ -48,7 +48,7 @@ def evaluate(
 
     A hub tool's write asks in every mode but read-only, ahead of any rule (ADR 0096).
     Consolidation's own write runs unasked in every mode but read-only, where it is denied,
-    also ahead of any rule (ADR 0100).
+    also ahead of any rule (ADR 0100). So does notify, unless a rule names it (ADR 0103).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
@@ -56,6 +56,9 @@ def evaluate(
     if tool is not None and tool.consolidation:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ALLOW
         return GateDecision(action, GateRule("consolidation.write"))
+    if tool is not None and tool.notify and call.name not in policy.tools:
+        action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ALLOW
+        return GateDecision(action, GateRule("notify"))
     if (
         mode is not PermissionMode.READ_ONLY
         and call.name == "bash"

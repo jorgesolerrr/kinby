@@ -2285,6 +2285,24 @@ class HubRegistry:
                 (error, at.isoformat(), str(channel_id)),
             )
 
+    def notification_id(self, instance_id: UUID, key: str) -> UUID | None:
+        """The notification the instance raised under *key*, if it did."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM notifications WHERE instance_id = ? AND source_key = ?",
+                (str(instance_id), key),
+            ).fetchone()
+        return UUID(row[0]) if row is not None else None
+
+    def notifications_raised(self, instance_id: UUID, since: datetime) -> int:
+        """How many notifications the instance raised since then."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM notifications WHERE instance_id = ? AND raised_at >= ?",
+                (str(instance_id), since.isoformat()),
+            ).fetchone()
+        return row[0]
+
     def raise_notification(
         self,
         instance_id: UUID,
