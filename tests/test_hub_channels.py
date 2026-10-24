@@ -146,6 +146,9 @@ class FakeService:
                     )
                 return Inbound(sender=ChannelUser(body["user"]), text=body["text"])
 
+            def answer(self, received: Inbound | Reply | None) -> web.Response:
+                return web.Response()
+
             async def edit(self, message: SentRef, outcome: str) -> None:
                 service.edited.put_nowait((message, outcome))
 

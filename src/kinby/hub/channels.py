@@ -118,7 +118,14 @@ class ReceivingKind(ChannelKind, Protocol):
     """A kind whose service calls the hub's public route when the user sends something."""
 
     async def receive(self, request: web.Request) -> Inbound | Reply | None:
-        """What the user sent, or None for a call that is not authentic or carries neither."""
+        """What the user sent, or None for a call that is not authentic or carries neither. A
+        kind whose service expects a call that is not authentic to be refused raises the
+        refusal."""
+        ...
+
+    def answer(self, received: Inbound | Reply | None) -> web.Response:
+        """The answer to the service's call, once the hub took what *received* says it
+        carried."""
         ...
 
     async def edit(self, message: SentRef, outcome: str) -> None:
@@ -128,10 +135,12 @@ class ReceivingKind(ChannelKind, Protocol):
 
 @runtime_checkable
 class RegisteringKind(ChannelKind, Protocol):
-    """A kind whose service is told where the hub takes its calls, rather than the user."""
+    """A kind whose service the hub sets up for the channel, rather than the user: where the hub
+    takes its calls, or what the user can send it."""
 
     async def register(self, route: str) -> None:
-        """Have the service call *route*, the channel's public route, or raise why it would not."""
+        """Set the service up to call *route*, the channel's public route, or raise why it would
+        not."""
         ...
 
 
@@ -260,11 +269,15 @@ class Channels:
         return _shown(self._existing(command.channel_id))
 
     async def receive(
-        self, channel_id: str, kind: str, request: web.Request
-    ) -> tuple[ChannelRecord, Reply] | None:
-        """Hand a call to the channel's public route to its kind, and return the reply it
-        carries from the user the channel is paired with. The first sender of a valid pairing
-        code becomes that user."""
+        self,
+        channel_id: str,
+        kind: str,
+        request: web.Request,
+        take: Callable[[ChannelRecord, Reply], None],
+    ) -> web.Response:
+        """Hand a call to the channel's public route to its kind, give *take* the reply it
+        carries from the user the channel is paired with, and answer the call as the kind does.
+        The first sender of a valid pairing code becomes that user."""
         parsed = _parsed(channel_id)
         record = self._registry.channel(parsed) if parsed is not None else None
         if record is None or record.kind != kind or record.kind not in self._kinds:
@@ -272,16 +285,17 @@ class Channels:
         receiver = self.sender(record)
         if not isinstance(receiver, ReceivingKind):
             raise web.HTTPNotFound()
-        match await receiver.receive(request):
+        received = await receiver.receive(request)
+        match received:
             case Reply(sender=sender) as reply if sender == record.paired_user:
-                return record, reply
+                take(record, reply)
             case Inbound(sender=sender, text=text) if (
                 (pairing := record.pairing) is not None
                 and self._clock() < pairing.expires_at
                 and hmac.compare_digest(text.strip().encode(), pairing.code.encode())
             ):
                 self._registry.pair_channel(record.channel_id, pairing.code, sender)
-        return None
+        return receiver.answer(received)
 
     def limit(self, record: ChannelRecord) -> int:
         """The most characters of a notification's text the channel's kind sends."""
