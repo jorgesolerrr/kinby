@@ -529,7 +529,6 @@ class Hub:
             )
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
-            self.runs = FactoryRuns(self.registry, self.factories, self._run_step, self._tell_stop)
             self.approvals = HomeApprovals()
             self.channels = Channels(
                 self.registry,
@@ -538,11 +537,15 @@ class Hub:
                 clock,
             )
             self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
+            self.runs = FactoryRuns(
+                self.registry, self.factories, self._run_step, self._tell_stop, self.outbox
+            )
             self.replies = Replies(
                 self.registry,
                 self.channels,
                 self._start_turn,
                 self._answer_approval,
+                self.runs.answer_stop,
                 clock,
                 sleep,
             )

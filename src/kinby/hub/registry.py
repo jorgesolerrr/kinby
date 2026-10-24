@@ -151,6 +151,14 @@ class PendingDelivery:
 
 
 @dataclass(frozen=True)
+class RunStopRef:
+    """One stop of a factory run: the run, and the generation that names the stop."""
+
+    run_id: UUID
+    generation: int
+
+
+@dataclass(frozen=True)
 class ReceivedReply:
     """A reply recorded and not applied yet."""
 
@@ -170,6 +178,8 @@ class ReceivedReply:
     calling: bool
     #: The approval the notification asks the user to answer, if it asks for one.
     approval: WaitingApproval | None
+    #: The run stop the notification asks the user to move on from, if it asks about one.
+    stop: RunStopRef | None
 
 
 class HubRegistry:
@@ -449,6 +459,10 @@ class HubRegistry:
             self._add_columns(connection, "operations", {"login_id": "TEXT", "requester": "TEXT"})
             # The approval a notification's options answer, as JSON. Null for any other.
             self._add_columns(connection, "notifications", {"approval": "TEXT"})
+            # The run stop a notification's options answer. Null for any other.
+            self._add_columns(
+                connection, "notifications", {"run_id": "TEXT", "stop_generation": "INTEGER"}
+            )
             self._drop_packages(connection)
 
     def _let_operations_stand_alone(self) -> None:
@@ -2390,6 +2404,7 @@ class HubRegistry:
         thread_id: UUID | None,
         notification: ChannelNotification,
         approval: WaitingApproval | None,
+        stop: RunStopRef | None,
         raised_at: datetime,
         deliveries: Mapping[UUID, DeliveryStatus],
     ) -> UUID:
@@ -2400,9 +2415,9 @@ class HubRegistry:
                 """
                 INSERT INTO notifications (
                     id, instance_id, source_key, thread_id, header, title, text, link, options,
-                    approval, raised_at
+                    approval, run_id, stop_generation, raised_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (instance_id, source_key) DO NOTHING
                 """,
                 (
@@ -2416,6 +2431,8 @@ class HubRegistry:
                     notification.link,
                     json.dumps(notification.options),
                     approval.model_dump_json() if approval is not None else None,
+                    str(stop.run_id) if stop is not None else None,
+                    stop.generation if stop is not None else None,
                     raised_at.isoformat(),
                 ),
             ).rowcount
@@ -2620,7 +2637,8 @@ class HubRegistry:
             rows = connection.execute(
                 """
                 SELECT replies.id, replies.notification_id, instance_id, thread_id, option,
-                    received_at, replies.channel_id, sent_ref, calling, approval
+                    received_at, replies.channel_id, sent_ref, calling, approval, run_id,
+                    stop_generation
                 FROM replies
                 JOIN notifications ON notifications.id = replies.notification_id
                 LEFT JOIN notification_deliveries
@@ -2645,6 +2663,7 @@ class HubRegistry:
                 approval=(
                     WaitingApproval.model_validate_json(row[9]) if row[9] is not None else None
                 ),
+                stop=RunStopRef(UUID(row[10]), row[11]) if row[10] is not None else None,
             )
             for row in rows
         ]
