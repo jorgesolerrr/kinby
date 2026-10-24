@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from uuid import UUID, uuid4
 
 from kinby.contracts import (
@@ -15,16 +15,18 @@ from kinby.contracts import (
     NotificationRaiseCommand,
     NotificationRaiseResult,
 )
-from kinby.core.errors import ManagedInstanceNotFound
+from kinby.core.errors import ManagedInstanceNotFound, NotificationCapReached
 from kinby.hub.channels import Channels
 from kinby.hub.models import ChannelNotification
-from kinby.hub.registry import HubRegistry, PendingDelivery
+from kinby.hub.registry import HubRegistry, ManagedInstance, PendingDelivery
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 #: How long after a notification was raised the outbox stops trying a channel that fails.
 GIVE_UP_AFTER = timedelta(days=1)
 #: The option every channel adds to a notification's own.
 MUTE_OPTION = "Mute this instance"
+#: The most notifications one instance raises in a day (ADR 0103).
+DAILY_CAP = 20
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -54,18 +56,45 @@ class Outbox:
         """Record the notification under the hub's header and link, once per key, and deliver it.
 
         A channel that mutes the instance records it as muted and never sends it. Every channel
-        that sends it offers to mute the instance, after the notification's own options.
+        that sends it offers to mute the instance, after the notification's own options. A new
+        key past the instance's daily cap is refused, and the first refusal of the day raises a
+        notification that says so.
         """
         record = self._registry.instance(instance_id)
         if record is None:
             raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
+        known = self._registry.notification_id(instance_id, command.key)
+        if known is not None:
+            return NotificationRaiseResult(notification_id=known)
+        now = self._clock()
+        today = datetime.combine(now.date(), time(), now.tzinfo)
+        if self._registry.notifications_raised(instance_id, since=today) >= DAILY_CAP:
+            name = _name(record)
+            self._raise(
+                record,
+                NotificationRaiseCommand(
+                    key=f"cap:{now.date()}",
+                    thread_id=command.thread_id,
+                    source=command.source,
+                    title="Daily notification cap reached",
+                    text=f"{name} raised {DAILY_CAP} notifications today. "
+                    "kinby sends no more of them until tomorrow.",
+                ),
+            )
+            raise NotificationCapReached(
+                f"{name} raised {DAILY_CAP} notifications today, its daily cap. "
+                "Raise no more until tomorrow."
+            )
+        return NotificationRaiseResult(notification_id=self._raise(record, command))
+
+    def _raise(self, record: ManagedInstance, command: NotificationRaiseCommand) -> UUID:
         notification = ChannelNotification(
             notification_id=uuid4(),
-            header=f"{record.persona_name or record.manifest_id} · {command.source}",
+            header=f"{_name(record)} · {command.source}",
             title=command.title,
             text=command.text,
             link=(
-                f"{self._public_url}/instances/{instance_id}/threads/{command.thread_id}"
+                f"{self._public_url}/instances/{record.instance_id}/threads/{command.thread_id}"
                 if self._public_url is not None
                 else None
             ),
@@ -73,17 +102,24 @@ class Outbox:
         )
         deliveries = {
             channel.channel_id: (
-                DeliveryStatus.MUTED if instance_id in channel.muted else DeliveryStatus.PENDING
+                DeliveryStatus.MUTED
+                if record.instance_id in channel.muted
+                else DeliveryStatus.PENDING
             )
             for channel in self._registry.channels()
             if channel.sends
         }
         raised = self._registry.raise_notification(
-            instance_id, command.key, command.thread_id, notification, self._clock(), deliveries
+            record.instance_id,
+            command.key,
+            command.thread_id,
+            notification,
+            self._clock(),
+            deliveries,
         )
         if raised == notification.notification_id:
             self._deliver_all(self._registry.pending_deliveries(raised))
-        return NotificationRaiseResult(notification_id=raised)
+        return raised
 
     async def list(self, command: NotificationListCommand) -> NotificationListResult:
         return NotificationListResult(
@@ -147,6 +183,10 @@ class Outbox:
                 self._registry.delivery_sent(notification.notification_id, channel.channel_id, sent)
                 self._registry.channel_sent(channel.channel_id, self._clock())
                 return
+
+
+def _name(record: ManagedInstance) -> str:
+    return record.persona_name or record.manifest_id
 
 
 def _cut(text: str, limit: int) -> str:

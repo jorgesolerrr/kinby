@@ -9,6 +9,7 @@ from kinby.memory import GraphStore, memory_tools
 from kinby.plugins.hub import hub_tools
 from kinby.plugins.instance_tools import instance_tools
 from kinby.plugins.intake import intake_tools
+from kinby.plugins.notify import notify_tools
 from kinby.plugins.skills import Skill, skill_tool
 from kinby.plugins.tools import Tool
 
@@ -25,5 +26,6 @@ def core_tools(
         *memory_tools(GraphStore(instance.path), today=today),
         *instance_tools(instance),
         *intake_tools(),
+        *notify_tools(),
         *hub_tools(),
     )

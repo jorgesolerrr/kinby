@@ -83,6 +83,7 @@ from kinby.core.prompt import (
     render_system_prompt,
     render_wake,
 )
+from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalAnswer,
@@ -501,8 +502,10 @@ class LangGraphRunner:
                                     else None
                                 ),
                                 dreaming_stage=self._opened_with_dreaming_step(turn),
+                                notification_source=self._notification_source(turn),
                                 run_reporter=_run_reporter(emit),
                                 recall_reporter=_recall_reporter(emit),
+                                notification_reporter=emit,
                             ),
                             user_message=HumanMessage(
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)
@@ -656,6 +659,17 @@ class LangGraphRunner:
             None,
         )
         return call is not None and SharedCodeStep(call.name) in DREAMING_STEPS
+
+    def _notification_source(self, turn: PreparedTurnRequest) -> str | None:
+        """Where a notification raised in the turn came from: its routine, its factory step, or
+        its thread's title, when it has one."""
+        match turn.origin:
+            case RoutineOrigin(name=name):
+                return name
+            case FactoryRunOrigin(factory=factory, step=step):
+                return f"{factory} · {step}"
+        thread = ThreadStore(self._instance.manifest.state_dir).thread(turn.thread_id)
+        return thread.title if thread is not None else None
 
     def _delivery_for_turn(self, turn: PreparedTurnRequest) -> Delivery | None:
         return next(
