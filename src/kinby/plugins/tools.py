@@ -12,12 +12,23 @@ from uuid import UUID
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import JsonValue
 
-from kinby.contracts import DelegatedRun, NodeId, RoutineName
+from kinby.contracts import (
+    DelegatedRun,
+    Event,
+    NodeId,
+    NotificationAccepted,
+    NotificationRaised,
+    NotificationRefused,
+    RoutineName,
+)
 from kinby.instance import Instance
 
 ToolFunction = Callable[..., object]
 RunReporter = Callable[[DelegatedRun], Awaitable[object]]
 RecallReporter = Callable[[tuple[NodeId, ...]], Awaitable[object]]
+NotificationReporter = Callable[
+    [NotificationRaised | NotificationAccepted | NotificationRefused], Awaitable[Event]
+]
 
 
 @dataclass(frozen=True)
@@ -34,8 +45,12 @@ class ToolContext:
     dreaming_stage: bool = False
     #: The approval the user gave this call. None for a call the gate let through on its own.
     approval_id: UUID | None = None
+    #: Where a notification raised in the turn came from: its routine, its factory step, or its
+    #: thread's title.
+    notification_source: str | None = None
     run_reporter: RunReporter | None = field(default=None, repr=False)
     recall_reporter: RecallReporter | None = field(default=None, repr=False)
+    notification_reporter: NotificationReporter | None = field(default=None, repr=False)
 
     @property
     def workspace(self) -> Path:
@@ -56,6 +71,17 @@ class ToolContext:
         if self.recall_reporter is not None:
             await self.recall_reporter(nodes)
 
+    async def report_notification(
+        self, payload: NotificationRaised | NotificationAccepted | NotificationRefused
+    ) -> Event:
+        """Record *payload* in the turn that invoked the tool, and return its event."""
+        if self.notification_reporter is None:
+            # kinby.core imports this module, so its errors load on first use.
+            from kinby.core.errors import NoActiveTurn
+
+            raise NoActiveTurn(f'Thread "{self.thread_id}" has no open turn to notify from.')
+        return await self.notification_reporter(payload)
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -70,6 +96,8 @@ class Tool:
     hub: bool = False
     #: Consolidation's own write, which needs no approval (ADR 0100).
     consolidation: bool = False
+    #: The notify tool, which runs unasked unless a rule names it (ADR 0103).
+    notify: bool = False
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(
@@ -114,7 +142,7 @@ class Tool:
 
 
 def tool(
-    *, write: bool, paths: tuple[str, ...] = (), hub: bool = False
+    *, write: bool, paths: tuple[str, ...] = (), hub: bool = False, notify: bool = False
 ) -> Callable[[ToolFunction], Tool]:
     """Build a structured tool from a function signature and docstring."""
 
@@ -142,6 +170,7 @@ def tool(
             runnable=runnable,
             paths=paths,
             hub=hub,
+            notify=notify,
             context_parameter=context_parameter,
         )
 
