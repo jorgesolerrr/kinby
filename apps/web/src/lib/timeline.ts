@@ -96,7 +96,9 @@ export function project(timeline: Timeline, event: Event): Timeline {
 }
 
 function projectTurn(previous: TurnBlock, payload: Payload): TurnBlock {
-  // Answering an approval appends nothing, so the turn's next event is what ends the wait.
+  // Answering an approval appends nothing, so the turn's next event is what ends the wait. The
+  // notifications recorded while it waits leave it standing.
+  if (payload.type.startsWith("notification.")) return previous
   const turn = { ...previous, approval: undefined }
   switch (payload.type) {
     case "message.delta": {

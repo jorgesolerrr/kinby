@@ -14,6 +14,7 @@ from kinby.contracts import (
     NotificationListResult,
     NotificationRaiseCommand,
     NotificationRaiseResult,
+    WaitingApproval,
 )
 from kinby.core.errors import ManagedInstanceNotFound, NotificationCapReached
 from kinby.hub.channels import Channels
@@ -92,6 +93,7 @@ class Outbox:
             page=page,
             options=tuple(command.options),
             thread_id=command.thread_id,
+            approval=command.approval,
         )
         return NotificationRaiseResult(notification_id=raised)
 
@@ -106,10 +108,11 @@ class Outbox:
         page: str,
         options: tuple[str, ...] = (),
         thread_id: UUID | None = None,
+        approval: WaitingApproval | None = None,
     ) -> UUID:
         """Record the notification under the hub's header and a link to the web app's *page*, once
         per key, and deliver it. The id of the notification the key names. *thread_id* is the
-        thread it came from, if any.
+        thread it came from, if any, and *approval* the approval its options answer.
 
         A channel that mutes the instance records it as muted and never sends it. Every channel
         that sends it offers to mute the instance, after the notification's own options.
@@ -133,7 +136,7 @@ class Outbox:
             if channel.sends
         }
         raised = self._registry.raise_notification(
-            instance_id, key, thread_id, notification, self._clock(), deliveries
+            instance_id, key, thread_id, notification, approval, self._clock(), deliveries
         )
         if raised == notification.notification_id:
             self._deliver_all(self._registry.pending_deliveries(raised))

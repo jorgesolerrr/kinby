@@ -11,10 +11,13 @@ from uuid import UUID, uuid4
 from aiohttp import web
 
 from kinby.contracts import (
+    APPROVAL_OPTIONS,
+    ApprovalDecision,
     NotificationReply,
     NotificationReplyCommand,
     ReplyStatus,
     ThreadTurnStartCommand,
+    WaitingApproval,
 )
 from kinby.core.errors import (
     CoreError,
@@ -29,18 +32,21 @@ from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 _logger = logging.getLogger(__name__)
 _UNKNOWN = "Not known whether the instance got this answer. Answer again from the web app."
+_DECIDED = {ApprovalDecision.APPROVE: "Approved.", ApprovalDecision.DENY: "Denied."}
 
 #: Start a user turn in one of an instance's threads.
 type StartTurn = Callable[[UUID, ThreadTurnStartCommand], Awaitable[object]]
+#: Answer an approval waiting in one of an instance's threads. False when it no longer waits.
+type AnswerApproval = Callable[[UUID, UUID, WaitingApproval, ApprovalDecision], Awaitable[bool]]
 
 
 class Replies:
     """Take the user's replies to notifications, and apply them one at a time.
 
-    A reply to an instance's notification starts a user turn in the thread that raised it, and
-    "Mute this instance" mutes the instance on the channel the reply came through. One that
-    answers something already settled changes nothing. Either way, the channel's message is
-    edited to show what came of it.
+    A reply to an instance's notification starts a user turn in the thread that raised it, one to
+    an approval's answers that approval, and "Mute this instance" mutes the instance on the
+    channel the reply came through. One that answers something already settled changes nothing.
+    Either way, the channel's message is edited to show what came of it.
     """
 
     def __init__(
@@ -48,12 +54,14 @@ class Replies:
         registry: HubRegistry,
         channels: Channels,
         start_turn: StartTurn,
+        answer_approval: AnswerApproval,
         clock: Callable[[], datetime],
         sleep: Sleep,
     ) -> None:
         self._registry = registry
         self._channels = channels
         self._start_turn = start_turn
+        self._answer_approval = answer_approval
         self._clock = clock
         self._sleep = sleep
         self._applying = asyncio.Lock()
@@ -147,21 +155,28 @@ class Replies:
             return ReplyStatus.STALE, "No thread takes this answer."
         if self._registry.answered(reply.notification_id):
             return ReplyStatus.STALE, "Already answered."
-        # A turn start is asked for at most once: one that may have landed is never repeated.
+        # An answer is asked for at most once: one that may have landed is never repeated.
         if reply.calling:
             return ReplyStatus.FAILED, _UNKNOWN
         self._registry.reply_calling(reply.reply_id, calling=True)
         try:
-            await self._start_turn(
-                reply.instance_id,
-                ThreadTurnStartCommand(thread_id=reply.thread_id, message=reply.option),
-            )
+            if reply.approval is None:
+                await self._start_turn(
+                    reply.instance_id,
+                    ThreadTurnStartCommand(thread_id=reply.thread_id, message=reply.option),
+                )
+                return ReplyStatus.APPLIED, f'Answered "{reply.option}".'
+            decision = APPROVAL_OPTIONS[reply.option]
+            if not await self._answer_approval(
+                reply.instance_id, reply.thread_id, reply.approval, decision
+            ):
+                return ReplyStatus.STALE, "No longer waiting."
+            return ReplyStatus.APPLIED, _DECIDED[decision]
         except InstanceAnswerLost:
             return ReplyStatus.FAILED, _UNKNOWN
         except Exception:
             self._registry.reply_calling(reply.reply_id, calling=False)
             raise
-        return ReplyStatus.APPLIED, f'Answered "{reply.option}".'
 
     async def _edit(self, reply: ReceivedReply, outcome: str) -> None:
         channel = self._registry.channel(reply.channel_id) if reply.channel_id is not None else None

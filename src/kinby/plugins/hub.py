@@ -342,7 +342,7 @@ async def call_hub(method: str, params: dict[str, JsonValue], named: str) -> dic
         ):
             await socket.send_str(call.model_dump_json())
             answer = await socket.receive_str()
-    except aiohttp.ClientError as exc:
+    except (aiohttp.ClientError, aiohttp.WSMessageTypeError) as exc:
         raise ConnectionError(f"The hub refused {named}: {exc}") from exc
     match parse_server_frame(answer):
         case ResultFrame(result=result):

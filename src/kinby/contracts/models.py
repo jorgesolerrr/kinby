@@ -521,6 +521,13 @@ class SignalReceived(ContractModel):
     delivery: Delivery
 
 
+class WaitingApproval(ContractModel):
+    """An approval a turn parked on, which a notification asks the user to answer."""
+
+    turn_id: UUID
+    request: ApprovalRequested
+
+
 class NotificationContent(ContractModel):
     """What an instance's notification says. The hub adds its header and link."""
 
@@ -530,6 +537,8 @@ class NotificationContent(ContractModel):
     text: str
     #: What the user can reply with.
     options: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list, max_length=4)
+    #: The approval its options answer, the ones APPROVAL_OPTIONS names.
+    approval: WaitingApproval | None = None
 
 
 class NotificationRaised(NotificationContent):
@@ -688,6 +697,10 @@ class ThreadTurnRateCommand(ContractModel):
 class ApprovalDecision(StrEnum):
     APPROVE = "approve"
     DENY = "deny"
+
+
+#: The options of a notification that asks for an approval, and the decision each one gives.
+APPROVAL_OPTIONS = {"Approve": ApprovalDecision.APPROVE, "Deny": ApprovalDecision.DENY}
 
 
 class ThreadApprovalRespondCommand(ContractModel):

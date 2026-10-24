@@ -73,6 +73,14 @@ class HomeApprovals:
         if witnessed is not None and answer.decision is ApprovalDecision.APPROVE:
             witnessed.approved = True
 
+    def approve(self, turn_id: UUID, request: ApprovalRequested) -> None:
+        """The user approved *request* in a reply the hub relays, so the hub saw both."""
+        if request.approval_id not in self._used:
+            witnessed = self._witnessed.setdefault(
+                request.approval_id, _Witnessed(turn_id, request)
+            )
+            witnessed.approved = True
+
     def approved(self, approval_id: UUID) -> ApprovalRequested:
         """The call the user approved under this id, not yet used."""
         witnessed = self._witnessed.get(approval_id)
@@ -81,5 +89,5 @@ class HomeApprovals:
         return witnessed.request
 
     def use(self, approval_id: UUID) -> None:
-        del self._witnessed[approval_id]
+        self._witnessed.pop(approval_id, None)
         self._used.add(approval_id)

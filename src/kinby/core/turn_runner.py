@@ -110,6 +110,12 @@ from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
+from kinby.plugins.notify import (
+    UNTITLED,
+    approval_notification,
+    raise_notification,
+    raises_notifications,
+)
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
     CONSOLIDATION_STEP,
@@ -529,6 +535,11 @@ class LangGraphRunner:
             if not isinstance(approval, ApprovalRequested):
                 raise InvalidApprovalRequest("The graph returned an invalid approval request.")
             await emit(approval)
+            if raises_notifications():
+                source = self._notification_source(turn) or UNTITLED
+                await raise_notification(
+                    approval_notification(source, turn.turn_id, approval), emit
+                )
             return ParkedTurn()
         result = _MODEL_STATE.validate_python(graph_result)
         return TurnOutcome(
