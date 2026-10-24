@@ -26,6 +26,11 @@ __all__ = ["TelegramBot", "TelegramRefused"]
 
 _CALL_TIMEOUT_SECONDS = 30
 _SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+#: The most characters one message shows, counted once Telegram has parsed its HTML.
+_MESSAGE_CHARACTERS = 4_096
+#: The most characters of the header, and of the title, a message shows.
+_HEADING_CHARACTERS = 256
+_LINK_TEXT = "Open in kinby"
 
 
 class TelegramRefused(Exception):
@@ -57,7 +62,7 @@ class TelegramBot:
             ),
         ),
         pairs=True,
-        # Telegram's limit is 4096, and the header, title and link come on top of the text.
+        # The text's share of a message, once the header, title and link take theirs.
         message_limit=3_500,
     )
 
@@ -143,10 +148,20 @@ class TelegramBot:
 
 
 def _html(notification: ChannelNotification) -> str:
+    """The message, cut to what one message shows: the header and title to their share, and the
+    text to what they and the link leave."""
+    header = _cut(notification.header, _HEADING_CHARACTERS)
+    title = _cut(notification.title, _HEADING_CHARACTERS)
+    separators = 5
+    room = _MESSAGE_CHARACTERS - len(header) - len(title) - len(_LINK_TEXT) - separators
     parts = [
-        f"<b>{escape(notification.header)}</b>\n<b>{escape(notification.title)}</b>",
-        escape(notification.text),
+        f"<b>{escape(header)}</b>\n<b>{escape(title)}</b>",
+        escape(_cut(notification.text, room)),
     ]
     if notification.link is not None:
-        parts.append(f'<a href="{escape(notification.link)}">Open in kinby</a>')
+        parts.append(f'<a href="{escape(notification.link)}">{_LINK_TEXT}</a>')
     return "\n\n".join(parts)
+
+
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"

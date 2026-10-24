@@ -1,9 +1,11 @@
 """The Telegram channel kind, against a local app standing in for Telegram's Bot API."""
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from html import unescape
 from pathlib import Path
 from uuid import UUID
 
@@ -173,11 +175,14 @@ def test_kinby_registers_the_telegram_kind_through_its_entry_point_group():
     ]
 
 
-def test_creating_a_channel_sets_the_bots_webhook_to_its_route_with_a_secret_token(tmp_path):
+@pytest.mark.parametrize("public_url", [_PUBLIC_URL, f"{_PUBLIC_URL}/"])
+def test_creating_a_channel_sets_the_bots_webhook_to_its_route_with_a_secret_token(
+    tmp_path, public_url
+):
     async def scenario() -> None:
         service = FakeTelegram()
         async with telegram(service) as base_url:
-            hub = telegram_hub(tmp_path / "hub")
+            hub = telegram_hub(tmp_path / "hub", public_url=public_url)
             channel = await created_channel(hub_client(hub), base_url)
 
         [(token, method, body)] = service.calls
@@ -329,6 +334,31 @@ def test_a_notification_is_sent_as_html_with_its_link_and_its_options_as_buttons
                 [{"text": "Deny", "callback_data": "1"}],
             ]
         }
+
+    asyncio.run(scenario())
+
+
+def test_a_long_header_and_title_still_fit_one_telegram_message():
+    async def scenario() -> None:
+        service = FakeTelegram()
+        long = ChannelNotification(
+            notification_id=UUID(int=7),
+            header="K" * 1_000,
+            title="<" * 1_000,
+            text="t" * TelegramBot.setup.message_limit,
+            link=_LINK,
+            options=(),
+        )
+        async with telegram(service) as base_url:
+            await bot(base_url).send(long)
+
+        [text] = [str(body["text"]) for body in service.sent()]
+        # Telegram counts the characters left once it has parsed the HTML.
+        shown = unescape(re.sub(r"<[^>]+>", "", text))
+        assert len(shown) <= 4_096
+        assert shown.startswith("KKK")
+        assert "<<<" in shown
+        assert shown.endswith("Open in kinby")
 
     asyncio.run(scenario())
 
