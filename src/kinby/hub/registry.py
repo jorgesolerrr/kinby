@@ -439,6 +439,7 @@ class HubRegistry:
                 {"prompt_url": "TEXT", "prompt_code": "TEXT"},
             )
         self._let_operations_stand_alone()
+        self._let_notifications_go_without_a_thread()
         # After the rebuild, which copies only the columns operations had before preparations.
         with self._connect() as connection:
             # The instance that asked the hub for the operation. Null for one the user started.
@@ -471,6 +472,51 @@ class HubRegistry:
                 SELECT id, instance_id, kind, state, detail FROM operations ORDER BY rowid;
                 DROP TABLE operations;
                 ALTER TABLE operations_standing_alone RENAME TO operations;
+                COMMIT;
+                """
+            )
+        finally:
+            connection.close()
+
+    def _let_notifications_go_without_a_thread(self) -> None:
+        """Rebuild a notifications table from before instance notices, whose rows all name a
+        thread.
+
+        SQLite cannot drop a NOT NULL constraint in place. The copy keeps every row in order, and
+        the deliveries and replies that reference a notification still find it by its id.
+        """
+        connection = sqlite3.connect(self.path)
+        try:
+            columns = {
+                row[1]: row[3] for row in connection.execute("PRAGMA table_info(notifications)")
+            }
+            if not columns["thread_id"]:
+                return
+            connection.executescript(
+                """
+                BEGIN;
+                CREATE TABLE notifications_without_a_thread (
+                    id TEXT PRIMARY KEY,
+                    instance_id TEXT NOT NULL,
+                    source_key TEXT NOT NULL,
+                    thread_id TEXT,
+                    header TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    link TEXT,
+                    options TEXT NOT NULL,
+                    raised_at TEXT NOT NULL,
+                    UNIQUE (instance_id, source_key)
+                );
+                INSERT INTO notifications_without_a_thread (
+                    id, instance_id, source_key, thread_id, header, title, text, link, options,
+                    raised_at
+                )
+                SELECT id, instance_id, source_key, thread_id, header, title, text, link, options,
+                    raised_at
+                FROM notifications ORDER BY rowid;
+                DROP TABLE notifications;
+                ALTER TABLE notifications_without_a_thread RENAME TO notifications;
                 COMMIT;
                 """
             )

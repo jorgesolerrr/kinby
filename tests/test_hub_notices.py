@@ -426,6 +426,64 @@ def test_an_instance_notice_raises_one_notification_across_two_hub_starts(tmp_pa
     assert [sent.title for sent in second] == ["second start"]
 
 
+def test_a_registry_from_before_instance_notices_keeps_its_notifications_and_raises_one(
+    tmp_path,
+):
+    directory = tmp_path / "hub"
+    images = FakeImages()
+
+    async def set_up() -> UUID:
+        service = FakeService()
+        hub = _notifying_hub(directory, images, service)
+        client = hub_client(hub)
+        alice = await created_instance(client)
+        async with served(hub) as address:
+            await paired_channel(client, address)
+        await raised(raising(hub, alice.instance_id), "before")
+        await next_sent(service)
+        hub.close()
+        return alice.instance_id
+
+    async def start() -> list[ChannelNotification]:
+        service = FakeService()
+        hub = _notifying_hub(directory, images, service)
+        await hub.recover()
+        await until(lambda: any(sent.title == "Revision behind" for sent in service.attempts))
+        hub.close()
+        return service.attempts
+
+    asyncio.run(set_up())
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE notifications_before (
+                id TEXT PRIMARY KEY,
+                instance_id TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                header TEXT NOT NULL,
+                title TEXT NOT NULL,
+                text TEXT NOT NULL,
+                link TEXT,
+                options TEXT NOT NULL,
+                raised_at TEXT NOT NULL,
+                UNIQUE (instance_id, source_key)
+            );
+            INSERT INTO notifications_before SELECT * FROM notifications;
+            DROP TABLE notifications;
+            ALTER TABLE notifications_before RENAME TO notifications;
+            """
+        )
+    images.hub_revision = "b" * 40
+    sent = asyncio.run(start())
+
+    assert [notice.header for notice in sent] == ["alice · Instance notice"]
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        rows = connection.execute("SELECT title FROM notifications ORDER BY rowid")
+        titles = [row[0] for row in rows]
+    assert titles == ["before", "Revision behind"]
+
+
 def test_each_factory_write_that_moves_a_template_on_raises_a_notification(tmp_path):
     async def scenario() -> None:
         service = FakeService()
