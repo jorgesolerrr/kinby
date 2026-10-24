@@ -117,7 +117,11 @@ export function threadTitle(thread: ThreadSummary): string {
 }
 
 /** The statuses that wait on the user. */
-const NEEDS_YOU: ReadonlySet<ThreadStatus> = new Set(["awaiting_approval", "failed"])
+const NEEDS_YOU: ReadonlySet<ThreadStatus> = new Set([
+  "awaiting_approval",
+  "awaiting_reply",
+  "failed",
+])
 
 export function needsYou(thread: ThreadSummary): boolean {
   return NEEDS_YOU.has(thread.status)

@@ -771,6 +771,7 @@ class ThreadStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
+    AWAITING_REPLY = "awaiting_reply"
     FAILED = "failed"
 
 

@@ -1,5 +1,5 @@
-import { CallError, type Event } from "@kinby/contract"
-import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
+import { CallError, type Event, type Notification } from "@kinby/contract"
+import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
@@ -19,11 +19,16 @@ function instanceClient(answers: Answers = {}) {
   }
 }
 
-/** Open thread t1 of Ada's instance, from a client that answers from `answers`. */
-function openThread(answers: Answers = {}, client = instanceClient(answers)) {
+/**
+ * Open thread t1 of Ada's instance, from a client that answers from `answers`, with a hub that
+ * answers from `hub`.
+ */
+function openThread(answers: Answers = {}, client = instanceClient(answers), hub = stubCaller({})) {
   const rendered = render(
     <ThreadPanel
       client={client}
+      hub={hub}
+      clock={fakeClock()}
       instanceId="hub-ada"
       threadId="t1"
       name="Ada"
@@ -1034,6 +1039,114 @@ describe("a thread's panel", () => {
         expect(prevented).toEqual([false])
         expect(window.location.pathname).toBe("/instances/hub-ada/threads/t1")
       })
+    })
+  })
+
+  describe("a notification", () => {
+    const raised: Payload = {
+      type: "notification.raised",
+      source: "inbox-sort",
+      title: "Inbox sorted",
+      text: "Three emails need an answer.",
+      options: ["Archive them", "Leave them"],
+    }
+
+    /** The notification the hub keeps as n1, delivered on each channel as `statuses` say. */
+    function kept(fields: Partial<Notification> = {}): Notification {
+      return {
+        notification_id: "n1",
+        instance_id: "hub-ada",
+        thread_id: "t1",
+        header: "Ada · inbox-sort",
+        title: "Inbox sorted",
+        text: "Three emails need an answer.",
+        options: ["Archive them", "Leave them"],
+        link: null,
+        raised_at: "2026-09-28T10:00:00Z",
+        deliveries: [{ channel_id: "c1", status: "sent" }],
+        replies: [],
+        ...fields,
+      }
+    }
+
+    /** Open a thread whose one turn raised the notification, then `answers` for it. */
+    async function notified(answers: Payload[], hubAnswers: Answers = {}) {
+      const events = thread(
+        ["turn-1", started("Sort my inbox")],
+        ["turn-1", raised],
+        ...answers.map((payload): [string, Payload] => ["turn-1", payload]),
+      )
+      const hub = stubCaller(hubAnswers)
+      const { subscription } = openThread({}, undefined, hub)
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      return { hub, card: screen.getByRole("article", { name: "Inbox sorted" }) }
+    }
+
+    const accepted: Payload = { type: "notification.accepted", raised: 2, notification_id: "n1" }
+
+    it("shows its title, text, options and that it was delivered", async () => {
+      const { hub, card } = await notified([accepted], {
+        "notification.list": () => ({ notifications: [kept()] }),
+      })
+
+      expect(within(card).getByText("Three emails need an answer.")).toBeDefined()
+      expect(within(card).getByRole("button", { name: "Archive them" })).toBeDefined()
+      expect(within(card).getByRole("button", { name: "Leave them" })).toBeDefined()
+      expect(await within(card).findByText("Delivered")).toBeDefined()
+      expect(hub.calls).toEqual([{ method: "notification.list", params: { thread_id: "t1" } }])
+    })
+
+    it("shows as not delivered when every delivery failed", async () => {
+      const deliveries = [
+        { channel_id: "c1", status: "failed" as const },
+        { channel_id: "c2", status: "failed" as const },
+      ]
+      const { card } = await notified([accepted], {
+        "notification.list": () => ({ notifications: [kept({ deliveries })] }),
+      })
+
+      expect(await within(card).findByText("Not delivered")).toBeDefined()
+    })
+
+    it("shows why the hub refused it, and offers its options to no answer", async () => {
+      const { hub, card } = await notified([
+        { type: "notification.refused", raised: 2, reason: "The daily cap is reached." },
+      ])
+
+      expect(within(card).getByText("Not sent: The daily cap is reached.")).toBeDefined()
+      const option = within(card).getByRole("button", { name: "Archive them" })
+      expect((option as HTMLButtonElement).disabled).toBe(true)
+      expect(hub.calls).toEqual([])
+    })
+
+    it("answers an option through the hub, then shows the answer", async () => {
+      let replies: Notification["replies"] = []
+      const { hub, card } = await notified([accepted], {
+        "notification.list": () => ({ notifications: [kept({ replies })] }),
+        "notification.reply": ({ option }) => {
+          const reply = {
+            channel_id: null,
+            option,
+            received_at: "2026-09-28T10:01:00Z",
+            status: "received" as const,
+          }
+          replies = [reply]
+          return reply
+        },
+      })
+      await within(card).findByText("Delivered")
+
+      await userEvent.click(within(card).getByRole("button", { name: "Archive them" }))
+
+      expect(hub.calls).toContainEqual({
+        method: "notification.reply",
+        params: { notification_id: "n1", option: "Archive them" },
+      })
+      expect(await within(card).findByText("Answered “Archive them”")).toBeDefined()
+      expect(within(card).queryByRole("button", { name: "Leave them" })).toBeNull()
     })
   })
 

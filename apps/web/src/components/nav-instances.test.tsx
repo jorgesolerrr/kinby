@@ -169,17 +169,18 @@ describe("the needs-you count on an instance that is not selected", () => {
     Reflect.deleteProperty(document, "visibilityState")
   })
 
-  it("counts its threads awaiting approval or failed, in place of its state", async () => {
+  it("counts its threads awaiting approval, awaiting a reply or failed, in place of its state", async () => {
     const { row } = adaRow({ process: "running" }, [
       thread({ id: "t1", status: "idle" }),
       thread({ id: "t2", status: "running" }),
       thread({ id: "t3", status: "awaiting_approval" }),
       thread({ id: "t4", status: "failed" }),
       thread({ id: "t5", status: "awaiting_approval" }),
+      thread({ id: "t6", status: "awaiting_reply" }),
     ])
 
     await row.findByText(/ waiting for you$/)
-    expect(needsYou(row)).toBe("3 waiting for you")
+    expect(needsYou(row)).toBe("4 waiting for you")
     expect(row.queryByText("running")).toBeNull()
   })
 
