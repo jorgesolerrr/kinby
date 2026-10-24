@@ -108,8 +108,12 @@ from kinby.contracts.models import (
     MemoryOpenCommand,
     MemoryOpenResult,
     MemoryWriteResult,
+    NotificationListCommand,
+    NotificationListResult,
     NotificationRaiseCommand,
     NotificationRaiseResult,
+    NotificationReply,
+    NotificationReplyCommand,
     OperationGetCommand,
     OperationGetResult,
     PermissionsGetCommand,
@@ -446,7 +450,7 @@ HUB_SECRET_DELETE = Method(
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 STATS_RUNS = Method("stats.runs", Scope.HUB_READ, StatsRunsCommand, StatsRunsResult)
 CHANNEL_KINDS = Method("channel.kinds", Scope.HUB_ADMIN, ChannelKindsCommand, ChannelKindsResult)
-CHANNEL_LIST = Method("channel.list", Scope.HUB_ADMIN, ChannelListCommand, ChannelListResult)
+CHANNEL_LIST = Method("channel.list", Scope.HUB_READ, ChannelListCommand, ChannelListResult)
 CHANNEL_CREATE = Method("channel.create", Scope.HUB_ADMIN, ChannelCreateCommand, Channel)
 CHANNEL_UPDATE = Method("channel.update", Scope.HUB_ADMIN, ChannelUpdateCommand, Channel)
 CHANNEL_DELETE = Method("channel.delete", Scope.HUB_ADMIN, ChannelDeleteCommand, ChannelListResult)
@@ -458,6 +462,12 @@ NOTIFICATION_RAISE = Method(
     Scope.NOTIFICATION_RAISE,
     NotificationRaiseCommand,
     NotificationRaiseResult,
+)
+NOTIFICATION_LIST = Method(
+    "notification.list", Scope.HUB_ADMIN, NotificationListCommand, NotificationListResult
+)
+NOTIFICATION_REPLY = Method(
+    "notification.reply", Scope.HUB_ADMIN, NotificationReplyCommand, NotificationReply
 )
 
 METHODS = (
@@ -567,6 +577,8 @@ METHODS = (
     CHANNEL_MUTE,
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
+    NOTIFICATION_LIST,
+    NOTIFICATION_REPLY,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
 

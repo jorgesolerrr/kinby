@@ -422,7 +422,7 @@ def test_an_instance_notice_raises_one_notification_across_two_hub_starts(tmp_pa
     assert notice.header == "alice · Instance notice"
     assert notice.text.startswith("The instance runs kinby aaaaaaa")
     assert notice.link == f"{PUBLIC_URL}/instances/{alice}"
-    assert notice.options == ()
+    assert notice.options == ("Mute this instance",)
     assert [sent.title for sent in second] == ["second start"]
 
 

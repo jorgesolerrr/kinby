@@ -2708,6 +2708,82 @@ class NotificationRaiseResult(ContractModel):
     notification_id: UUID
 
 
+class DeliveryStatus(StrEnum):
+    """Where one notification stands on one channel."""
+
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    #: The channel mutes the notification's instance, so it is never sent.
+    MUTED = "muted"
+
+
+class NotificationDelivery(ContractModel):
+    channel_id: UUID
+    status: DeliveryStatus
+
+
+class ReplyStatus(StrEnum):
+    """What came of a reply."""
+
+    #: Recorded, and not applied yet.
+    RECEIVED = "received"
+    APPLIED = "applied"
+    #: It answered something already settled, so it changed nothing.
+    STALE = "stale"
+    FAILED = "failed"
+
+
+class NotificationReply(ContractModel):
+    #: One of the notification's options. None for "Mute this instance".
+    option: str | None
+    #: The channel it came through. None for a reply from the web app.
+    channel_id: UUID | None
+    received_at: datetime
+    status: ReplyStatus
+    #: What came of it, as the channel's message shows it once edited. None until applied.
+    outcome: str | None = None
+
+
+class Notification(ContractModel):
+    """A notification an instance raised, where it was delivered, and how the user replied."""
+
+    notification_id: UUID
+    instance_id: UUID
+    #: None for a notification kinby raised itself, such as an instance notice.
+    thread_id: UUID | None
+    #: The persona name and where the notification came from.
+    header: str
+    title: str
+    text: str
+    #: The page of the web app it came from. None while the hub has no public URL.
+    link: str | None
+    options: list[str]
+    raised_at: datetime
+    deliveries: list[NotificationDelivery]
+    #: Oldest first.
+    replies: list[NotificationReply]
+
+
+class NotificationListCommand(ContractModel):
+    """The notifications of one instance or one thread, or every one without either."""
+
+    instance_id: UUID | None = None
+    thread_id: UUID | None = None
+
+
+class NotificationListResult(ContractModel):
+    #: Oldest first.
+    notifications: list[Notification]
+
+
+class NotificationReplyCommand(ContractModel):
+    """Answer a notification with one of its options, as a reply through a channel would."""
+
+    notification_id: UUID
+    option: str
+
+
 type StepId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 #: The name of a value a work item carries or a step result declares, such as ``branch``.
 type ValueName = Annotated[str, Field(pattern=r"^[a-z_][a-z0-9_]*$")]

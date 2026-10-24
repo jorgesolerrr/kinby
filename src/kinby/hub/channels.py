@@ -52,6 +52,7 @@ __all__ = [
     "Channels",
     "Inbound",
     "ReceivingKind",
+    "Reply",
     "SentRef",
     "installed_kinds",
 ]
@@ -83,6 +84,16 @@ class Inbound:
     text: str
 
 
+@dataclass(frozen=True)
+class Reply:
+    """An option the user answered a message the channel sent with."""
+
+    sender: ChannelUser
+    message: SentRef
+    #: Its place among the options the message was sent with.
+    option: int
+
+
 class ChannelKind(Protocol):
     """A sort of service the hub sends notifications through.
 
@@ -105,8 +116,12 @@ class ChannelKind(Protocol):
 class ReceivingKind(ChannelKind, Protocol):
     """A kind whose service calls the hub's public route when the user sends something."""
 
-    async def receive(self, request: web.Request) -> Inbound | None:
-        """What the user sent, or None for a call that is not authentic or carries no text."""
+    async def receive(self, request: web.Request) -> Inbound | Reply | None:
+        """What the user sent, or None for a call that is not authentic or carries neither."""
+        ...
+
+    async def edit(self, message: SentRef, outcome: str) -> None:
+        """Show on the message that it was answered, and what came of the reply."""
         ...
 
 
@@ -222,9 +237,12 @@ class Channels:
         self._registry.unmute(self._existing(command.channel_id).channel_id, command.instance_id)
         return _shown(self._existing(command.channel_id))
 
-    async def receive(self, channel_id: str, kind: str, request: web.Request) -> web.Response:
-        """Hand a call to the channel's public route to its kind. The first sender of a valid
-        pairing code becomes the user the channel is paired with."""
+    async def receive(
+        self, channel_id: str, kind: str, request: web.Request
+    ) -> tuple[ChannelRecord, Reply] | None:
+        """Hand a call to the channel's public route to its kind, and return the reply it
+        carries from the user the channel is paired with. The first sender of a valid pairing
+        code becomes that user."""
         parsed = _parsed(channel_id)
         record = self._registry.channel(parsed) if parsed is not None else None
         if record is None or record.kind != kind or record.kind not in self._kinds:
@@ -232,16 +250,16 @@ class Channels:
         receiver = self.sender(record)
         if not isinstance(receiver, ReceivingKind):
             raise web.HTTPNotFound()
-        inbound = await receiver.receive(request)
-        pairing = record.pairing
-        if (
-            inbound is not None
-            and pairing is not None
-            and self._clock() < pairing.expires_at
-            and hmac.compare_digest(inbound.text.strip().encode(), pairing.code.encode())
-        ):
-            self._registry.pair_channel(record.channel_id, pairing.code, inbound.sender)
-        return web.Response()
+        match await receiver.receive(request):
+            case Reply(sender=sender) as reply if sender == record.paired_user:
+                return record, reply
+            case Inbound(sender=sender, text=text) if (
+                (pairing := record.pairing) is not None
+                and self._clock() < pairing.expires_at
+                and hmac.compare_digest(text.strip().encode(), pairing.code.encode())
+            ):
+                self._registry.pair_channel(record.channel_id, pairing.code, sender)
+        return None
 
     def limit(self, record: ChannelRecord) -> int:
         """The most characters of a notification's text the channel's kind sends."""

@@ -77,13 +77,16 @@ from kinby.contracts import (
     LIBRARY_SKILL_MOVE,
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
+    NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
+    NOTIFICATION_REPLY,
     NOTIFICATION_SCOPES,
     OPERATION_GET,
     RELAYED_READS,
     STATS_RUNS,
     STATS_SUMMARY,
     THREAD_ASK,
+    THREAD_TURN_START,
     Avatar,
     Capability,
     ChannelKindName,
@@ -172,6 +175,7 @@ from kinby.contracts import (
     SubscriptionLogin,
     TemplateBehind,
     ThreadAskCommand,
+    ThreadTurnStartCommand,
 )
 from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
@@ -208,7 +212,14 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.home import InstanceAsk, LibraryMove, RelayedWrite, home_write
+from kinby.hub.home import (
+    ChannelMute,
+    ChannelUnmute,
+    InstanceAsk,
+    LibraryMove,
+    RelayedWrite,
+    home_write,
+)
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -229,6 +240,7 @@ from kinby.hub.outbox import Outbox, Sleep
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.relay import relayed_call
+from kinby.hub.replies import Replies
 from kinby.hub.runs import FactoryRuns, LostAnswer, UndeliveredCall, Untold
 from kinby.hub.secrets import HubSecrets, replace_protected, write_protected
 from kinby.hub.setup import (
@@ -518,6 +530,7 @@ class Hub:
                 clock,
             )
             self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
+            self.replies = Replies(self.registry, self.channels, self._start_turn, clock, sleep)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
@@ -589,6 +602,8 @@ class Hub:
         dispatcher.register(CHANNEL_TEST, self.channels.test)
         dispatcher.register(CHANNEL_MUTE, self.channels.mute)
         dispatcher.register(CHANNEL_UNMUTE, self.channels.unmute)
+        dispatcher.register(NOTIFICATION_LIST, self.outbox.list)
+        dispatcher.register(NOTIFICATION_REPLY, self.replies.reply)
 
     def instance_scopes(self, instance_id: UUID) -> frozenset[Scope]:
         """The scopes the registry grants one of the hub's instances on its hub route."""
@@ -648,6 +663,10 @@ class Hub:
                 result = await self._move(write)
             case FactoryEditCommand():
                 result = await self.edit_factory(write)
+            case ChannelMute():
+                result = await self.channels.mute(write)
+            case ChannelUnmute():
+                result = await self.channels.unmute(write)
             case RelayedWrite():
                 params = write.command.model_dump(mode="json")
                 return HubWriteResult(
@@ -681,6 +700,9 @@ class Hub:
             command.model_dump(mode="json"),
             socket_path="/control",
         )
+
+    async def _start_turn(self, instance_id: UUID, command: ThreadTurnStartCommand) -> None:
+        await self._relayed(instance_id, THREAD_TURN_START.name, command.model_dump(mode="json"))
 
     async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
         if command.method not in RELAYED_READS:
@@ -2420,8 +2442,8 @@ class Hub:
 
     async def recover(self) -> LifecycleRecovery:
         """Reconcile every managed instance against what the container runtime still has, pick
-        factory runs and pending notifications up where the previous process left them, and
-        create a home instance when the hub holds none.
+        factory runs, pending notifications and unapplied replies up where the previous process
+        left them, and create a home instance when the hub holds none.
 
         Setup containers from a login the previous process did not finish go first, so
         they are not still holding a login volume when recovery looks at the instances.
@@ -2432,6 +2454,7 @@ class Hub:
         self._schedule(self._collect_images())
         self.runs.resume()
         self.outbox.resume()
+        self.replies.resume()
         await self._raise_notices()
         if not self._home_lost(recovery):
             return recovery

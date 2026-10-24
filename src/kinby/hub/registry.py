@@ -8,7 +8,6 @@ from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -20,6 +19,7 @@ from kinby.contracts import (
     ChannelFailure,
     ChannelKindName,
     DeclaredSetup,
+    DeliveryStatus,
     FactoryName,
     FactoryRun,
     FactoryRunStatus,
@@ -29,10 +29,14 @@ from kinby.contracts import (
     IntendedState,
     LoginPrompt,
     LoginState,
+    Notification,
+    NotificationDelivery,
+    NotificationReply,
     OperationGetResult,
     OperationKind,
     OperationState,
     OperationStep,
+    ReplyStatus,
     RunStop,
     SetupValue,
     SkillName,
@@ -133,16 +137,6 @@ class ChannelRecord:
         return self.enabled and self.pairing is None
 
 
-class DeliveryStatus(StrEnum):
-    """Where one notification stands on one channel."""
-
-    PENDING = "pending"
-    SENT = "sent"
-    FAILED = "failed"
-    #: The channel mutes the notification's instance, so it is never sent.
-    MUTED = "muted"
-
-
 @dataclass(frozen=True)
 class PendingDelivery:
     """A notification still to send through one channel."""
@@ -153,6 +147,26 @@ class PendingDelivery:
     #: The failed sends so far.
     attempts: int
     next_attempt: datetime
+
+
+@dataclass(frozen=True)
+class ReceivedReply:
+    """A reply recorded and not applied yet."""
+
+    reply_id: UUID
+    notification_id: UUID
+    instance_id: UUID
+    #: None for a notification kinby raised itself, which offers no options of its own.
+    thread_id: UUID | None
+    #: One of the notification's options. None for "Mute this instance".
+    option: str | None
+    received_at: datetime
+    #: The channel it came through. None for a reply from the web app.
+    channel_id: UUID | None
+    #: The message it answered on that channel.
+    message: SentRef | None
+    #: A previous process asked the instance to apply it and never heard back.
+    calling: bool
 
 
 class HubRegistry:
@@ -325,6 +339,8 @@ class HubRegistry:
                     id TEXT PRIMARY KEY,
                     instance_id TEXT NOT NULL,
                     source_key TEXT NOT NULL,
+                    -- Null for a notification kinby raised itself, such as an instance notice.
+                    thread_id TEXT,
                     header TEXT NOT NULL,
                     title TEXT NOT NULL,
                     text TEXT NOT NULL,
@@ -342,6 +358,19 @@ class HubRegistry:
                     sent_ref TEXT,
                     last_error TEXT,
                     PRIMARY KEY (notification_id, channel_id)
+                );
+                CREATE TABLE IF NOT EXISTS replies (
+                    id TEXT PRIMARY KEY,
+                    notification_id TEXT NOT NULL REFERENCES notifications(id),
+                    -- Null for a reply from the web app, or once the channel is deleted.
+                    channel_id TEXT REFERENCES channels(id) ON DELETE SET NULL,
+                    -- One of the notification's options. Null for "Mute this instance".
+                    option TEXT,
+                    received_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    outcome TEXT,
+                    -- Set while the turn it starts is asked for, so no restart asks twice.
+                    calling INTEGER NOT NULL DEFAULT 0
                 );
                 -- Kept when the user deletes the skill, so the hub never copies it again.
                 CREATE TABLE IF NOT EXISTS shipped_skills (
@@ -2307,6 +2336,7 @@ class HubRegistry:
         self,
         instance_id: UUID,
         key: str,
+        thread_id: UUID | None,
         notification: ChannelNotification,
         raised_at: datetime,
         deliveries: Mapping[UUID, DeliveryStatus],
@@ -2317,15 +2347,17 @@ class HubRegistry:
             inserted = connection.execute(
                 """
                 INSERT INTO notifications (
-                    id, instance_id, source_key, header, title, text, link, options, raised_at
+                    id, instance_id, source_key, thread_id, header, title, text, link, options,
+                    raised_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (instance_id, source_key) DO NOTHING
                 """,
                 (
                     str(notification.notification_id),
                     str(instance_id),
                     key,
+                    str(thread_id) if thread_id is not None else None,
                     notification.header,
                     notification.title,
                     notification.text,
@@ -2414,6 +2446,176 @@ class HubRegistry:
                 WHERE notification_id = ? AND channel_id = ?
                 """,
                 (status.value, sent_ref, error, str(notification_id), str(channel_id)),
+            )
+
+    def notifications(
+        self,
+        *,
+        instance_id: UUID | None = None,
+        thread_id: UUID | None = None,
+        notification_id: UUID | None = None,
+    ) -> list[Notification]:
+        """The notifications each given filter matches, oldest first."""
+        matching = """
+            SELECT id FROM notifications
+            WHERE (:instance IS NULL OR instance_id = :instance)
+                AND (:thread IS NULL OR thread_id = :thread)
+                AND (:notification IS NULL OR id = :notification)
+        """
+        filters = {
+            "instance": str(instance_id) if instance_id is not None else None,
+            "thread": str(thread_id) if thread_id is not None else None,
+            "notification": str(notification_id) if notification_id is not None else None,
+        }
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, instance_id, thread_id, header, title, text, link, options, raised_at
+                FROM notifications WHERE id IN ({matching}) ORDER BY rowid
+                """,
+                filters,
+            ).fetchall()
+            deliveries = connection.execute(
+                f"""
+                SELECT notification_id, channel_id, status FROM notification_deliveries
+                WHERE notification_id IN ({matching}) ORDER BY rowid
+                """,
+                filters,
+            ).fetchall()
+            replies = connection.execute(
+                f"""
+                SELECT notification_id, option, channel_id, received_at, status, outcome
+                FROM replies WHERE notification_id IN ({matching}) ORDER BY rowid
+                """,
+                filters,
+            ).fetchall()
+        delivered: dict[str, list[NotificationDelivery]] = {}
+        for notification, channel_id, status in deliveries:
+            delivered.setdefault(notification, []).append(
+                NotificationDelivery(channel_id=UUID(channel_id), status=DeliveryStatus(status))
+            )
+        replied: dict[str, list[NotificationReply]] = {}
+        for notification, option, channel_id, received_at, status, outcome in replies:
+            replied.setdefault(notification, []).append(
+                NotificationReply(
+                    option=option,
+                    channel_id=UUID(channel_id) if channel_id is not None else None,
+                    received_at=datetime.fromisoformat(received_at),
+                    status=ReplyStatus(status),
+                    outcome=outcome,
+                )
+            )
+        return [
+            Notification(
+                notification_id=UUID(row[0]),
+                instance_id=UUID(row[1]),
+                thread_id=UUID(row[2]) if row[2] is not None else None,
+                header=row[3],
+                title=row[4],
+                text=row[5],
+                link=row[6],
+                options=json.loads(row[7]),
+                raised_at=datetime.fromisoformat(row[8]),
+                deliveries=delivered.get(row[0], []),
+                replies=replied.get(row[0], []),
+            )
+            for row in rows
+        ]
+
+    def sent_notification(self, channel_id: UUID, message: SentRef) -> Notification | None:
+        """The notification the channel sent as *message*."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT notification_id FROM notification_deliveries
+                WHERE channel_id = ? AND sent_ref = ?
+                """,
+                (str(channel_id), message),
+            ).fetchone()
+        if row is None:
+            return None
+        return next(iter(self.notifications(notification_id=UUID(row[0]))), None)
+
+    def record_reply(
+        self,
+        reply_id: UUID,
+        notification_id: UUID,
+        channel_id: UUID | None,
+        option: str | None,
+        received_at: datetime,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO replies (id, notification_id, channel_id, option, received_at, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(reply_id),
+                    str(notification_id),
+                    str(channel_id) if channel_id is not None else None,
+                    option,
+                    received_at.isoformat(),
+                    ReplyStatus.RECEIVED.value,
+                ),
+            )
+
+    def received_replies(self, reply_id: UUID | None = None) -> list[ReceivedReply]:
+        """The replies still to apply, one or all, oldest first."""
+        only = str(reply_id) if reply_id is not None else None
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT replies.id, replies.notification_id, instance_id, thread_id, option,
+                    received_at, replies.channel_id, sent_ref, calling
+                FROM replies
+                JOIN notifications ON notifications.id = replies.notification_id
+                LEFT JOIN notification_deliveries
+                    ON notification_deliveries.notification_id = replies.notification_id
+                    AND notification_deliveries.channel_id = replies.channel_id
+                WHERE replies.status = ? AND (? IS NULL OR replies.id = ?)
+                ORDER BY replies.rowid
+                """,
+                (ReplyStatus.RECEIVED.value, only, only),
+            ).fetchall()
+        return [
+            ReceivedReply(
+                reply_id=UUID(row[0]),
+                notification_id=UUID(row[1]),
+                instance_id=UUID(row[2]),
+                thread_id=UUID(row[3]) if row[3] is not None else None,
+                option=row[4],
+                received_at=datetime.fromisoformat(row[5]),
+                channel_id=UUID(row[6]) if row[6] is not None else None,
+                message=SentRef(row[7]) if row[7] is not None else None,
+                calling=bool(row[8]),
+            )
+            for row in rows
+        ]
+
+    def answered(self, notification_id: UUID) -> bool:
+        """Whether a reply with one of the notification's options was applied."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM replies
+                WHERE notification_id = ? AND status = ? AND option IS NOT NULL
+                """,
+                (str(notification_id), ReplyStatus.APPLIED.value),
+            ).fetchone()
+        return row is not None
+
+    def reply_calling(self, reply_id: UUID, *, calling: bool) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE replies SET calling = ? WHERE id = ?", (int(calling), str(reply_id))
+            )
+
+    def settle_reply(self, reply_id: UUID, status: ReplyStatus, outcome: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE replies SET status = ?, outcome = ? WHERE id = ?",
+                (status.value, outcome, str(reply_id)),
             )
 
 

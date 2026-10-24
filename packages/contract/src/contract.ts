@@ -105,6 +105,14 @@ export type NodeKind = "fact" | "episode";
  * Where a knowledge graph node came from. The instance derives it from the node's file.
  */
 export type NodeSource = "agent" | "recap" | "user";
+/**
+ * Where one notification stands on one channel.
+ */
+export type DeliveryStatus = "pending" | "sent" | "failed" | "muted";
+/**
+ * What came of a reply.
+ */
+export type ReplyStatus = "received" | "applied" | "stale" | "failed";
 export type OperationKind =
   | "create"
   | "start"
@@ -435,9 +443,17 @@ export interface Contract {
       command: MemoryOpenCommand;
       result: MemoryOpenResult;
     };
+    "notification.list": {
+      command: NotificationListCommand;
+      result: NotificationListResult;
+    };
     "notification.raise": {
       command: NotificationRaiseCommand;
       result: NotificationRaiseResult;
+    };
+    "notification.reply": {
+      command: NotificationReplyCommand;
+      result: NotificationReply;
     };
     "operation.get": {
       command: OperationGetCommand;
@@ -1516,6 +1532,43 @@ export interface MemoryOpenResult {
   turn: string | null;
 }
 /**
+ * The notifications of one instance or one thread, or every one without either.
+ */
+export interface NotificationListCommand {
+  instance_id?: string | null;
+  thread_id?: string | null;
+}
+export interface NotificationListResult {
+  notifications: Notification[];
+}
+/**
+ * A notification an instance raised, where it was delivered, and how the user replied.
+ */
+export interface Notification {
+  deliveries: NotificationDelivery[];
+  header: string;
+  instance_id: string;
+  link: string | null;
+  notification_id: string;
+  options: string[];
+  raised_at: string;
+  replies: NotificationReply[];
+  text: string;
+  thread_id: string | null;
+  title: string;
+}
+export interface NotificationDelivery {
+  channel_id: string;
+  status: DeliveryStatus;
+}
+export interface NotificationReply {
+  channel_id: string | null;
+  option: string | null;
+  outcome?: string | null;
+  received_at: string;
+  status: ReplyStatus;
+}
+/**
  * A notification an instance raises on its hub route. The hub adds its header and link.
  */
 export interface NotificationRaiseCommand {
@@ -1531,6 +1584,13 @@ export interface NotificationRaiseCommand {
 }
 export interface NotificationRaiseResult {
   notification_id: string;
+}
+/**
+ * Answer a notification with one of its options, as a reply through a channel would.
+ */
+export interface NotificationReplyCommand {
+  notification_id: string;
+  option: string;
 }
 export interface OperationGetCommand {
   operation_id: string;

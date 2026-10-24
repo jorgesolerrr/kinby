@@ -8,15 +8,23 @@ from dataclasses import replace
 from datetime import datetime, time, timedelta
 from uuid import UUID, uuid4
 
-from kinby.contracts import NotificationRaiseCommand, NotificationRaiseResult
+from kinby.contracts import (
+    DeliveryStatus,
+    NotificationListCommand,
+    NotificationListResult,
+    NotificationRaiseCommand,
+    NotificationRaiseResult,
+)
 from kinby.core.errors import ManagedInstanceNotFound, NotificationCapReached
 from kinby.hub.channels import Channels
 from kinby.hub.models import ChannelNotification
-from kinby.hub.registry import DeliveryStatus, HubRegistry, ManagedInstance, PendingDelivery
+from kinby.hub.registry import HubRegistry, ManagedInstance, PendingDelivery
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 #: How long after a notification was raised the outbox stops trying a channel that fails.
 GIVE_UP_AFTER = timedelta(days=1)
+#: The option every channel adds to a notification's own.
+MUTE_OPTION = "Mute this instance"
 #: The most notifications one instance raises in a day (ADR 0103).
 DAILY_CAP = 20
 
@@ -69,6 +77,7 @@ class Outbox:
                 text=f"{name} raised {DAILY_CAP} notifications today. "
                 "kinby sends no more of them until tomorrow.",
                 page=page,
+                thread_id=command.thread_id,
             )
             raise NotificationCapReached(
                 f"{name} raised {DAILY_CAP} notifications today, its daily cap. "
@@ -82,6 +91,7 @@ class Outbox:
             text=command.text,
             page=page,
             options=tuple(command.options),
+            thread_id=command.thread_id,
         )
         return NotificationRaiseResult(notification_id=raised)
 
@@ -95,11 +105,14 @@ class Outbox:
         text: str,
         page: str,
         options: tuple[str, ...] = (),
+        thread_id: UUID | None = None,
     ) -> UUID:
         """Record the notification under the hub's header and a link to the web app's *page*, once
-        per key, and deliver it. The id of the notification the key names.
+        per key, and deliver it. The id of the notification the key names. *thread_id* is the
+        thread it came from, if any.
 
-        A channel that mutes the instance records it as muted and never sends it.
+        A channel that mutes the instance records it as muted and never sends it. Every channel
+        that sends it offers to mute the instance, after the notification's own options.
         """
         record = self._registry.instance(instance_id)
         if record is None:
@@ -120,11 +133,18 @@ class Outbox:
             if channel.sends
         }
         raised = self._registry.raise_notification(
-            instance_id, key, notification, self._clock(), deliveries
+            instance_id, key, thread_id, notification, self._clock(), deliveries
         )
         if raised == notification.notification_id:
             self._deliver_all(self._registry.pending_deliveries(raised))
         return raised
+
+    async def list(self, command: NotificationListCommand) -> NotificationListResult:
+        return NotificationListResult(
+            notifications=self._registry.notifications(
+                instance_id=command.instance_id, thread_id=command.thread_id
+            )
+        )
 
     def resume(self) -> None:
         """Deliver what the previous process left pending, each when its next try is due."""
@@ -154,7 +174,11 @@ class Outbox:
             try:
                 limit = self._channels.limit(channel)
                 sent = await self._channels.sender(channel).send(
-                    replace(notification, text=_cut(notification.text, limit))
+                    replace(
+                        notification,
+                        text=_cut(notification.text, limit),
+                        options=(*notification.options, MUTE_OPTION),
+                    )
                 )
             except Exception as exc:
                 attempts += 1

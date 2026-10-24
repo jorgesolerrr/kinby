@@ -17,6 +17,7 @@ from kinby.contracts import (
     RELAYED_READS,
     AcceptedResult,
     CallFrame,
+    ChannelMuteCommand,
     ContractModel,
     ErrorFrame,
     FactoryEditCommand,
@@ -81,6 +82,8 @@ def hub_tools() -> tuple[Tool, ...]:
         library_git_add,
         library_move,
         factory_write,
+        channel_mute,
+        channel_unmute,
     )
 
 
@@ -90,11 +93,11 @@ async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
 
     Hub reads include instance.list, instance.status, instance.logs, instance.picks.get,
     stats.summary, stats.runs, factory.list, factory.get, factory.check, factory.run.list,
-    library.list, library.skill.read, library.skill.check, library.git.preview and
-    hub.secret.list. An instance's own reads are memory.list, memory.open, thread.list,
-    thread.turn.list, routine.list, routine.read, usage.get, stats.get, prompt.get,
-    manifest.get, permissions.get and config.history: name the instance in params as
-    instance_id, beside the read's own params.
+    library.list, library.skill.read, library.skill.check, library.git.preview,
+    hub.secret.list and channel.list. An instance's own reads are memory.list, memory.open,
+    thread.list, thread.turn.list, routine.list, routine.read, usage.get, stats.get,
+    prompt.get, manifest.get, permissions.get and config.history: name the instance in params
+    as instance_id, beside the read's own params.
     """
     if method not in RELAYED_READS:
         return json.dumps(await call_hub(method, params, "the read"), ensure_ascii=False)
@@ -284,6 +287,20 @@ async def factory_write(
     """
     command = FactoryEditCommand(name=name, files=files, hash=hash)
     return await _write(factory_write, command.model_dump(mode="json"), context)
+
+
+@tool(write=True, hub=True)
+async def channel_mute(channel_id: UUID, instance_id: UUID, context: ToolContext) -> str:
+    """Stop a channel sending an instance's notifications, and return the channel as JSON."""
+    command = ChannelMuteCommand(channel_id=channel_id, instance_id=instance_id)
+    return await _write(channel_mute, command.model_dump(mode="json"), context)
+
+
+@tool(write=True, hub=True)
+async def channel_unmute(channel_id: UUID, instance_id: UUID, context: ToolContext) -> str:
+    """Let a channel send an instance's notifications again, and return the channel as JSON."""
+    command = ChannelMuteCommand(channel_id=channel_id, instance_id=instance_id)
+    return await _write(channel_unmute, command.model_dump(mode="json"), context)
 
 
 async def _relayed_write(

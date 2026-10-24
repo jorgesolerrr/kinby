@@ -452,6 +452,7 @@ describe("the instances", () => {
       "Usage",
       "Library",
       "Secrets",
+      "Channels",
     ])
   })
 })
