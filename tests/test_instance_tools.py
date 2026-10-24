@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
@@ -88,8 +89,12 @@ def test_routine_write_installs_an_armed_routine(tmp_path: Path) -> None:
         target = tmp_path / "routines" / "morning-news" / "ROUTINE.md"
         assert target.read_text(encoding="utf-8").endswith("Read the news.\n")
         assert "Wrote routines/morning-news/ROUTINE.md." in result
-        assert "Next firing:" in result
-        assert "+02:00" in result
+        # The next firing comes from the wall clock, so Madrid's offset depends on the season.
+        firing = datetime.fromisoformat(
+            result.partition("Next firing: ")[2].split(" ")[0].removesuffix(".")
+        )
+        assert firing.hour == 9
+        assert firing.utcoffset() == firing.astimezone(ZoneInfo("Europe/Madrid")).utcoffset()
 
         await dispatcher.scheduler.tick()
         listed = await call(dispatcher, "routine.list")
