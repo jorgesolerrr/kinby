@@ -534,6 +534,7 @@ class Hub:
                 self.registry,
                 self.secrets,
                 installed_kinds() if channel_kinds is None else channel_kinds,
+                public_url,
                 clock,
             )
             self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
