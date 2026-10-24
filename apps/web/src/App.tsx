@@ -5,6 +5,7 @@ import { MessagesSquareIcon } from "lucide-react"
 import { useCallback, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { ChannelsPage } from "@/components/channels-page"
 import { HubSecretsPage } from "@/components/hub-secrets-page"
 import { Onboarding } from "@/components/onboarding"
 import { LibraryPage } from "@/components/library-page"
@@ -24,6 +25,7 @@ import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePolled } from "@/hooks/use-polled"
 import {
+  useChannelsOpen,
   useConfigOpen,
   useCreating,
   useLibraryOpen,
@@ -64,6 +66,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const usageOpen = useUsageOpen()
   const libraryOpen = useLibraryOpen()
   const secretsOpen = useSecretsOpen()
+  const channelsOpen = useChannelsOpen()
   const removedOpen = useRemovedOpen()
   const threadsOpen = useThreadsOpen()
   const path = usePath()
@@ -113,6 +116,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           usageOpen={usageOpen}
           libraryOpen={libraryOpen}
           secretsOpen={secretsOpen}
+          channelsOpen={channelsOpen}
           client={client}
           clock={clock}
           selectedClient={columnFor !== undefined ? instanceClient : undefined}
@@ -151,6 +155,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                   <LibraryPage client={client} clock={clock} />
                 ) : secretsOpen ? (
                   <HubSecretsPage client={client} clock={clock} />
+                ) : channelsOpen ? (
+                  <ChannelsPage client={client} clock={clock} />
                 ) : removedOpen ? (
                   <RemovedInstancesPage
                     caller={client}

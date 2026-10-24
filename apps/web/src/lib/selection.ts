@@ -14,6 +14,7 @@ export const USAGE_PATH = "/usage"
 export const REMOVED_PATH = "/removed"
 export const LIBRARY_PATH = "/library"
 export const SECRETS_PATH = "/secrets"
+export const CHANNELS_PATH = "/channels"
 
 const listeners = new Set<() => void>()
 
@@ -163,6 +164,11 @@ export function openSecrets(): void {
   navigate(SECRETS_PATH)
 }
 
+/** Open the hub's Channels page the same way. */
+export function openChannels(): void {
+  navigate(CHANNELS_PATH)
+}
+
 /** The URL's path, which changes with every page, instance, and thread picked. */
 export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname)
@@ -226,6 +232,11 @@ export function useLibraryOpen(): boolean {
 /** Whether the URL opens the hub's Secrets page. */
 export function useSecretsOpen(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === SECRETS_PATH)
+}
+
+/** Whether the URL opens the hub's Channels page. */
+export function useChannelsOpen(): boolean {
+  return useSyncExternalStore(subscribe, () => window.location.pathname === CHANNELS_PATH)
 }
 
 /** Open a page of the app by its path, without reloading the page, as a new history entry. */

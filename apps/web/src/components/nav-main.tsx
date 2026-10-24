@@ -5,24 +5,28 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import {
+  CHANNELS_PATH,
   LIBRARY_PATH,
+  openChannels,
   openLibrary,
   openSecrets,
   openUsage,
   SECRETS_PATH,
   USAGE_PATH,
 } from "@/lib/selection"
-import { ChartColumnIcon, KeyRoundIcon, LibraryIcon } from "lucide-react"
+import { BellIcon, ChartColumnIcon, KeyRoundIcon, LibraryIcon } from "lucide-react"
 
 /** The hub's own pages, at the sidebar's foot above the user. */
 export function NavMain({
   usageOpen,
   libraryOpen,
   secretsOpen,
+  channelsOpen,
 }: {
   usageOpen: boolean
   libraryOpen: boolean
   secretsOpen: boolean
+  channelsOpen: boolean
 }) {
   return (
     <SidebarGroup>
@@ -74,6 +78,23 @@ export function NavMain({
               <a href={SECRETS_PATH}>
                 <KeyRoundIcon />
                 <span>Secrets</span>
+              </a>
+            }
+          />
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            tooltip="Channels"
+            isActive={channelsOpen}
+            aria-current={channelsOpen ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault()
+              openChannels()
+            }}
+            render={
+              <a href={CHANNELS_PATH}>
+                <BellIcon />
+                <span>Channels</span>
               </a>
             }
           />
