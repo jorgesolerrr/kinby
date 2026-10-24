@@ -211,6 +211,12 @@ class OptionNotOffered(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class NotificationCapReached(CoreError):
+    """The instance raised its daily cap of notifications, so the hub takes no more today."""
+
+    code = ErrorCode.RESOURCE_EXHAUSTED
+
+
 class AdoptionBlocked(CoreError):
     """The adoption preflight found something the operator has to settle first."""
 

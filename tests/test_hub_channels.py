@@ -383,6 +383,42 @@ def test_an_instance_raises_a_notification_on_its_hub_route_and_a_paired_channel
     asyncio.run(scenario())
 
 
+def test_an_instance_past_its_daily_cap_is_refused_and_the_hub_says_so_once(tmp_path):
+    async def scenario() -> None:
+        service = FakeService()
+        time = FakeTime()
+        hub = channel_hub(tmp_path / "hub", service, time)
+        client = hub_client(hub)
+        alice_id = (await started_instance(client, hub)).instance_id
+        alice = raising(hub, alice_id)
+        async with served(hub) as address:
+            await paired_channel(client, address)
+        for index in range(20):
+            await raised(alice, f"news {index}")
+        refused = await alice.call(NOTIFICATION_RAISE, notification("news 20"))
+        again = await alice.call(NOTIFICATION_RAISE, notification("news 21"))
+        repeated = await raised(alice, "news 0")
+        await until(lambda: len(service.attempts) == 21)
+        time.now += timedelta(days=1)
+        await raised(alice, "tomorrow")
+        await until(lambda: len(service.attempts) == 22)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.RESOURCE_EXHAUSTED
+        assert "20 notifications today" in refused.message
+        assert isinstance(again, ErrorEnvelope)
+        assert again.code is ErrorCode.RESOURCE_EXHAUSTED
+        assert isinstance(repeated, NotificationRaiseResult)
+        cap = service.attempts[20]
+        assert cap.header == "alice · Daily news"
+        assert cap.title == "Daily notification cap reached"
+        assert cap.link == f"{_PUBLIC_URL}/instances/{alice_id}/threads/{UUID(int=1)}"
+        assert cap.options == ("Mute this instance",)
+        assert service.attempts[21].title == "tomorrow"
+
+    asyncio.run(scenario())
+
+
 def test_every_instance_holds_the_scope_to_raise_a_notification_and_the_hubs_clients_do_not(
     tmp_path,
 ):
