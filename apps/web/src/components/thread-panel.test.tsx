@@ -21,14 +21,19 @@ function instanceClient(answers: Answers = {}) {
 
 /**
  * Open thread t1 of Ada's instance, from a client that answers from `answers`, with a hub that
- * answers from `hub`.
+ * answers from `hub`, on `clock`.
  */
-function openThread(answers: Answers = {}, client = instanceClient(answers), hub = stubCaller({})) {
+function openThread(
+  answers: Answers = {},
+  client = instanceClient(answers),
+  hub = stubCaller({}),
+  clock = fakeClock(),
+) {
   const rendered = render(
     <ThreadPanel
       client={client}
       hub={hub}
-      clock={fakeClock()}
+      clock={clock}
       instanceId="hub-ada"
       threadId="t1"
       name="Ada"
@@ -1077,13 +1082,27 @@ describe("a thread's panel", () => {
         ...answers.map((payload): [string, Payload] => ["turn-1", payload]),
       )
       const hub = stubCaller(hubAnswers)
-      const { subscription } = openThread({}, undefined, hub)
+      const clock = fakeClock()
+      const { subscription } = openThread({}, undefined, hub, clock)
       await act(async () => {
         subscription().subscribed(events.length)
         for (const event of events) subscription().deliver(event)
       })
-      return { hub, card: screen.getByRole("article", { name: "Inbox sorted" }) }
+      const card = screen.getByRole("article", { name: "Inbox sorted" })
+      return { hub, clock, subscription, sequence: events.length, card }
     }
+
+    /** The user's reply to the notification, as the hub records it. */
+    const reply = (
+      status: Notification["replies"][number]["status"],
+      outcome: string | null = null,
+    ): Notification["replies"][number] => ({
+      channel_id: null,
+      option: "Archive them",
+      received_at: "2026-09-28T10:01:00Z",
+      status,
+      outcome,
+    })
 
     const accepted: Payload = { type: "notification.accepted", raised: 2, notification_id: "n1" }
 
@@ -1122,19 +1141,13 @@ describe("a thread's panel", () => {
       expect(hub.calls).toEqual([])
     })
 
-    it("answers an option through the hub, then shows the answer", async () => {
+    it("answers an option through the hub, and shows it answering until the hub applies it", async () => {
       let replies: Notification["replies"] = []
-      const { hub, card } = await notified([accepted], {
+      const { hub, clock, card } = await notified([accepted], {
         "notification.list": () => ({ notifications: [kept({ replies })] }),
-        "notification.reply": ({ option }) => {
-          const reply = {
-            channel_id: null,
-            option,
-            received_at: "2026-09-28T10:01:00Z",
-            status: "received" as const,
-          }
-          replies = [reply]
-          return reply
+        "notification.reply": () => {
+          replies = [reply("received")]
+          return reply("received")
         },
       })
       await within(card).findByText("Delivered")
@@ -1145,8 +1158,48 @@ describe("a thread's panel", () => {
         method: "notification.reply",
         params: { notification_id: "n1", option: "Archive them" },
       })
-      expect(await within(card).findByText("Answered “Archive them”")).toBeDefined()
+      expect(await within(card).findByText("Answering “Archive them”")).toBeDefined()
       expect(within(card).queryByRole("button", { name: "Leave them" })).toBeNull()
+
+      replies = [reply("applied", 'Answered "Archive them".')]
+      await act(() => clock.advance(5_000))
+
+      expect(within(card).getByText("Answered “Archive them”")).toBeDefined()
+    })
+
+    it("offers its options again, saying why, when the hub could not apply the answer", async () => {
+      const outcome =
+        "Not known whether the instance got this answer. Answer again from the web app."
+      const { card } = await notified([accepted], {
+        "notification.list": () => ({
+          notifications: [kept({ replies: [reply("failed", outcome)] })],
+        }),
+      })
+
+      expect(await within(card).findByText(outcome)).toBeDefined()
+      const option = within(card).getByRole("button", { name: "Archive them" })
+      expect((option as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    it("shows an answer sent through a channel once the turn it starts reaches the thread", async () => {
+      let replies: Notification["replies"] = []
+      const { subscription, sequence, card } = await notified([accepted], {
+        "notification.list": () => ({ notifications: [kept({ replies })] }),
+      })
+      await within(card).findByText("Delivered")
+
+      replies = [reply("applied", 'Answered "Archive them".')]
+      await act(async () =>
+        subscription().deliver({
+          sequence: sequence + 1,
+          thread_id: "t1",
+          turn_id: "turn-2",
+          timestamp: "2026-09-28T10:01:00Z",
+          payload: started("Archive them"),
+        }),
+      )
+
+      expect(await within(card).findByText("Answered “Archive them”")).toBeDefined()
     })
   })
 

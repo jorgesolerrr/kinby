@@ -82,8 +82,11 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-/** How often the panel reads the thread's notifications again while one is still sending. */
-const SENDING_READ_MS = 5_000
+/**
+ * How often the panel reads the thread's notifications again while one is still sending or the
+ * hub has yet to apply an answer to one.
+ */
+const SETTLING_READ_MS = 5_000
 
 /**
  * A thread's turns as a timeline, followed live once its history has loaded. The hub tells how
@@ -201,8 +204,8 @@ interface Notifications {
 }
 
 /**
- * The hub's notifications of the thread, read again whenever the hub takes another and while one
- * is still sending.
+ * The hub's notifications of the thread, read again whenever the hub takes another or a turn
+ * starts, and while one is still settling.
  */
 function useNotifications(
   hub: Pick<Client, "call">,
@@ -221,12 +224,23 @@ function useNotifications(
     [hub, threadId, accepted],
   )
   const { value, readAgain } = useRead(list, clock)
-  const sending =
-    value?.some((kept) => kept.deliveries.some((delivery) => delivery.status === "pending")) ??
-    false
+  // A reply through a channel shows in the thread only as the turn it starts.
+  const started = turns.length
+  const seen = useRef(started)
+  useEffect(() => {
+    if (seen.current === started) return
+    seen.current = started
+    readAgain()
+  }, [started, readAgain])
+  const settling =
+    value?.some(
+      (kept) =>
+        kept.deliveries.some((delivery) => delivery.status === "pending") ||
+        kept.replies.some((reply) => reply.status === "received"),
+    ) ?? false
   useEffect(
-    () => (sending ? clock.after(SENDING_READ_MS, readAgain) : undefined),
-    [sending, value, clock, readAgain],
+    () => (settling ? clock.after(SETTLING_READ_MS, readAgain) : undefined),
+    [settling, value, clock, readAgain],
   )
   const answer = async (notificationId: string, option: string) => {
     await hub.call("notification.reply", { notification_id: notificationId, option })
@@ -708,9 +722,13 @@ function NotificationCard({
   const [failure, setFailure] = useState<string>()
   const notificationId = step.hub?.kind === "accepted" ? step.hub.notificationId : undefined
   const kept = notificationId === undefined ? undefined : notifications.kept.get(notificationId)
-  const answered = kept?.replies.findLast(
-    (reply) => reply.option != null && (reply.status === "received" || reply.status === "applied"),
-  )?.option
+  const replies = kept?.replies.filter((reply) => reply.option != null) ?? []
+  const applied = replies.find((reply) => reply.status === "applied")
+  const latest = replies.at(-1)
+  // An answer the hub could not apply leaves the options to answer again.
+  const unapplied =
+    latest?.status === "failed" || latest?.status === "stale" ? latest.outcome : undefined
+  const shown = failure ?? unapplied ?? undefined
   const status = notificationStatus(step, kept)
 
   const answer = async (id: string, option: string) => {
@@ -744,14 +762,19 @@ function NotificationCard({
         <CardContent>
           <div className="flex flex-col gap-3">
             <p className="whitespace-pre-wrap">{step.text}</p>
-            {answered != null ? (
+            {applied !== undefined ? (
               <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                 <CheckIcon aria-hidden className="size-3.5" />
-                {`Answered “${answered}”`}
+                {`Answered “${applied.option}”`}
+              </p>
+            ) : latest?.status === "received" ? (
+              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                <Spinner aria-hidden className="size-3.5" />
+                {`Answering “${latest.option}”`}
               </p>
             ) : (
               step.options.length > 0 && (
-                <Field data-invalid={failure !== undefined || undefined}>
+                <Field data-invalid={shown !== undefined || undefined}>
                   <div className="flex flex-wrap gap-2">
                     {step.options.map((option) => (
                       <Button
@@ -768,7 +791,7 @@ function NotificationCard({
                       </Button>
                     ))}
                   </div>
-                  {failure !== undefined && <FieldError>{failure}</FieldError>}
+                  {shown !== undefined && <FieldError>{shown}</FieldError>}
                 </Field>
               )
             )}
