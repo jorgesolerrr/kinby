@@ -187,6 +187,16 @@ class HubSecretNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class ChannelNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class ChannelUnpaired(CoreError):
+    """The channel waits for its pairing code, so it sends nothing yet."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class AdoptionBlocked(CoreError):
     """The adoption preflight found something the operator has to settle first."""
 

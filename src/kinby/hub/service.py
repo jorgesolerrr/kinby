@@ -9,6 +9,7 @@ import re
 import shutil
 from collections.abc import Callable, Collection, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import IO
@@ -18,6 +19,14 @@ from dotenv import dotenv_values
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    CHANNEL_CREATE,
+    CHANNEL_DELETE,
+    CHANNEL_KINDS,
+    CHANNEL_LIST,
+    CHANNEL_MUTE,
+    CHANNEL_TEST,
+    CHANNEL_UNMUTE,
+    CHANNEL_UPDATE,
     DEFAULT_AVATAR,
     FACTORY_CHECK,
     FACTORY_DESCRIBE,
@@ -67,6 +76,8 @@ from kinby.contracts import (
     LIBRARY_SKILL_MOVE,
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
+    NOTIFICATION_RAISE,
+    NOTIFICATION_SCOPES,
     OPERATION_GET,
     RELAYED_READS,
     STATS_RUNS,
@@ -74,6 +85,7 @@ from kinby.contracts import (
     THREAD_ASK,
     Avatar,
     Capability,
+    ChannelKindName,
     ContainerOwner,
     ControlToken,
     DeclaredSetup,
@@ -159,6 +171,7 @@ from kinby.contracts import (
     TemplateBehind,
     ThreadAskCommand,
 )
+from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
@@ -182,6 +195,7 @@ from kinby.factories.file import InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
+from kinby.hub.channels import ChannelKind, Channels, installed_kinds
 from kinby.hub.control import (
     ControlConnectionLost,
     ControlEndpoint,
@@ -209,6 +223,7 @@ from kinby.hub.models import (
     Signal,
     secrets_digest,
 )
+from kinby.hub.outbox import Outbox, Sleep
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.relay import relayed_call
@@ -457,8 +472,14 @@ class Hub:
         shipped_factories: Path = SHIPPED_FACTORIES,
         shipped_skills: Path = SHIPPED_SKILLS,
         private_url: str | None = None,
+        public_url: str | None = None,
+        channel_kinds: Mapping[ChannelKindName, type[ChannelKind]] | None = None,
+        clock: Callable[[], datetime] = utc_now,
+        sleep: Sleep = asyncio.sleep,
     ) -> None:
-        """*private_url* is where the hub's instances reach it on their private network."""
+        """*private_url* is where the hub's instances reach it on their private network, and
+        *public_url* where the user reaches its web app. *channel_kinds* stand in for the kinds
+        installed packages expose."""
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._directory_lock = _acquire_directory(self.directory)
@@ -484,6 +505,13 @@ class Hub:
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
             self.runs = FactoryRuns(self.registry, self.factories, self._run_step, self._tell_stop)
             self.approvals = HomeApprovals()
+            self.channels = Channels(
+                self.registry,
+                self.secrets,
+                installed_kinds() if channel_kinds is None else channel_kinds,
+                clock,
+            )
+            self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
@@ -547,20 +575,34 @@ class Hub:
         dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
         dispatcher.register(STATS_SUMMARY, self.stats_summary)
         dispatcher.register(STATS_RUNS, self.stats_runs)
+        dispatcher.register(CHANNEL_KINDS, self.channels.kinds)
+        dispatcher.register(CHANNEL_LIST, self.channels.list)
+        dispatcher.register(CHANNEL_CREATE, self.channels.create)
+        dispatcher.register(CHANNEL_UPDATE, self.channels.update)
+        dispatcher.register(CHANNEL_DELETE, self.channels.delete)
+        dispatcher.register(CHANNEL_TEST, self.channels.test)
+        dispatcher.register(CHANNEL_MUTE, self.channels.mute)
+        dispatcher.register(CHANNEL_UNMUTE, self.channels.unmute)
 
     def instance_scopes(self, instance_id: UUID) -> frozenset[Scope]:
         """The scopes the registry grants one of the hub's instances on its hub route."""
         record = self.registry.instance(instance_id)
         if record is None:
             return frozenset()
-        return (INTAKE_SCOPES if record.factory is not None else frozenset()) | (
-            HOME_SCOPES if record.home else frozenset()
+        return (
+            NOTIFICATION_SCOPES
+            | (INTAKE_SCOPES if record.factory is not None else frozenset())
+            | (HOME_SCOPES if record.home else frozenset())
         )
 
     def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
         """What one of the hub's instances may call on the hub, built from its scopes."""
         scopes = self.instance_scopes(instance_id)
         dispatcher = Dispatcher()
+        if Scope.NOTIFICATION_RAISE in scopes:
+            dispatcher.register(
+                NOTIFICATION_RAISE, partial(self.outbox.raise_notification, instance_id)
+            )
         if Scope.FACTORY_INTAKE in scopes:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
         if Scope.HUB_HOME in scopes:
@@ -2365,8 +2407,8 @@ class Hub:
 
     async def recover(self) -> LifecycleRecovery:
         """Reconcile every managed instance against what the container runtime still has, pick
-        factory runs up where the previous process left them, and create a home instance when
-        the hub holds none.
+        factory runs and pending notifications up where the previous process left them, and
+        create a home instance when the hub holds none.
 
         Setup containers from a login the previous process did not finish go first, so
         they are not still holding a login volume when recovery looks at the instances.
@@ -2376,6 +2418,7 @@ class Hub:
         recovery = await recover_lifecycle(self.registry, self._runtime, self._restore_start)
         self._schedule(self._collect_images())
         self.runs.resume()
+        self.outbox.resume()
         if not self._home_lost(recovery):
             return recovery
         return replace(recovery, home=self._create_home())

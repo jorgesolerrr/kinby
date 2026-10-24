@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, NewType, Protocol
 from uuid import UUID
 
 from kinby.contracts import (
@@ -78,6 +78,27 @@ class Signal:
     #: Read without regard to case, as HTTP headers are.
     headers: Mapping[str, str]
     body: bytes
+
+
+#: A user as a channel's service knows them, such as a Telegram user id.
+ChannelUser = NewType("ChannelUser", str)
+#: A message a channel sent, as its service knows it.
+SentRef = NewType("SentRef", str)
+
+
+@dataclass(frozen=True)
+class ChannelNotification:
+    """A notification as a channel sends it: the hub's header, then what the source wrote."""
+
+    notification_id: UUID
+    #: The persona name and where the notification came from.
+    header: str
+    title: str
+    text: str
+    #: The page of the web app it came from. None while the hub has no public URL.
+    link: str | None
+    #: What the user can reply with.
+    options: tuple[str, ...]
 
 
 class InstanceRouting(Protocol):

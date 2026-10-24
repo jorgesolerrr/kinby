@@ -47,6 +47,7 @@ def test_hub_command_passes_explicit_docker_host_mapping(tmp_path, monkeypatch):
         listen: Serve,
         web_app: Path | None,
         private_url: str,
+        public_url: str | None,
     ) -> int:
         received.append((directory, source, docker_host_directory, network))
         return 0
@@ -73,9 +74,9 @@ def test_hub_command_passes_explicit_docker_host_mapping(tmp_path, monkeypatch):
     assert received == [(hub, source, host, "private-network")]
 
 
-def test_hub_command_carries_its_listen_address_web_app_and_private_url(tmp_path, monkeypatch):
+def test_hub_command_carries_its_listen_address_web_app_and_urls(tmp_path, monkeypatch):
     cli_module = import_module("kinby.cli.main")
-    received: list[tuple[Serve, Path | None, str]] = []
+    received: list[tuple[Serve, Path | None, str, str | None]] = []
 
     async def run_hub(
         directory: Path,
@@ -85,8 +86,9 @@ def test_hub_command_carries_its_listen_address_web_app_and_private_url(tmp_path
         listen: Serve,
         web_app: Path | None,
         private_url: str,
+        public_url: str | None,
     ) -> int:
-        received.append((listen, web_app, private_url))
+        received.append((listen, web_app, private_url, public_url))
         return 0
 
     monkeypatch.setattr(cli_module, "_run_hub", run_hub)
@@ -102,14 +104,16 @@ def test_hub_command_carries_its_listen_address_web_app_and_private_url(tmp_path
             str(app),
             "--private-url",
             "http://kinby-hub:9000",
+            "--public-url",
+            "https://kinby.example",
         ]
     )
     defaults = main(["hub", str(tmp_path / "hub")])
 
     assert (exit_code, defaults) == (0, 0)
     assert received == [
-        (Serve("127.0.0.1", 9000), app, "http://kinby-hub:9000"),
-        (Serve("0.0.0.0", 8080), None, "http://hub:8080"),
+        (Serve("127.0.0.1", 9000), app, "http://kinby-hub:9000", "https://kinby.example"),
+        (Serve("0.0.0.0", 8080), None, "http://hub:8080", None),
     ]
 
 

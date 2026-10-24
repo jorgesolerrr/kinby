@@ -17,6 +17,8 @@ services:
       - --source=/source
       - --network=kinby_private
       - --listen=0.0.0.0:8080
+      # Notifications link into the web app here.
+      - --public-url=https://${KINBY_DOMAIN:?set KINBY_DOMAIN in .env next to compose.hub.yaml}
     volumes:
       - type: bind
         source: ${KINBY_HUB_DIR:?set KINBY_HUB_DIR to the hub directory on the Docker host}

@@ -7,6 +7,16 @@ from dataclasses import dataclass
 
 from kinby.contracts.models import (
     AcceptedResult,
+    Channel,
+    ChannelCreateCommand,
+    ChannelDeleteCommand,
+    ChannelKindsCommand,
+    ChannelKindsResult,
+    ChannelListCommand,
+    ChannelListResult,
+    ChannelMuteCommand,
+    ChannelTestCommand,
+    ChannelUpdateCommand,
     ConfigHistoryCommand,
     ConfigHistoryResult,
     ContractModel,
@@ -98,6 +108,8 @@ from kinby.contracts.models import (
     MemoryOpenCommand,
     MemoryOpenResult,
     MemoryWriteResult,
+    NotificationRaiseCommand,
+    NotificationRaiseResult,
     OperationGetCommand,
     OperationGetResult,
     PermissionsGetCommand,
@@ -433,6 +445,20 @@ HUB_SECRET_DELETE = Method(
 #: The same time range and bucket size as stats.get, asked of every running instance.
 STATS_SUMMARY = Method("stats.summary", Scope.HUB_READ, StatsGetCommand, StatsSummaryResult)
 STATS_RUNS = Method("stats.runs", Scope.HUB_READ, StatsRunsCommand, StatsRunsResult)
+CHANNEL_KINDS = Method("channel.kinds", Scope.HUB_ADMIN, ChannelKindsCommand, ChannelKindsResult)
+CHANNEL_LIST = Method("channel.list", Scope.HUB_ADMIN, ChannelListCommand, ChannelListResult)
+CHANNEL_CREATE = Method("channel.create", Scope.HUB_ADMIN, ChannelCreateCommand, Channel)
+CHANNEL_UPDATE = Method("channel.update", Scope.HUB_ADMIN, ChannelUpdateCommand, Channel)
+CHANNEL_DELETE = Method("channel.delete", Scope.HUB_ADMIN, ChannelDeleteCommand, ChannelListResult)
+CHANNEL_TEST = Method("channel.test", Scope.HUB_ADMIN, ChannelTestCommand, Channel)
+CHANNEL_MUTE = Method("channel.mute", Scope.HUB_ADMIN, ChannelMuteCommand, Channel)
+CHANNEL_UNMUTE = Method("channel.unmute", Scope.HUB_ADMIN, ChannelMuteCommand, Channel)
+NOTIFICATION_RAISE = Method(
+    "notification.raise",
+    Scope.NOTIFICATION_RAISE,
+    NotificationRaiseCommand,
+    NotificationRaiseResult,
+)
 
 METHODS = (
     THREAD_CREATE,
@@ -532,6 +558,15 @@ METHODS = (
     HUB_SECRET_DELETE,
     STATS_SUMMARY,
     STATS_RUNS,
+    CHANNEL_KINDS,
+    CHANNEL_LIST,
+    CHANNEL_CREATE,
+    CHANNEL_UPDATE,
+    CHANNEL_DELETE,
+    CHANNEL_TEST,
+    CHANNEL_MUTE,
+    CHANNEL_UNMUTE,
+    NOTIFICATION_RAISE,
 )
 SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
 
