@@ -210,7 +210,14 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.home import InstanceAsk, LibraryMove, RelayedWrite, home_write
+from kinby.hub.home import (
+    ChannelMute,
+    ChannelUnmute,
+    InstanceAsk,
+    LibraryMove,
+    RelayedWrite,
+    home_write,
+)
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -650,6 +657,10 @@ class Hub:
                 result = await self._move(write)
             case FactoryEditCommand():
                 result = await self.factories.edit(write)
+            case ChannelMute():
+                result = await self.channels.mute(write)
+            case ChannelUnmute():
+                result = await self.channels.unmute(write)
             case RelayedWrite():
                 params = write.command.model_dump(mode="json")
                 return HubWriteResult(

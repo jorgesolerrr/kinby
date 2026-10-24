@@ -14,6 +14,7 @@ from kinby.contracts import (
     ROUTINE_RUN,
     ROUTINE_SET_ENABLED,
     ROUTINE_WRITE,
+    ChannelMuteCommand,
     ContractModel,
     FactoryEditCommand,
     InstanceCreateCommand,
@@ -29,6 +30,8 @@ from kinby.contracts import (
 from kinby.core.errors import PermissionDenied
 from kinby.plugins.hub import (
     LifecycleAction,
+    channel_mute,
+    channel_unmute,
     factory_write,
     instance_ask,
     instance_create,
@@ -67,6 +70,14 @@ class LibraryMove(LibrarySkillMoveCommand):
     diff: str
 
 
+class ChannelMute(ChannelMuteCommand):
+    """A mute the hub adds to a channel."""
+
+
+class ChannelUnmute(ChannelMuteCommand):
+    """A mute the hub takes off a channel."""
+
+
 type HomeWrite = (
     InstanceCreateCommand
     | InstanceStartCommand
@@ -79,6 +90,8 @@ type HomeWrite = (
     | LibraryGitAddCommand
     | LibraryMove
     | FactoryEditCommand
+    | ChannelMute
+    | ChannelUnmute
 )
 
 #: The hub tools whose write runs in the target instance, and the instance method each calls.
@@ -134,6 +147,10 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                 return LibraryMove.model_validate(arguments)
             case factory_write.name:
                 return FactoryEditCommand.model_validate(arguments)
+            case channel_mute.name:
+                return ChannelMute.model_validate(arguments)
+            case channel_unmute.name:
+                return ChannelUnmute.model_validate(arguments)
             case _ if tool in _RELAYED_WRITES:
                 method = _RELAYED_WRITES[tool]
                 own = {name: value for name, value in arguments.items() if name != "instance_id"}
