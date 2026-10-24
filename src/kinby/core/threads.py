@@ -14,6 +14,8 @@ from kinby.contracts import (
     ApprovalRequested,
     Event,
     ModePinned,
+    NotificationRaised,
+    NotificationRefused,
     Origin,
     PermissionMode,
     RoutineName,
@@ -171,7 +173,7 @@ def is_in(summary: ThreadSummary, events: Sequence[Event], thread_filter: Thread
                 not summary.archived
                 and (
                     isinstance(summary.origin, UserOrigin)
-                    or summary.status is ThreadStatus.FAILED
+                    or summary.status in {ThreadStatus.FAILED, ThreadStatus.AWAITING_REPLY}
                     or user_started_a_turn(events)
                 )
             )
@@ -254,8 +256,26 @@ def thread_status(events: Sequence[Event]) -> ThreadStatus:
             return ThreadStatus.RUNNING
         case TurnFailed():
             return ThreadStatus.FAILED
+        case _ if offers_options(events, started.turn_id):
+            return ThreadStatus.AWAITING_REPLY
         case _:
             return ThreadStatus.IDLE
+
+
+def offers_options(events: Sequence[Event], turn_id: UUID) -> bool:
+    """Whether the turn raised a notification with options that the hub did not refuse. A reply
+    starts the next turn, so the user has answered none of them."""
+    offered = {
+        event.sequence
+        for event in events
+        if event.turn_id == turn_id
+        and isinstance(event.payload, NotificationRaised)
+        and event.payload.options
+    }
+    refused = {
+        event.payload.raised for event in events if isinstance(event.payload, NotificationRefused)
+    }
+    return bool(offered - refused)
 
 
 def pending_approval(events: Sequence[Event]) -> PendingApproval | None:

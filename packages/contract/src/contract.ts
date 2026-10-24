@@ -157,7 +157,7 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
 export type ToolName = string;
 export type ApprovalDecision = "approve" | "deny";
-export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "failed";
+export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_reply" | "failed";
 export type ThreadFilter = "sidebar" | "all" | "archived";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 /**

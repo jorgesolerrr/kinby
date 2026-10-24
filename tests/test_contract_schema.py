@@ -107,6 +107,7 @@ def test_a_thread_summary_carries_its_status_and_last_activity() -> None:
         "idle",
         "running",
         "awaiting_approval",
+        "awaiting_reply",
         "failed",
     ]
 

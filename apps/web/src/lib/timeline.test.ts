@@ -1,4 +1,4 @@
-import type { Event } from "@kinby/contract"
+import type { Event, NotificationRaised } from "@kinby/contract"
 import { describe, expect, it } from "vitest"
 
 import { EMPTY_TIMELINE, project, type Timeline } from "@/lib/timeline"
@@ -112,6 +112,51 @@ describe("a thread's timeline", () => {
     ]).turns
 
     expect(turn?.end).toEqual({ kind: "stopped" })
+  })
+
+  it("shows each notification the turn raised, with the hub's answer to it", () => {
+    const raised = (title: string, options: NotificationRaised["options"]): Payload => ({
+      type: "notification.raised",
+      source: "nightly-digest",
+      title,
+      text: "Three need an answer.",
+      options,
+    })
+    const [turn] = replay([
+      "turn-1",
+      started("Sort the inbox"),
+      raised("Inbox sorted", ["Archive them", "Leave them"]),
+      raised("Second one", []),
+      raised("Third one", []),
+      { type: "notification.accepted", raised: 2, notification_id: "n1" },
+      { type: "notification.refused", raised: 3, reason: "The daily cap is reached." },
+    ]).turns
+
+    expect(turn?.steps).toEqual([
+      {
+        kind: "notification",
+        raised: 2,
+        title: "Inbox sorted",
+        text: "Three need an answer.",
+        options: ["Archive them", "Leave them"],
+        hub: { kind: "accepted", notificationId: "n1" },
+      },
+      {
+        kind: "notification",
+        raised: 3,
+        title: "Second one",
+        text: "Three need an answer.",
+        options: [],
+        hub: { kind: "refused", reason: "The daily cap is reached." },
+      },
+      {
+        kind: "notification",
+        raised: 4,
+        title: "Third one",
+        text: "Three need an answer.",
+        options: [],
+      },
+    ])
   })
 
   it("names the routine that started a turn", () => {

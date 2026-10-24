@@ -8115,6 +8115,7 @@
         "idle",
         "running",
         "awaiting_approval",
+        "awaiting_reply",
         "failed"
       ],
       "title": "ThreadStatus",

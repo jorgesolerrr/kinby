@@ -356,7 +356,7 @@ One conversation with its own durable history. Survives across sessions; can be 
 
 ### Thread status
 
-What a **thread**'s latest **turn** is doing: running while it is open, awaiting approval while it waits on an **approval**, failed when it closed as failed, and idle otherwise, including after a **turn interruption**. Derived from the thread's events when it is read, never stored. Failed clears when the next turn starts.
+What a **thread**'s latest **turn** is doing: running while it is open, awaiting approval while it waits on an **approval**, failed when it closed as failed, awaiting reply when it closed after raising a **notification** with options the hub did not refuse, and idle otherwise, including after a **turn interruption**. Derived from the thread's events when it is read, never stored. Failed and awaiting reply clear when the next turn starts, as a **reply** starts one.
 
 ### Routine run
 

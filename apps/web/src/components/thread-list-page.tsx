@@ -61,6 +61,7 @@ const STATUS_BADGES: Record<ThreadStatus, ReactNode> = {
   idle: <Badge variant="outline">idle</Badge>,
   running: <Badge variant="secondary">working</Badge>,
   awaiting_approval: <Badge variant="attention">needs you</Badge>,
+  awaiting_reply: <Badge variant="attention">needs your reply</Badge>,
   failed: <Badge variant="destructive">failed</Badge>,
 }
 

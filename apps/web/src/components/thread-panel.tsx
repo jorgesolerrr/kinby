@@ -1,8 +1,16 @@
-import type { Avatar as AvatarChoice, InstanceClient, JsonValue } from "@kinby/contract"
+import type {
+  Avatar as AvatarChoice,
+  Client,
+  Clock,
+  InstanceClient,
+  JsonValue,
+  Notification,
+} from "@kinby/contract"
 import {
   type ComponentProps,
   type ReactNode,
   type Ref,
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -16,9 +24,10 @@ import { InstanceAvatar } from "@/components/instance-avatar"
 import { ThreadHeader } from "@/components/thread-header"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -39,13 +48,22 @@ import {
 } from "@/components/ui/message-scroller"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { useRead } from "@/hooks/use-read"
 import { reason } from "@/lib/operation"
 import { originLabel } from "@/lib/origin"
 import { navigate, nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
-import type { ParkedApproval, Recap, ToolStep, TurnBlock, TurnEnd } from "@/lib/timeline"
+import type {
+  NotificationStep,
+  ParkedApproval,
+  Recap,
+  ToolStep,
+  TurnBlock,
+  TurnEnd,
+} from "@/lib/timeline"
 import {
   BanIcon,
+  BellIcon,
   BrainIcon,
   CheckIcon,
   CircleAlertIcon,
@@ -64,15 +82,28 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-/** A thread's turns as a timeline, followed live once its history has loaded. */
+/**
+ * How often the panel reads the thread's notifications again while one is still sending or the
+ * hub has yet to apply an answer to one.
+ */
+const SETTLING_READ_MS = 5_000
+
+/**
+ * A thread's turns as a timeline, followed live once its history has loaded. The hub tells how
+ * each notification the thread raised was delivered, and takes the user's answer to its options.
+ */
 export function ThreadPanel({
   client,
+  hub,
+  clock,
   instanceId,
   threadId,
   name,
   avatar,
 }: {
   client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
+  hub: Pick<Client, "call">
+  clock: Clock
   /** The hub's ID for the instance, which its pages' links name. */
   instanceId: string
   threadId: string
@@ -85,6 +116,7 @@ export function ThreadPanel({
   const store = threadStore(client, threadId)
   useEffect(() => store.follow(), [store])
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
+  const notifications = useNotifications(hub, clock, threadId, timeline.turns)
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
   const reasonField = useRef<HTMLInputElement>(null)
@@ -124,7 +156,12 @@ export function ThreadPanel({
       {/* Half a history must not pass for all of it. */}
       {replayed ? (
         <>
-          <Transcript turns={timeline.turns} instanceId={instanceId} speaker={speaker} />
+          <Transcript
+            turns={timeline.turns}
+            notifications={notifications}
+            instanceId={instanceId}
+            speaker={speaker}
+          />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
             {/* Nothing else is sent while the turn waits on the user. */}
             {approval === undefined ? (
@@ -158,6 +195,61 @@ export function ThreadPanel({
 interface Speaker {
   name: string
   avatar: AvatarChoice
+}
+
+/** What the hub keeps of the thread's notifications, and the answer to one of their options. */
+interface Notifications {
+  kept: ReadonlyMap<string, Notification>
+  answer: (notificationId: string, option: string) => Promise<void>
+}
+
+/**
+ * The hub's notifications of the thread, read again whenever the hub takes another or a turn
+ * starts, and while one is still settling.
+ */
+function useNotifications(
+  hub: Pick<Client, "call">,
+  clock: Clock,
+  threadId: string,
+  turns: TurnBlock[],
+): Notifications {
+  const accepted = turns
+    .flatMap((turn) => turn.steps)
+    .filter((step) => step.kind === "notification" && step.hub?.kind === "accepted").length
+  const list = useCallback(
+    async () =>
+      accepted === 0
+        ? []
+        : (await hub.call("notification.list", { thread_id: threadId })).notifications,
+    [hub, threadId, accepted],
+  )
+  const { value, readAgain } = useRead(list, clock)
+  // A reply through a channel shows in the thread only as the turn it starts.
+  const started = turns.length
+  const seen = useRef(started)
+  useEffect(() => {
+    if (seen.current === started) return
+    seen.current = started
+    readAgain()
+  }, [started, readAgain])
+  const settling =
+    value?.some(
+      (kept) =>
+        kept.deliveries.some((delivery) => delivery.status === "pending") ||
+        kept.replies.some((reply) => reply.status === "received"),
+    ) ?? false
+  useEffect(
+    () => (settling ? clock.after(SETTLING_READ_MS, readAgain) : undefined),
+    [settling, value, clock, readAgain],
+  )
+  const answer = async (notificationId: string, option: string) => {
+    await hub.call("notification.reply", { notification_id: notificationId, option })
+    readAgain()
+  }
+  return {
+    kept: new Map((value ?? []).map((kept) => [kept.notification_id, kept])),
+    answer,
+  }
 }
 
 /**
@@ -413,10 +505,12 @@ function takeFocus(field: HTMLElement | null) {
 
 function Transcript({
   turns,
+  notifications,
   instanceId,
   speaker,
 }: {
   turns: TurnBlock[]
+  notifications: Notifications
   instanceId: string
   speaker: Speaker
 }) {
@@ -433,7 +527,12 @@ function Transcript({
           <MessageScrollerContent className="mx-auto w-full max-w-3xl">
             {turns.map((turn) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
-                <Turn turn={turn} instanceId={instanceId} speaker={speaker} />
+                <Turn
+                  turn={turn}
+                  notifications={notifications}
+                  instanceId={instanceId}
+                  speaker={speaker}
+                />
               </MessageScrollerItem>
             ))}
           </MessageScrollerContent>
@@ -478,10 +577,12 @@ const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, 
  */
 function Turn({
   turn,
+  notifications,
   instanceId,
   speaker,
 }: {
   turn: TurnBlock
+  notifications: Notifications
   instanceId: string
   speaker: Speaker
 }) {
@@ -527,6 +628,8 @@ function Turn({
                   <Reply text={run.text} />
                 </BubbleContent>
               </Bubble>
+            ) : run.kind === "notification" ? (
+              <NotificationCard key={run.key} step={run.step} notifications={notifications} />
             ) : (
               <ol key={run.key} className="flex flex-col">
                 {run.steps.map((step, index) => (
@@ -563,6 +666,7 @@ function StartedByNode({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
 
 type Run =
   | { kind: "text"; key: string; text: string }
+  | { kind: "notification"; key: string; step: NotificationStep }
   | { kind: "rail"; key: string; steps: ToolStep[] }
 
 /** A turn's steps with each stretch of consecutive tool calls gathered into one rail. */
@@ -571,6 +675,8 @@ function railed(steps: TurnBlock["steps"]): Run[] {
   steps.forEach((step, index) => {
     const last = runs.at(-1)
     if (step.kind === "text") runs.push({ kind: "text", key: `text-${index}`, text: step.text })
+    else if (step.kind === "notification")
+      runs.push({ kind: "notification", key: `notification-${step.raised}`, step })
     else if (last?.kind === "rail") last.steps.push(step)
     else runs.push({ kind: "rail", key: step.callId, steps: [step] })
   })
@@ -598,6 +704,123 @@ const replyOptions = {
 /** What the instance wrote, as the Markdown it writes in. */
 function Reply({ text }: { text: string }) {
   return <Streamdown {...replyOptions}>{text}</Streamdown>
+}
+
+/**
+ * A notification the turn raised: what it said, where it stands, and its options. The hub takes an
+ * answer once it holds the notification, and the user's answer takes the options' place.
+ */
+function NotificationCard({
+  step,
+  notifications,
+}: {
+  step: NotificationStep
+  notifications: Notifications
+}) {
+  const titleId = useId()
+  const [answering, setAnswering] = useState<string>()
+  const [failure, setFailure] = useState<string>()
+  const notificationId = step.hub?.kind === "accepted" ? step.hub.notificationId : undefined
+  const kept = notificationId === undefined ? undefined : notifications.kept.get(notificationId)
+  const replies = kept?.replies.filter((reply) => reply.option != null) ?? []
+  const applied = replies.find((reply) => reply.status === "applied")
+  const latest = replies.at(-1)
+  // An answer the hub could not apply leaves the options to answer again.
+  const unapplied =
+    latest?.status === "failed" || latest?.status === "stale" ? latest.outcome : undefined
+  const shown = failure ?? unapplied ?? undefined
+  const status = notificationStatus(step, kept)
+
+  const answer = async (id: string, option: string) => {
+    setAnswering(option)
+    try {
+      await notifications.answer(id, option)
+      setFailure(undefined)
+    } catch (error) {
+      setFailure(reason(error))
+    } finally {
+      setAnswering(undefined)
+    }
+  }
+
+  return (
+    <article aria-labelledby={titleId}>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle id={titleId}>
+            <span className="flex items-center gap-2">
+              <BellIcon aria-hidden className="size-4 shrink-0" />
+              {step.title}
+            </span>
+          </CardTitle>
+          {status !== undefined && (
+            <CardAction>
+              <Badge variant={status.variant}>{status.label}</Badge>
+            </CardAction>
+          )}
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-3">
+            <p className="whitespace-pre-wrap">{step.text}</p>
+            {applied !== undefined ? (
+              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                <CheckIcon aria-hidden className="size-3.5" />
+                {`Answered “${applied.option}”`}
+              </p>
+            ) : latest?.status === "received" ? (
+              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                <Spinner aria-hidden className="size-3.5" />
+                {`Answering “${latest.option}”`}
+              </p>
+            ) : (
+              step.options.length > 0 && (
+                <Field data-invalid={shown !== undefined || undefined}>
+                  <div className="flex flex-wrap gap-2">
+                    {step.options.map((option) => (
+                      <Button
+                        key={option}
+                        size="sm"
+                        variant="outline"
+                        disabled={kept === undefined || answering !== undefined}
+                        onClick={() => {
+                          if (kept !== undefined) void answer(kept.notification_id, option)
+                        }}
+                      >
+                        {answering === option && <Spinner data-icon="inline-start" />}
+                        {option}
+                      </Button>
+                    ))}
+                  </div>
+                  {shown !== undefined && <FieldError>{shown}</FieldError>}
+                </Field>
+              )
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </article>
+  )
+}
+
+/**
+ * Where a notification stands: waiting for the hub, refused by it, or how its channels took it.
+ * One the hub took shows nothing until the hub tells.
+ */
+function notificationStatus(
+  step: NotificationStep,
+  kept: Notification | undefined,
+): { label: string; variant: "outline" | "secondary" | "destructive" } | undefined {
+  if (step.hub === undefined) return { label: "Waiting for the hub", variant: "secondary" }
+  if (step.hub.kind === "refused") {
+    return { label: `Not sent: ${step.hub.reason}`, variant: "destructive" }
+  }
+  if (kept === undefined) return undefined
+  const statuses = new Set(kept.deliveries.map((delivery) => delivery.status))
+  if (statuses.has("sent")) return { label: "Delivered", variant: "outline" }
+  if (statuses.has("pending")) return { label: "Sending", variant: "secondary" }
+  if (statuses.has("failed")) return { label: "Not delivered", variant: "destructive" }
+  if (statuses.has("muted")) return { label: "Muted", variant: "outline" }
+  return { label: "No channel", variant: "outline" }
 }
 
 /**
