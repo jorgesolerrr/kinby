@@ -53,12 +53,10 @@ class Outbox:
     async def raise_notification(
         self, instance_id: UUID, command: NotificationRaiseCommand
     ) -> NotificationRaiseResult:
-        """Record the notification under the hub's header and link, once per key, and deliver it.
+        """Record the notification an instance raised, linked to its thread.
 
-        A channel that mutes the instance records it as muted and never sends it. Every channel
-        that sends it offers to mute the instance, after the notification's own options. A new
-        key past the instance's daily cap is refused, and the first refusal of the day raises a
-        notification that says so.
+        A new key past the instance's daily cap is refused, and the first refusal of the day raises
+        a notification that says so.
         """
         record = self._registry.instance(instance_id)
         if record is None:
@@ -66,56 +64,76 @@ class Outbox:
         known = self._registry.notification_id(instance_id, command.key)
         if known is not None:
             return NotificationRaiseResult(notification_id=known)
+        page = f"/instances/{instance_id}/threads/{command.thread_id}"
         now = self._clock()
         today = datetime.combine(now.date(), time(), now.tzinfo)
         if self._registry.notifications_raised(instance_id, since=today) >= DAILY_CAP:
             name = _name(record)
-            self._raise(
-                record,
-                NotificationRaiseCommand(
-                    key=f"cap:{now.date()}",
-                    thread_id=command.thread_id,
-                    source=command.source,
-                    title="Daily notification cap reached",
-                    text=f"{name} raised {DAILY_CAP} notifications today. "
-                    "kinby sends no more of them until tomorrow.",
-                ),
+            self.notify(
+                instance_id,
+                f"cap:{now.date()}",
+                source=command.source,
+                title="Daily notification cap reached",
+                text=f"{name} raised {DAILY_CAP} notifications today. "
+                "kinby sends no more of them until tomorrow.",
+                page=page,
+                thread_id=command.thread_id,
             )
             raise NotificationCapReached(
                 f"{name} raised {DAILY_CAP} notifications today, its daily cap. "
                 "Raise no more until tomorrow."
             )
-        return NotificationRaiseResult(notification_id=self._raise(record, command))
-
-    def _raise(self, record: ManagedInstance, command: NotificationRaiseCommand) -> UUID:
-        notification = ChannelNotification(
-            notification_id=uuid4(),
-            header=f"{_name(record)} · {command.source}",
+        raised = self.notify(
+            instance_id,
+            command.key,
+            source=command.source,
             title=command.title,
             text=command.text,
-            link=(
-                f"{self._public_url}/instances/{record.instance_id}/threads/{command.thread_id}"
-                if self._public_url is not None
-                else None
-            ),
+            page=page,
             options=tuple(command.options),
+            thread_id=command.thread_id,
+        )
+        return NotificationRaiseResult(notification_id=raised)
+
+    def notify(
+        self,
+        instance_id: UUID,
+        key: str,
+        *,
+        source: str,
+        title: str,
+        text: str,
+        page: str,
+        options: tuple[str, ...] = (),
+        thread_id: UUID | None = None,
+    ) -> UUID:
+        """Record the notification under the hub's header and a link to the web app's *page*, once
+        per key, and deliver it. The id of the notification the key names. *thread_id* is the
+        thread it came from, if any.
+
+        A channel that mutes the instance records it as muted and never sends it. Every channel
+        that sends it offers to mute the instance, after the notification's own options.
+        """
+        record = self._registry.instance(instance_id)
+        if record is None:
+            raise ManagedInstanceNotFound(f'Instance "{instance_id}" was not found.')
+        notification = ChannelNotification(
+            notification_id=uuid4(),
+            header=f"{_name(record)} · {source}",
+            title=title,
+            text=text,
+            link=f"{self._public_url}{page}" if self._public_url is not None else None,
+            options=options,
         )
         deliveries = {
             channel.channel_id: (
-                DeliveryStatus.MUTED
-                if record.instance_id in channel.muted
-                else DeliveryStatus.PENDING
+                DeliveryStatus.MUTED if instance_id in channel.muted else DeliveryStatus.PENDING
             )
             for channel in self._registry.channels()
             if channel.sends
         }
         raised = self._registry.raise_notification(
-            record.instance_id,
-            command.key,
-            command.thread_id,
-            notification,
-            self._clock(),
-            deliveries,
+            instance_id, key, thread_id, notification, self._clock(), deliveries
         )
         if raised == notification.notification_id:
             self._deliver_all(self._registry.pending_deliveries(raised))

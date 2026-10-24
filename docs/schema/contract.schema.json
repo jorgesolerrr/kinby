@@ -4656,8 +4656,15 @@
           "type": "string"
         },
         "thread_id": {
-          "format": "uuid",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "title": {
           "type": "string"

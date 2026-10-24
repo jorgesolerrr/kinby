@@ -2750,7 +2750,8 @@ class Notification(ContractModel):
 
     notification_id: UUID
     instance_id: UUID
-    thread_id: UUID
+    #: None for a notification kinby raised itself, such as an instance notice.
+    thread_id: UUID | None
     #: The persona name and where the notification came from.
     header: str
     title: str

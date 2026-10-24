@@ -143,6 +143,8 @@ class Replies:
                 return ReplyStatus.STALE, "This instance was already muted on this channel."
             self._registry.mute(channel.channel_id, reply.instance_id)
             return ReplyStatus.APPLIED, "Muted this instance on this channel."
+        if reply.thread_id is None:
+            return ReplyStatus.STALE, "No thread takes this answer."
         if self._registry.answered(reply.notification_id):
             return ReplyStatus.STALE, "Already answered."
         # A turn start is asked for at most once: one that may have landed is never repeated.

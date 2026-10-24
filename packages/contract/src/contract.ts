@@ -1554,7 +1554,7 @@ export interface Notification {
   raised_at: string;
   replies: NotificationReply[];
   text: string;
-  thread_id: string;
+  thread_id: string | null;
   title: string;
 }
 export interface NotificationDelivery {

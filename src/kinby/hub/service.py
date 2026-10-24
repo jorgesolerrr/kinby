@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import json
 import logging
 import re
 import shutil
@@ -95,6 +96,7 @@ from kinby.contracts import (
     DrainState,
     FactoryEditCommand,
     FactoryName,
+    FactoryResult,
     FactoryRole,
     HubRouteMissing,
     HubSecret,
@@ -262,6 +264,7 @@ from kinby.instance import (
     init_instance,
     inspect_instance,
 )
+from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
@@ -297,6 +300,12 @@ _HOME_NAME = "home"
 _HOME_PERSONA_NAME = "Kinby"
 #: How long a login waits for the user to sign in before its code counts as expired.
 LOGIN_SECONDS = 15 * 60
+#: The title of the notification each kind of instance notice raises.
+_NOTICE_TITLES = {
+    "revision_behind": "Revision behind",
+    "template_behind": "Template behind",
+    "hub_route_missing": "Hub route missing",
+}
 #: Colors and cursor moves a command prints around its URL and code.
 _TERMINAL_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -330,21 +339,21 @@ def _notices(
     served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
     route: Mapping[str, str],
     environment: Mapping[str, str],
-) -> list[InstanceNotice]:
+) -> dict[str, InstanceNotice]:
     """The hub route the instance's environment lacks, the kinby revision the hub moved past, and
-    the template the factory moved past, if any.
+    the template the factory moved past, if any, each by its kind and the value it reports.
 
     *served* holds each template the hub serves now, by its factory and name. *route* is what the
     hub writes into the instance's *environment* when it creates a container. An update refuses a
     factory's instance whose template the hub does not serve, so its route notice waits until the
     hub serves the template again.
     """
-    notices: list[InstanceNotice] = []
+    notices: dict[str, InstanceNotice] = {}
     member = record.factory
     template = None if member is None else served.get((member.factory, member.name))
     updatable = member is None or template is not None
     if updatable and any(environment.get(name) != value for name, value in route.items()):
-        notices.append(
+        notices[f"hub_route_missing:{route[HUB_URL_VARIABLE]} {route[HUB_SCOPES_VARIABLE]}"] = (
             HubRouteMissing(
                 message=(
                     "The instance cannot reach the hub with the scopes it holds, "
@@ -354,15 +363,13 @@ def _notices(
         )
     instance_revision = record.source_revision
     if instance_revision and instance_revision != hub_revision:
-        notices.append(
-            RevisionBehind(
-                message=(
-                    f"The instance runs kinby {instance_revision[:7]}, "
-                    f"and the hub is at {hub_revision[:7]}."
-                ),
-                instance_revision=instance_revision,
-                hub_revision=hub_revision,
-            )
+        notices[f"revision_behind:{hub_revision}"] = RevisionBehind(
+            message=(
+                f"The instance runs kinby {instance_revision[:7]}, "
+                f"and the hub is at {hub_revision[:7]}."
+            ),
+            instance_revision=instance_revision,
+            hub_revision=hub_revision,
         )
     if member is not None and template is not None and template.baseline != member.baseline:
         found = (
@@ -372,10 +379,9 @@ def _notices(
             else f'Factory "{member.factory}" changed template "{member.name}" '
             "since the hub copied it."
         )
-        notices.append(
-            TemplateBehind(
-                message=f"{found} An instance update brings the files up to the factory's."
-            )
+        baseline = file_hash(json.dumps(template.baseline, sort_keys=True).encode())
+        notices[f"template_behind:{baseline}"] = TemplateBehind(
+            message=f"{found} An instance update brings the files up to the factory's."
         )
     return notices
 
@@ -564,7 +570,7 @@ class Hub:
         dispatcher.register(FACTORY_LIST, self.factories.list)
         dispatcher.register(FACTORY_GET, self.factories.get)
         dispatcher.register(FACTORY_CHECK, self.factories.check)
-        dispatcher.register(FACTORY_EDIT, self.factories.edit)
+        dispatcher.register(FACTORY_EDIT, self.edit_factory)
         dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
         dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
         dispatcher.register(FACTORY_RUN_GET, self.runs.get)
@@ -656,7 +662,7 @@ class Hub:
             case LibraryMove():
                 result = await self._move(write)
             case FactoryEditCommand():
-                result = await self.factories.edit(write)
+                result = await self.edit_factory(write)
             case ChannelMute():
                 result = await self.channels.mute(write)
             case ChannelUnmute():
@@ -669,6 +675,12 @@ class Hub:
             case InstanceAsk():
                 return HubWriteResult(result=await self._ask(write))
         return HubWriteResult(result=result.model_dump(mode="json"))
+
+    async def edit_factory(self, command: FactoryEditCommand) -> FactoryResult:
+        """Edit the factory, then raise the notices of the instances its templates moved past."""
+        edited = await self.factories.edit(command)
+        await self._raise_notices()
+        return edited
 
     async def _move(self, move: LibraryMove) -> LibraryListResult:
         checked = await self.library.check(LibrarySkillCheckCommand(name=move.name))
@@ -1833,11 +1845,12 @@ class Hub:
                     detail = await self._replace_image(operation_id, record, selection)
                 except Exception as exc:
                     self._fail(operation_id, record, str(exc) or type(exc).__name__)
-                    return
-                self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
+                else:
+                    self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
         except asyncio.CancelledError:
             self._fail_if_unfinished(operation_id)
             raise
+        await self._raise_notices()
 
     async def _replace_image(
         self,
@@ -2442,6 +2455,7 @@ class Hub:
         self.runs.resume()
         self.outbox.resume()
         self.replies.resume()
+        await self._raise_notices()
         if not self._home_lost(recovery):
             return recovery
         return replace(recovery, home=self._create_home())
@@ -2528,15 +2542,39 @@ class Hub:
                 if record.factory is not None
                 else None
             ),
-            notices=_notices(
-                record,
-                hub_revision,
-                served,
-                self._hub_route(record),
-                self._environment(record.path),
-            ),
+            notices=[*self._notices_of(record, hub_revision, served).values()],
             needs_human=self.runs.needing_human(record),
         )
+
+    def _notices_of(
+        self,
+        record: ManagedInstance,
+        hub_revision: str,
+        served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+    ) -> dict[str, InstanceNotice]:
+        return _notices(
+            record, hub_revision, served, self._hub_route(record), self._environment(record.path)
+        )
+
+    async def _raise_notices(self) -> None:
+        """Raise a notification for each instance notice, once per instance, kind and value."""
+        try:
+            hub_revision = await self._images.resolve(_PREPARED_REVISION)
+            records = self.registry.listed_instances()
+            served = await self._served_templates(records)
+        except Exception:
+            _logger.exception("Could not look for instance notices")
+            return
+        for record in records:
+            for key, notice in self._notices_of(record, hub_revision, served).items():
+                self.outbox.notify(
+                    record.instance_id,
+                    key,
+                    source="Instance notice",
+                    title=_NOTICE_TITLES[notice.code],
+                    text=notice.message,
+                    page=f"/instances/{record.instance_id}",
+                )
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
         record = self._active_instance(command.instance_id)
