@@ -25,7 +25,7 @@ from kinby.contracts import (
     SetupValue,
 )
 from kinby.hub import Hub
-from kinby.hub.channels import ChannelNotification, ChannelUser, installed_kinds
+from kinby.hub.channels import ChannelNotification, ChannelUser, SentRef, installed_kinds
 from kinby.hub.discord import DiscordBot, DiscordRefused
 from kinby.instance import Serve
 from tests.test_hub import FakeControl, created_instance, hub_at, hub_client
@@ -319,5 +319,19 @@ def test_an_error_from_discord_raises_with_its_answer():
         async with discord(FakeDiscord(refusing=True)) as base_url:
             with pytest.raises(DiscordRefused, match="Unauthorized"):
                 await bot(base_url).send(notification())
+
+    asyncio.run(scenario())
+
+
+def test_a_long_outcome_is_cut_to_what_one_discord_message_holds():
+    async def scenario() -> None:
+        service = FakeDiscord()
+        async with discord(service) as base_url:
+            await bot(base_url).edit(SentRef("9"), f'Answered "{"o" * 3_000}".')
+
+        [edited] = service.sent("PATCH", f"/api/channels/{_DM}/messages/9")
+        content = str(edited["content"])
+        assert len(content) <= 2_000
+        assert content.startswith('Answered "ooo')
 
     asyncio.run(scenario())
