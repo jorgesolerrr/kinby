@@ -17,6 +17,7 @@ from kinby.contracts import (
     LIBRARY_GIT_ADD,
     ApprovalRequested,
     CallFrame,
+    Channel,
     ControlToken,
     ErrorCode,
     Event,
@@ -61,6 +62,7 @@ from tests.test_hub import (
     instance_environment,
     started_instance,
 )
+from tests.test_hub_channels import FakeService, created_channel, listed_channel
 from tests.test_hub_factories import FILES, renamed
 from tests.test_hub_home_reads import answers, as_the_home_instance, error_code
 from tests.test_hub_library_git import commit, head, repository, skill
@@ -96,9 +98,9 @@ async def kinby_hub(
 ) -> AsyncIterator[KinbyHub]:
     """Serve a hub and its home instance behind the relay, whose model answers with *script*,
     given alice's id. The home instance calls the hub on its own hub route. Alice lives in
-    *directory*/alice."""
+    *directory*/alice. The hub sets up channels of the fake kind."""
     runtime = FakeRuntime()
-    hub = hub_at(directory / "hub", runtime=runtime)
+    hub = hub_at(directory / "hub", runtime=runtime, channel_kinds={"fake": FakeService().kind()})
     recovery = await hub.recover()
     assert recovery.home is not None
     home = await started(hub_client(hub), runtime, recovery.home)
@@ -707,6 +709,61 @@ def test_the_home_instance_never_deletes_a_library_skill(tmp_path, monkeypatch):
         assert error_code(deleted) == ErrorCode.PERMISSION_DENIED.value
         assert error_code(hub_deleted) == ErrorCode.PERMISSION_DENIED.value
         assert "grill" in library_names(listed)
+
+    asyncio.run(scenario())
+
+
+def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up(
+    tmp_path, monkeypatch
+):
+    created: list[Channel] = []
+
+    def script(alice: UUID) -> Iterator[AIMessageChunk]:
+        # Read once the turn starts, after the test created the channel.
+        [phone] = created
+        mute: dict[str, object] = {"channel_id": str(phone.channel_id), "instance_id": str(alice)}
+        yield calling("list-1", "hub_read", {"method": "channel.list", "params": {}})
+        yield calling("mute-1", "channel_mute", mute)
+        yield calling("unmute-1", "channel_unmute", mute)
+        yield AIMessageChunk(content="Alice is muted, then unmuted, on your phone.")
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            phone = await created_channel(hub_client(kinby.hub))
+            created.append(phone)
+            payloads = await relayed_turn(kinby, approvals=2)
+            channel: dict[str, object] = {"channel_id": str(phone.channel_id)}
+            setup: dict[str, object] = {
+                "name": "laptop",
+                "kind": "fake",
+                "secrets": {"token": "sentinel-new"},
+            }
+            refused = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("channel.create", setup),
+                ("channel.update", {**channel, "enabled": False}),
+                ("channel.delete", channel),
+                ("channel.mute", {**channel, "instance_id": str(kinby.alice)}),
+                written(uuid4(), "channel.create", setup),
+            )
+            listed = await listed_channel(hub_client(kinby.hub), phone.channel_id)
+
+        results = tool_results(payloads)
+        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+            "channel_mute",
+            "channel_unmute",
+        ]
+        [shown] = json.loads(results["list-1"].output)["channels"]
+        assert shown["name"] == "phone"
+        assert "sentinel-fake-token" not in results["list-1"].output
+        assert Channel.model_validate_json(results["mute-1"].output).muted == [kinby.alice]
+        assert Channel.model_validate_json(results["unmute-1"].output).muted == []
+        assert [error_code(answer) for answer in refused] == [
+            ErrorCode.PERMISSION_DENIED.value
+        ] * len(refused)
+        assert listed.name == "phone"
+        assert listed.enabled
 
     asyncio.run(scenario())
 
