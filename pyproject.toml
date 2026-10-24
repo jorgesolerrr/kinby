@@ -26,6 +26,7 @@ defaults = "kinby.plugins.defaults:TOOLS"
 
 [project.entry-points."kinby.channels"]
 email = "kinby.hub.email:ResendEmail"
+telegram = "kinby.hub.telegram:TelegramBot"
 
 [build-system]
 requires = ["hatchling"]
