@@ -9560,14 +9560,15 @@
     "ViewChange": {
       "enum": [
         "created",
-        "changed"
+        "changed",
+        "deleted"
       ],
       "title": "ViewChange",
       "type": "string"
     },
     "ViewChanged": {
       "additionalProperties": false,
-      "description": "A turn wrote a view. The view's content stays in the view.",
+      "description": "A turn wrote or deleted a view. The view's content stays in the view.",
       "properties": {
         "change": {
           "$ref": "#/$defs/ViewChange"
@@ -9738,6 +9739,19 @@
       "minLength": 1,
       "type": "string"
     },
+    "ViewDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ViewDeleteCommand",
+      "type": "object"
+    },
     "ViewGetCommand": {
       "additionalProperties": false,
       "properties": {
@@ -9895,7 +9909,7 @@
     },
     "ViewSubscribeCommand": {
       "additionalProperties": false,
-      "description": "Follow one view: the view as it is, then the whole view again after each write.",
+      "description": "Follow one view: the view as it is, then the whole view again after each write, until it\nis deleted.",
       "properties": {
         "id": {
           "$ref": "#/$defs/ViewId"
@@ -11815,6 +11829,22 @@
           ],
           "type": "object"
         },
+        "view.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ViewDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ViewListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "view.get": {
           "additionalProperties": false,
           "properties": {
@@ -11900,6 +11930,7 @@
         "tool.list",
         "view.list",
         "view.get",
+        "view.delete",
         "instance.create",
         "instance.start",
         "instance.stop",

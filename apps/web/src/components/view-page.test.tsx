@@ -1,7 +1,8 @@
 import type { View, ViewComponent } from "@kinby/contract"
 import { CallError } from "@kinby/contract"
-import { stubSubscriber } from "@kinby/contract/testing"
-import { act, render, screen, within } from "@testing-library/react"
+import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ViewPage } from "@/components/view-page"
@@ -38,12 +39,26 @@ function view(components: ViewComponent[] = BOARD, data: View["data"] = DATA): V
   }
 }
 
-function openPage(shown: View) {
-  const client = stubSubscriber()
-  const page = render(<ViewPage client={client} viewId="applications" />)
-  const [subscription] = client.subscriptions
+function openPage(shown: View, answers: Answers = {}) {
+  const subscriber = stubSubscriber()
+  const caller = stubCaller(answers)
+  const page = render(
+    <ViewPage
+      client={{ subscribe: subscriber.subscribe, call: caller.call }}
+      instanceId="hub-ada"
+      viewId="applications"
+    />,
+  )
+  const [subscription] = subscriber.subscriptions
   act(() => subscription.deliver(shown))
-  return { subscription, page }
+  return { subscription, page, caller }
+}
+
+async function askToDelete() {
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole("button", { name: "More actions" }))
+  await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
+  return { user, dialog: await screen.findByRole("alertdialog") }
 }
 
 describe("ViewPage", () => {
@@ -99,6 +114,44 @@ describe("ViewPage", () => {
     page.unmount()
 
     expect(subscription.cancelled).toBe(true)
+  })
+
+  it("deletes the view from its ⋯ menu once confirmed, and goes back to the instance", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/views/applications")
+    const { caller } = openPage(view(), { "view.delete": () => ({ views: [] }) })
+
+    const { user, dialog } = await askToDelete()
+    expect(within(dialog).getByRole("heading", { name: "Delete Job board?" })).toBeTruthy()
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }))
+
+    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-ada"))
+    expect(caller.calls).toEqual([{ method: "view.delete", params: { id: "applications" } }])
+  })
+
+  it("deletes nothing when the confirm is cancelled", async () => {
+    const { caller } = openPage(view(), { "view.delete": () => ({ views: [] }) })
+
+    const { user, dialog } = await askToDelete()
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    expect(caller.calls).toEqual([])
+  })
+
+  it("says why a delete failed, and keeps the view", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/views/applications")
+    openPage(view(), {
+      "view.delete": () => {
+        throw new CallError({ code: "INTERNAL", message: "The disk is full.", retryable: false })
+      },
+    })
+
+    const { user, dialog } = await askToDelete()
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }))
+
+    expect(await screen.findByText("The disk is full.")).toBeTruthy()
+    expect(screen.getByText("Globex")).toBeTruthy()
+    expect(window.location.pathname).toBe("/instances/hub-ada/views/applications")
   })
 
   it("renders its components with the data they bind", async () => {

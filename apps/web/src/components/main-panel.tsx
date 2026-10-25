@@ -137,7 +137,12 @@ export function MainPanel({
     }
     if (instanceClient === undefined) return null
     return (
-      <ViewPage key={`${selected.instance_id} ${viewId}`} client={instanceClient} viewId={viewId} />
+      <ViewPage
+        key={`${selected.instance_id} ${viewId}`}
+        client={instanceClient}
+        instanceId={selected.instance_id}
+        viewId={viewId}
+      />
     )
   }
   if (selected !== undefined) {

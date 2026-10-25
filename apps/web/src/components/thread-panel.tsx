@@ -836,9 +836,17 @@ function notificationStatus(
   return { label: "No channel", variant: "outline" }
 }
 
-/** A view the turn created or changed, linking to its page. */
+/** A view the turn created or changed, linking to its page, or one it deleted, struck through. */
 function ViewChangedCard({ step, instanceId }: { step: ViewStep; instanceId: string }) {
   const titleId = useId()
+  if (step.change === "deleted") {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <LayoutDashboardIcon aria-hidden className="size-4 shrink-0" />
+        <del>{step.title}</del>
+      </p>
+    )
+  }
   return (
     <article aria-labelledby={titleId}>
       <Card size="sm">

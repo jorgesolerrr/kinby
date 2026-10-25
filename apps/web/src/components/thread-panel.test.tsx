@@ -1,4 +1,4 @@
-import { CallError, type Event, type Notification } from "@kinby/contract"
+import { CallError, type Event, type Notification, type ViewChange } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -1204,7 +1204,7 @@ describe("a thread's panel", () => {
   })
 
   describe("a view the turn wrote", () => {
-    const changed = (view: string, title: string, change: "created" | "changed"): Payload => ({
+    const changed = (view: string, title: string, change: ViewChange): Payload => ({
       type: "view.changed",
       view,
       title,
@@ -1228,6 +1228,22 @@ describe("a thread's panel", () => {
       expect(within(board).getByText("Created")).toBeDefined()
       const reading = screen.getByRole("article", { name: "Reading list" })
       expect(within(reading).getByText("Changed")).toBeDefined()
+    })
+
+    it("strikes through a deleted view instead of linking to it", async () => {
+      const events = thread(
+        ["turn-1", started("Drop the old board")],
+        ["turn-1", changed("applications", "Job board", "deleted")],
+      )
+      const { subscription } = openThread()
+
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+
+      expect(screen.getByText("Job board").tagName).toBe("DEL")
+      expect(screen.queryByRole("link", { name: "Job board" })).toBeNull()
     })
 
     it("opens the view's page from its card, as a new history entry", async () => {

@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 from kinby.contracts import (
     Stream,
     View,
+    ViewDeleteCommand,
     ViewGetCommand,
     ViewListCommand,
     ViewListResult,
@@ -14,7 +15,7 @@ from kinby.contracts import (
 )
 from kinby.core.errors import ViewNotFound
 from kinby.instance import Instance
-from kinby.instance.views import list_views, read_view, watch_view
+from kinby.instance.views import delete_view, list_views, read_view, watch_view
 
 
 class InstanceViews:
@@ -33,7 +34,8 @@ class InstanceViews:
             raise ViewNotFound(str(exc)) from exc
 
     async def subscribe(self, command: ViewSubscribeCommand) -> Stream[View]:
-        """The view, then the view again after each write. Nothing is replayed."""
+        """The view, then the view again after each write, until it is deleted. Nothing is
+        replayed."""
         # Watched before the read, so a write between the two is never missed.
         changes, stop = watch_view(self._instance, command.id)
         try:
@@ -44,7 +46,15 @@ class InstanceViews:
 
         async def items() -> AsyncGenerator[View]:
             yield current
-            while True:
-                yield await changes.get()
+            while (view := await changes.get()) is not None:
+                yield view
 
         return Stream(0, items(), _close=stop)
+
+    async def delete(self, command: ViewDeleteCommand) -> ViewListResult:
+        """Delete a view for a client. No turn made it, so no thread records it."""
+        try:
+            delete_view(self._instance, command.id)
+        except LookupError as exc:
+            raise ViewNotFound(str(exc)) from exc
+        return await self.list(ViewListCommand())

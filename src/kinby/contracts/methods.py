@@ -180,6 +180,7 @@ from kinby.contracts.models import (
     UsageGetCommand,
     UsageGetResult,
     View,
+    ViewDeleteCommand,
     ViewGetCommand,
     ViewListCommand,
     ViewListResult,
@@ -325,6 +326,7 @@ TOOL_LIST = Method("tool.list", Scope.INSTANCE_READ, ToolListCommand, ToolListRe
 VIEW_LIST = Method("view.list", Scope.INSTANCE_READ, ViewListCommand, ViewListResult)
 VIEW_GET = Method("view.get", Scope.INSTANCE_READ, ViewGetCommand, View)
 VIEW_SUBSCRIBE = Subscription("view.subscribe", Scope.INSTANCE_READ, ViewSubscribeCommand, View)
+VIEW_DELETE = Method("view.delete", Scope.INSTANCE_ADMIN, ViewDeleteCommand, ViewListResult)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -530,6 +532,7 @@ METHODS = (
     TOOL_LIST,
     VIEW_LIST,
     VIEW_GET,
+    VIEW_DELETE,
     INSTANCE_CREATE,
     INSTANCE_START,
     INSTANCE_STOP,
