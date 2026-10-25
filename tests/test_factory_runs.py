@@ -643,6 +643,8 @@ def test_a_needs_human_report_queued_but_not_delivered_is_sent_after_a_restart(t
         async with asyncio.timeout(5):
             while len(control.steps) < 3:
                 await asyncio.sleep(0.01)
+        # The fake records the call as it starts, and the hub marks it delivered once it returns.
+        await reported(restarted)
 
         _, report = control.steps[-1]
         assert report.step == CodeStepRun(call="notify_human", summary="")
