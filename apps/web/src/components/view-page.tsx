@@ -58,12 +58,13 @@ export function ViewPage({
     }
   }, [client, viewId])
   const [asking, setAsking] = useState(false)
+  const [refusal, setRefusal] = useState<unknown>()
   const remove = async () => {
     try {
       await client.call("view.delete", { id: viewId })
       landOn(instanceId)
     } catch (error) {
-      setShown((last) => ({ view: last.view, failure: error }))
+      setRefusal(error)
     }
   }
 
@@ -86,7 +87,13 @@ export function ViewPage({
                 <EllipsisIcon />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem variant="destructive" onClick={() => setAsking(true)}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => {
+                    setRefusal(undefined)
+                    setAsking(true)
+                  }}
+                >
                   Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -96,6 +103,7 @@ export function ViewPage({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete {view.title}?</AlertDialogTitle>
                 </AlertDialogHeader>
+                {refusal !== undefined && <Failure error={refusal} />}
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction variant="destructive" onClick={() => void remove()}>

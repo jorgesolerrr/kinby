@@ -138,7 +138,7 @@ describe("ViewPage", () => {
     expect(caller.calls).toEqual([])
   })
 
-  it("says why a delete failed, and keeps the view", async () => {
+  it("says why a delete failed in the confirm, and keeps the view", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/views/applications")
     openPage(view(), {
       "view.delete": () => {
@@ -149,7 +149,7 @@ describe("ViewPage", () => {
     const { user, dialog } = await askToDelete()
     await user.click(within(dialog).getByRole("button", { name: "Delete" }))
 
-    expect(await screen.findByText("The disk is full.")).toBeTruthy()
+    expect(await within(dialog).findByText("The disk is full.")).toBeTruthy()
     expect(screen.getByText("Globex")).toBeTruthy()
     expect(window.location.pathname).toBe("/instances/hub-ada/views/applications")
   })
