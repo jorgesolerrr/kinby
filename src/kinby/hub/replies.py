@@ -25,9 +25,9 @@ from kinby.core.errors import (
     NotificationNotFound,
     OptionNotOffered,
 )
-from kinby.hub.channels import Channels, ReceivingKind
+from kinby.hub.channels import Channels, ReceivingKind, Reply
 from kinby.hub.outbox import GIVE_UP_AFTER, Sleep
-from kinby.hub.registry import HubRegistry, ReceivedReply, RunStopRef
+from kinby.hub.registry import ChannelRecord, HubRegistry, ReceivedReply, RunStopRef
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 _logger = logging.getLogger(__name__)
@@ -75,18 +75,7 @@ class Replies:
     async def receive(self, channel_id: str, kind: str, request: web.Request) -> web.Response:
         """Answer a call to a channel's public route as soon as the reply it carries is
         recorded."""
-        received = await self._channels.receive(channel_id, kind, request)
-        if received is None:
-            return web.Response()
-        channel, reply = received
-        notification = self._registry.sent_notification(channel.channel_id, reply.message)
-        if notification is None:
-            return web.Response()
-        # The channel sent the notification's options with "Mute this instance" after them.
-        options = [*notification.options, None]
-        if 0 <= reply.option < len(options):
-            self._record(notification.notification_id, channel.channel_id, options[reply.option])
-        return web.Response()
+        return await self._channels.receive(channel_id, kind, request, self._take)
 
     async def reply(self, command: NotificationReplyCommand) -> NotificationReply:
         """Answer a notification from the web app, which edits no channel's message."""
@@ -102,6 +91,15 @@ class Replies:
     def resume(self) -> None:
         """Apply what the previous process recorded and did not apply."""
         self._apply_all(self._registry.received_replies())
+
+    def _take(self, channel: ChannelRecord, reply: Reply) -> None:
+        notification = self._registry.sent_notification(channel.channel_id, reply.message)
+        if notification is None:
+            return
+        # The channel sent the notification's options with "Mute this instance" after them.
+        options = [*notification.options, None]
+        if 0 <= reply.option < len(options):
+            self._record(notification.notification_id, channel.channel_id, options[reply.option])
 
     def _record(
         self, notification_id: UUID, channel_id: UUID | None, option: str | None
