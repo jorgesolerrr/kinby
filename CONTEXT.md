@@ -663,6 +663,16 @@ The core, read-only **tool** that returns an available **skill** body by name. I
 A core write **tool** through which the agent changes its own **instance**, such as a **routine** or a **skill**, under the **gate** like any other write. Workspace file tools never reach the instance.
 _Avoid_: self-modification tool, config tool
 
+### Instance code
+
+The Python project an **instance** keeps for itself: the scripts it writes and runs, the packages they need, and the **authored tools** it exposes. The agent changes it only through **instance tools**, and it survives restarts and updates. The user's own tools are not part of it.
+_Avoid_: sandbox code, scratch scripts
+
+### Authored tool
+
+A **tool** the agent wrote in its **instance code** and exposed to its own **turns**. The **gate** treats every call to it as a write, whatever it declares, until the user marks it read-only. The agent may change or remove only the tools it authored.
+_Avoid_: dynamic tool, self-made tool
+
 ### View
 
 A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
