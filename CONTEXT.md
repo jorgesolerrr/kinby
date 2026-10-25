@@ -673,6 +673,15 @@ _Avoid_: sandbox code, scratch scripts
 A **tool** the agent wrote in its **instance code** and exposed to its own **turns**. The **gate** treats every call to it as a write, whatever it declares, until the user marks it read-only. The agent may change or remove only the tools it authored.
 _Avoid_: dynamic tool, self-made tool
 
+### MCP server
+
+A **library** kind: an outside server whose tools an **instance** that picks it gets on its **turns**. The user or the **home instance** adds it to the library; an instance never adds one to itself. Every call to its tools is gated as a write unless the user trusts the server's own read-only hints.
+
+### Routine grant
+
+The user's standing allow for one **tool** inside one **routine**, given from an **approval** raised in that routine's **turn**. Any edit to the routine, by the user or the agent, revokes it.
+_Avoid_: standing approval, always-allow
+
 ### View
 
 A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
