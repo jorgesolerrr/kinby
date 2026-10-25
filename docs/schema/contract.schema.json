@@ -648,6 +648,15 @@
       "title": "ChannelUpdateCommand",
       "type": "object"
     },
+    "ChartKind": {
+      "enum": [
+        "line",
+        "bar",
+        "area"
+      ],
+      "title": "ChartKind",
+      "type": "string"
+    },
     "ClientFrame": {
       "discriminator": {
         "mapping": {
@@ -9469,6 +9478,30 @@
       "title": "View",
       "type": "object"
     },
+    "ViewBadge": {
+      "additionalProperties": false,
+      "description": "A short label, such as a stage.",
+      "properties": {
+        "component": {
+          "const": "Badge",
+          "default": "Badge",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "label": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "component"
+      ],
+      "title": "ViewBadge",
+      "type": "object"
+    },
     "ViewCard": {
       "additionalProperties": false,
       "description": "A card with an optional title and description, holding its children.",
@@ -9560,11 +9593,113 @@
       "title": "ViewChanged",
       "type": "object"
     },
+    "ViewChart": {
+      "additionalProperties": false,
+      "description": "A line, bar or area chart of the points in an array in the view's data. Each point's place\non the x axis and its series' values are read in the point.",
+      "properties": {
+        "component": {
+          "const": "Chart",
+          "default": "Chart",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChartKind"
+        },
+        "points": {
+          "$ref": "#/$defs/Binding"
+        },
+        "series": {
+          "items": {
+            "$ref": "#/$defs/ViewChartSeries"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "x": {
+          "$ref": "#/$defs/Binding"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "points",
+        "x",
+        "series",
+        "component"
+      ],
+      "title": "ViewChart",
+      "type": "object"
+    },
+    "ViewChartSeries": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Binding"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "title": "ViewChartSeries",
+      "type": "object"
+    },
+    "ViewChecklist": {
+      "additionalProperties": false,
+      "description": "A read-only checklist with one entry per item of an array in the view's data. Each entry's\nlabel and whether it is done are read in its item.",
+      "properties": {
+        "component": {
+          "const": "Checklist",
+          "default": "Checklist",
+          "type": "string"
+        },
+        "done": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/Binding"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "items": {
+          "$ref": "#/$defs/Binding"
+        },
+        "label": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "id",
+        "items",
+        "label",
+        "done",
+        "component"
+      ],
+      "title": "ViewChecklist",
+      "type": "object"
+    },
     "ViewComponent": {
       "discriminator": {
         "mapping": {
+          "Badge": "#/$defs/ViewBadge",
           "Card": "#/$defs/ViewCard",
+          "Chart": "#/$defs/ViewChart",
+          "Checklist": "#/$defs/ViewChecklist",
+          "Kanban": "#/$defs/ViewKanban",
           "Link": "#/$defs/ViewLink",
+          "Stat": "#/$defs/ViewStat",
+          "Table": "#/$defs/ViewTable",
           "Text": "#/$defs/ViewText"
         },
         "propertyName": "component"
@@ -9578,6 +9713,24 @@
         },
         {
           "$ref": "#/$defs/ViewLink"
+        },
+        {
+          "$ref": "#/$defs/ViewTable"
+        },
+        {
+          "$ref": "#/$defs/ViewBadge"
+        },
+        {
+          "$ref": "#/$defs/ViewKanban"
+        },
+        {
+          "$ref": "#/$defs/ViewStat"
+        },
+        {
+          "$ref": "#/$defs/ViewChart"
+        },
+        {
+          "$ref": "#/$defs/ViewChecklist"
         }
       ]
     },
@@ -9601,6 +9754,38 @@
     "ViewId": {
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
       "type": "string"
+    },
+    "ViewKanban": {
+      "additionalProperties": false,
+      "description": "A board with one column per item of an array in the view's data. Each column's title and\ncards are read in its item.",
+      "properties": {
+        "cards": {
+          "$ref": "#/$defs/ListBinding"
+        },
+        "columns": {
+          "$ref": "#/$defs/Binding"
+        },
+        "component": {
+          "const": "Kanban",
+          "default": "Kanban",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "title": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "id",
+        "columns",
+        "title",
+        "cards",
+        "component"
+      ],
+      "title": "ViewKanban",
+      "type": "object"
     },
     "ViewLink": {
       "additionalProperties": false,
@@ -9669,6 +9854,45 @@
       "title": "ViewSpec",
       "type": "object"
     },
+    "ViewStat": {
+      "additionalProperties": false,
+      "description": "One figure with its label, and an optional line under it.",
+      "properties": {
+        "component": {
+          "const": "Stat",
+          "default": "Stat",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextProp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "label": {
+          "$ref": "#/$defs/TextProp"
+        },
+        "value": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "value",
+        "component"
+      ],
+      "title": "ViewStat",
+      "type": "object"
+    },
     "ViewSummary": {
       "additionalProperties": false,
       "properties": {
@@ -9690,6 +9914,55 @@
         "updated_at"
       ],
       "title": "ViewSummary",
+      "type": "object"
+    },
+    "ViewTable": {
+      "additionalProperties": false,
+      "description": "A table with one row per item of an array in the view's data.",
+      "properties": {
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/ViewTableColumn"
+          },
+          "type": "array"
+        },
+        "component": {
+          "const": "Table",
+          "default": "Table",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "rows": {
+          "$ref": "#/$defs/Binding"
+        }
+      },
+      "required": [
+        "id",
+        "rows",
+        "columns",
+        "component"
+      ],
+      "title": "ViewTable",
+      "type": "object"
+    },
+    "ViewTableColumn": {
+      "additionalProperties": false,
+      "description": "A table column: its header, and the component each row shows in it, with the component's\npaths read in the row.",
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "header": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "header",
+        "cell"
+      ],
+      "title": "ViewTableColumn",
       "type": "object"
     },
     "ViewText": {
