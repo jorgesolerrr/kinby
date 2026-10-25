@@ -164,6 +164,11 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
  * What the gate does with a tool: its own rule in permissions.toml, or the mode's.
  */
 export type ToolRule = "allow" | "ask" | "deny" | "mode";
+export type ViewId = string;
+export type ViewComponent = ViewCard | ViewText | ViewLink;
+export type ViewComponentId = string;
+export type JsonPointer = string;
+export type TextProp = string | Binding;
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
 export type ErrorCode =
   | "NOT_FOUND"
@@ -187,6 +192,7 @@ export type ErrorCode =
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
+export type ViewChange = "created" | "changed";
 
 export interface Contract {
   client_frame: ClientFrame;
@@ -622,6 +628,14 @@ export interface Contract {
     "usage.get": {
       command: UsageGetCommand;
       result: UsageGetResult;
+    };
+    "view.get": {
+      command: ViewGetCommand;
+      result: View;
+    };
+    "view.list": {
+      command: ViewListCommand;
+      result: ViewListResult;
     };
   };
   server_frame: ServerFrame;
@@ -2413,6 +2427,80 @@ export interface TurnUsage {
   recap_output_tokens: number;
   turn_id: string;
 }
+export interface ViewGetCommand {
+  id: ViewId;
+}
+/**
+ * A page of UI an instance keeps: its layout from the view catalogue, and the data the
+ * layout's bindings read.
+ */
+export interface View {
+  data: {
+    [k: string]: JsonValue;
+  };
+  id: ViewId;
+  spec: ViewSpec;
+  title: string;
+  updated_at: string;
+}
+/**
+ * A view's layout: a flat list of components, one of them the root, that name their children
+ * by id.
+ */
+export interface ViewSpec {
+  components: ViewComponent[];
+}
+/**
+ * A card with an optional title and description, holding its children.
+ */
+export interface ViewCard {
+  children?: ViewComponentId[] | ListBinding;
+  component: "Card";
+  description?: TextProp | null;
+  id: ViewComponentId;
+  title?: TextProp | null;
+}
+/**
+ * Children repeated from an array in the view's data: the template once per item, with its
+ * paths read in the item.
+ */
+export interface ListBinding {
+  path: JsonPointer;
+  template: ViewComponentId;
+}
+/**
+ * A prop whose value is read from the view's data. A path that does not resolve renders as
+ * empty.
+ */
+export interface Binding {
+  path: JsonPointer;
+}
+/**
+ * A paragraph of text.
+ */
+export interface ViewText {
+  component: "Text";
+  id: ViewComponentId;
+  text: TextProp;
+}
+/**
+ * A link that opens its target, an http, https or mailto address, in a new tab.
+ */
+export interface ViewLink {
+  component: "Link";
+  href: TextProp;
+  id: ViewComponentId;
+  label: TextProp;
+}
+export interface ViewListCommand {}
+export interface ViewListResult {
+  views: ViewSummary[];
+}
+export interface ViewSummary {
+  id: ViewId;
+  title: string;
+  updated_at: string;
+}
 export interface ResultFrame {
   id: string;
   result: {
@@ -2487,7 +2575,8 @@ export interface Event {
     | WorkspaceReverted
     | NotificationRaised
     | NotificationAccepted
-    | NotificationRefused;
+    | NotificationRefused
+    | ViewChanged;
   sequence: number;
   thread_id: string;
   timestamp: string;
@@ -2689,4 +2778,13 @@ export interface NotificationRefused {
   raised: number;
   reason: string;
   type: "notification.refused";
+}
+/**
+ * A turn wrote a view. The view's content stays in the view.
+ */
+export interface ViewChanged {
+  change: ViewChange;
+  title: string;
+  type: "view.changed";
+  view: ViewId;
 }

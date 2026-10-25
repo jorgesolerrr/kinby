@@ -5,6 +5,7 @@ import type {
   InstanceStatusResult,
   InstanceSummary,
   OperationGetResult,
+  ViewSummary,
 } from "@kinby/contract"
 import {
   type Answers,
@@ -592,6 +593,48 @@ describe("a running instance", () => {
 
     expect(screen.queryByText(/^Start a thread with/)).toBeNull()
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+  })
+})
+
+describe("the views of a running instance", () => {
+  const running = { ...stopped, intended_state: "running", process: "running" } as const
+
+  function openWithViews(views: ViewSummary[]) {
+    const caller = stubCaller({ "instance.status": () => status({ process: "running" }) })
+    const client = stubCaller({ "view.list": () => ({ views }) })
+    render(
+      <InstancePage
+        caller={caller}
+        client={client}
+        clock={fakeClock()}
+        instance={running}
+        onChanged={vi.fn()}
+      />,
+    )
+    return userEvent.setup()
+  }
+
+  it("lists the instance's views under Views, and opens the one picked", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1")
+    const user = openWithViews([
+      { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" },
+      { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" },
+    ])
+
+    await user.click(await screen.findByRole("button", { name: "Views" }))
+    const items = await screen.findAllByRole("menuitem")
+    expect(items.map((item) => item.textContent)).toEqual(["Job board", "Reading list"])
+    await user.click(items[0]!)
+
+    expect(window.location.pathname).toBe("/instances/instance-1/views/applications")
+  })
+
+  it("says when the instance has no views yet", async () => {
+    const user = openWithViews([])
+
+    await user.click(await screen.findByRole("button", { name: "Views" }))
+
+    expect(await screen.findByText("No views yet")).toBeDefined()
   })
 })
 

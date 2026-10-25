@@ -179,6 +179,10 @@ from kinby.contracts.models import (
     ToolListResult,
     UsageGetCommand,
     UsageGetResult,
+    View,
+    ViewGetCommand,
+    ViewListCommand,
+    ViewListResult,
 )
 
 
@@ -317,6 +321,8 @@ SKILL_CUSTOMIZE = Method(
 )
 SKILL_DELETE = Method("skill.delete", Scope.INSTANCE_ADMIN, SkillDeleteCommand, SkillListResult)
 TOOL_LIST = Method("tool.list", Scope.INSTANCE_READ, ToolListCommand, ToolListResult)
+VIEW_LIST = Method("view.list", Scope.INSTANCE_READ, ViewListCommand, ViewListResult)
+VIEW_GET = Method("view.get", Scope.INSTANCE_READ, ViewGetCommand, View)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -520,6 +526,8 @@ METHODS = (
     SKILL_CUSTOMIZE,
     SKILL_DELETE,
     TOOL_LIST,
+    VIEW_LIST,
+    VIEW_GET,
     INSTANCE_CREATE,
     INSTANCE_START,
     INSTANCE_STOP,

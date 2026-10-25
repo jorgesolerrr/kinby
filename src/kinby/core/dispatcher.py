@@ -64,6 +64,8 @@ from kinby.contracts import (
     THREAD_UNARCHIVE,
     TOOL_LIST,
     USAGE_GET,
+    VIEW_GET,
+    VIEW_LIST,
     AcceptedResult,
     Capability,
     ContractModel,
@@ -125,6 +127,7 @@ from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import TimeRange, usage_totals
+from kinby.core.views import InstanceViews
 from kinby.instance import Instance, ModelPrice
 from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
@@ -531,6 +534,9 @@ def build_dispatcher(
         dispatcher.register(MEMORY_ADD, memory.add)
         dispatcher.register(MEMORY_CORRECT, memory.correct)
         dispatcher.register(MEMORY_FORGET, memory.forget)
+        views = InstanceViews(turns.scheduler.instance)
+        dispatcher.register(VIEW_LIST, views.list)
+        dispatcher.register(VIEW_GET, views.get)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

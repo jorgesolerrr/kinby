@@ -9,6 +9,7 @@ import { OpenHome } from "@/components/open-home"
 import { StatsPage } from "@/components/stats-page"
 import { ThreadListPage } from "@/components/thread-list-page"
 import { ThreadPanel } from "@/components/thread-panel"
+import { ViewPage } from "@/components/view-page"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -24,11 +25,12 @@ import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react
 
 /**
  * The selected thread's panel, the selected instance's thread list, config panel, memory page,
- * stats page, or page, or why there is none. A thread, the thread list, the config panel, the
- * memory page, or the stats page opens once `instanceClient` reaches its instance. The config panel
- * opens only on an instance meant to run, which is the one the hub relays to, and stays open while
- * an update restarts the container. The thread list, memory and stats pages need a running
- * instance. With none selected, it opens the home instance. `onChanged` lists the instances again.
+ * stats page, one of its views, or its page, or why there is none. A thread, the thread list, the
+ * config panel, the memory page, the stats page, or a view opens once `instanceClient` reaches its
+ * instance. The config panel opens only on an instance meant to run, which is the one the hub
+ * relays to, and stays open while an update restarts the container. The thread list, memory and
+ * stats pages and a view need a running instance. With none selected, it opens the home instance.
+ * `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -40,6 +42,7 @@ export function MainPanel({
   configOpen = false,
   memoryOpen = false,
   statsOpen = false,
+  viewId,
   instanceClient,
   onChanged,
 }: {
@@ -52,6 +55,7 @@ export function MainPanel({
   configOpen?: boolean
   memoryOpen?: boolean
   statsOpen?: boolean
+  viewId?: string
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
 }) {
@@ -127,11 +131,26 @@ export function MainPanel({
       />
     )
   }
+  if (selected !== undefined && viewId !== undefined) {
+    if (selected.process !== "running") {
+      return <NotRunning instance={selected} what="views" />
+    }
+    if (instanceClient === undefined) return null
+    return (
+      <ViewPage
+        key={`${selected.instance_id} ${viewId}`}
+        client={instanceClient}
+        clock={clock}
+        viewId={viewId}
+      />
+    )
+  }
   if (selected !== undefined) {
     return (
       <InstancePage
         key={selected.instance_id}
         caller={caller}
+        client={instanceClient}
         clock={clock}
         instance={selected}
         onChanged={onChanged}

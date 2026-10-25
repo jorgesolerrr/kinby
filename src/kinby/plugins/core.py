@@ -12,6 +12,7 @@ from kinby.plugins.intake import intake_tools
 from kinby.plugins.notify import notify_tools
 from kinby.plugins.skills import Skill, skill_tool
 from kinby.plugins.tools import Tool
+from kinby.plugins.views import view_tools
 
 
 def core_tools(
@@ -27,5 +28,6 @@ def core_tools(
         *instance_tools(instance),
         *intake_tools(),
         *notify_tools(),
+        *view_tools(),
         *hub_tools(),
     )

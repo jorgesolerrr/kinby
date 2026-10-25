@@ -64,6 +64,9 @@ class CoreSkillModel:
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         return self
 

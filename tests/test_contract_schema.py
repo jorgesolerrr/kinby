@@ -462,3 +462,13 @@ def test_the_schema_declares_the_skill_and_tool_calls() -> None:
     }
     assert _object(definitions["SkillTier"])["enum"] == ["instance", "kinby", "workspace"]
     assert _object(definitions["ToolRule"])["enum"] == ["allow", "ask", "deny", "mode"]
+
+
+def test_the_schema_exports_the_view_catalogue() -> None:
+    definitions = _object(contract_schema()["$defs"])
+
+    assert _object(definitions["ViewComponent"])["oneOf"] == [
+        {"$ref": "#/$defs/ViewCard"},
+        {"$ref": "#/$defs/ViewText"},
+        {"$ref": "#/$defs/ViewLink"},
+    ]

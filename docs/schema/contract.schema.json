@@ -249,6 +249,20 @@
       "title": "BashPermissions",
       "type": "object"
     },
+    "Binding": {
+      "additionalProperties": false,
+      "description": "A prop whose value is read from the view's data. A path that does not resolve renders as\nempty.",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/JsonPointer"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "Binding",
+      "type": "object"
+    },
     "CallFrame": {
       "additionalProperties": false,
       "properties": {
@@ -1297,6 +1311,7 @@
               "turn.interrupted": "#/$defs/TurnInterrupted",
               "turn.rated": "#/$defs/TurnRated",
               "turn.started": "#/$defs/TurnStarted",
+              "view.changed": "#/$defs/ViewChanged",
               "warning": "#/$defs/Warning",
               "workspace.reverted": "#/$defs/WorkspaceReverted"
             },
@@ -1380,6 +1395,9 @@
             },
             {
               "$ref": "#/$defs/NotificationRefused"
+            },
+            {
+              "$ref": "#/$defs/ViewChanged"
             }
           ]
         },
@@ -3209,6 +3227,10 @@
       "title": "ItemFrame",
       "type": "object"
     },
+    "JsonPointer": {
+      "pattern": "^(/.*)?$",
+      "type": "string"
+    },
     "JsonValue": {},
     "LibraryEntry": {
       "additionalProperties": false,
@@ -3536,6 +3558,24 @@
         "instance_id"
       ],
       "title": "LifecycleOperationResult",
+      "type": "object"
+    },
+    "ListBinding": {
+      "additionalProperties": false,
+      "description": "Children repeated from an array in the view's data: the template once per item, with its\npaths read in the item.",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/JsonPointer"
+        },
+        "template": {
+          "$ref": "#/$defs/ViewComponentId"
+        }
+      },
+      "required": [
+        "path",
+        "template"
+      ],
+      "title": "ListBinding",
       "type": "object"
     },
     "LoginPrompt": {
@@ -7892,6 +7932,16 @@
       "title": "TemplateBehind",
       "type": "object"
     },
+    "TextProp": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Binding"
+        }
+      ]
+    },
     "ThreadApprovalRespondCommand": {
       "additionalProperties": false,
       "properties": {
@@ -9383,6 +9433,288 @@
     "ValueName": {
       "pattern": "^[a-z_][a-z0-9_]*$",
       "type": "string"
+    },
+    "View": {
+      "additionalProperties": false,
+      "description": "A page of UI an instance keeps: its layout from the view catalogue, and the data the\nlayout's bindings read.",
+      "properties": {
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        },
+        "spec": {
+          "$ref": "#/$defs/ViewSpec"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "updated_at",
+        "spec",
+        "data"
+      ],
+      "title": "View",
+      "type": "object"
+    },
+    "ViewCard": {
+      "additionalProperties": false,
+      "description": "A card with an optional title and description, holding its children.",
+      "properties": {
+        "children": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ViewComponentId"
+              },
+              "type": "array"
+            },
+            {
+              "$ref": "#/$defs/ListBinding"
+            }
+          ]
+        },
+        "component": {
+          "const": "Card",
+          "default": "Card",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextProp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextProp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "component"
+      ],
+      "title": "ViewCard",
+      "type": "object"
+    },
+    "ViewChange": {
+      "enum": [
+        "created",
+        "changed"
+      ],
+      "title": "ViewChange",
+      "type": "string"
+    },
+    "ViewChanged": {
+      "additionalProperties": false,
+      "description": "A turn wrote a view. The view's content stays in the view.",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/ViewChange"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "const": "view.changed",
+          "default": "view.changed",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/ViewId"
+        }
+      },
+      "required": [
+        "view",
+        "title",
+        "change",
+        "type"
+      ],
+      "title": "ViewChanged",
+      "type": "object"
+    },
+    "ViewComponent": {
+      "discriminator": {
+        "mapping": {
+          "Card": "#/$defs/ViewCard",
+          "Link": "#/$defs/ViewLink",
+          "Text": "#/$defs/ViewText"
+        },
+        "propertyName": "component"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ViewCard"
+        },
+        {
+          "$ref": "#/$defs/ViewText"
+        },
+        {
+          "$ref": "#/$defs/ViewLink"
+        }
+      ]
+    },
+    "ViewComponentId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "ViewGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ViewGetCommand",
+      "type": "object"
+    },
+    "ViewId": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "ViewLink": {
+      "additionalProperties": false,
+      "description": "A link that opens its target, an http, https or mailto address, in a new tab.",
+      "properties": {
+        "component": {
+          "const": "Link",
+          "default": "Link",
+          "type": "string"
+        },
+        "href": {
+          "$ref": "#/$defs/TextProp"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "label": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "href",
+        "component"
+      ],
+      "title": "ViewLink",
+      "type": "object"
+    },
+    "ViewListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ViewListCommand",
+      "type": "object"
+    },
+    "ViewListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "views": {
+          "items": {
+            "$ref": "#/$defs/ViewSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "views"
+      ],
+      "title": "ViewListResult",
+      "type": "object"
+    },
+    "ViewSpec": {
+      "additionalProperties": false,
+      "description": "A view's layout: a flat list of components, one of them the root, that name their children\nby id.",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ViewComponent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "components"
+      ],
+      "title": "ViewSpec",
+      "type": "object"
+    },
+    "ViewSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "updated_at"
+      ],
+      "title": "ViewSummary",
+      "type": "object"
+    },
+    "ViewText": {
+      "additionalProperties": false,
+      "description": "A paragraph of text.",
+      "properties": {
+        "component": {
+          "const": "Text",
+          "default": "Text",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewComponentId"
+        },
+        "text": {
+          "$ref": "#/$defs/TextProp"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "component"
+      ],
+      "title": "ViewText",
+      "type": "object"
     },
     "WaitingApproval": {
       "additionalProperties": false,
@@ -11195,6 +11527,38 @@
             "result"
           ],
           "type": "object"
+        },
+        "view.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ViewGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/View"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "view.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ViewListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ViewListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -11247,6 +11611,8 @@
         "skill.customize",
         "skill.delete",
         "tool.list",
+        "view.list",
+        "view.get",
         "instance.create",
         "instance.start",
         "instance.stop",
