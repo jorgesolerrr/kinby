@@ -3168,8 +3168,99 @@ class ViewLink(ContractModel):
     href: TextProp
 
 
+class ViewTableColumn(ContractModel):
+    """A table column: its header, and the component each row shows in it, with the component's
+    paths read in the row."""
+
+    header: TextProp
+    cell: ViewComponentId
+
+
+class ViewTable(ContractModel):
+    """A table with one row per item of an array in the view's data."""
+
+    id: ViewComponentId
+    component: Literal["Table"] = "Table"
+    rows: Binding
+    columns: list[ViewTableColumn]
+
+
+class ViewBadge(ContractModel):
+    """A short label, such as a stage."""
+
+    id: ViewComponentId
+    component: Literal["Badge"] = "Badge"
+    label: TextProp
+
+
+class ViewKanban(ContractModel):
+    """A board with one column per item of an array in the view's data. Each column's title and
+    cards are read in its item."""
+
+    id: ViewComponentId
+    component: Literal["Kanban"] = "Kanban"
+    columns: Binding
+    title: TextProp
+    cards: ListBinding
+
+
+class ViewStat(ContractModel):
+    """One figure with its label, and an optional line under it."""
+
+    id: ViewComponentId
+    component: Literal["Stat"] = "Stat"
+    label: TextProp
+    value: TextProp
+    description: TextProp | None = None
+
+
+class ChartKind(StrEnum):
+    LINE = "line"
+    BAR = "bar"
+    AREA = "area"
+
+
+class ViewChartSeries(ContractModel):
+    label: str
+    value: Binding
+
+
+class ViewChart(ContractModel):
+    """A line, bar or area chart of the points in an array in the view's data. Each point's place
+    on the x axis and its series' values are read in the point."""
+
+    id: ViewComponentId
+    component: Literal["Chart"] = "Chart"
+    kind: ChartKind
+    points: Binding
+    x: Binding
+    series: Annotated[list[ViewChartSeries], Field(min_length=1)]
+
+
+class ViewChecklist(ContractModel):
+    """A read-only checklist with one entry per item of an array in the view's data. Each entry's
+    label and whether it is done are read in its item."""
+
+    id: ViewComponentId
+    component: Literal["Checklist"] = "Checklist"
+    items: Binding
+    label: TextProp
+    done: bool | Binding
+
+
 #: The view catalogue: every component a view can be composed from.
-type ViewComponent = Annotated[ViewCard | ViewText | ViewLink, Field(discriminator="component")]
+type ViewComponent = Annotated[
+    ViewCard
+    | ViewText
+    | ViewLink
+    | ViewTable
+    | ViewBadge
+    | ViewKanban
+    | ViewStat
+    | ViewChart
+    | ViewChecklist,
+    Field(discriminator="component"),
+]
 
 
 class ViewSpec(ContractModel):
@@ -3201,12 +3292,17 @@ class ViewSpec(ContractModel):
 
 
 def _named_components(component: ViewComponent) -> list[str]:
-    """The ids a component names as its children or its template."""
+    """The ids a component names as its children, its template or its cells."""
     match component:
-        case ViewCard(children=ListBinding(template=template)):
+        case (
+            ViewCard(children=ListBinding(template=template))
+            | ViewKanban(cards=ListBinding(template=template))
+        ):
             return [template]
         case ViewCard(children=list() as children):
             return children
+        case ViewTable(columns=columns):
+            return [column.cell for column in columns]
     return []
 
 

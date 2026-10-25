@@ -217,6 +217,98 @@ def test_a_spec_the_catalogue_refuses_is_a_tool_error_and_writes_nothing(
     asyncio.run(scenario())
 
 
+CATALOGUE: dict[str, list[dict[str, object]]] = {
+    "components": [
+        {"id": "root", "component": "Card", "children": ["open", "board", "list", "trend", "todo"]},
+        {"id": "open", "component": "Stat", "label": "Open", "value": {"path": "/open"}},
+        {
+            "id": "board",
+            "component": "Kanban",
+            "columns": {"path": "/stages"},
+            "title": {"path": "/name"},
+            "cards": {"path": "/applications", "template": "application"},
+        },
+        {"id": "application", "component": "Card", "title": {"path": "/company"}},
+        {
+            "id": "list",
+            "component": "Table",
+            "rows": {"path": "/postings"},
+            "columns": [{"header": "Stage", "cell": "stage"}],
+        },
+        {"id": "stage", "component": "Badge", "label": {"path": "/stage"}},
+        {
+            "id": "trend",
+            "component": "Chart",
+            "kind": "line",
+            "points": {"path": "/weeks"},
+            "x": {"path": "/week"},
+            "series": [{"label": "Sent", "value": {"path": "/sent"}}],
+        },
+        {
+            "id": "todo",
+            "component": "Checklist",
+            "items": {"path": "/todo"},
+            "label": {"path": "/task"},
+            "done": {"path": "/done"},
+        },
+    ]
+}
+
+
+def test_a_view_from_every_catalogue_component_is_written(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), writing(board(CATALOGUE, {})))
+
+        events = await turn(dispatcher)
+
+        assert [result.error for result in tool_results(events)] == [False]
+        assert await listed(dispatcher) == ["applications"]
+
+    asyncio.run(scenario())
+
+
+def _replacing(component: str, **props: object) -> list[dict[str, object]]:
+    """The catalogue fixture with one component's props replaced."""
+    return [
+        {**spec, **props} if spec["id"] == component else spec for spec in CATALOGUE["components"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("components", "message"),
+    [
+        (_replacing("open", value=[12]), "Stat.value"),
+        (_replacing("board", columns="stages"), "Kanban.columns"),
+        (_replacing("list", columns=[{"header": "Stage"}]), "Table.columns.0.cell"),
+        (_replacing("stage", label=["Applied"]), "Badge.label"),
+        (_replacing("trend", kind="pie"), "Chart.kind"),
+        (_replacing("todo", done="maybe"), "Checklist.done"),
+        (
+            _replacing("board", cards={"path": "/applications", "template": "missing"}),
+            'Component "board" names components that do not exist: missing.',
+        ),
+        (
+            _replacing("list", columns=[{"header": "Stage", "cell": "missing"}]),
+            'Component "list" names components that do not exist: missing.',
+        ),
+    ],
+)
+def test_a_catalogue_component_with_a_wrong_prop_is_a_tool_error(
+    tmp_path: Path, components: list[dict[str, object]], message: str
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), writing(board({"components": components})))
+
+        events = await turn(dispatcher)
+
+        [result] = tool_results(events)
+        assert result.error
+        assert message in result.output
+        assert await listed(dispatcher) == []
+
+    asyncio.run(scenario())
+
+
 def test_a_view_past_one_megabyte_is_refused(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = runtime(instance_at(tmp_path), writing(board(data={"notes": "x" * 1_000_000})))

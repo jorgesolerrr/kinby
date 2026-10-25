@@ -471,4 +471,10 @@ def test_the_schema_exports_the_view_catalogue() -> None:
         {"$ref": "#/$defs/ViewCard"},
         {"$ref": "#/$defs/ViewText"},
         {"$ref": "#/$defs/ViewLink"},
+        {"$ref": "#/$defs/ViewTable"},
+        {"$ref": "#/$defs/ViewBadge"},
+        {"$ref": "#/$defs/ViewKanban"},
+        {"$ref": "#/$defs/ViewStat"},
+        {"$ref": "#/$defs/ViewChart"},
+        {"$ref": "#/$defs/ViewChecklist"},
     ]

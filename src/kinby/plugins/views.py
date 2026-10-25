@@ -40,10 +40,12 @@ async def view_write(
     as a board a routine updates every morning.
 
     id is a short slug. The spec lists components from the view catalogue, each with a unique id;
-    the one with id "root" is rendered, and a Card names its children by id. A prop is a literal
-    or {"path": "<JSON Pointer>"} into data. Card children may instead be
-    {"path": "/items", "template": "<component id>"}, which renders the template once per item of
-    the array, with the template's paths read in the item. A view is capped at 1 MB.
+    the one with id "root" is rendered, and a Card names its children, and a Table column its
+    cell, by id. A prop is a literal or {"path": "<JSON Pointer>"} into data. Card children may
+    instead be {"path": "/items", "template": "<component id>"}, which renders the template once
+    per item of the array, with the template's paths read in the item. Table rows, Kanban columns,
+    Chart points and Checklist items repeat over an array the same way; each component says which
+    of its props are read in the item. A view is capped at 1 MB.
     """
     change = await asyncio.to_thread(write_view, context.instance, id, title, spec, data)
     await context.report_view_changed(ViewChanged(view=id, title=title, change=change))

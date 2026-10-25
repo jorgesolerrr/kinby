@@ -108,3 +108,144 @@ describe("ViewPage", () => {
     expect(screen.getByText("Acme")).toBeTruthy()
   })
 })
+
+/** A view with every component of the catalogue: a job board as a kanban, a table and more. */
+const CATALOGUE: ViewComponent[] = [
+  {
+    id: "root",
+    component: "Card",
+    title: "Job search",
+    children: ["intro", "open", "board", "postings", "trend", "todo"],
+  },
+  { id: "intro", component: "Text", text: "Where every application stands." },
+  {
+    id: "open",
+    component: "Stat",
+    label: "Open",
+    value: { path: "/open" },
+    description: "+1 today",
+  },
+  {
+    id: "board",
+    component: "Kanban",
+    columns: { path: "/stages" },
+    title: { path: "/name" },
+    cards: { path: "/applications", template: "application" },
+  },
+  { id: "application", component: "Card", title: { path: "/company" } },
+  {
+    id: "postings",
+    component: "Table",
+    rows: { path: "/postings" },
+    columns: [
+      { header: "Company", cell: "company" },
+      { header: "Stage", cell: "stage" },
+      { header: "Posting", cell: "posting" },
+    ],
+  },
+  { id: "company", component: "Text", text: { path: "/company" } },
+  { id: "stage", component: "Badge", label: { path: "/stage" } },
+  { id: "posting", component: "Link", label: "Open", href: { path: "/url" } },
+  {
+    id: "trend",
+    component: "Chart",
+    kind: "line",
+    points: { path: "/weeks" },
+    x: { path: "/week" },
+    series: [{ label: "Applications sent", value: { path: "/sent" } }],
+  },
+  {
+    id: "todo",
+    component: "Checklist",
+    items: { path: "/todo" },
+    label: { path: "/task" },
+    done: { path: "/done" },
+  },
+]
+
+const SEARCH: View["data"] = {
+  open: 3,
+  stages: [
+    { name: "Applied", applications: [{ company: "Acme" }, { company: "Globex" }] },
+    { name: "Interview", applications: [{ company: "Initech" }] },
+  ],
+  postings: [
+    { company: "Acme", stage: "Applied", url: "https://jobs.example/acme" },
+    { company: "Initech", stage: "Interview", url: "https://jobs.example/initech" },
+  ],
+  weeks: [
+    { week: "W1", sent: 2 },
+    { week: "W2", sent: 5 },
+  ],
+  todo: [
+    { task: "Follow up with Acme", done: true },
+    { task: "Update the CV", done: false },
+  ],
+}
+
+describe("ViewPage, with every catalogue component", () => {
+  it("renders each component with the data it binds", async () => {
+    openPage(view(CATALOGUE, SEARCH))
+
+    expect(await screen.findByText("Where every application stands.")).toBeTruthy()
+    const stat = screen.getByRole("region", { name: "Open" })
+    expect(within(stat).getByText("3")).toBeTruthy()
+    expect(within(stat).getByText("+1 today")).toBeTruthy()
+    expect(screen.getByRole("region", { name: "Applied" })).toBeTruthy()
+    expect(within(screen.getByRole("table")).getByText("Interview")).toBeTruthy()
+    expect(screen.getByText("Applications sent")).toBeTruthy()
+    expect(document.querySelector(".recharts-line")).toBeTruthy()
+    const done = screen.getByRole("checkbox", { name: "Follow up with Acme" })
+    expect(done.getAttribute("aria-checked")).toBe("true")
+    const open = screen.getByRole("checkbox", { name: "Update the CV" })
+    expect(open.getAttribute("aria-checked")).toBe("false")
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("shows a kanban column per entry in the data, with a card per item", async () => {
+    openPage(view(CATALOGUE, SEARCH))
+
+    const applied = await screen.findByRole("region", { name: "Applied" })
+    const interview = screen.getByRole("region", { name: "Interview" })
+    expect(within(applied).getByText("Acme")).toBeTruthy()
+    expect(within(applied).getByText("Globex")).toBeTruthy()
+    expect(within(interview).getByText("Initech")).toBeTruthy()
+    expect(within(interview).queryByText("Acme")).toBeNull()
+  })
+
+  it("shows a table row per item, each cell read in its row", async () => {
+    openPage(view(CATALOGUE, SEARCH))
+
+    const table = await screen.findByRole("table")
+    const [header, ...rows] = within(table).getAllByRole("row")
+    expect(
+      within(header)
+        .getAllByRole("columnheader")
+        .map((cell) => cell.textContent),
+    ).toEqual(["Company", "Stage", "Posting"])
+    expect(
+      rows.map((row) =>
+        within(row)
+          .getAllByRole("cell")
+          .map((cell) => cell.textContent),
+      ),
+    ).toEqual([
+      ["Acme", "Applied", "Open"],
+      ["Initech", "Interview", "Open"],
+    ])
+    expect(within(rows[1]).getByRole("link").getAttribute("href")).toBe(
+      "https://jobs.example/initech",
+    )
+  })
+
+  it.each([
+    ["bar", ".recharts-bar"],
+    ["area", ".recharts-area"],
+  ] as const)("draws a %s chart", async (kind, drawn) => {
+    const chart = { ...CATALOGUE[9], kind } as ViewComponent
+    openPage(view([...CATALOGUE.slice(0, 9), chart, CATALOGUE[10]], SEARCH))
+
+    expect(await screen.findByText("Applications sent")).toBeTruthy()
+    expect(document.querySelector(drawn)).toBeTruthy()
+  })
+})
