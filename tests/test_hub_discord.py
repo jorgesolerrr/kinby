@@ -238,7 +238,7 @@ def test_sending_the_code_from_a_dm_pairs_the_channel_with_that_dm(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_click_from_the_paired_user_is_a_reply_and_the_message_is_edited_to_its_outcome(
+def test_a_click_from_the_paired_user_is_a_reply_and_the_message_keeps_it_with_its_outcome(
     tmp_path,
 ):
     async def scenario() -> None:
@@ -263,7 +263,11 @@ def test_a_click_from_the_paired_user_is_a_reply_and_the_message_is_edited_to_it
         assert sent["components"] == [button("Rerun", 0), button("Mute this instance", 1)]
         assert stranger == answer == {"type": 6}
         assert service.sent("PATCH", edited) == [
-            {"content": "Muted this instance on this channel.", "embeds": [], "components": []}
+            {
+                "content": "Muted this instance on this channel.",
+                "embeds": sent["embeds"],
+                "components": [],
+            }
         ]
         assert muted.muted == [alice_id]
 
@@ -327,7 +331,7 @@ def test_a_long_outcome_is_cut_to_what_one_discord_message_holds():
     async def scenario() -> None:
         service = FakeDiscord()
         async with discord(service) as base_url:
-            await bot(base_url).edit(SentRef("9"), f'Answered "{"o" * 3_000}".')
+            await bot(base_url).edit(SentRef("9"), notification(), f'Answered "{"o" * 3_000}".')
 
         [edited] = service.sent("PATCH", f"/api/channels/{_DM}/messages/9")
         content = str(edited["content"])

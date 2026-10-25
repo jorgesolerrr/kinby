@@ -107,10 +107,18 @@ class TelegramBot:
             case sent:
                 raise TelegramRefused(f"Telegram sent no message id: {sent!r}")
 
-    async def edit(self, message: SentRef, outcome: str) -> None:
-        """Replace the message with the outcome. Sent without a keyboard, it has no buttons left."""
+    async def edit(self, message: SentRef, notification: ChannelNotification, outcome: str) -> None:
+        """Write the message again with the outcome under it. Sent without a keyboard, it has no
+        buttons left."""
         await self._call(
-            "editMessageText", {"chat_id": self._chat, "message_id": int(message), "text": outcome}
+            "editMessageText",
+            {
+                "chat_id": self._chat,
+                "message_id": int(message),
+                "text": _html(notification, outcome),
+                "parse_mode": "HTML",
+                "link_preview_options": {"is_disabled": True},
+            },
         )
 
     async def receive(self, request: web.Request) -> Inbound | Reply | None:
@@ -150,19 +158,29 @@ class TelegramBot:
             return (await answer.json())["result"]
 
 
-def _html(notification: ChannelNotification) -> str:
-    """The message, cut to what one message shows: the header and title to their share, and the
-    text to what they and the link leave."""
+def _html(notification: ChannelNotification, outcome: str | None = None) -> str:
+    """The message, cut to what one message shows: the header, title and outcome to their share,
+    and the text to what they and the link leave."""
     header = _cut(notification.header, _HEADING_CHARACTERS)
     title = _cut(notification.title, _HEADING_CHARACTERS)
-    separators = 5
-    room = _MESSAGE_CHARACTERS - len(header) - len(title) - len(_LINK_TEXT) - separators
+    answered = _cut(outcome, _HEADING_CHARACTERS) if outcome is not None else ""
+    separators = 7
+    room = (
+        _MESSAGE_CHARACTERS
+        - len(header)
+        - len(title)
+        - len(_LINK_TEXT)
+        - len(answered)
+        - separators
+    )
     parts = [
         f"<b>{escape(header)}</b>\n<b>{escape(title)}</b>",
         escape(_cut(notification.text, room)),
     ]
     if notification.link is not None:
         parts.append(f'<a href="{escape(notification.link)}">{_LINK_TEXT}</a>')
+    if outcome is not None:
+        parts.append(f"<i>{escape(answered)}</i>")
     return "\n\n".join(parts)
 
 

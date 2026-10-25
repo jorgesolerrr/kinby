@@ -163,7 +163,8 @@ class ReceivedReply:
     """A reply recorded and not applied yet."""
 
     reply_id: UUID
-    notification_id: UUID
+    #: The notification it answers, which an edit of the message it answered shows again.
+    notification: ChannelNotification
     instance_id: UUID
     #: None for a notification kinby raised itself, which offers no options of its own.
     thread_id: UUID | None
@@ -2636,9 +2637,9 @@ class HubRegistry:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT replies.id, replies.notification_id, instance_id, thread_id, option,
-                    received_at, replies.channel_id, sent_ref, calling, approval, run_id,
-                    stop_generation
+                SELECT replies.id, replies.notification_id, header, title, text, link, options,
+                    instance_id, thread_id, option, received_at, replies.channel_id, sent_ref,
+                    calling, approval, run_id, stop_generation
                 FROM replies
                 JOIN notifications ON notifications.id = replies.notification_id
                 LEFT JOIN notification_deliveries
@@ -2652,18 +2653,25 @@ class HubRegistry:
         return [
             ReceivedReply(
                 reply_id=UUID(row[0]),
-                notification_id=UUID(row[1]),
-                instance_id=UUID(row[2]),
-                thread_id=UUID(row[3]) if row[3] is not None else None,
-                option=row[4],
-                received_at=datetime.fromisoformat(row[5]),
-                channel_id=UUID(row[6]) if row[6] is not None else None,
-                message=SentRef(row[7]) if row[7] is not None else None,
-                calling=bool(row[8]),
-                approval=(
-                    WaitingApproval.model_validate_json(row[9]) if row[9] is not None else None
+                notification=ChannelNotification(
+                    notification_id=UUID(row[1]),
+                    header=row[2],
+                    title=row[3],
+                    text=row[4],
+                    link=row[5],
+                    options=tuple(json.loads(row[6])),
                 ),
-                stop=RunStopRef(UUID(row[10]), row[11]) if row[10] is not None else None,
+                instance_id=UUID(row[7]),
+                thread_id=UUID(row[8]) if row[8] is not None else None,
+                option=row[9],
+                received_at=datetime.fromisoformat(row[10]),
+                channel_id=UUID(row[11]) if row[11] is not None else None,
+                message=SentRef(row[12]) if row[12] is not None else None,
+                calling=bool(row[13]),
+                approval=(
+                    WaitingApproval.model_validate_json(row[14]) if row[14] is not None else None
+                ),
+                stop=RunStopRef(UUID(row[15]), row[16]) if row[15] is not None else None,
             )
             for row in rows
         ]

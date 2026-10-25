@@ -161,7 +161,7 @@ class Replies:
             return ReplyStatus.APPLIED, outcome
         if reply.thread_id is None:
             return ReplyStatus.STALE, "No thread takes this answer."
-        if self._registry.answered(reply.notification_id):
+        if self._registry.answered(reply.notification.notification_id):
             return ReplyStatus.STALE, "Already answered."
         # An answer is asked for at most once: one that may have landed is never repeated.
         if reply.calling:
@@ -193,6 +193,6 @@ class Replies:
         try:
             editor = self._channels.sender(channel)
             if isinstance(editor, ReceivingKind):
-                await editor.edit(reply.message, outcome)
+                await editor.edit(reply.message, reply.notification, outcome)
         except Exception:
             _logger.exception('Channel "%s" did not edit its message.', channel.name)

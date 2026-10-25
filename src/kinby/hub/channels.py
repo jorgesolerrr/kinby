@@ -128,8 +128,9 @@ class ReceivingKind(ChannelKind, Protocol):
         carried."""
         ...
 
-    async def edit(self, message: SentRef, outcome: str) -> None:
-        """Show on the message that it was answered, and what came of the reply."""
+    async def edit(self, message: SentRef, notification: ChannelNotification, outcome: str) -> None:
+        """Show on the message, which sent *notification*, that it was answered and what came of
+        the reply. The notification stays on it, without its options."""
         ...
 
 

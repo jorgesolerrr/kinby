@@ -120,15 +120,8 @@ class DiscordBot:
 
     async def send(self, notification: ChannelNotification) -> SentRef:
         """Send the notification as one embed, with a button for each option."""
-        embed: dict[str, object] = {
-            "author": {"name": _cut(notification.header, _HEADING_CHARACTERS)},
-            "title": _cut(notification.title, _HEADING_CHARACTERS),
-            "description": notification.text,
-        }
-        if notification.link is not None:
-            embed["url"] = notification.link
         body = {
-            "embeds": [embed],
+            "embeds": [_embed(notification)],
             "components": [
                 {
                     "type": 1,
@@ -150,14 +143,14 @@ class DiscordBot:
             case sent:
                 raise DiscordRefused(f"Discord sent no message id: {sent!r}")
 
-    async def edit(self, message: SentRef, outcome: str) -> None:
-        """Replace the message with the outcome, without its embed or buttons."""
+    async def edit(self, message: SentRef, notification: ChannelNotification, outcome: str) -> None:
+        """Put the outcome above the notification's embed and take the buttons off."""
         await self._call(
             "PATCH",
             f"channels/{self._dm}/messages/{message}",
             {
                 "content": _cut(outcome, _CONTENT_CHARACTERS),
-                "embeds": [],
+                "embeds": [_embed(notification)],
                 "components": [],
             },
         )
@@ -232,6 +225,17 @@ class DiscordBot:
             if answer.status >= 400:
                 raise DiscordRefused(f"Discord answered {answer.status}: {await answer.text()}")
             return await answer.json()
+
+
+def _embed(notification: ChannelNotification) -> dict[str, object]:
+    embed: dict[str, object] = {
+        "author": {"name": _cut(notification.header, _HEADING_CHARACTERS)},
+        "title": _cut(notification.title, _HEADING_CHARACTERS),
+        "description": notification.text,
+    }
+    if notification.link is not None:
+        embed["url"] = notification.link
+    return embed
 
 
 def _cut(text: str, limit: int) -> str:
