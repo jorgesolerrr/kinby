@@ -38,6 +38,7 @@ import {
   useStatsOpen,
   useThreadsOpen,
   useUsageOpen,
+  useViewOpen,
 } from "@/lib/selection"
 
 export default function App({ client, clock = browserClock }: { client: Client; clock?: Clock }) {
@@ -63,6 +64,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const configOpen = useConfigOpen()
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
+  const viewId = useViewOpen()
   const usageOpen = useUsageOpen()
   const libraryOpen = useLibraryOpen()
   const secretsOpen = useSecretsOpen()
@@ -175,6 +177,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                     configOpen={configOpen}
                     memoryOpen={memoryOpen}
                     statsOpen={statsOpen}
+                    viewId={viewId}
                     instanceClient={instanceClient}
                     onChanged={listAgain}
                   />

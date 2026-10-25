@@ -9,6 +9,7 @@ const ROUTINES = "routines"
 const CORE = "core"
 const MEMORY = "memory"
 const STATS = "stats"
+const VIEWS = "views"
 export const CREATE_PATH = "/new"
 export const USAGE_PATH = "/usage"
 export const REMOVED_PATH = "/removed"
@@ -60,6 +61,11 @@ export function nodePath(instanceId: string, node: string): string {
 
 export function statsPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${STATS}`
+}
+
+/** One of an instance's views, on its own page. */
+function viewPath(instanceId: string, viewId: string): string {
+  return `${instancePath(instanceId)}/${VIEWS}/${encodeURIComponent(viewId)}`
 }
 
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
@@ -122,6 +128,11 @@ export function leaveNode(instanceId: string): void {
 /** Open an instance's stats page the same way. */
 export function openStats(instanceId: string): void {
   navigate(statsPath(instanceId))
+}
+
+/** Open one of an instance's views the same way. */
+export function openView(instanceId: string, viewId: string): void {
+  navigate(viewPath(instanceId, viewId))
 }
 
 /**
@@ -207,6 +218,11 @@ export function useMemoryOpen(): boolean {
 /** Whether the URL opens its instance's stats page. */
 export function useStatsOpen(): boolean {
   return useSyncExternalStore(subscribe, statsOpen)
+}
+
+/** The view the URL opens under its instance, if it names one. */
+export function useViewOpen(): string | undefined {
+  return useSyncExternalStore(subscribe, openedView)
 }
 
 /** Whether the URL opens the onboarding. */
@@ -304,6 +320,13 @@ export function linkedNode(): string | undefined {
 function statsOpen(): boolean {
   const [, section, instanceId, stats] = window.location.pathname.split("/")
   return section === SECTION && Boolean(instanceId) && stats === STATS
+}
+
+function openedView(): string | undefined {
+  const [, section, instanceId, views, viewId] = window.location.pathname.split("/")
+  return section === SECTION && instanceId && views === VIEWS && viewId
+    ? decoded(viewId)
+    : undefined
 }
 
 function decoded(part: string): string | undefined {

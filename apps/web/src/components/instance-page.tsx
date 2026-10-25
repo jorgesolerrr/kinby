@@ -1,11 +1,13 @@
 import type {
   Client,
   Clock,
+  InstanceClient,
   InstanceStatusResult,
   InstanceSummary,
   LifecycleOperationResult,
   LoginSetup,
   RepositoryCommandList,
+  ViewSummary,
 } from "@kinby/contract"
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
@@ -54,7 +56,7 @@ import { useFollowing } from "@/hooks/use-following"
 import { followStart, type Starting } from "@/lib/creation"
 import { instanceName, observedState } from "@/lib/instances"
 import { type Followed, followOperation, reason } from "@/lib/operation"
-import { openConfig, openHome, openMemory, openStats } from "@/lib/selection"
+import { openConfig, openHome, openMemory, openStats, openView } from "@/lib/selection"
 import {
   BotIcon,
   BrainIcon,
@@ -63,13 +65,14 @@ import {
   CircleStopIcon,
   CircleXIcon,
   EllipsisIcon,
+  LayoutDashboardIcon,
   SlidersHorizontalIcon,
 } from "lucide-react"
 
 /**
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
  * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
- * its memory, and its stats, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
+ * its memory, its stats, and through `client`, its own connection, its views, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
  * all are. Outside the setup card, an instance whose factory role needs repository commands shows
  * them.
  * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home. The home
@@ -80,11 +83,13 @@ import {
  */
 export function InstancePage({
   caller,
+  client,
   clock,
   instance,
   onChanged,
 }: {
   caller: Pick<Client, "call">
+  client?: Pick<InstanceClient, "call">
   clock: Clock
   instance: InstanceSummary
   onChanged: () => void
@@ -166,6 +171,9 @@ export function InstancePage({
               <ChartColumnIcon data-icon="inline-start" />
               Stats
             </Button>
+            {client !== undefined && (
+              <ViewsMenu client={client} instanceId={instance.instance_id} />
+            )}
             <div className="ml-auto flex items-center gap-2">
               <StopButton
                 caller={caller}
@@ -307,6 +315,46 @@ function StopButton({
  * in the dialog with the hub's message. A force stop only escalates the drain: the removal's own
  * operation still says how it ends, even when it ends before the escalation lands.
  */
+/** The instance's views, read each time the menu opens. Picking one opens its page. */
+function ViewsMenu({
+  client,
+  instanceId,
+}: {
+  client: Pick<InstanceClient, "call">
+  instanceId: string
+}) {
+  const [views, setViews] = useState<ViewSummary[]>()
+  const [failure, setFailure] = useState<string>()
+  const list = () => {
+    setFailure(undefined)
+    client.call("view.list", {}).then(
+      (listed) => setViews(listed.views),
+      (error: unknown) => setFailure(reason(error)),
+    )
+  }
+  return (
+    <DropdownMenu onOpenChange={(open) => open && list()}>
+      <DropdownMenuTrigger render={<Button variant="outline" />}>
+        <LayoutDashboardIcon data-icon="inline-start" />
+        Views
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        {failure !== undefined || views === undefined || views.length === 0 ? (
+          <DropdownMenuItem disabled>
+            {failure ?? (views === undefined ? "Reading…" : "No views yet")}
+          </DropdownMenuItem>
+        ) : (
+          views.map((view) => (
+            <DropdownMenuItem key={view.id} onClick={() => openView(instanceId, view.id)}>
+              {view.title}
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function RemoveMenu({
   caller,
   clock,

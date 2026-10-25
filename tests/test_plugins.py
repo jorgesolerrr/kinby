@@ -271,6 +271,9 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
             "write",
         ]
 
@@ -345,6 +348,9 @@ def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeyp
                 "skill",
                 "skill_delete",
                 "skill_write",
+                "view_list",
+                "view_read",
+                "view_write",
             ],
             [
                 "forget",
@@ -361,6 +367,9 @@ def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeyp
                 "skill",
                 "skill_delete",
                 "skill_write",
+                "view_list",
+                "view_read",
+                "view_write",
             ],
         ]
 
@@ -447,6 +456,9 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
                 "skill",
                 "skill_delete",
                 "skill_write",
+                "view_list",
+                "view_read",
+                "view_write",
             ],
             [
                 "available",
@@ -463,6 +475,9 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
                 "skill",
                 "skill_delete",
                 "skill_write",
+                "view_list",
+                "view_read",
+                "view_write",
             ],
         ]
 
@@ -513,6 +528,9 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
 
     asyncio.run(scenario())
@@ -552,6 +570,9 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
                 "skill",
                 "skill_delete",
                 "skill_write",
+                "view_list",
+                "view_read",
+                "view_write",
             ]
         ]
 
@@ -588,6 +609,9 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
             "write",
         ]
 
@@ -1118,6 +1142,9 @@ def greet(name: str) -> str:
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         bound = next(tool for tool in model.bound_tools[0] if tool.name == "greet")
         assert bound.description == "Greet someone by name."
@@ -1581,6 +1608,9 @@ def {tool_name}() -> str:
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
             "zulu",
         ]
 
@@ -1639,6 +1669,9 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         result = next(event.payload for event in events if isinstance(event.payload, ToolResult))
         assert _without_duration(result) == ToolResult(
@@ -2121,6 +2154,9 @@ def version() -> str:
             "skill_delete",
             "skill_write",
             "version",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         assert [tool.name for tool in model.bound_tools[1]] == [
             "forget",
@@ -2137,6 +2173,9 @@ def version() -> str:
             "skill_delete",
             "skill_write",
             "version",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         assert [tool.name for tool in model.bound_tools[2]] == [
             "forget",
@@ -2152,6 +2191,9 @@ def version() -> str:
             "skill",
             "skill_delete",
             "skill_write",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         assert not any(isinstance(event.payload, ToolCall) for event in third)
 
@@ -2236,6 +2278,9 @@ def fresh() -> str:
             "skill_delete",
             "skill_write",
             "stable",
+            "view_list",
+            "view_read",
+            "view_write",
         ]
         repeated = [event.payload for event in again if isinstance(event.payload, Warning)]
         assert [warning.sources for warning in repeated] == [

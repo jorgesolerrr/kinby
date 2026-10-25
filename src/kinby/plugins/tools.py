@@ -20,6 +20,7 @@ from kinby.contracts import (
     NotificationRaised,
     NotificationRefused,
     RoutineName,
+    ViewChanged,
 )
 from kinby.instance import Instance
 
@@ -29,6 +30,7 @@ RecallReporter = Callable[[tuple[NodeId, ...]], Awaitable[object]]
 NotificationReporter = Callable[
     [NotificationRaised | NotificationAccepted | NotificationRefused], Awaitable[Event]
 ]
+ViewReporter = Callable[[ViewChanged], Awaitable[object]]
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class ToolContext:
     run_reporter: RunReporter | None = field(default=None, repr=False)
     recall_reporter: RecallReporter | None = field(default=None, repr=False)
     notification_reporter: NotificationReporter | None = field(default=None, repr=False)
+    view_reporter: ViewReporter | None = field(default=None, repr=False)
 
     @property
     def workspace(self) -> Path:
@@ -82,6 +85,12 @@ class ToolContext:
             raise NoActiveTurn(f'Thread "{self.thread_id}" has no open turn to notify from.')
         return await self.notification_reporter(payload)
 
+    async def report_view_changed(self, changed: ViewChanged) -> None:
+        """Record that the turn that invoked the tool wrote a view. Outside a turn there is
+        nothing to record."""
+        if self.view_reporter is not None:
+            await self.view_reporter(changed)
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -98,6 +107,8 @@ class Tool:
     consolidation: bool = False
     #: The notify tool, which runs unasked unless a rule names it (ADR 0103).
     notify: bool = False
+    #: A view write, which runs unasked unless a rule names it (ADR 0108).
+    view: bool = False
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(
@@ -142,7 +153,12 @@ class Tool:
 
 
 def tool(
-    *, write: bool, paths: tuple[str, ...] = (), hub: bool = False, notify: bool = False
+    *,
+    write: bool,
+    paths: tuple[str, ...] = (),
+    hub: bool = False,
+    notify: bool = False,
+    view: bool = False,
 ) -> Callable[[ToolFunction], Tool]:
     """Build a structured tool from a function signature and docstring."""
 
@@ -171,6 +187,7 @@ def tool(
             paths=paths,
             hub=hub,
             notify=notify,
+            view=view,
             context_parameter=context_parameter,
         )
 

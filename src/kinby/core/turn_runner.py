@@ -512,6 +512,7 @@ class LangGraphRunner:
                                 run_reporter=_run_reporter(emit),
                                 recall_reporter=_recall_reporter(emit),
                                 notification_reporter=emit,
+                                view_reporter=emit,
                             ),
                             user_message=HumanMessage(
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)

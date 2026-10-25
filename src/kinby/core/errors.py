@@ -132,6 +132,10 @@ class ThreadNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class ViewNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class MemoryNodeNotFound(CoreError):
     """No live knowledge graph node has this id: none was written, or it was forgotten."""
 

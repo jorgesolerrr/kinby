@@ -175,6 +175,7 @@ class EventType(StrEnum):
     NOTIFICATION_RAISED = "notification.raised"
     NOTIFICATION_ACCEPTED = "notification.accepted"
     NOTIFICATION_REFUSED = "notification.refused"
+    VIEW_CHANGED = "view.changed"
 
 
 class UserOrigin(ContractModel):
@@ -566,6 +567,24 @@ class NotificationRefused(ContractModel):
     reason: str
 
 
+#: A view's id, a short slug like a routine's name, which names its file in the instance.
+type ViewId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+
+
+class ViewChange(StrEnum):
+    CREATED = "created"
+    CHANGED = "changed"
+
+
+class ViewChanged(ContractModel):
+    """A turn wrote a view. The view's content stays in the view."""
+
+    type: Literal[EventType.VIEW_CHANGED] = EventType.VIEW_CHANGED
+    view: ViewId
+    title: str
+    change: ViewChange
+
+
 Payload = Annotated[
     ModePinned
     | TurnStarted
@@ -592,7 +611,8 @@ Payload = Annotated[
     | WorkspaceReverted
     | NotificationRaised
     | NotificationAccepted
-    | NotificationRefused,
+    | NotificationRefused
+    | ViewChanged,
     Field(discriminator="type"),
 ]
 
@@ -3091,3 +3111,146 @@ class FactoryRunDetail(ContractModel):
 
 class FactoryRunSubscribeCommand(ContractModel):
     """Follow every factory run of the hub as its state changes. Nothing is replayed."""
+
+
+#: Where a binding reads in a view's data: an RFC 6901 JSON Pointer. Inside a list template it
+#: reads in the item.
+type JsonPointer = Annotated[str, Field(pattern=r"^(/.*)?$")]
+#: A component's id, unique in its spec. Children and templates name components by it.
+type ViewComponentId = Annotated[str, Field(min_length=1)]
+
+#: The component every view renders from.
+VIEW_ROOT = "root"
+
+
+class Binding(ContractModel):
+    """A prop whose value is read from the view's data. A path that does not resolve renders as
+    empty."""
+
+    path: JsonPointer
+
+
+class ListBinding(ContractModel):
+    """Children repeated from an array in the view's data: the template once per item, with its
+    paths read in the item."""
+
+    path: JsonPointer
+    template: ViewComponentId
+
+
+type TextProp = str | Binding
+
+
+class ViewCard(ContractModel):
+    """A card with an optional title and description, holding its children."""
+
+    id: ViewComponentId
+    component: Literal["Card"] = "Card"
+    title: TextProp | None = None
+    description: TextProp | None = None
+    children: list[ViewComponentId] | ListBinding = Field(default_factory=list)
+
+
+class ViewText(ContractModel):
+    """A paragraph of text."""
+
+    id: ViewComponentId
+    component: Literal["Text"] = "Text"
+    text: TextProp
+
+
+class ViewLink(ContractModel):
+    """A link that opens its target, an http, https or mailto address, in a new tab."""
+
+    id: ViewComponentId
+    component: Literal["Link"] = "Link"
+    label: TextProp
+    href: TextProp
+
+
+#: The view catalogue: every component a view can be composed from.
+type ViewComponent = Annotated[ViewCard | ViewText | ViewLink, Field(discriminator="component")]
+
+
+class ViewSpec(ContractModel):
+    """A view's layout: a flat list of components, one of them the root, that name their children
+    by id."""
+
+    components: list[ViewComponent]
+
+    @model_validator(mode="after")
+    def _a_tree_from_the_root(self) -> Self:
+        ids = [component.id for component in self.components]
+        duplicates = sorted({named for named in ids if ids.count(named) > 1})
+        if duplicates:
+            raise ValueError(f"Component ids must be unique; repeated: {', '.join(duplicates)}.")
+        if VIEW_ROOT not in ids:
+            raise ValueError(f'One component must have the id "{VIEW_ROOT}".')
+        named = {component.id: _named_components(component) for component in self.components}
+        for parent, children in named.items():
+            missing = [child for child in children if child not in named]
+            if missing:
+                raise ValueError(
+                    f'Component "{parent}" names components that do not exist: '
+                    f"{', '.join(missing)}."
+                )
+        cycle = _cycle(named)
+        if cycle is not None:
+            raise ValueError(f"Components must not contain themselves: {' -> '.join(cycle)}.")
+        return self
+
+
+def _named_components(component: ViewComponent) -> list[str]:
+    """The ids a component names as its children or its template."""
+    match component:
+        case ViewCard(children=ListBinding(template=template)):
+            return [template]
+        case ViewCard(children=list() as children):
+            return children
+    return []
+
+
+def _cycle(named: dict[str, list[str]]) -> list[str] | None:
+    """A path of ids that comes back to where it started, if the components hold one."""
+    finished: set[str] = set()
+
+    def visit(component: str, path: list[str]) -> list[str] | None:
+        if component in path:
+            return [*path[path.index(component) :], component]
+        if component in finished:
+            return None
+        for child in named[component]:
+            found = visit(child, [*path, component])
+            if found is not None:
+                return found
+        finished.add(component)
+        return None
+
+    return next((cycle for start in named if (cycle := visit(start, [])) is not None), None)
+
+
+class ViewSummary(ContractModel):
+    id: ViewId
+    title: Annotated[str, Field(min_length=1)]
+    updated_at: AwareDatetime
+
+
+class View(ViewSummary):
+    """A page of UI an instance keeps: its layout from the view catalogue, and the data the
+    layout's bindings read."""
+
+    spec: ViewSpec
+    data: dict[str, JsonValue]
+
+
+class ViewListCommand(ContractModel):
+    pass
+
+
+class ViewListResult(ContractModel):
+    #: By id.
+    views: list[ViewSummary]
+
+
+class ViewGetCommand(ContractModel):
+    id: ViewId
