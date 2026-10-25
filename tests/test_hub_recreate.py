@@ -91,6 +91,36 @@ def test_a_recreation_applies_replaced_secrets_through_the_drain_and_stop_path(t
     asyncio.run(scenario())
 
 
+def test_a_force_stop_escalates_a_recreation_s_drain_and_the_recreation_carries_on(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        accepted = await client.call(
+            INSTANCE_RECREATE,
+            InstanceRecreateCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        escalated = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=True),
+        )
+        assert isinstance(escalated, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert escalated.operation_id == accepted.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [False, True]
+        assert len(runtime.created) == 2
+        assert runtime.started == [str(created.instance_id)] * 2
+
+    asyncio.run(scenario())
+
+
 def test_a_recreation_brings_a_missing_container_back_on_request(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()

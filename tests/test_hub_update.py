@@ -392,6 +392,78 @@ def test_an_interruption_after_the_replacement_exists_keeps_that_image(tmp_path)
     asyncio.run(scenario())
 
 
+def test_a_force_stop_escalates_an_update_s_drain_and_the_update_carries_on(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(holds=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=CandidateImages(), control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        accepted = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0"),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        escalated = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=True),
+        )
+        assert isinstance(escalated, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+        later = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id),
+        )
+        assert isinstance(later, LifecycleOperationResult)
+        stopped = await finished_operation(client, later)
+
+        assert escalated.operation_id == accepted.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
+        assert ("force", "Force stop requested. Interrupting active work.") in [
+            (step.name, step.detail) for step in outcome.steps
+        ]
+        assert runtime.created[1].image == "sha256:v0.2.0-image"
+        assert runtime.started == [str(created.instance_id)] * 2
+        assert later.operation_id != accepted.operation_id
+        assert stopped.kind is OperationKind.STOP
+        assert stopped.state is OperationState.SUCCEEDED
+        assert control.forces == [False, True, False]
+
+    asyncio.run(scenario())
+
+
+def test_a_stop_after_a_failed_update_opens_its_own_operation(tmp_path):
+    async def scenario() -> None:
+        control = FakeControl(refuses=True)
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=CandidateImages(), control=control)
+        client = hub_client(hub)
+        created = await started_instance(client, hub)
+
+        accepted = await client.call(
+            INSTANCE_UPDATE,
+            InstanceUpdateCommand(instance_id=created.instance_id, revision="v0.2.0"),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        failed = await finished_operation(client, accepted)
+        control.refuses = False
+        later = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=created.instance_id, force=True),
+        )
+        assert isinstance(later, LifecycleOperationResult)
+        stopped = await finished_operation(client, later)
+
+        assert failed.state is OperationState.FAILED
+        assert later.operation_id != accepted.operation_id
+        assert stopped.kind is OperationKind.STOP
+        assert stopped.state is OperationState.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
 def test_an_update_is_refused_while_another_operation_owns_the_instance(tmp_path):
     async def scenario() -> None:
         control = FakeControl(holds=True)

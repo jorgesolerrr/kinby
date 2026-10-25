@@ -367,6 +367,15 @@ class Turns:
                 return
             await self._changed.wait()
 
+    async def wait_live(self) -> None:
+        """Wait until no live turn and no claim holds the instance. A parked approval stays
+        parked, to resume at the next start."""
+        while True:
+            self._changed.clear()
+            if not self._live() and not self._claims:
+                return
+            await self._changed.wait()
+
     async def drain(self) -> None:
         tasks = [running.task for running in self._running.values()]
         if tasks:

@@ -254,47 +254,48 @@ def test_draining_waits_for_an_accepted_turn_to_close(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_a_parked_approval_keeps_the_drain_pending_until_it_is_answered(tmp_path: Path) -> None:
+def test_a_drain_leaves_a_parked_approval_parked_for_the_next_start(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
-        runtime = booted(instance, ParkingRunner())
+        runner = ParkingRunner()
+        runtime = booted(instance, runner)
         thread = await opened_thread(runtime.dispatcher)
         await call(runtime.dispatcher, "thread.turn.start", thread_id=str(thread), message="Hi")
         await until(
             lambda: any(isinstance(e.payload, ApprovalRequested) for e in recorded(instance))
         )
 
-        draining = asyncio.create_task(runtime.drain(InstanceDrainCommand()))
-        await asyncio.sleep(0)
-        parked = not draining.done()
+        result = await asyncio.wait_for(runtime.drain(InstanceDrainCommand()), timeout=5)
+        await runtime.stop_interrupting_running_routine()
+        while_drained = [type(event.payload).__name__ for event in recorded(instance)]
+        restarted = booted(load_instance(tmp_path), runner)
         answered = await call(
-            runtime.dispatcher,
+            restarted.dispatcher,
             "thread.approval.respond",
             thread_id=str(thread),
             approval_id=str(_APPROVAL_ID),
             decision="approve",
         )
-        result = await asyncio.wait_for(draining, timeout=5)
+        await until(lambda: any(isinstance(e.payload, TurnCompleted) for e in recorded(instance)))
+        await restarted.stop_after_running_routine()
 
-        assert parked is True
-        assert not isinstance(answered, ErrorEnvelope)
         assert result.state is DrainState.DRAINED
-        assert any(isinstance(event.payload, TurnCompleted) for event in recorded(instance))
+        assert while_drained == [TurnStarted.__name__, ApprovalRequested.__name__]
+        assert not isinstance(answered, ErrorEnvelope)
 
     asyncio.run(scenario())
 
 
-def test_force_escalates_a_pending_drain_and_interrupts_the_parked_approval(
+def test_force_escalates_a_pending_drain_and_interrupts_the_running_turn(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
-        runtime = booted(instance, ParkingRunner())
+        runner = WaitingRunner()
+        runtime = booted(instance, runner)
         thread = await opened_thread(runtime.dispatcher)
         await call(runtime.dispatcher, "thread.turn.start", thread_id=str(thread), message="Hi")
-        await until(
-            lambda: any(isinstance(e.payload, ApprovalRequested) for e in recorded(instance))
-        )
+        await asyncio.wait_for(runner.started.wait(), timeout=5)
 
         draining = asyncio.create_task(runtime.drain(InstanceDrainCommand()))
         await asyncio.sleep(0)
@@ -477,7 +478,7 @@ def test_the_hub_stops_a_served_instance_through_its_private_server(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A parked approval holds the stop; answering it lets recap and the container finish."""
+    """A running turn holds the stop; its end lets recap and the container finish."""
     monkeypatch.setenv("SIGNAL_SECRET", "secret")
 
     async def scenario() -> tuple[OperationGetResult, OperationGetResult, list[str], list[str]]:
@@ -488,16 +489,15 @@ def test_the_hub_stops_a_served_instance_through_its_private_server(
         instance = load_instance(tmp_path / "instance")
         routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
         log = EventLog(instance.manifest.state_dir)
+        runner = WaitingRunner()
         runtime = booted(
             instance,
-            ParkingRunner(),
+            runner,
             recap=RecapWriter(log, GraphStore(instance.path), instance),
         )
         thread = await opened_thread(runtime.dispatcher)
         await call(runtime.dispatcher, "thread.turn.start", thread_id=str(thread), message="Hi")
-        await until(
-            lambda: any(isinstance(e.payload, ApprovalRequested) for e in recorded(instance))
-        )
+        await asyncio.wait_for(runner.started.wait(), timeout=5)
 
         container = ServedRuntime()
         hub = hub_at(tmp_path / "hub", runtime=container, control=HttpInstanceControl())
@@ -514,14 +514,7 @@ def test_the_hub_stops_a_served_instance_through_its_private_server(
             await until(lambda: _draining(hub, stopping.operation_id))
             pending = hub.registry.operation(stopping.operation_id)
             delivery = await _post_signal(address)
-            answered = await call(
-                runtime.dispatcher,
-                "thread.approval.respond",
-                thread_id=str(thread),
-                approval_id=str(_APPROVAL_ID),
-                decision="approve",
-            )
-            assert not isinstance(answered, ErrorEnvelope)
+            runner.release.set()
             outcome = await _finished(hub, stopping.operation_id)
         while_stopping = [type(event.payload).__name__ for event in recorded(instance)]
 
@@ -545,7 +538,7 @@ def test_the_hub_stops_a_served_instance_through_its_private_server(
     assert outcome.state is OperationState.SUCCEEDED
     assert outcome.detail == "Instance stopped."
     assert "Instance drained. Stopping the container." in [step.detail for step in outcome.steps]
-    # The turn that was parked finished, its recap ran, and the delivery only waited.
+    # The running turn finished, its recap ran, and the delivery only waited.
     assert while_stopping.count(TurnCompleted.__name__) == 1
     assert MemoryRecapped.__name__ in while_stopping
     assert while_stopping.count(TurnStarted.__name__) == 1
