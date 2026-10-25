@@ -183,6 +183,7 @@ from kinby.contracts.models import (
     ViewGetCommand,
     ViewListCommand,
     ViewListResult,
+    ViewSubscribeCommand,
 )
 
 
@@ -323,6 +324,7 @@ SKILL_DELETE = Method("skill.delete", Scope.INSTANCE_ADMIN, SkillDeleteCommand, 
 TOOL_LIST = Method("tool.list", Scope.INSTANCE_READ, ToolListCommand, ToolListResult)
 VIEW_LIST = Method("view.list", Scope.INSTANCE_READ, ViewListCommand, ViewListResult)
 VIEW_GET = Method("view.get", Scope.INSTANCE_READ, ViewGetCommand, View)
+VIEW_SUBSCRIBE = Subscription("view.subscribe", Scope.INSTANCE_READ, ViewSubscribeCommand, View)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -588,7 +590,7 @@ METHODS = (
     NOTIFICATION_LIST,
     NOTIFICATION_REPLY,
 )
-SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE)
+SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE, VIEW_SUBSCRIBE)
 
 #: The methods of an instance the hub relays to the home instance: reads only.
 RELAYED_READS = frozenset(

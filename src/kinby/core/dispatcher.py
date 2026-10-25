@@ -66,6 +66,7 @@ from kinby.contracts import (
     USAGE_GET,
     VIEW_GET,
     VIEW_LIST,
+    VIEW_SUBSCRIBE,
     AcceptedResult,
     Capability,
     ContractModel,
@@ -274,6 +275,8 @@ class Dispatcher:
         route, command = call
         try:
             stream = await route.handler(command)
+        except CoreError as exc:
+            return exc.envelope()
         except Exception:
             return _SUBSCRIPTION_FAILED
         return Stream(stream.head_sequence, _guarded(stream.items), _close=stream._close)
@@ -537,6 +540,7 @@ def build_dispatcher(
         views = InstanceViews(turns.scheduler.instance)
         dispatcher.register(VIEW_LIST, views.list)
         dispatcher.register(VIEW_GET, views.get)
+        dispatcher.register_subscription(VIEW_SUBSCRIBE, views.subscribe)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)
         dispatcher.register(ROUTINE_RUN, scheduler.run)

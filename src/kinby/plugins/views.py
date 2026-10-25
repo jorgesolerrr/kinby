@@ -7,13 +7,19 @@ import json
 
 from pydantic import JsonValue
 
-from kinby.contracts import ViewChanged, ViewId, ViewSpec
-from kinby.instance.views import list_views, read_view, write_view
+from kinby.contracts import ViewChange, ViewChanged, ViewId, ViewSpec
+from kinby.instance.views import (
+    ViewPatchOperation,
+    list_views,
+    patch_view,
+    read_view,
+    write_view,
+)
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 
 def view_tools() -> tuple[Tool, ...]:
-    return (view_list, view_read, view_write)
+    return (view_list, view_read, view_write, view_patch)
 
 
 @tool(write=False)
@@ -50,3 +56,20 @@ async def view_write(
     change = await asyncio.to_thread(write_view, context.instance, id, title, spec, data)
     await context.report_view_changed(ViewChanged(view=id, title=title, change=change))
     return f"{change.value.capitalize()} view {id}."
+
+
+@tool(write=True, view=True)
+async def view_patch(id: ViewId, ops: list[ViewPatchOperation], context: ToolContext) -> str:
+    """Change part of a view with RFC 6902 JSON Patch operations, such as adding one item to a
+    list, instead of writing the whole view again. Call view_read first.
+
+    The operations apply in order to {"title", "spec", "data"} as view_read returns them: the
+    path "/data/postings/-" appends to the postings, and "/spec/components/2/columns/-" adds a
+    column to the third component. The result must still be a valid view under 1 MB, or nothing
+    is written.
+    """
+    patched = await asyncio.to_thread(patch_view, context.instance, id, ops)
+    await context.report_view_changed(
+        ViewChanged(view=id, title=patched.title, change=ViewChange.CHANGED)
+    )
+    return f"Changed view {id}."

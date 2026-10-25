@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest"
 
 import { CallError, createClient, type Transport } from "./client"
-import type { Event, InstanceListResult, InstanceStatusResult } from "./index"
+import type { Event, InstanceListResult, InstanceStatusResult, View } from "./index"
 import { type FakeHub, fakeClock, fakeHub } from "./testing"
 
 const ORIGIN = "https://hub.example"
@@ -255,6 +255,35 @@ describe("client", () => {
       },
     ])
     expect(await collect(events)).toEqual([event(1), event(2), event(3)])
+  })
+
+  it("delivers every snapshot, which has no sequence, and resubscribes for the current one", async () => {
+    const { client, hub, socket, clock } = await connected()
+    const snapshot = (title: string): View => ({
+      id: "board",
+      title,
+      updated_at: "2026-10-25T09:30:00Z",
+      spec: { components: [{ id: "root", component: "Text", text: title }] },
+      data: {},
+    })
+
+    const views = client.subscribe("view.subscribe", { id: "board" })
+    socket.receive({ type: "item", id: "1", item: snapshot("Board") })
+    socket.receive({ type: "item", id: "1", item: snapshot("Board") })
+    socket.drop()
+    await clock.advance(16_000)
+    const reopened = lastSocket(hub)
+    reopened.receive({ type: "item", id: "1", item: snapshot("Job board") })
+    reopened.receive({ type: "end", id: "1" })
+
+    expect(reopened.sent).toEqual([
+      { type: "subscribe", id: "1", method: "view.subscribe", params: { id: "board" } },
+    ])
+    expect(await collect(views)).toEqual([
+      snapshot("Board"),
+      snapshot("Board"),
+      snapshot("Job board"),
+    ])
   })
 
   it("sends a subscription opened while reconnecting once the socket is back", async () => {

@@ -2,20 +2,60 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import Annotated, Literal
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+import jsonpatch
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
-from kinby.contracts import View, ViewChange, ViewId, ViewSpec, ViewSummary
+from kinby.contracts import (
+    ContractModel,
+    JsonPointer,
+    View,
+    ViewChange,
+    ViewId,
+    ViewSpec,
+    ViewSummary,
+)
 from kinby.instance.dataclasses import Instance
 from kinby.instance.layout import VIEWS_DIR
 
 #: The most a view takes up serialized, so a whole snapshot stays cheap to send.
 VIEW_CAP_BYTES = 1_000_000
 _VIEW_ID = TypeAdapter(ViewId)
+
+#: Who hears of each write, by the view's file. Writes run in worker threads.
+_watchers: dict[Path, set[Callable[[View], object]]] = {}
+_watchers_lock = threading.Lock()
+
+
+class ValueOperation(ContractModel):
+    op: Literal["add", "replace", "test"]
+    path: JsonPointer
+    value: JsonValue
+
+
+class RemoveOperation(ContractModel):
+    op: Literal["remove"]
+    path: JsonPointer
+
+
+class FromOperation(ContractModel):
+    op: Literal["move", "copy"]
+    from_: JsonPointer = Field(alias="from")
+    path: JsonPointer
+
+
+#: One RFC 6902 JSON Patch operation.
+type ViewPatchOperation = Annotated[
+    ValueOperation | RemoveOperation | FromOperation, Field(discriminator="op")
+]
 
 
 def list_views(instance: Instance) -> list[ViewSummary]:
@@ -39,8 +79,33 @@ def write_view(
     instance: Instance, view_id: str, title: str, spec: ViewSpec, data: dict[str, JsonValue]
 ) -> ViewChange:
     """Create or replace a view, whole. A reader sees the old view or the new one, never half."""
-    path = _view_path(instance, view_id)
     view = View(id=view_id, title=title, spec=spec, data=data, updated_at=datetime.now(UTC))
+    return _store(instance, view)
+
+
+def patch_view(instance: Instance, view_id: str, ops: Sequence[ViewPatchOperation]) -> View:
+    """Apply *ops* in order to the view's title, spec and data, and write the result only if it
+    is still a valid view."""
+    document = read_view(instance, view_id).model_dump(
+        mode="json", include={"title", "spec", "data"}
+    )
+    for number, op in enumerate(ops):
+        try:
+            operation = op.model_dump(mode="json", by_alias=True)
+            document = jsonpatch.apply_patch(document, [operation], in_place=True)
+        except jsonpatch.JsonPatchException, jsonpatch.JsonPointerException:
+            # The library's message quotes the document, which may be up to a megabyte.
+            raise ValueError(
+                f'Operation {number} ({op.op} "{op.path}") does not apply to the view. '
+                "Read it with view_read for its paths."
+            ) from None
+    patched = View.model_validate({**document, "id": view_id, "updated_at": datetime.now(UTC)})
+    _store(instance, patched)
+    return patched
+
+
+def _store(instance: Instance, view: View) -> ViewChange:
+    path = _view_path(instance, view.id)
     serialized = view.model_dump_json().encode()
     if len(serialized) > VIEW_CAP_BYTES:
         megabytes = len(serialized) / VIEW_CAP_BYTES
@@ -53,7 +118,34 @@ def write_view(
     with NamedTemporaryFile(dir=path.parent, prefix=".", suffix=".tmp", delete=False) as staged:
         staged.write(serialized)
     os.replace(staged.name, path)
+    with _watchers_lock:
+        watchers = tuple(_watchers.get(path, ()))
+    for watcher in watchers:
+        watcher(view)
     return change
+
+
+def watch_view(instance: Instance, view_id: str) -> tuple[asyncio.Queue[View], Callable[[], None]]:
+    """A queue that gets the view after each write from now on, and the call that stops it.
+    Call it on the event loop that reads the queue."""
+    loop = asyncio.get_running_loop()
+    path = _view_path(instance, view_id)
+    changes: asyncio.Queue[View] = asyncio.Queue()
+
+    def watcher(view: View) -> None:
+        loop.call_soon_threadsafe(changes.put_nowait, view)
+
+    with _watchers_lock:
+        _watchers.setdefault(path, set()).add(watcher)
+
+    def stop() -> None:
+        with _watchers_lock:
+            watchers = _watchers.get(path, set())
+            watchers.discard(watcher)
+            if not watchers:
+                _watchers.pop(path, None)
+
+    return changes, stop
 
 
 def _view_path(instance: Instance, view_id: str) -> Path:

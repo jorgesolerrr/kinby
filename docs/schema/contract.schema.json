@@ -9893,6 +9893,20 @@
       "title": "ViewStat",
       "type": "object"
     },
+    "ViewSubscribeCommand": {
+      "additionalProperties": false,
+      "description": "Follow one view: the view as it is, then the whole view again after each write.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ViewSubscribeCommand",
+      "type": "object"
+    },
     "ViewSummary": {
       "additionalProperties": false,
       "properties": {
@@ -11985,11 +11999,28 @@
             "item"
           ],
           "type": "object"
+        },
+        "view.subscribe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ViewSubscribeCommand"
+            },
+            "item": {
+              "$ref": "#/$defs/View"
+            }
+          },
+          "required": [
+            "command",
+            "item"
+          ],
+          "type": "object"
         }
       },
       "required": [
         "thread.subscribe",
-        "factory.run.subscribe"
+        "factory.run.subscribe",
+        "view.subscribe"
       ],
       "type": "object"
     }

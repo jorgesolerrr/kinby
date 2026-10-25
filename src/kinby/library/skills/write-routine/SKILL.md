@@ -192,6 +192,22 @@ user's answer is the next step. A reply starts a turn in the run's thread with t
 option as its message. An instance sends at most 20 notifications a day, and
 `notify` fails past that, so never notify inside a loop.
 
+## Keep a view
+
+A routine can keep one of the instance's views current, such as a board of job
+applications the morning run updates. Write the view once with `view_write`, then
+have the prompt tell each run to keep it:
+
+```markdown
+Check the job boards for new postings. Read the applications view with view_read,
+and add each new posting to it with view_patch. Leave the postings already there.
+```
+
+Each run reads the view first, so it patches what the view holds now. It changes
+the data with `view_patch`, such as adding one posting at `/data/postings/-`, rather
+than writing the whole view again. A view change does not tell the user. Notify
+only when the change needs them.
+
 ## Change or remove a routine
 
 To change an existing routine, call `routine_read` first. Edit the text, then call
