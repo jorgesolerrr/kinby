@@ -149,7 +149,9 @@ class FakeService:
             def answer(self, received: Inbound | Reply | None) -> web.Response:
                 return web.Response()
 
-            async def edit(self, message: SentRef, outcome: str) -> None:
+            async def edit(
+                self, message: SentRef, notification: ChannelNotification, outcome: str
+            ) -> None:
                 service.edited.put_nowait((message, outcome))
 
         return FakeChannel

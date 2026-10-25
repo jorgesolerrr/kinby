@@ -271,7 +271,9 @@ def test_messaging_the_bot_its_code_pairs_the_channel_with_that_chat(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_tap_from_the_paired_user_is_a_reply_and_the_message_is_edited_to_its_outcome(tmp_path):
+def test_a_tap_from_the_paired_user_is_a_reply_and_the_message_keeps_it_under_its_outcome(
+    tmp_path,
+):
     async def scenario() -> None:
         service = FakeTelegram()
         async with telegram(service) as base_url:
@@ -302,7 +304,9 @@ def test_a_tap_from_the_paired_user_is_a_reply_and_the_message_is_edited_to_its_
             {
                 "chat_id": str(_JORGE),
                 "message_id": 1,
-                "text": "Muted this instance on this channel.",
+                "text": f"{sent['text']}\n\n<i>Muted this instance on this channel.</i>",
+                "parse_mode": "HTML",
+                "link_preview_options": {"is_disabled": True},
             }
         ]
         assert muted.muted == [alice_id]
