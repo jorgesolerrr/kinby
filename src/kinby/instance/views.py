@@ -30,7 +30,8 @@ from kinby.instance.layout import VIEWS_DIR
 VIEW_CAP_BYTES = 1_000_000
 _VIEW_ID = TypeAdapter(ViewId)
 
-#: Who hears of each write, by the view's file. Writes run in worker threads.
+#: Who hears of each write, by the view's file. Writes run in worker threads, and a watcher
+#: only schedules the view on its event loop, so it is called under the lock.
 _watchers: dict[Path, set[Callable[[View], object]]] = {}
 _watchers_lock = threading.Lock()
 
@@ -117,11 +118,11 @@ def _store(instance: Instance, view: View) -> ViewChange:
     path.parent.mkdir(exist_ok=True)
     with NamedTemporaryFile(dir=path.parent, prefix=".", suffix=".tmp", delete=False) as staged:
         staged.write(serialized)
-    os.replace(staged.name, path)
+    # Replaced and announced under one lock, so watchers hear of writes in the order they land.
     with _watchers_lock:
-        watchers = tuple(_watchers.get(path, ()))
-    for watcher in watchers:
-        watcher(view)
+        os.replace(staged.name, path)
+        for watcher in _watchers.get(path, ()):
+            watcher(view)
     return change
 
 
