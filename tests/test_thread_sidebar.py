@@ -1,21 +1,28 @@
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from kinby.contracts import (
+    APPROVAL_OPTIONS,
     AcceptedResult,
+    ApprovalRequested,
     CompletionOutcome,
+    GateRule,
+    NotificationRaised,
+    NotificationRefused,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
     Scope,
     ThreadCreateResult,
     ThreadListResult,
+    ThreadStatus,
     ThreadSummary,
     UserOrigin,
+    WaitingApproval,
 )
 from kinby.core.dispatcher import (
     ScheduledDispatcher,
@@ -32,13 +39,39 @@ from tests.test_thread_status import ScriptedRunner
 
 
 class RoutineRunner(ScriptedRunner):
-    """Run each turn as its message says, and find no work in a message of "nothing new"."""
+    """Run each turn as its message says, find no work in a message of "nothing new", and notify
+    the user with options in one of "ask", or with options the hub refuses in "ask refused", or
+    with an approval's options in "ask approval"."""
 
     async def run(
         self, turn: PreparedTurnRequest, context: TurnContext
     ) -> TurnOutcome | ParkedTurn:
-        if turn.message == "nothing new":
-            return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
+        match turn.message:
+            case "nothing new":
+                return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
+            case "ask" | "ask refused":
+                raised = await context.emit(
+                    NotificationRaised(
+                        source="ask", title="Deploy?", text="It is ready.", options=["Yes", "No"]
+                    )
+                )
+                if turn.message == "ask refused":
+                    await context.emit(NotificationRefused(raised=raised.sequence, reason="cap"))
+                return TurnOutcome()
+            case "ask approval":
+                request = ApprovalRequested(
+                    approval_id=uuid4(), name="write", arguments={}, rule=GateRule("write")
+                )
+                await context.emit(
+                    NotificationRaised(
+                        source="ask approval",
+                        title="Approval waiting",
+                        text="write",
+                        options=list(APPROVAL_OPTIONS),
+                        approval=WaitingApproval(turn_id=turn.turn_id, request=request),
+                    )
+                )
+                return TurnOutcome()
         return await super().run(turn, context)
 
 
@@ -230,5 +263,26 @@ def test_a_routine_run_the_user_started_a_turn_in_stays_in_the_sidebar(
         assert summary.origin == RoutineOrigin(
             name=RoutineName("done"), trigger=RoutineTrigger.MANUAL
         )
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_run_awaiting_a_reply_stays_in_the_sidebar_until_the_user_answers(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher, _ = await _setup(tmp_path, "ask", "ask refused", "ask approval")
+        asking = await _fire(dispatcher, "ask")
+        await _fire(dispatcher, "ask-refused")
+        await _fire(dispatcher, "ask-approval")
+
+        [summary] = await _threads(dispatcher, "sidebar")
+        assert summary.id == asking
+        assert summary.status is ThreadStatus.AWAITING_REPLY
+
+        await _reply(dispatcher, asking, "done")
+
+        [summary] = await _threads(dispatcher, "sidebar")
+        assert summary.status is ThreadStatus.IDLE
 
     asyncio.run(scenario())

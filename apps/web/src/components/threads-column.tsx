@@ -1,5 +1,6 @@
 import type { Clock, InstanceClient, InstanceSummary, ThreadSummary } from "@kinby/contract"
 import {
+  BellDotIcon,
   BrainIcon,
   ChartColumnIcon,
   CircleAlertIcon,
@@ -55,6 +56,7 @@ const STATUS: Record<
     className: "animate-spin text-muted-foreground",
   },
   awaiting_approval: { label: "Needs you", icon: ShieldAlertIcon, className: "text-foreground" },
+  awaiting_reply: { label: "Needs your reply", icon: BellDotIcon, className: "text-foreground" },
   failed: { label: "Failed", icon: CircleAlertIcon, className: "text-destructive" },
 }
 

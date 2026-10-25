@@ -62,6 +62,8 @@ export function MainPanel({
       <ThreadPanel
         key={threadId}
         client={instanceClient}
+        hub={caller}
+        clock={clock}
         instanceId={selected.instance_id}
         threadId={threadId}
         name={instanceName(selected)}

@@ -148,7 +148,9 @@ test("thread.list reads each thread's status and last activity", () => {
   type Thread = Contract["methods"]["thread.list"]["result"]["threads"][number]
 
   expectTypeOf<Thread["status"]>().toEqualTypeOf<ThreadStatus>()
-  expectTypeOf<ThreadStatus>().toEqualTypeOf<"idle" | "running" | "awaiting_approval" | "failed">()
+  expectTypeOf<ThreadStatus>().toEqualTypeOf<
+    "idle" | "running" | "awaiting_approval" | "awaiting_reply" | "failed"
+  >()
   expectTypeOf<Thread["last_activity_at"]>().toEqualTypeOf<string>()
 })
 

@@ -46,7 +46,7 @@ export interface ParkedApproval {
   rule: string
 }
 
-type Step = TextStep | ToolStep
+type Step = TextStep | ToolStep | NotificationStep
 
 interface TextStep {
   kind: "text"
@@ -62,6 +62,18 @@ export interface ToolStep {
   gate?: { action: GateOutcome; decidedBy: GateDecider; rule: string; reason?: string | null }
   /** How long the call ran, once it returned. */
   durationMs?: number
+}
+
+/** A notification the turn raised on the instance's hub route. */
+export interface NotificationStep {
+  kind: "notification"
+  /** The sequence of its `notification.raised` event, which the hub's answer names. */
+  raised: number
+  title: string
+  text: string
+  options: string[]
+  /** The hub's answer: the notification it sends, or why it refused it. None while it is pending. */
+  hub?: { kind: "accepted"; notificationId: string } | { kind: "refused"; reason: string }
 }
 
 export type TurnEnd =
@@ -90,16 +102,17 @@ export function project(timeline: Timeline, event: Event): Timeline {
   return {
     sequence: event.sequence,
     turns: timeline.turns.map((turn) =>
-      turn.turnId === event.turn_id ? projectTurn(turn, payload) : turn,
+      turn.turnId === event.turn_id ? projectTurn(turn, payload, event.sequence) : turn,
     ),
   }
 }
 
-function projectTurn(previous: TurnBlock, payload: Payload): TurnBlock {
+function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): TurnBlock {
   // Answering an approval appends nothing, so the turn's next event is what ends the wait. The
   // notifications recorded while it waits leave it standing.
-  if (payload.type.startsWith("notification.")) return previous
-  const turn = { ...previous, approval: undefined }
+  const turn = payload.type.startsWith("notification.")
+    ? previous
+    : { ...previous, approval: undefined }
   switch (payload.type) {
     case "message.delta": {
       const last = turn.steps.at(-1)
@@ -157,6 +170,20 @@ function projectTurn(previous: TurnBlock, payload: Payload): TurnBlock {
       return updateTool(turn, payload.call_id, (step) =>
         payload.duration_ms == null ? step : { ...step, durationMs: payload.duration_ms },
       )
+    case "notification.raised": {
+      const { title, text, options = [] } = payload
+      return {
+        ...turn,
+        steps: [...turn.steps, { kind: "notification", raised: sequence, title, text, options }],
+      }
+    }
+    case "notification.accepted":
+      return updateNotification(turn, payload.raised, {
+        kind: "accepted",
+        notificationId: payload.notification_id,
+      })
+    case "notification.refused":
+      return updateNotification(turn, payload.raised, { kind: "refused", reason: payload.reason })
     case "turn.completed":
       return {
         ...turn,
@@ -189,6 +216,19 @@ function updateTool(
     ...turn,
     steps: turn.steps.map((step) =>
       step.kind === "tool" && step.callId === callId ? update(step) : step,
+    ),
+  }
+}
+
+function updateNotification(
+  turn: TurnBlock,
+  raised: number,
+  hub: NotificationStep["hub"],
+): TurnBlock {
+  return {
+    ...turn,
+    steps: turn.steps.map((step) =>
+      step.kind === "notification" && step.raised === raised ? { ...step, hub } : step,
     ),
   }
 }
