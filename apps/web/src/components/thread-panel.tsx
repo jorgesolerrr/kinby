@@ -51,7 +51,14 @@ import { Spinner } from "@/components/ui/spinner"
 import { useRead } from "@/hooks/use-read"
 import { reason } from "@/lib/operation"
 import { originLabel } from "@/lib/origin"
-import { navigate, nodePath, openNode, useSelectedTurnId } from "@/lib/selection"
+import {
+  navigate,
+  nodePath,
+  openNode,
+  openView,
+  useSelectedTurnId,
+  viewPath,
+} from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import type {
   NotificationStep,
@@ -60,6 +67,7 @@ import type {
   ToolStep,
   TurnBlock,
   TurnEnd,
+  ViewStep,
 } from "@/lib/timeline"
 import {
   BanIcon,
@@ -71,6 +79,7 @@ import {
   CornerDownLeftIcon,
   FactoryIcon,
   HouseIcon,
+  LayoutDashboardIcon,
   MinusIcon,
   RepeatIcon,
   ShieldAlertIcon,
@@ -630,6 +639,8 @@ function Turn({
               </Bubble>
             ) : run.kind === "notification" ? (
               <NotificationCard key={run.key} step={run.step} notifications={notifications} />
+            ) : run.kind === "view" ? (
+              <ViewChangedCard key={run.key} step={run.step} instanceId={instanceId} />
             ) : (
               <ol key={run.key} className="flex flex-col">
                 {run.steps.map((step, index) => (
@@ -667,6 +678,7 @@ function StartedByNode({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
 type Run =
   | { kind: "text"; key: string; text: string }
   | { kind: "notification"; key: string; step: NotificationStep }
+  | { kind: "view"; key: string; step: ViewStep }
   | { kind: "rail"; key: string; steps: ToolStep[] }
 
 /** A turn's steps with each stretch of consecutive tool calls gathered into one rail. */
@@ -677,6 +689,7 @@ function railed(steps: TurnBlock["steps"]): Run[] {
     if (step.kind === "text") runs.push({ kind: "text", key: `text-${index}`, text: step.text })
     else if (step.kind === "notification")
       runs.push({ kind: "notification", key: `notification-${step.raised}`, step })
+    else if (step.kind === "view") runs.push({ kind: "view", key: `view-${index}`, step })
     else if (last?.kind === "rail") last.steps.push(step)
     else runs.push({ kind: "rail", key: step.callId, steps: [step] })
   })
@@ -821,6 +834,35 @@ function notificationStatus(
   if (statuses.has("failed")) return { label: "Not delivered", variant: "destructive" }
   if (statuses.has("muted")) return { label: "Muted", variant: "outline" }
   return { label: "No channel", variant: "outline" }
+}
+
+/** A view the turn created or changed, linking to its page. */
+function ViewChangedCard({ step, instanceId }: { step: ViewStep; instanceId: string }) {
+  const titleId = useId()
+  return (
+    <article aria-labelledby={titleId}>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle id={titleId}>
+            <a
+              className="flex items-center gap-2"
+              href={viewPath(instanceId, step.view)}
+              onClick={(event) => {
+                event.preventDefault()
+                openView(instanceId, step.view)
+              }}
+            >
+              <LayoutDashboardIcon aria-hidden className="size-4 shrink-0" />
+              {step.title}
+            </a>
+          </CardTitle>
+          <CardAction>
+            <Badge variant="outline">{step.change === "created" ? "Created" : "Changed"}</Badge>
+          </CardAction>
+        </CardHeader>
+      </Card>
+    </article>
+  )
 }
 
 /**

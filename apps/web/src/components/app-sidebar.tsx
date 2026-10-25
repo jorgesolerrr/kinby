@@ -47,7 +47,7 @@ export function AppSidebar({
   client: Pick<Client, "instance">
   clock: Clock
   /** The selected instance's connection, whose threads column lists the threads its row counts. */
-  selectedClient: Pick<InstanceClient, "call"> | undefined
+  selectedClient: Pick<InstanceClient, "call" | "state" | "onStateChange"> | undefined
   onSignOut: () => void
 }) {
   return (

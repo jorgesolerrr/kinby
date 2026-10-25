@@ -5,6 +5,7 @@ import type {
   GateOutcome,
   JsonValue,
   TurnStarted,
+  ViewChange,
 } from "@kinby/contract"
 
 type Payload = Event["payload"]
@@ -46,7 +47,7 @@ export interface ParkedApproval {
   rule: string
 }
 
-type Step = TextStep | ToolStep | NotificationStep
+type Step = TextStep | ToolStep | NotificationStep | ViewStep
 
 interface TextStep {
   kind: "text"
@@ -74,6 +75,14 @@ export interface NotificationStep {
   options: string[]
   /** The hub's answer: the notification it sends, or why it refused it. None while it is pending. */
   hub?: { kind: "accepted"; notificationId: string } | { kind: "refused"; reason: string }
+}
+
+/** A view the turn wrote. */
+export interface ViewStep {
+  kind: "view"
+  view: string
+  title: string
+  change: ViewChange
 }
 
 export type TurnEnd =
@@ -184,6 +193,10 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
       })
     case "notification.refused":
       return updateNotification(turn, payload.raised, { kind: "refused", reason: payload.reason })
+    case "view.changed": {
+      const { view, title, change } = payload
+      return { ...turn, steps: [...turn.steps, { kind: "view", view, title, change }] }
+    }
     case "turn.completed":
       return {
         ...turn,

@@ -8,6 +8,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar"
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { usePolled } from "@/hooks/use-polled"
@@ -17,8 +20,11 @@ import {
   instancePath,
   openOnboarding,
   openRemoved,
+  openView,
   REMOVED_PATH,
   selectInstance,
+  useViewOpen,
+  viewPath,
 } from "@/lib/selection"
 import { needsYou, threadList } from "@/lib/thread-list"
 import { ArchiveRestoreIcon, PlusIcon } from "lucide-react"
@@ -43,7 +49,7 @@ export function NavInstances({
   client: Pick<Client, "instance">
   clock: Clock
   /** The selected instance's connection, whose threads column lists the threads its row counts. */
-  selectedClient: Pick<InstanceClient, "call"> | undefined
+  selectedClient: Pick<InstanceClient, "call" | "state" | "onStateChange"> | undefined
 }) {
   const home = instances.filter((instance) => instance.home)
   const others = instances.filter((instance) => !instance.home)
@@ -110,8 +116,9 @@ export function NavInstances({
 /**
  * An instance's row: its avatar, its name, and under the name what needs the user or else its
  * state, with an ember dot while something waits. The link is named by the instance alone; the
- * second line is its description. The selected instance counts the threads its threads column
- * lists, and the others count on connections of their own.
+ * second line is its description. Under the row, a running instance lists its views. The selected
+ * instance counts the threads its threads column lists, and the others count and list on
+ * connections of their own.
  */
 function InstanceRow({
   instance,
@@ -126,9 +133,14 @@ function InstanceRow({
   isSelected: boolean
   client: Pick<Client, "instance">
   clock: Clock
-  selectedClient: Pick<InstanceClient, "call"> | undefined
+  selectedClient: Pick<InstanceClient, "call" | "state" | "onStateChange"> | undefined
 }) {
   const statusId = useId()
+  const ownClient = useInstanceClient(
+    client,
+    !isSelected && instance.process === "running" ? instance.instance_id : undefined,
+  )
+  const reached = selectedClient ?? ownClient
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -146,44 +158,34 @@ function InstanceRow({
             <InstanceAvatar avatar={instance.avatar} name={name} />
             {selectedClient !== undefined ? (
               <ListedNeedsYou client={selectedClient} instance={instance} id={statusId} />
-            ) : !isSelected && instance.process === "running" ? (
-              <NeedsYouBadge client={client} clock={clock} instance={instance} id={statusId} />
+            ) : ownClient !== undefined ? (
+              <NeedsYouCount client={ownClient} clock={clock} instance={instance} id={statusId} />
             ) : (
               <NeedsYou count={instance.needs_human} instance={instance} id={statusId} />
             )}
           </a>
         }
       />
+      {reached !== undefined && (
+        <InstanceViews
+          client={reached}
+          clock={clock}
+          instanceId={instance.instance_id}
+          isSelected={isSelected}
+        />
+      )}
     </SidebarMenuItem>
   )
 }
 
-/** How often an instance that is not selected has its threads counted while the page is visible. */
-const COUNT_INTERVAL_MS = 5_000
+/** How often a row reads again what it shows of an instance while the page is visible. */
+const POLL_INTERVAL_MS = 5_000
 
 /**
  * How many of a running instance's sidebar threads and factory runs need the user, in place of its
- * state. It reads the threads on a connection of its own, open while the row shows the count, and
- * the runs from the hub's summary of the instance.
+ * state. It reads the threads on the row's own connection, and the runs from the hub's summary of
+ * the instance.
  */
-function NeedsYouBadge({
-  client,
-  clock,
-  instance,
-  id,
-}: {
-  client: Pick<Client, "instance">
-  clock: Clock
-  instance: InstanceSummary
-  id: string
-}) {
-  const instanceClient = useInstanceClient(client, instance.instance_id)
-  if (instanceClient === undefined) {
-    return <NeedsYou count={instance.needs_human} instance={instance} id={id} />
-  }
-  return <NeedsYouCount client={instanceClient} clock={clock} instance={instance} id={id} />
-}
-
 function NeedsYouCount({
   client,
   clock,
@@ -203,8 +205,49 @@ function NeedsYouCount({
         .then(({ threads }) => threads.filter(needsYou).length),
     [client],
   )
-  const [threadsNeedingYou = 0] = usePolled(count, clock, connected, COUNT_INTERVAL_MS)
+  const [threadsNeedingYou = 0] = usePolled(count, clock, connected, POLL_INTERVAL_MS)
   return <NeedsYou count={threadsNeedingYou + instance.needs_human} instance={instance} id={id} />
+}
+
+/** An instance's views, each linking to its page, with the one the URL opens marked current. */
+function InstanceViews({
+  client,
+  clock,
+  instanceId,
+  isSelected,
+}: {
+  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
+  clock: Clock
+  instanceId: string
+  isSelected: boolean
+}) {
+  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
+  const list = useCallback(() => client.call("view.list", {}).then(({ views }) => views), [client])
+  const [views = []] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
+  const openedView = useViewOpen()
+  if (views.length === 0) return null
+  return (
+    <SidebarMenuSub>
+      {views.map((view) => {
+        const isOpen = isSelected && view.id === openedView
+        return (
+          <SidebarMenuSubItem key={view.id}>
+            <SidebarMenuSubButton
+              isActive={isOpen}
+              aria-current={isOpen ? "page" : undefined}
+              href={viewPath(instanceId, view.id)}
+              onClick={(event) => {
+                event.preventDefault()
+                openView(instanceId, view.id)
+              }}
+            >
+              <span>{view.title}</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+        )
+      })}
+    </SidebarMenuSub>
+  )
 }
 
 /** What needs the user among the threads the selected instance's threads column last listed. */

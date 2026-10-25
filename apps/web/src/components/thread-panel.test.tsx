@@ -1203,6 +1203,56 @@ describe("a thread's panel", () => {
     })
   })
 
+  describe("a view the turn wrote", () => {
+    const changed = (view: string, title: string, change: "created" | "changed"): Payload => ({
+      type: "view.changed",
+      view,
+      title,
+      change,
+    })
+
+    it("shows a card naming each view and whether it was created or changed", async () => {
+      const events = thread(
+        ["turn-1", started("Track my applications")],
+        ["turn-1", changed("applications", "Job board", "created")],
+        ["turn-1", changed("reading", "Reading list", "changed")],
+      )
+      const { subscription } = openThread()
+
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+
+      const board = screen.getByRole("article", { name: "Job board" })
+      expect(within(board).getByText("Created")).toBeDefined()
+      const reading = screen.getByRole("article", { name: "Reading list" })
+      expect(within(reading).getByText("Changed")).toBeDefined()
+    })
+
+    it("opens the view's page from its card, as a new history entry", async () => {
+      window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
+      const events = thread(
+        ["turn-1", started("Track my applications")],
+        ["turn-1", changed("applications", "Job board", "created")],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      const link = screen.getByRole("link", { name: "Job board" })
+      const entries = window.history.length
+
+      await userEvent.click(link)
+
+      const view = "/instances/hub-ada/views/applications"
+      expect(link.getAttribute("href")).toBe(view)
+      expect(window.location.pathname).toBe(view)
+      expect(window.history.length).toBe(entries + 1)
+    })
+  })
+
   it("says why a thread it cannot follow did not load", async () => {
     const { subscription } = openThread()
 
