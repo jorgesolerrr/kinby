@@ -1,27 +1,42 @@
-import type { Clock, InstanceClient } from "@kinby/contract"
-import { useCallback } from "react"
+import type { InstanceClient, View } from "@kinby/contract"
+import { useEffect, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ViewRenderer } from "@/components/view-renderer"
-import { useRead } from "@/hooks/use-read"
 import { when } from "@/lib/config-changes"
 
 /**
- * One of an instance's views: its title, when it last changed, and the view. It reads on open and
- * when the window regains focus.
+ * One of an instance's views: its title, when it last changed, and the view. It follows the view
+ * while open, showing each snapshot the instance sends after a write.
  */
 export function ViewPage({
   client,
-  clock,
   viewId,
 }: {
-  client: Pick<InstanceClient, "call">
-  clock: Clock
+  client: Pick<InstanceClient, "subscribe">
   viewId: string
 }) {
-  const read = useCallback(() => client.call("view.get", { id: viewId }), [client, viewId])
-  const { value: view, failure } = useRead(read, clock)
+  const [{ view, failure }, setShown] = useState<{ view?: View; failure?: unknown }>({})
+  useEffect(() => {
+    const snapshots = client.subscribe("view.subscribe", { id: viewId })
+    let following = true
+    const read = async () => {
+      try {
+        for await (const snapshot of snapshots) {
+          if (following) setShown({ view: snapshot })
+        }
+      } catch (error) {
+        if (following) setShown((last) => ({ view: last.view, failure: error }))
+      }
+    }
+    void read()
+    return () => {
+      following = false
+      snapshots.cancel()
+    }
+  }, [client, viewId])
+
   return (
     <div className="flex max-w-4xl flex-col gap-6 p-6">
       {failure !== undefined && <Failure error={failure} />}

@@ -1,6 +1,7 @@
 import type { View, ViewComponent } from "@kinby/contract"
-import { fakeClock, stubCaller } from "@kinby/contract/testing"
-import { render, screen, within } from "@testing-library/react"
+import { CallError } from "@kinby/contract"
+import { stubSubscriber } from "@kinby/contract/testing"
+import { act, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ViewPage } from "@/components/view-page"
@@ -38,9 +39,11 @@ function view(components: ViewComponent[] = BOARD, data: View["data"] = DATA): V
 }
 
 function openPage(shown: View) {
-  const caller = stubCaller({ "view.get": () => shown })
-  render(<ViewPage client={caller} clock={fakeClock()} viewId="applications" />)
-  return caller
+  const client = stubSubscriber()
+  const page = render(<ViewPage client={client} viewId="applications" />)
+  const [subscription] = client.subscriptions
+  act(() => subscription.deliver(shown))
+  return { subscription, page }
 }
 
 describe("ViewPage", () => {
@@ -49,11 +52,53 @@ describe("ViewPage", () => {
   })
 
   it("shows the view's title and when it last changed", async () => {
-    const caller = openPage(view())
+    const { subscription } = openPage(view())
 
     expect(await screen.findByRole("heading", { name: "Job board" })).toBeTruthy()
     expect(screen.getByText(/Changed Oct 25, 2026/)).toBeTruthy()
-    expect(caller.calls).toEqual([{ method: "view.get", params: { id: "applications" } }])
+    expect([subscription.method, subscription.params]).toEqual([
+      "view.subscribe",
+      { id: "applications" },
+    ])
+  })
+
+  it("shows each new snapshot of the view as it arrives", async () => {
+    const { subscription } = openPage(view())
+    expect(await screen.findByText("Globex")).toBeTruthy()
+
+    const postings = [...(DATA.postings as object[]), { company: "Initech", stage: "Applied" }]
+    act(() =>
+      subscription.deliver({
+        ...view(BOARD, { ...DATA, postings }),
+        updated_at: "2026-10-26T08:00:00Z",
+      }),
+    )
+
+    expect(await screen.findByText("Initech")).toBeTruthy()
+    expect(screen.getByText(/Changed Oct 26, 2026/)).toBeTruthy()
+  })
+
+  it("keeps the view it shows when the subscription fails, and says why", async () => {
+    const { subscription } = openPage(view())
+    expect(await screen.findByText("Globex")).toBeTruthy()
+
+    act(() =>
+      subscription.fail(
+        new CallError({ code: "INTERNAL", message: "The instance broke.", retryable: false }),
+      ),
+    )
+
+    expect(await screen.findByText("The instance broke.")).toBeTruthy()
+    expect(screen.getByText("Globex")).toBeTruthy()
+  })
+
+  it("stops following the view when the page closes", async () => {
+    const { subscription, page } = openPage(view())
+    await screen.findByText("Globex")
+
+    page.unmount()
+
+    expect(subscription.cancelled).toBe(true)
   })
 
   it("renders its components with the data they bind", async () => {

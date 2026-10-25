@@ -650,6 +650,10 @@ export interface Contract {
       command: ThreadSubscribeCommand;
       item: Event;
     };
+    "view.subscribe": {
+      command: ViewSubscribeCommand;
+      item: View;
+    };
   };
 }
 export interface CallFrame {
@@ -2865,4 +2869,10 @@ export interface ViewChanged {
   title: string;
   type: "view.changed";
   view: ViewId;
+}
+/**
+ * Follow one view: the view as it is, then the whole view again after each write.
+ */
+export interface ViewSubscribeCommand {
+  id: ViewId;
 }

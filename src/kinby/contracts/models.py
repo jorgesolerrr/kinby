@@ -3350,3 +3350,9 @@ class ViewListResult(ContractModel):
 
 class ViewGetCommand(ContractModel):
     id: ViewId
+
+
+class ViewSubscribeCommand(ContractModel):
+    """Follow one view: the view as it is, then the whole view again after each write."""
+
+    id: ViewId

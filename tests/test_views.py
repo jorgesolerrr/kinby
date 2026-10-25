@@ -1,7 +1,9 @@
-"""A turn keeps a view with the view tools, and a client reads it with view.list and view.get."""
+"""A turn keeps a view with the view tools, and a client reads it with view.list, view.get and
+view.subscribe."""
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +13,7 @@ from langchain_core.messages import AIMessageChunk
 from kinby.contracts import (
     AcceptedResult,
     ApprovalRequested,
+    ContractModel,
     ErrorCode,
     ErrorEnvelope,
     Event,
@@ -65,25 +68,25 @@ DATA = {
 }
 
 
-def writing(*writes: dict[str, object]) -> ScriptedModel:
-    """A model that writes one view per turn, then says it is done."""
+def calling(*calls: tuple[str, dict[str, object]]) -> ScriptedModel:
+    """A model that calls one view tool per turn, then says it is done."""
     responses: list[AIMessageChunk] = []
-    for number, arguments in enumerate(writes):
+    for number, (name, arguments) in enumerate(calls):
         responses += [
             AIMessageChunk(
                 content="",
                 tool_calls=[
-                    {
-                        "name": "view_write",
-                        "args": arguments,
-                        "id": f"view-{number}",
-                        "type": "tool_call",
-                    }
+                    {"name": name, "args": arguments, "id": f"view-{number}", "type": "tool_call"}
                 ],
             ),
             AIMessageChunk(content="Done"),
         ]
     return ScriptedModel(responses)
+
+
+def writing(*writes: dict[str, object]) -> ScriptedModel:
+    """A model that writes one view per turn, then says it is done."""
+    return calling(*(("view_write", arguments) for arguments in writes))
 
 
 def board(spec: object = BOARD, data: object = DATA) -> dict[str, object]:
@@ -439,5 +442,130 @@ def test_a_routine_whose_code_step_is_view_write_records_the_change(tmp_path: Pa
 
         assert [change.change for change in changes(events)] == [ViewChange.CREATED]
         assert await listed(dispatcher) == ["applications"]
+
+    asyncio.run(scenario())
+
+
+def patch(*ops: dict[str, object]) -> tuple[str, dict[str, object]]:
+    return ("view_patch", {"id": "applications", "ops": list(ops)})
+
+
+ADD_INITECH: dict[str, object] = {
+    "op": "add",
+    "path": "/data/postings/-",
+    "value": {"company": "Initech"},
+}
+
+
+async def snapshots(dispatcher: Dispatcher) -> AsyncGenerator[ContractModel]:
+    stream = await dispatcher.subscribe(
+        "view.subscribe", {"id": "applications"}, {Scope.INSTANCE_READ}
+    )
+    assert not isinstance(stream, ErrorEnvelope), stream
+    return stream.items
+
+
+def test_a_subscriber_gets_the_view_then_each_patch_a_turn_makes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(
+            instance_at(tmp_path), calling(("view_write", board()), patch(ADD_INITECH))
+        )
+        written = await turn(dispatcher)
+        items = await snapshots(dispatcher)
+
+        async with asyncio.timeout(5):
+            first = await anext(items)
+            patched = await turn(dispatcher)
+            second = await anext(items)
+        await items.aclose()
+
+        assert isinstance(first, View)
+        assert first.data == DATA
+        assert [result.error for result in tool_results(patched)] == [False]
+        assert isinstance(second, View)
+        assert second.data["postings"] == [
+            {"company": "Acme"},
+            {"company": "Globex"},
+            {"company": "Initech"},
+        ]
+        assert second.updated_at > first.updated_at
+        assert [change.change for change in changes(written) + changes(patched)] == [
+            ViewChange.CREATED,
+            ViewChange.CHANGED,
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_patch_may_change_the_spec(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        column = {"id": "stage", "component": "Badge", "label": {"path": "/stage"}}
+        dispatcher = runtime(
+            instance_at(tmp_path),
+            calling(
+                ("view_write", board()),
+                patch(
+                    {"op": "add", "path": "/spec/components/-", "value": column},
+                    {"op": "add", "path": "/spec/components/0/children/-", "value": "stage"},
+                    {"op": "replace", "path": "/title", "value": "Job board"},
+                ),
+            ),
+        )
+
+        await turn(dispatcher)
+        events = await turn(dispatcher)
+        view = await call(dispatcher, "view.get", id="applications")
+
+        assert [result.error for result in tool_results(events)] == [False]
+        assert changes(events) == [
+            ViewChanged(view="applications", title="Job board", change=ViewChange.CHANGED)
+        ]
+        assert isinstance(view, View)
+        assert view.title == "Job board"
+        assert [component.id for component in view.spec.components][-1] == "stage"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("ops", "message"),
+    [
+        (
+            [{"op": "add", "path": "/spec/components/0/children/-", "value": "missing"}],
+            'Component "root" names components that do not exist: missing.',
+        ),
+        ([{"op": "remove", "path": "/title"}], "title"),
+        ([{"op": "add", "path": "/data/notes", "value": "x" * 1_000_000}], "capped at 1 MB"),
+        ([{"op": "remove", "path": "/data/missing"}], "missing"),
+    ],
+)
+def test_a_patch_that_fails_is_a_tool_error_and_leaves_the_view(
+    tmp_path: Path, ops: list[dict[str, object]], message: str
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), calling(("view_write", board()), patch(*ops)))
+        await turn(dispatcher)
+        before = await call(dispatcher, "view.get", id="applications")
+
+        events = await turn(dispatcher)
+        after = await call(dispatcher, "view.get", id="applications")
+
+        [result] = tool_results(events)
+        assert result.error
+        assert message in result.output
+        assert changes(events) == []
+        assert after == before
+
+    asyncio.run(scenario())
+
+
+def test_subscribing_to_a_view_the_instance_does_not_have_is_not_found(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path))
+
+        missing = await dispatcher.subscribe("view.subscribe", {"id": "applications"}, set(Scope))
+
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
 
     asyncio.run(scenario())

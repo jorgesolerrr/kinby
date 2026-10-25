@@ -114,10 +114,11 @@ interface PendingCall {
 interface OpenSubscription {
   readonly method: SubscriptionMethod
   readonly params: object
-  /** The sequence of the last item delivered. A resubscribe asks for what comes after it. */
+  /** The sequence of the last event delivered. A resubscribe asks for what comes after it. */
   lastSequence: number | undefined
   subscribed(headSequence: number): void
-  deliver(sequence: number, item: object): void
+  /** An event comes with its sequence. A snapshot, such as a view, has none. */
+  deliver(sequence: number | undefined, item: object): void
   end(error?: CallError): void
 }
 
@@ -291,11 +292,13 @@ function connect(
         lastSequence: undefined,
         subscribed,
         deliver(sequence, item) {
-          // A resubscribe can replay what was already delivered.
-          if (subscription.lastSequence !== undefined && sequence <= subscription.lastSequence) {
-            return
+          if (sequence !== undefined) {
+            // A resubscribe can replay what was already delivered.
+            if (subscription.lastSequence !== undefined && sequence <= subscription.lastSequence) {
+              return
+            }
+            subscription.lastSequence = sequence
           }
-          subscription.lastSequence = sequence
           // The generated contract types come from the hub's models, and a test keeps them in step.
           items.push(item as Item<typeof method>)
         },
@@ -397,7 +400,7 @@ function itemQueue<T>(onStop: () => void) {
 type Reply =
   | ((ResultFrame | ErrorFrame | EndFrame) & { id: string })
   | SubscribedFrame
-  | { type: "item"; id: string; sequence: number; item: Record<string, unknown> }
+  | { type: "item"; id: string; sequence: number | undefined; item: Record<string, unknown> }
 
 /** Read a frame off the socket. Anything that is not a reply the client can route is dropped. */
 function parseReply(data: unknown): Reply | undefined {
@@ -410,9 +413,11 @@ function parseReply(data: unknown): Reply | undefined {
   if (frame.type === "error" && isErrorEnvelope(frame.error)) {
     return { type: "error", id: frame.id, error: frame.error }
   }
-  // Every subscription's items are events, and the sequence is how a resubscribe resumes.
-  if (frame.type === "item" && isRecord(frame.item) && typeof frame.item.sequence === "number") {
-    return { type: "item", id: frame.id, sequence: frame.item.sequence, item: frame.item }
+  // An event's sequence is how a resubscribe resumes. A snapshot has none: a resubscribe sends
+  // it whole again.
+  if (frame.type === "item" && isRecord(frame.item)) {
+    const sequence = typeof frame.item.sequence === "number" ? frame.item.sequence : undefined
+    return { type: "item", id: frame.id, sequence, item: frame.item }
   }
   if (frame.type === "subscribed" && typeof frame.head_sequence === "number") {
     return { type: "subscribed", id: frame.id, head_sequence: frame.head_sequence }
