@@ -24,6 +24,7 @@ from collections.abc import (
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -98,8 +99,11 @@ from kinby.factories.file import (
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
-from kinby.hub.registry import STOPS, FactoryMember, HubRegistry, ManagedInstance
+from kinby.hub.registry import STOPS, FactoryMember, HubRegistry, ManagedInstance, RunStopRef
 from kinby.instance import ManifestError, repository_commands
+
+if TYPE_CHECKING:
+    from kinby.hub.outbox import Outbox
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,10 @@ BACKOFF_CAP_SECONDS = 300.0
 _CLIENT_TIMEOUT: Duration = "60m"
 #: The statuses a run ends in, which the factory's ended call follows.
 _ENDS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED)
+#: The options a needs-human notification offers, a send back naming the step it goes to.
+_RETRY = "Retry"
+_SEND_BACK = "Send back to "
+_CANCEL = "Cancel"
 
 
 @dataclass(frozen=True)
@@ -205,11 +213,13 @@ class FactoryRuns:
         factories: FactoryStore,
         run_step: StepCaller,
         tell_stop: StopTeller,
+        outbox: Outbox,
     ) -> None:
         self._registry = registry
         self._factories = factories
         self._run_step = run_step
         self._tell_stop = tell_stop
+        self._outbox = outbox
         #: The steps, needs_human and ended calls and run stops waiting for each instance, by
         #: instance id.
         self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
@@ -373,6 +383,26 @@ class FactoryRuns:
         else:
             _needing_human(run)
         return self._move(run.run_id, FactoryRunStatus.CANCELLED, run.step)
+
+    async def answer_stop(self, stop: RunStopRef, option: str) -> str | None:
+        """Retry, send back or cancel the run as the user's reply to its needs-human notification
+        says. What came of it, or None when the run moved since that stop."""
+        run = self._registry.run(stop.run_id)
+        if (
+            run is None
+            or run.status is not FactoryRunStatus.NEEDS_HUMAN
+            or self._registry.stop_generation(run.run_id) != stop.generation
+        ):
+            return None
+        if option == _RETRY:
+            await self.retry(FactoryRunRetryCommand(run_id=run.run_id))
+            return "Retried."
+        if option == _CANCEL:
+            await self.cancel(FactoryRunCancelCommand(run_id=run.run_id))
+            return "Cancelled."
+        step = option.removeprefix(_SEND_BACK)
+        await self.send_back(FactoryRunSendBackCommand(run_id=run.run_id, step=step))
+        return f'Sent back to "{step}".'
 
     async def subscribe(self, command: FactoryRunSubscribeCommand) -> Stream[FactoryRun]:
         """Each run as it changes from now on."""
@@ -916,11 +946,31 @@ class FactoryRuns:
         moved = self._registry.move_run(run_id, status, step, ended_call=ended is not None)
         self._publish(moved)
         if moved.status in STOPS:
-            stop = self._registry.run_stop(run_id, self._registry.stop_generation(run_id))
-            self._put_stop(_QueuedStop(stop))
+            generation = self._registry.stop_generation(run_id)
+            self._put_stop(_QueuedStop(self._registry.run_stop(run_id, generation)))
+            if moved.status is FactoryRunStatus.NEEDS_HUMAN:
+                self._notify(moved, RunStopRef(run_id, generation), factory)
         if factory is not None and ended is not None:
             self._report(factory, ended, moved)
         return moved
+
+    def _notify(self, run: FactoryRun, stop: RunStopRef, factory: FactoryFile | None) -> None:
+        """Tell the user the run needs them, offering to retry it, send it back to the step before
+        its stop, or cancel it."""
+        if self._registry.instance(run.instance_id) is None:
+            return
+        work_item = ", ".join(f"{name} {value}" for name, value in run.work_item.items())
+        send_back = [f"{_SEND_BACK}{step}" for step in _earlier(factory, run.step)[-1:]]
+        self._outbox.notify(
+            run.instance_id,
+            f"run_stop:{run.run_id}:{stop.generation}",
+            source=run.factory,
+            title="Needs human",
+            text=f'The run for {work_item} stopped at "{run.step}".',
+            page="/library",
+            options=(_RETRY, *send_back, _CANCEL),
+            stop=stop,
+        )
 
     def _put_stop(self, queued: _QueuedStop) -> None:
         owner = self._registry.instance(self._existing(queued.stop.run_id).instance_id)
