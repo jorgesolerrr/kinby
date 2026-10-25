@@ -663,6 +663,16 @@ The core, read-only **tool** that returns an available **skill** body by name. I
 A core write **tool** through which the agent changes its own **instance**, such as a **routine** or a **skill**, under the **gate** like any other write. Workspace file tools never reach the instance.
 _Avoid_: self-modification tool, config tool
 
+### View
+
+A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
+_Avoid_: artifact, widget, dashboard, surface
+
+### View catalogue
+
+The fixed set of components kinby ships from which every **view** is composed. A view can use only what the catalogue holds, so no view carries code of its own; the catalogue grows only with a kinby release.
+_Avoid_: component library
+
 ### Hub tool
 
 A **tool** only the **home instance** holds, through which it reads the **hub** and other **instances**, or asks the hub to change something the hub owns or another instance's setup. One that writes asks in every **permission mode**, and the hub runs it only after seeing the user approve that exact call. Hub tools are present only on turns the user starts.
