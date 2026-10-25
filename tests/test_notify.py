@@ -38,7 +38,7 @@ from kinby.core.scheduler import SchedulerConfig
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
-from tests.test_gate import ScriptedModel, _instance, _run_turn
+from tests.test_gate import ScriptedModel, _instance, _run_turn, _write_store_tool
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import (
     FailingRunner,
@@ -58,6 +58,8 @@ class RecordingHub:
     def __init__(self) -> None:
         self.raised: list[NotificationRaiseCommand] = []
         self.down = False
+        #: Take each call, then close the socket without answering, as a hub that stops does.
+        self.hangs_up = False
         self.refusal: str | None = None
 
 
@@ -73,6 +75,9 @@ async def recording_hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Record
         call = CallFrame.model_validate_json(await socket.receive_str())
         assert call.method == NOTIFICATION_RAISE.name
         hub.raised.append(NotificationRaiseCommand.model_validate(call.params))
+        if hub.hangs_up:
+            await socket.close()
+            return socket
         answer = (
             ErrorFrame(
                 id=call.id,
@@ -258,7 +263,7 @@ def test_a_permissions_rule_for_notify_overrides_its_default(
             runner = LangGraphRunner(instance, model_factory=lambda _: notifying())
             result, payloads = await _run_turn(runner)
 
-        assert len(hub.raised) == raised
+        assert len([command for command in hub.raised if command.approval is None]) == raised
         if rule == "ask":
             assert isinstance(result, ParkedTurn)
             approval = next(p for p in payloads if isinstance(p, ApprovalRequested))
@@ -334,5 +339,74 @@ def test_a_routine_notice_without_a_hub_url_raises_nothing(tmp_path: Path) -> No
         await dispatcher.scheduler.tick()
 
         assert not any(isinstance(event.payload, NotificationRaised) for event in log.all_events())
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_parked_on_an_approval_raises_one_notification_naming_the_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        _write_store_tool(instance)
+        permissions(instance, 'mode = "ask"\n')
+        content = "line one\n" + "x" * 200
+        arguments = {"path": "notes.md", "content": content}
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {"name": "store", "args": arguments, "id": "store-1", "type": "tool_call"}
+                    ],
+                )
+            ]
+        )
+        async with recording_hub(monkeypatch) as hub:
+            runner = LangGraphRunner(instance, model_factory=lambda _: model)
+            result, payloads = await _run_turn(runner)
+
+        assert isinstance(result, ParkedTurn)
+        approval = next(p for p in payloads if isinstance(p, ApprovalRequested))
+        [command] = hub.raised
+        assert (command.source, command.title, command.options) == (
+            "Untitled thread",
+            "Approval waiting",
+            ["Approve", "Deny"],
+        )
+        assert command.text == f"store: path=notes.md, content=line one {'x' * 70}…"
+        assert command.approval is not None
+        assert command.approval.request == approval
+        assert isinstance(payloads[-1], NotificationAccepted)
+
+    asyncio.run(scenario())
+
+
+def test_a_hub_that_hangs_up_on_the_raise_leaves_the_turn_parked_and_the_notification_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        _write_store_tool(instance)
+        permissions(instance, 'mode = "ask"\n')
+        arguments = {"path": "notes.md", "content": "hello"}
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {"name": "store", "args": arguments, "id": "store-1", "type": "tool_call"}
+                    ],
+                )
+            ]
+        )
+        async with recording_hub(monkeypatch) as hub:
+            hub.hangs_up = True
+            runner = LangGraphRunner(instance, model_factory=lambda _: model)
+            result, payloads = await _run_turn(runner)
+
+        assert isinstance(result, ParkedTurn)
+        assert len(hub.raised) == 1
+        assert isinstance(payloads[-1], NotificationRaised)
 
     asyncio.run(scenario())

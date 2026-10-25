@@ -48,6 +48,7 @@ from kinby.contracts import (
     StorageItem,
     StorageKind,
     ValueName,
+    WaitingApproval,
 )
 from kinby.factories.file import InstanceName, RecipeName
 from kinby.hub.models import ChannelNotification, ChannelUser, ImageArtifact, SentRef
@@ -167,6 +168,8 @@ class ReceivedReply:
     message: SentRef | None
     #: A previous process asked the instance to apply it and never heard back.
     calling: bool
+    #: The approval the notification asks the user to answer, if it asks for one.
+    approval: WaitingApproval | None
 
 
 class HubRegistry:
@@ -444,6 +447,8 @@ class HubRegistry:
         with self._connect() as connection:
             # The instance that asked the hub for the operation. Null for one the user started.
             self._add_columns(connection, "operations", {"login_id": "TEXT", "requester": "TEXT"})
+            # The approval a notification's options answer, as JSON. Null for any other.
+            self._add_columns(connection, "notifications", {"approval": "TEXT"})
             self._drop_packages(connection)
 
     def _let_operations_stand_alone(self) -> None:
@@ -2384,6 +2389,7 @@ class HubRegistry:
         key: str,
         thread_id: UUID | None,
         notification: ChannelNotification,
+        approval: WaitingApproval | None,
         raised_at: datetime,
         deliveries: Mapping[UUID, DeliveryStatus],
     ) -> UUID:
@@ -2394,9 +2400,9 @@ class HubRegistry:
                 """
                 INSERT INTO notifications (
                     id, instance_id, source_key, thread_id, header, title, text, link, options,
-                    raised_at
+                    approval, raised_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (instance_id, source_key) DO NOTHING
                 """,
                 (
@@ -2409,6 +2415,7 @@ class HubRegistry:
                     notification.text,
                     notification.link,
                     json.dumps(notification.options),
+                    approval.model_dump_json() if approval is not None else None,
                     raised_at.isoformat(),
                 ),
             ).rowcount
@@ -2613,7 +2620,7 @@ class HubRegistry:
             rows = connection.execute(
                 """
                 SELECT replies.id, replies.notification_id, instance_id, thread_id, option,
-                    received_at, replies.channel_id, sent_ref, calling
+                    received_at, replies.channel_id, sent_ref, calling, approval
                 FROM replies
                 JOIN notifications ON notifications.id = replies.notification_id
                 LEFT JOIN notification_deliveries
@@ -2635,6 +2642,9 @@ class HubRegistry:
                 channel_id=UUID(row[6]) if row[6] is not None else None,
                 message=SentRef(row[7]) if row[7] is not None else None,
                 calling=bool(row[8]),
+                approval=(
+                    WaitingApproval.model_validate_json(row[9]) if row[9] is not None else None
+                ),
             )
             for row in rows
         ]

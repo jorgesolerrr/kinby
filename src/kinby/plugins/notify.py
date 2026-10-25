@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
 from kinby.contracts import (
+    APPROVAL_OPTIONS,
     NOTIFICATION_RAISE,
+    ApprovalRequested,
     Event,
     NotificationAccepted,
     NotificationRaiseCommand,
@@ -16,9 +19,15 @@ from kinby.contracts import (
     NotificationRaiseResult,
     NotificationRefused,
     Scope,
+    WaitingApproval,
 )
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, call_hub
-from kinby.plugins.tools import Tool, ToolContext, tool
+from kinby.plugins.tools import NotificationReporter, Tool, ToolContext, tool
+
+#: The source of a notification from a thread without a title.
+UNTITLED = "Untitled thread"
+#: How much of each argument's value an approval's notification shows.
+_ARGUMENT_LENGTH = 80
 
 
 def raises_notifications() -> bool:
@@ -45,21 +54,54 @@ async def notify(
     takes at most 20 notifications from this instance a day.
     """
     raised = NotificationRaised(
-        source=context.notification_source or "Untitled thread",
+        source=context.notification_source or UNTITLED,
         title=title,
         text=text,
         options=options or [],
     )
-    event = await context.report_notification(raised)
-    answer = await raise_recorded(
-        RecordedNotification(event.thread_id, event.turn_id, event.sequence, raised)
-    )
+    answer = await raise_notification(raised, context.report_notification)
     if answer is None:
         return "The hub is out of reach. kinby raises the notification again once it is back."
-    await context.report_notification(answer)
     if isinstance(answer, NotificationRefused):
         raise ValueError(answer.reason)
     return "The hub took the notification and sends it through every channel."
+
+
+async def raise_notification(
+    raised: NotificationRaised, report: NotificationReporter
+) -> NotificationAccepted | NotificationRefused | None:
+    """Record the notification in the turn, raise it on the hub route, and record the hub's
+    answer. None while the hub is out of reach, so a scheduler pass raises it again."""
+    event = await report(raised)
+    answer = await raise_recorded(
+        RecordedNotification(event.thread_id, event.turn_id, event.sequence, raised)
+    )
+    if answer is not None:
+        await report(answer)
+    return answer
+
+
+def approval_notification(
+    source: str, turn_id: UUID, request: ApprovalRequested
+) -> NotificationRaised:
+    """kinby's notification for an approval a turn parked on: the tool and its arguments on one
+    line, each value cut short, and the options that answer it."""
+    arguments = ", ".join(
+        f"{name}={_shown(value if isinstance(value, str) else json.dumps(value))}"
+        for name, value in request.arguments.items()
+    )
+    return NotificationRaised(
+        source=source,
+        title="Approval waiting",
+        text=f"{request.name}: {arguments}",
+        options=list(APPROVAL_OPTIONS),
+        approval=WaitingApproval(turn_id=turn_id, request=request),
+    )
+
+
+def _shown(value: str) -> str:
+    line = " ".join(value.split())
+    return line if len(line) <= _ARGUMENT_LENGTH else f"{line[: _ARGUMENT_LENGTH - 1]}…"
 
 
 @dataclass(frozen=True)
@@ -101,6 +143,7 @@ async def raise_recorded(
         title=raised.title,
         text=raised.text,
         options=raised.options,
+        approval=raised.approval,
     )
     try:
         result = await call_hub(

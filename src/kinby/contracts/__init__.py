@@ -134,6 +134,7 @@ from kinby.contracts.methods import (
     Subscription,
 )
 from kinby.contracts.models import (
+    APPROVAL_OPTIONS,
     CONTRACT_VERSION,
     CONTROL_SCOPES,
     DEFAULT_AVATAR,
@@ -521,6 +522,7 @@ from kinby.contracts.models import (
     UsageSource,
     UserOrigin,
     ValueName,
+    WaitingApproval,
     Warning,
     WorkspaceReverted,
     accepted,
@@ -530,6 +532,7 @@ from kinby.contracts.models import (
 from kinby.contracts.streams import Stream
 
 __all__ = [
+    "APPROVAL_OPTIONS",
     "CHANNEL_CREATE",
     "CHANNEL_DELETE",
     "CHANNEL_KINDS",
@@ -1045,6 +1048,7 @@ __all__ = [
     "UsageSource",
     "UserOrigin",
     "ValueName",
+    "WaitingApproval",
     "Warning",
     "WorkspaceReverted",
     "accepted",

@@ -469,7 +469,10 @@ def test_a_registry_from_before_instance_notices_keeps_its_notifications_and_rai
                 raised_at TEXT NOT NULL,
                 UNIQUE (instance_id, source_key)
             );
-            INSERT INTO notifications_before SELECT * FROM notifications;
+            INSERT INTO notifications_before
+            SELECT id, instance_id, source_key, thread_id, header, title, text, link, options,
+                raised_at
+            FROM notifications;
             DROP TABLE notifications;
             ALTER TABLE notifications_before RENAME TO notifications;
             """
