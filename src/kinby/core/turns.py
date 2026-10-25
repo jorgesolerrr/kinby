@@ -249,6 +249,7 @@ class Turns:
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim] = {}
         self._admitting = True
+        self._answering = True
 
     def close(self) -> None:
         """Take no more turns. Accepted work, reads and approval responses keep going."""
@@ -367,12 +368,13 @@ class Turns:
                 return
             await self._changed.wait()
 
-    async def wait_live(self) -> None:
-        """Wait until no live turn and no claim holds the instance. A parked approval stays
-        parked, to resume at the next start."""
+    async def seal(self) -> None:
+        """Wait until no live turn and no claim holds the instance, then take no more approval
+        answers. A parked approval stays parked, to resume at the next start."""
         while True:
             self._changed.clear()
             if not self._live() and not self._claims:
+                self._answering = False
                 return
             await self._changed.wait()
 
@@ -718,6 +720,10 @@ class Turns:
 
     async def respond(self, command: ThreadApprovalRespondCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
+        if not self._answering:
+            raise InstanceDraining(
+                "The instance has drained. The approval waits for its next start."
+            )
         events = self._log.stored(command.thread_id)
         pending = pending_approval(events)
         known = any(

@@ -297,7 +297,7 @@ The hub's explicit record of storage owned by an instance. Each entry distinguis
 
 ### Instance draining
 
-The period when an **instance** stops accepting new work and waits for its running **turns** to finish before stopping. A parked **approval** is not waited on: it stays parked and resumes at the next start. Reads and **approval** responses remain available, while new **deliveries** wait for the next start.
+The period when an **instance** stops accepting new work and waits for its running **turns** to finish before stopping. A parked **approval** is not waited on: it stays parked and resumes at the next start. Reads remain available, and so do **approval** responses until the running turns finish, while new **deliveries** wait for the next start.
 
 ### Instance discovery
 

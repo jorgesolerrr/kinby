@@ -266,6 +266,13 @@ def test_a_drain_leaves_a_parked_approval_parked_for_the_next_start(tmp_path: Pa
         )
 
         result = await asyncio.wait_for(runtime.drain(InstanceDrainCommand()), timeout=5)
+        late = await call(
+            runtime.dispatcher,
+            "thread.approval.respond",
+            thread_id=str(thread),
+            approval_id=str(_APPROVAL_ID),
+            decision="approve",
+        )
         await runtime.stop_interrupting_running_routine()
         while_drained = [type(event.payload).__name__ for event in recorded(instance)]
         restarted = booted(load_instance(tmp_path), runner)
@@ -280,6 +287,8 @@ def test_a_drain_leaves_a_parked_approval_parked_for_the_next_start(tmp_path: Pa
         await restarted.stop_after_running_routine()
 
         assert result.state is DrainState.DRAINED
+        assert isinstance(late, ErrorEnvelope)
+        assert late.code is ErrorCode.INSTANCE_DRAINING
         assert while_drained == [TurnStarted.__name__, ApprovalRequested.__name__]
         assert not isinstance(answered, ErrorEnvelope)
 
