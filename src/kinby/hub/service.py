@@ -523,6 +523,8 @@ class Hub:
             self._runtime = runtime
             self._images = images
             self._private_url = private_url
+            # Links and channel routes append a path that starts with a slash.
+            public_url = public_url.rstrip("/") if public_url is not None else None
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
             self.library = Library(
                 self.directory / "skills", shipped_skills, self.factories, self.registry
@@ -534,6 +536,7 @@ class Hub:
                 self.registry,
                 self.secrets,
                 installed_kinds() if channel_kinds is None else channel_kinds,
+                public_url,
                 clock,
             )
             self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
