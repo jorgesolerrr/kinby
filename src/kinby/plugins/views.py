@@ -10,6 +10,7 @@ from pydantic import JsonValue
 from kinby.contracts import ViewChange, ViewChanged, ViewId, ViewSpec
 from kinby.instance.views import (
     ViewPatchOperation,
+    delete_view,
     list_views,
     patch_view,
     read_view,
@@ -19,7 +20,7 @@ from kinby.plugins.tools import Tool, ToolContext, tool
 
 
 def view_tools() -> tuple[Tool, ...]:
-    return (view_list, view_read, view_write, view_patch)
+    return (view_list, view_read, view_write, view_patch, view_delete)
 
 
 @tool(write=False)
@@ -73,3 +74,14 @@ async def view_patch(id: ViewId, ops: list[ViewPatchOperation], context: ToolCon
         ViewChanged(view=id, title=patched.title, change=ViewChange.CHANGED)
     )
     return f"Changed view {id}."
+
+
+@tool(write=True)
+async def view_delete(id: ViewId, context: ToolContext) -> str:
+    """Delete a view for good. The user may rely on it, so delete one only when it no longer
+    serves."""
+    deleted = await asyncio.to_thread(delete_view, context.instance, id)
+    await context.report_view_changed(
+        ViewChanged(view=id, title=deleted.title, change=ViewChange.DELETED)
+    )
+    return f"Deleted view {id}."

@@ -30,9 +30,10 @@ from kinby.instance.layout import VIEWS_DIR
 VIEW_CAP_BYTES = 1_000_000
 _VIEW_ID = TypeAdapter(ViewId)
 
-#: Who hears of each write, by the view's file. Writes run in worker threads, and a watcher
-#: only schedules the view on its event loop, so it is called under the lock.
-_watchers: dict[Path, set[Callable[[View], object]]] = {}
+#: Who hears of each write, by the view's file, and hears None once it is deleted. Writes run in
+#: worker threads, and a watcher only schedules the view on its event loop, so it is called under
+#: the lock.
+_watchers: dict[Path, set[Callable[[View | None], object]]] = {}
 _watchers_lock = threading.Lock()
 
 
@@ -126,14 +127,27 @@ def _store(instance: Instance, view: View) -> ViewChange:
     return change
 
 
-def watch_view(instance: Instance, view_id: str) -> tuple[asyncio.Queue[View], Callable[[], None]]:
-    """A queue that gets the view after each write from now on, and the call that stops it.
-    Call it on the event loop that reads the queue."""
+def delete_view(instance: Instance, view_id: str) -> View:
+    """Remove a view, and end every watch of it. Returns the view as it was."""
+    path = _view_path(instance, view_id)
+    with _watchers_lock:
+        view = read_view(instance, view_id)
+        path.unlink()
+        for watcher in _watchers.pop(path, ()):
+            watcher(None)
+    return view
+
+
+def watch_view(
+    instance: Instance, view_id: str
+) -> tuple[asyncio.Queue[View | None], Callable[[], None]]:
+    """A queue that gets the view after each write from now on and None once it is deleted, and
+    the call that stops it. Call it on the event loop that reads the queue."""
     loop = asyncio.get_running_loop()
     path = _view_path(instance, view_id)
-    changes: asyncio.Queue[View] = asyncio.Queue()
+    changes: asyncio.Queue[View | None] = asyncio.Queue()
 
-    def watcher(view: View) -> None:
+    def watcher(view: View | None) -> None:
         loop.call_soon_threadsafe(changes.put_nowait, view)
 
     with _watchers_lock:

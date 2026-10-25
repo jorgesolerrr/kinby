@@ -194,7 +194,7 @@ export type ErrorCode =
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
-export type ViewChange = "created" | "changed";
+export type ViewChange = "created" | "changed" | "deleted";
 
 export interface Contract {
   client_frame: ClientFrame;
@@ -630,6 +630,10 @@ export interface Contract {
     "usage.get": {
       command: UsageGetCommand;
       result: UsageGetResult;
+    };
+    "view.delete": {
+      command: ViewDeleteCommand;
+      result: ViewListResult;
     };
     "view.get": {
       command: ViewGetCommand;
@@ -2433,6 +2437,17 @@ export interface TurnUsage {
   recap_output_tokens: number;
   turn_id: string;
 }
+export interface ViewDeleteCommand {
+  id: ViewId;
+}
+export interface ViewListResult {
+  views: ViewSummary[];
+}
+export interface ViewSummary {
+  id: ViewId;
+  title: string;
+  updated_at: string;
+}
 export interface ViewGetCommand {
   id: ViewId;
 }
@@ -2575,14 +2590,6 @@ export interface ViewChecklist {
   label: TextProp;
 }
 export interface ViewListCommand {}
-export interface ViewListResult {
-  views: ViewSummary[];
-}
-export interface ViewSummary {
-  id: ViewId;
-  title: string;
-  updated_at: string;
-}
 export interface ResultFrame {
   id: string;
   result: {
@@ -2862,7 +2869,7 @@ export interface NotificationRefused {
   type: "notification.refused";
 }
 /**
- * A turn wrote a view. The view's content stays in the view.
+ * A turn wrote or deleted a view. The view's content stays in the view.
  */
 export interface ViewChanged {
   change: ViewChange;
@@ -2871,7 +2878,8 @@ export interface ViewChanged {
   view: ViewId;
 }
 /**
- * Follow one view: the view as it is, then the whole view again after each write.
+ * Follow one view: the view as it is, then the whole view again after each write, until it
+ * is deleted.
  */
 export interface ViewSubscribeCommand {
   id: ViewId;

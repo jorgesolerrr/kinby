@@ -569,3 +569,115 @@ def test_subscribing_to_a_view_the_instance_does_not_have_is_not_found(tmp_path:
         assert missing.code is ErrorCode.NOT_FOUND
 
     asyncio.run(scenario())
+
+
+DELETE: tuple[str, dict[str, object]] = ("view_delete", {"id": "applications"})
+
+
+@pytest.mark.parametrize(
+    ("mode", "action"), [("ask", "ask"), ("auto", "ask"), ("read-only", "deny")]
+)
+def test_a_view_delete_asks_in_ask_and_auto_mode_and_is_denied_in_read_only(
+    tmp_path: Path, mode: str, action: str
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        permissions(instance, f'mode = "{mode}"\n')
+        runner = LangGraphRunner(instance, model_factory=lambda _: calling(DELETE))
+
+        result, payloads = await _run_turn(runner)
+
+        if action == "ask":
+            assert isinstance(result, ParkedTurn)
+            approval = next(p for p in payloads if isinstance(p, ApprovalRequested))
+            assert approval.rule == f"mode.{mode}.write"
+        else:
+            gated = next(payload for payload in payloads if isinstance(payload, ToolGated))
+            assert (gated.action.value, gated.rule) == ("deny", "mode.read-only.write")
+
+    asyncio.run(scenario())
+
+
+async def approved_turn(dispatcher: Dispatcher) -> list[Event]:
+    """Start a turn in a new thread, approve each call it asks for, and return its events once it
+    closes."""
+    created = await call(dispatcher, "thread.create")
+    assert isinstance(created, ThreadCreateResult)
+    accepted = await call(dispatcher, "thread.turn.start", thread_id=created.id, message="Board")
+    assert isinstance(accepted, AcceptedResult), accepted
+    events: list[Event] = []
+    stream = await thread_events(dispatcher, {"thread_id": created.id}, set(Scope))
+    async with asyncio.timeout(5):
+        async for event in stream:
+            assert isinstance(event, Event)
+            events.append(event)
+            if isinstance(event.payload, ApprovalRequested):
+                approval_id = event.payload.approval_id
+                await call(
+                    dispatcher,
+                    "thread.approval.respond",
+                    thread_id=created.id,
+                    approval_id=approval_id,
+                    decision="approve",
+                )
+            if is_turn_closing(event.payload):
+                break
+    await stream.aclose()
+    return events
+
+
+def test_an_approved_view_delete_removes_the_view_and_ends_its_subscription(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), calling(("view_write", board()), DELETE))
+        await turn(dispatcher)
+        items = await snapshots(dispatcher)
+
+        async with asyncio.timeout(5):
+            await anext(items)
+            events = await approved_turn(dispatcher)
+            remaining = [item async for item in items]
+
+        assert [result.error for result in tool_results(events)] == [False]
+        assert changes(events) == [
+            ViewChanged(view="applications", title="Applications", change=ViewChange.DELETED)
+        ]
+        assert remaining == []
+        assert await listed(dispatcher) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_client_deletes_a_view_which_ends_its_subscription_and_records_no_event(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), writing(board()))
+        await turn(dispatcher)
+        threads = await call(dispatcher, "thread.list")
+        items = await snapshots(dispatcher)
+
+        async with asyncio.timeout(5):
+            await anext(items)
+            deleted = await call(dispatcher, "view.delete", id="applications")
+            remaining = [item async for item in items]
+
+        assert deleted == ViewListResult(views=[])
+        assert remaining == []
+        assert await listed(dispatcher) == []
+        assert await call(dispatcher, "thread.list") == threads
+
+    asyncio.run(scenario())
+
+
+def test_deleting_a_view_the_instance_does_not_have_is_not_found(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path))
+
+        missing = await call(dispatcher, "view.delete", id="applications")
+
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())

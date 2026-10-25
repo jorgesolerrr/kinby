@@ -574,10 +574,11 @@ type ViewId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
 class ViewChange(StrEnum):
     CREATED = "created"
     CHANGED = "changed"
+    DELETED = "deleted"
 
 
 class ViewChanged(ContractModel):
-    """A turn wrote a view. The view's content stays in the view."""
+    """A turn wrote or deleted a view. The view's content stays in the view."""
 
     type: Literal[EventType.VIEW_CHANGED] = EventType.VIEW_CHANGED
     view: ViewId
@@ -3353,6 +3354,11 @@ class ViewGetCommand(ContractModel):
 
 
 class ViewSubscribeCommand(ContractModel):
-    """Follow one view: the view as it is, then the whole view again after each write."""
+    """Follow one view: the view as it is, then the whole view again after each write, until it
+    is deleted."""
 
+    id: ViewId
+
+
+class ViewDeleteCommand(ContractModel):
     id: ViewId
