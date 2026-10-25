@@ -1,13 +1,16 @@
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from kinby.contracts import (
+    APPROVAL_OPTIONS,
     AcceptedResult,
+    ApprovalRequested,
     CompletionOutcome,
+    GateRule,
     NotificationRaised,
     NotificationRefused,
     RoutineName,
@@ -19,6 +22,7 @@ from kinby.contracts import (
     ThreadStatus,
     ThreadSummary,
     UserOrigin,
+    WaitingApproval,
 )
 from kinby.core.dispatcher import (
     ScheduledDispatcher,
@@ -36,7 +40,8 @@ from tests.test_thread_status import ScriptedRunner
 
 class RoutineRunner(ScriptedRunner):
     """Run each turn as its message says, find no work in a message of "nothing new", and notify
-    the user with options in one of "ask", or with options the hub refuses in "ask refused"."""
+    the user with options in one of "ask", or with options the hub refuses in "ask refused", or
+    with an approval's options in "ask approval"."""
 
     async def run(
         self, turn: PreparedTurnRequest, context: TurnContext
@@ -52,6 +57,20 @@ class RoutineRunner(ScriptedRunner):
                 )
                 if turn.message == "ask refused":
                     await context.emit(NotificationRefused(raised=raised.sequence, reason="cap"))
+                return TurnOutcome()
+            case "ask approval":
+                request = ApprovalRequested(
+                    approval_id=uuid4(), name="write", arguments={}, rule=GateRule("write")
+                )
+                await context.emit(
+                    NotificationRaised(
+                        source="ask approval",
+                        title="Approval waiting",
+                        text="write",
+                        options=list(APPROVAL_OPTIONS),
+                        approval=WaitingApproval(turn_id=turn.turn_id, request=request),
+                    )
+                )
                 return TurnOutcome()
         return await super().run(turn, context)
 
@@ -252,9 +271,10 @@ def test_a_routine_run_awaiting_a_reply_stays_in_the_sidebar_until_the_user_answ
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        dispatcher, _ = await _setup(tmp_path, "ask", "ask refused")
+        dispatcher, _ = await _setup(tmp_path, "ask", "ask refused", "ask approval")
         asking = await _fire(dispatcher, "ask")
         await _fire(dispatcher, "ask-refused")
+        await _fire(dispatcher, "ask-approval")
 
         [summary] = await _threads(dispatcher, "sidebar")
         assert summary.id == asking

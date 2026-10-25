@@ -290,6 +290,23 @@ describe("a thread's timeline", () => {
       })
     })
 
+    it("still waits once the turn records the notification that tells the user", () => {
+      const [turn] = replay([
+        "turn-1",
+        ...parked,
+        {
+          type: "notification.raised",
+          source: "Fix the runtime",
+          title: "Approval waiting",
+          text: "write: path=runtime.py, content=fixed",
+          options: ["Approve", "Deny"],
+        },
+        { type: "notification.accepted", raised: 5, notification_id: "n1" },
+      ]).turns
+
+      expect(turn?.approval?.approvalId).toBe("a1")
+    })
+
     it("stops waiting once the turn moves on, the call approved by the user", () => {
       const [turn] = replay([
         "turn-1",

@@ -4781,6 +4781,17 @@
       "additionalProperties": false,
       "description": "A notification an instance raises on its hub route. The hub adds its header and link.",
       "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "key": {
           "minLength": 1,
           "type": "string"
@@ -4837,6 +4848,17 @@
       "additionalProperties": false,
       "description": "A notification the instance raises on its hub route, again on each scheduler pass, until\nthe hub answers it.",
       "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "options": {
           "items": {
             "minLength": 1,
@@ -9361,6 +9383,25 @@
     "ValueName": {
       "pattern": "^[a-z_][a-z0-9_]*$",
       "type": "string"
+    },
+    "WaitingApproval": {
+      "additionalProperties": false,
+      "description": "An approval a turn parked on, which a notification asks the user to answer.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/ApprovalRequested"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "request"
+      ],
+      "title": "WaitingApproval",
+      "type": "object"
     },
     "Warning": {
       "additionalProperties": false,

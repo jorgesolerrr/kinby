@@ -52,6 +52,7 @@ __all__ = [
     "Channels",
     "Inbound",
     "ReceivingKind",
+    "RegisteringKind",
     "Reply",
     "SentRef",
     "installed_kinds",
@@ -117,11 +118,29 @@ class ReceivingKind(ChannelKind, Protocol):
     """A kind whose service calls the hub's public route when the user sends something."""
 
     async def receive(self, request: web.Request) -> Inbound | Reply | None:
-        """What the user sent, or None for a call that is not authentic or carries neither."""
+        """What the user sent, or None for a call that is not authentic or carries neither. A
+        kind whose service expects a call that is not authentic to be refused raises the
+        refusal."""
+        ...
+
+    def answer(self, received: Inbound | Reply | None) -> web.Response:
+        """The answer to the service's call, once the hub took what *received* says it
+        carried."""
         ...
 
     async def edit(self, message: SentRef, outcome: str) -> None:
         """Show on the message that it was answered, and what came of the reply."""
+        ...
+
+
+@runtime_checkable
+class RegisteringKind(ChannelKind, Protocol):
+    """A kind whose service the hub sets up for the channel, rather than the user: where the hub
+    takes its calls, or what the user can send it."""
+
+    async def register(self, route: str) -> None:
+        """Set the service up to call *route*, the channel's public route, or raise why it would
+        not."""
         ...
 
 
@@ -144,11 +163,14 @@ class Channels:
         registry: HubRegistry,
         hub_secrets: HubSecrets,
         kinds: Mapping[ChannelKindName, type[ChannelKind]],
+        public_url: str | None,
         clock: Callable[[], datetime],
     ) -> None:
+        """*public_url* is where a channel's service reaches the hub's public routes."""
         self._registry = registry
         self._secrets = hub_secrets
         self._kinds = kinds
+        self._public_url = public_url
         self._clock = clock
 
     async def kinds(self, command: ChannelKindsCommand) -> ChannelKindsResult:
@@ -170,6 +192,9 @@ class Channels:
             raise InvalidSetup({"kind": f'The hub has no channel kind "{command.kind}".'})
         channel_id = uuid4()
         settings = _checked(kind.setup, command.settings, command.secrets, {})
+        await self._register(
+            channel_id, command.kind, self._built(kind, settings, command.secrets, None)
+        )
         settings |= self._kept(channel_id, kind.setup, command.secrets)
         pairing = (
             Pairing(
@@ -184,9 +209,15 @@ class Channels:
 
     async def update(self, command: ChannelUpdateCommand) -> Channel:
         record = self._existing(command.channel_id)
-        setup = self._kind(record).setup
-        settings = _checked(setup, command.settings, command.secrets, record.settings)
-        settings |= self._kept(record.channel_id, setup, command.secrets)
+        kind = self._kind(record)
+        settings = _checked(kind.setup, command.settings, command.secrets, record.settings)
+        if command.settings or command.secrets:
+            await self._register(
+                record.channel_id,
+                record.kind,
+                self._built(kind, settings, command.secrets, record.paired_user),
+            )
+        settings |= self._kept(record.channel_id, kind.setup, command.secrets)
         self._registry.update_channel(
             record.channel_id,
             name=command.name if command.name is not None else record.name,
@@ -238,11 +269,15 @@ class Channels:
         return _shown(self._existing(command.channel_id))
 
     async def receive(
-        self, channel_id: str, kind: str, request: web.Request
-    ) -> tuple[ChannelRecord, Reply] | None:
-        """Hand a call to the channel's public route to its kind, and return the reply it
-        carries from the user the channel is paired with. The first sender of a valid pairing
-        code becomes that user."""
+        self,
+        channel_id: str,
+        kind: str,
+        request: web.Request,
+        take: Callable[[ChannelRecord, Reply], None],
+    ) -> web.Response:
+        """Hand a call to the channel's public route to its kind, give *take* the reply it
+        carries from the user the channel is paired with, and answer the call as the kind does.
+        The first sender of a valid pairing code becomes that user."""
         parsed = _parsed(channel_id)
         record = self._registry.channel(parsed) if parsed is not None else None
         if record is None or record.kind != kind or record.kind not in self._kinds:
@@ -250,16 +285,17 @@ class Channels:
         receiver = self.sender(record)
         if not isinstance(receiver, ReceivingKind):
             raise web.HTTPNotFound()
-        match await receiver.receive(request):
+        received = await receiver.receive(request)
+        match received:
             case Reply(sender=sender) as reply if sender == record.paired_user:
-                return record, reply
+                take(record, reply)
             case Inbound(sender=sender, text=text) if (
                 (pairing := record.pairing) is not None
                 and self._clock() < pairing.expires_at
                 and hmac.compare_digest(text.strip().encode(), pairing.code.encode())
             ):
                 self._registry.pair_channel(record.channel_id, pairing.code, sender)
-        return None
+        return receiver.answer(received)
 
     def limit(self, record: ChannelRecord) -> int:
         """The most characters of a notification's text the channel's kind sends."""
@@ -267,14 +303,38 @@ class Channels:
 
     def sender(self, record: ChannelRecord) -> ChannelKind:
         """The channel's kind, built with the values its secret settings name."""
-        kind = self._kind(record)
+        return self._built(self._kind(record), record.settings, {}, record.paired_user)
+
+    def _built(
+        self,
+        kind: type[ChannelKind],
+        settings: Mapping[str, SetupValue],
+        typed: Mapping[str, SecretStr],
+        paired_user: ChannelUser | None,
+    ) -> ChannelKind:
+        """*kind* built with the values its secret settings name, or the ones just *typed*."""
         kept = self._secrets.values()
         secret = {field.name for field in _fields(kind.setup, SetupFieldKind.SECRET)}
-        settings = {
+        values = {
             name: kept.get(str(value), "") if name in secret else value
-            for name, value in record.settings.items()
+            for name, value in settings.items()
         }
-        return kind(settings, record.paired_user)
+        values |= {name: value.get_secret_value() for name, value in typed.items()}
+        return kind(values, paired_user)
+
+    async def _register(self, channel_id: UUID, kind: ChannelKindName, built: ChannelKind) -> None:
+        """Tell a kind that registers where its service reaches the channel. Raise when it cannot,
+        so the channel is not set up to a service that never calls."""
+        if not isinstance(built, RegisteringKind):
+            return
+        if self._public_url is None:
+            raise InvalidSetup({"kind": f'A "{kind}" channel needs the hub\'s public URL.'})
+        try:
+            await built.register(f"{self._public_url}/channels/{channel_id}/{kind}")
+        except Exception as exc:
+            raise InvalidSetup(
+                {"kind": f"The service refused the channel's route: {exc or type(exc).__name__}"}
+            ) from exc
 
     def _kind(self, record: ChannelRecord) -> type[ChannelKind]:
         kind = self._kinds.get(record.kind)

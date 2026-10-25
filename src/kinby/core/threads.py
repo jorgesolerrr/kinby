@@ -14,6 +14,7 @@ from kinby.contracts import (
     ApprovalRequested,
     Event,
     ModePinned,
+    NotificationAccepted,
     NotificationRaised,
     NotificationRefused,
     Origin,
@@ -40,6 +41,7 @@ from kinby.jsonl import append_line, whole_lines
 THREADS_NAME = "threads.jsonl"
 #: The most characters a title taken from a thread's first message has.
 TITLE_LENGTH = 60
+_NOTIFYING = (NotificationRaised, NotificationAccepted, NotificationRefused)
 
 
 class ThreadRecord(BaseModel):
@@ -264,13 +266,15 @@ def thread_status(events: Sequence[Event]) -> ThreadStatus:
 
 def offers_options(events: Sequence[Event], turn_id: UUID) -> bool:
     """Whether the turn raised a notification with options that the hub did not refuse. A reply
-    starts the next turn, so the user has answered none of them."""
+    starts the next turn, so the user has answered none of them. The options of an approval's
+    notification answer the approval, not the closed turn."""
     offered = {
         event.sequence
         for event in events
         if event.turn_id == turn_id
         and isinstance(event.payload, NotificationRaised)
         and event.payload.options
+        and event.payload.approval is None
     }
     refused = {
         event.payload.raised for event in events if isinstance(event.payload, NotificationRefused)
@@ -280,12 +284,16 @@ def offers_options(events: Sequence[Event], turn_id: UUID) -> bool:
 
 def pending_approval(events: Sequence[Event]) -> PendingApproval | None:
     # Answering an approval appends nothing, so the resumed turn's own next event is
-    # what ends the park. Events on any other turn leave it standing.
+    # what ends the park. Events on any other turn, and the notifications recorded while it
+    # waits, leave it standing.
     for index, event in reversed(list(enumerate(events))):
         payload = event.payload
         if not isinstance(payload, ApprovalRequested):
             continue
-        if any(later.turn_id == event.turn_id for later in events[index + 1 :]):
+        if any(
+            later.turn_id == event.turn_id and not isinstance(later.payload, _NOTIFYING)
+            for later in events[index + 1 :]
+        ):
             return None
         return PendingApproval(event, payload)
     return None

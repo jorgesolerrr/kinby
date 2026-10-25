@@ -39,6 +39,7 @@ from kinby.contracts import (
     ThreadListResult,
     ToolGated,
     ToolResult,
+    TurnCompleted,
     is_turn_closing,
 )
 from kinby.core import LangGraphRunner
@@ -62,10 +63,18 @@ from tests.test_hub import (
     instance_environment,
     started_instance,
 )
-from tests.test_hub_channels import FakeService, created_channel, listed_channel
+from tests.test_hub_channels import (
+    FakeService,
+    FakeTime,
+    created_channel,
+    listed_channel,
+    next_sent,
+    paired_channel,
+)
 from tests.test_hub_factories import FILES, renamed
 from tests.test_hub_home_reads import answers, as_the_home_instance, error_code
 from tests.test_hub_library_git import commit, head, repository, skill
+from tests.test_hub_replies import next_edit, replied
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import frame, served, url
 from tests.test_routines import instance_at
@@ -87,6 +96,7 @@ class KinbyHub:
     home: UUID
     home_token: ControlToken
     alice: UUID
+    service: FakeService
 
     def route(self, instance_id: UUID) -> str:
         return url(self.address, f"/instances/{instance_id}/hub")
@@ -100,7 +110,14 @@ async def kinby_hub(
     given alice's id. The home instance calls the hub on its own hub route. Alice lives in
     *directory*/alice. The hub sets up channels of the fake kind."""
     runtime = FakeRuntime()
-    hub = hub_at(directory / "hub", runtime=runtime, channel_kinds={"fake": FakeService().kind()})
+    service = FakeService()
+    # A reply the parking turn is still too busy for is tried again at once.
+    hub = hub_at(
+        directory / "hub",
+        runtime=runtime,
+        channel_kinds={"fake": service.kind()},
+        sleep=FakeTime().sleep,
+    )
     recovery = await hub.recover()
     assert recovery.home is not None
     home = await started(hub_client(hub), runtime, recovery.home)
@@ -128,7 +145,7 @@ async def kinby_hub(
     ):
         runtime.addresses[str(home)] = f"http://{private.host}:{private.port}"
         runtime.addresses[str(alice)] = f"http://{alices.host}:{alices.port}"
-        kinby = KinbyHub(hub, runtime, address, access_token, home, home_token, alice)
+        kinby = KinbyHub(hub, runtime, address, access_token, home, home_token, alice, service)
         as_the_home_instance(monkeypatch, kinby.route(home))
         monkeypatch.setenv("KINBY_CONTROL_TOKEN", home_token)
         yield kinby
@@ -228,6 +245,90 @@ def test_kinby_creates_an_instance_once_the_user_approves_it_through_the_relay(
         assert operation.state is OperationState.SUCCEEDED
         assert operation.requester == kinby.home
         assert str(created.instance_id) in [spec.instance_id for spec in kinby.runtime.created]
+
+    asyncio.run(scenario())
+
+
+async def unwatched_turn(kinby: KinbyHub) -> str:
+    """Start a turn in the home instance through the relay without subscribing to its thread, so
+    the hub sees none of its events. Return its thread's id."""
+    headers = {"Authorization": f"Bearer {kinby.access_token}"}
+    async with (
+        aiohttp.ClientSession(headers=headers) as session,
+        session.ws_connect(url(kinby.address, f"/instances/{kinby.home}/ws")) as socket,
+    ):
+        await socket.send_json({"type": "call", "id": "create", "method": "thread.create"})
+        created = await frame(socket)
+        assert isinstance(created["result"], dict), created
+        thread_id = created["result"]["id"]
+        await socket.send_json(
+            {
+                "type": "call",
+                "id": "start",
+                "method": "thread.turn.start",
+                "params": {"thread_id": thread_id, "message": "Set things up."},
+            }
+        )
+        started = await frame(socket)
+        assert started["type"] == FrameType.RESULT.value, started
+        return thread_id
+
+
+async def closed_turn(kinby: KinbyHub, thread_id: str) -> list[Payload]:
+    """What the thread's turn emitted, once it ends."""
+    headers = {"Authorization": f"Bearer {kinby.access_token}"}
+    async with (
+        aiohttp.ClientSession(headers=headers) as session,
+        session.ws_connect(url(kinby.address, f"/instances/{kinby.home}/ws")) as socket,
+    ):
+        await socket.send_json(
+            {
+                "type": "subscribe",
+                "id": "events",
+                "method": "thread.subscribe",
+                "params": {"thread_id": thread_id},
+            }
+        )
+        payloads: list[Payload] = []
+        while not payloads or not is_turn_closing(payloads[-1]):
+            received = await frame(socket)
+            if received["type"] == FrameType.ITEM.value:
+                payloads.append(Event.model_validate(received["item"]).payload)
+        return payloads
+
+
+def test_kinby_creates_an_instance_once_the_user_approves_it_from_a_channel(tmp_path, monkeypatch):
+    def script(_: UUID) -> list[AIMessageChunk]:
+        return [
+            calling("create-1", "instance_create", {"manifest_id": "bob", "model": "openai:gpt-5"}),
+            AIMessageChunk(content="Bob is being created."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            monkeypatch.setenv(HUB_SCOPES_VARIABLE, "hub:home,hub:read,notification:raise")
+            channel = await paired_channel(hub_client(kinby.hub), kinby.address)
+            thread_id = await unwatched_turn(kinby)
+            sent = await next_sent(kinby.service)
+            await replied(kinby.address, channel, sent.ref, 0)
+            edited = await next_edit(kinby.service)
+            payloads = await closed_turn(kinby, thread_id)
+            [result] = [payload for payload in payloads if isinstance(payload, ToolResult)]
+            assert not result.error, result.output
+            created = LifecycleOperationResult.model_validate_json(result.output)
+            operation = await finished_operation(hub_client(kinby.hub), created)
+
+        notification = sent.notification
+        assert (notification.header, notification.title) == (
+            "Kinby · Set things up.",
+            "Approval waiting",
+        )
+        assert notification.text.startswith("instance_create: manifest_id=bob")
+        assert notification.options == ("Approve", "Deny", "Mute this instance")
+        assert edited == (sent.ref, "Approved.")
+        assert isinstance(payloads[-1], TurnCompleted)
+        assert operation.state is OperationState.SUCCEEDED
+        assert operation.requester == kinby.home
 
     asyncio.run(scenario())
 

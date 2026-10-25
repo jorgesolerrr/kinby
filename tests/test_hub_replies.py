@@ -8,31 +8,40 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from uuid import UUID, uuid4
 
+import pytest
 from aiohttp import web
 
 from kinby.contracts import (
+    APPROVAL_OPTIONS,
     CHANNEL_MUTE,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
     NOTIFICATION_REPLY,
+    THREAD_APPROVAL_RESPOND,
     THREAD_TURN_START,
     AcceptedResult,
+    ApprovalDecision,
+    ApprovalRequested,
     Channel,
     ChannelMuteCommand,
     DeliveryStatus,
     ErrorCode,
     ErrorEnvelope,
+    GateRule,
     NotificationDelivery,
     NotificationListCommand,
     NotificationListResult,
+    NotificationRaiseCommand,
     NotificationReply,
     NotificationReplyCommand,
     ReplyStatus,
     Scope,
+    ThreadApprovalRespondCommand,
     ThreadTurnStartCommand,
+    WaitingApproval,
 )
 from kinby.core.dispatcher import Dispatcher
-from kinby.core.errors import ThreadBusy
+from kinby.core.errors import ApprovalNotFound, ThreadBusy
 from kinby.hub import Hub
 from kinby.hub.channels import SentRef
 from kinby.instance import Serve
@@ -58,16 +67,27 @@ _UNKNOWN = "Not known whether the instance got this answer. Answer again from th
 
 class FakeThreads:
     """An instance's threads as the hub's relay reaches them: the turns they started, after
-    refusing as many as *refusals* because a turn was running."""
+    refusing as many as *refusals* because a turn was running, and the answers they took to the
+    approvals *waiting*."""
 
-    def __init__(self, *, refusals: int = 0) -> None:
+    def __init__(self, *, refusals: int = 0, waiting: set[UUID] | None = None) -> None:
         self.refusals = refusals
+        self.waiting = waiting or set()
         self.started: asyncio.Queue[ThreadTurnStartCommand] = asyncio.Queue()
+        self.answered: asyncio.Queue[ThreadApprovalRespondCommand] = asyncio.Queue()
 
     def dispatcher(self) -> Dispatcher:
         dispatcher = Dispatcher()
         dispatcher.register(THREAD_TURN_START, self._start)
+        dispatcher.register(THREAD_APPROVAL_RESPOND, self._respond)
         return dispatcher
+
+    async def _respond(self, command: ThreadApprovalRespondCommand) -> AcceptedResult:
+        if command.approval_id not in self.waiting:
+            raise ApprovalNotFound(f'Approval "{command.approval_id}" was not found.')
+        self.waiting.remove(command.approval_id)
+        self.answered.put_nowait(command)
+        return AcceptedResult(thread_id=command.thread_id, turn_id=uuid4(), sequence=2)
 
     async def _start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
         if self.refusals:
@@ -498,5 +518,83 @@ def test_the_web_app_replies_only_with_an_option_the_notification_offers_and_onl
         assert isinstance(reader, ErrorEnvelope)
         assert reader.code is ErrorCode.PERMISSION_DENIED
         assert await replies(hub, alice_id) == []
+
+    asyncio.run(scenario())
+
+
+def approval_notification(key: str, approval_id: UUID) -> NotificationRaiseCommand:
+    """What an instance raises when a turn parks on an approval."""
+    request = ApprovalRequested(
+        approval_id=approval_id,
+        name="store",
+        arguments={"path": "notes.md"},
+        rule=GateRule("ask mode: writes need approval"),
+    )
+    return notification(key).model_copy(
+        update={
+            "title": "Approval waiting",
+            "text": "store: path=notes.md",
+            "options": list(APPROVAL_OPTIONS),
+            "approval": WaitingApproval(turn_id=UUID(int=2), request=request),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("option", "decision", "outcome"),
+    [(0, ApprovalDecision.APPROVE, "Approved."), (1, ApprovalDecision.DENY, "Denied.")],
+)
+def test_approve_and_deny_answer_the_approval_a_notification_asks_for_through_the_relay(
+    tmp_path, option, decision, outcome
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        service = FakeService()
+        hub = channel_hub(tmp_path / "hub", service, FakeTime(), runtime)
+        client = hub_client(hub)
+        alice_id = (await started_instance(client, hub)).instance_id
+        approval_id = uuid4()
+        threads = FakeThreads(waiting={approval_id})
+        async with served(hub) as address, running(runtime, hub, alice_id, threads):
+            channel = await paired_channel(client, address)
+            await raising(hub, alice_id).call(
+                NOTIFICATION_RAISE, approval_notification("approval", approval_id)
+            )
+            sent = await next_sent(service)
+            await replied(address, channel, sent.ref, option)
+            answered = await asyncio.wait_for(threads.answered.get(), timeout=5)
+            edited = await next_edit(service)
+
+        assert sent.notification.options == ("Approve", "Deny", "Mute this instance")
+        assert answered == ThreadApprovalRespondCommand(
+            thread_id=UUID(int=1), approval_id=approval_id, decision=decision
+        )
+        assert edited == (sent.ref, outcome)
+        assert threads.started.empty()
+
+    asyncio.run(scenario())
+
+
+def test_an_answer_to_an_approval_no_longer_waiting_is_stale_and_changes_nothing(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        service = FakeService()
+        hub = channel_hub(tmp_path / "hub", service, FakeTime(), runtime)
+        client = hub_client(hub)
+        alice_id = (await started_instance(client, hub)).instance_id
+        threads = FakeThreads()
+        async with served(hub) as address, running(runtime, hub, alice_id, threads):
+            channel = await paired_channel(client, address)
+            await raising(hub, alice_id).call(
+                NOTIFICATION_RAISE, approval_notification("approval", uuid4())
+            )
+            sent = await next_sent(service)
+            await replied(address, channel, sent.ref, 0)
+            edited = await next_edit(service)
+
+        assert edited == (sent.ref, "No longer waiting.")
+        assert threads.answered.empty()
+        [reply] = await replies(hub, alice_id)
+        assert (reply.option, reply.status) == ("Approve", ReplyStatus.STALE)
 
     asyncio.run(scenario())

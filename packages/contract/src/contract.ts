@@ -1572,6 +1572,7 @@ export interface NotificationReply {
  * A notification an instance raises on its hub route. The hub adds its header and link.
  */
 export interface NotificationRaiseCommand {
+  approval?: WaitingApproval | null;
   key: string;
   /**
    * @maxItems 4
@@ -1581,6 +1582,22 @@ export interface NotificationRaiseCommand {
   text: string;
   thread_id: string;
   title: string;
+}
+/**
+ * An approval a turn parked on, which a notification asks the user to answer.
+ */
+export interface WaitingApproval {
+  request: ApprovalRequested;
+  turn_id: string;
+}
+export interface ApprovalRequested {
+  approval_id: string;
+  arguments: {
+    [k: string]: JsonValue;
+  };
+  name: string;
+  rule: string;
+  type: "approval.requested";
 }
 export interface NotificationRaiseResult {
   notification_id: string;
@@ -2529,15 +2546,6 @@ export interface ToolResult {
   output: string;
   type: "tool.result";
 }
-export interface ApprovalRequested {
-  approval_id: string;
-  arguments: {
-    [k: string]: JsonValue;
-  };
-  name: string;
-  rule: string;
-  type: "approval.requested";
-}
 export interface TurnCompleted {
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
@@ -2656,6 +2664,7 @@ export interface WorkspaceReverted {
  * the hub answers it.
  */
 export interface NotificationRaised {
+  approval?: WaitingApproval | null;
   /**
    * @maxItems 4
    */

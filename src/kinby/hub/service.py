@@ -85,8 +85,10 @@ from kinby.contracts import (
     RELAYED_READS,
     STATS_RUNS,
     STATS_SUMMARY,
+    THREAD_APPROVAL_RESPOND,
     THREAD_ASK,
     THREAD_TURN_START,
+    ApprovalDecision,
     Avatar,
     Capability,
     ChannelKindName,
@@ -94,6 +96,7 @@ from kinby.contracts import (
     ControlToken,
     DeclaredSetup,
     DrainState,
+    ErrorCode,
     FactoryEditCommand,
     FactoryName,
     FactoryResult,
@@ -174,8 +177,10 @@ from kinby.contracts import (
     StorageKind,
     SubscriptionLogin,
     TemplateBehind,
+    ThreadApprovalRespondCommand,
     ThreadAskCommand,
     ThreadTurnStartCommand,
+    WaitingApproval,
 )
 from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
@@ -186,6 +191,7 @@ from kinby.core.errors import (
     FactoryNotFound,
     HomeInstanceKept,
     ImageNotPrepared,
+    InstanceRefused,
     InstanceUnavailable,
     InvalidSetup,
     LifecycleOperationInFlight,
@@ -306,6 +312,8 @@ _NOTICE_TITLES = {
     "template_behind": "Template behind",
     "hub_route_missing": "Hub route missing",
 }
+#: What an instance answers for an approval that no longer waits: gone, or its turn ended.
+_NOT_WAITING = frozenset({ErrorCode.NOT_FOUND, ErrorCode.NO_ACTIVE_TURN})
 #: Colors and cursor moves a command prints around its URL and code.
 _TERMINAL_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -515,22 +523,35 @@ class Hub:
             self._runtime = runtime
             self._images = images
             self._private_url = private_url
+            # Links and channel routes append a path that starts with a slash.
+            public_url = public_url.rstrip("/") if public_url is not None else None
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
             self.library = Library(
                 self.directory / "skills", shipped_skills, self.factories, self.registry
             )
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
-            self.runs = FactoryRuns(self.registry, self.factories, self._run_step, self._tell_stop)
             self.approvals = HomeApprovals()
             self.channels = Channels(
                 self.registry,
                 self.secrets,
                 installed_kinds() if channel_kinds is None else channel_kinds,
+                public_url,
                 clock,
             )
             self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
-            self.replies = Replies(self.registry, self.channels, self._start_turn, clock, sleep)
+            self.runs = FactoryRuns(
+                self.registry, self.factories, self._run_step, self._tell_stop, self.outbox
+            )
+            self.replies = Replies(
+                self.registry,
+                self.channels,
+                self._start_turn,
+                self._answer_approval,
+                self.runs.answer_stop,
+                clock,
+                sleep,
+            )
             self._control = control if control is not None else HttpInstanceControl()
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
@@ -703,6 +724,38 @@ class Hub:
 
     async def _start_turn(self, instance_id: UUID, command: ThreadTurnStartCommand) -> None:
         await self._relayed(instance_id, THREAD_TURN_START.name, command.model_dump(mode="json"))
+
+    async def _answer_approval(
+        self,
+        instance_id: UUID,
+        thread_id: UUID,
+        waiting: WaitingApproval,
+        decision: ApprovalDecision,
+    ) -> bool:
+        """Answer the approval on the instance's socket, as the relay carries the user's answer.
+        False when it no longer waits.
+
+        The hub sees a home instance's approval approved before the instance does, so the hub
+        write the resumed turn makes finds it (ADR 0096).
+        """
+        approval_id = waiting.request.approval_id
+        approvals = self.home_approvals(instance_id)
+        if approvals is not None and decision is ApprovalDecision.APPROVE:
+            approvals.approve(waiting.turn_id, waiting.request)
+        command = ThreadApprovalRespondCommand(
+            thread_id=thread_id, approval_id=approval_id, decision=decision
+        )
+        try:
+            await self._relayed(
+                instance_id, THREAD_APPROVAL_RESPOND.name, command.model_dump(mode="json")
+            )
+        except InstanceRefused as exc:
+            if exc.error.code not in _NOT_WAITING:
+                raise
+            if approvals is not None:
+                approvals.use(approval_id)
+            return False
+        return True
 
     async def relay_read(self, command: InstanceRelayReadCommand) -> InstanceRelayReadResult:
         if command.method not in RELAYED_READS:
