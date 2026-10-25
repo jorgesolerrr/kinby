@@ -694,6 +694,11 @@ A named signed-in state an **instance** can open a page with, such as its Linked
 
 An **instance**'s sign-in credentials, each bound to one site, which the **browser service** types into that site's page for the agent. The user adds entries; the agent sees only their names and sites, never their values. Unlike a **hub secret**, a vault entry never reaches the instance.
 
+### Takeover
+
+The user driving an **instance**'s browser live from the web app, to sign in or get past a check the agent cannot. The agent asks for one and its **turn** waits, needing the user, until the user finishes; the user can also start one to create a **browser profile**.
+_Avoid_: handoff, which the factory uses for work handed to it
+
 ### View
 
 A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
