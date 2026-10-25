@@ -16,7 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kinby.contracts import FactoryRunStatus
-from kinby.core.run_worktrees import cut_run_worktree, remove_run_worktree, sweep_run_worktrees
+from kinby.core.run_worktrees import (
+    cut_run_worktree,
+    remove_run_worktree,
+    run_worktree,
+    sweep_run_worktrees,
+)
 from kinby.factories.file import FAILURE
 from kinby.plugins.hooks import HookResult
 from kinby.plugins.intake import hand_over
@@ -106,6 +111,11 @@ class UntrustedTicket(RuntimeError):
 
 class DivergedBlockers(RuntimeError):
     """No agent branch holds every open blocker's agent branch."""
+
+
+class LostBase(RuntimeError):
+    """The branch a pull request stacks on is gone, and the run's commits cannot follow it to
+    where it merged."""
 
 
 class UntrustedFeedback(RuntimeError):
@@ -226,6 +236,7 @@ def publish_pull_request(
     issue: int,
     branch: str,
     base: str,
+    run_id: str,
     context: ToolContext,
     *,
     reviewed: bool = False,
@@ -239,9 +250,14 @@ def publish_pull_request(
 
     *title* and *body* are the words this run's coding session wrote, as its steps recorded them
     (ADR 0083). An empty one keeps that part of the pull request as it is.
+
+    A pull request opens on its base, or on where that base landed once it merged.
     """
     workspace = context.workspace
     if pr is None:
+        if not body:
+            raise MissingPullRequestBody("The coding session wrote no pull request body.")
+        base = _landed_base(context, branch, base, run_id)
         return _open_pull_request(workspace, issue, branch, base, title, body, reviewed=reviewed)
     answered = json.loads(replies or "{}")
     return _push_fix_round(workspace, issue, branch, pr, answered, title, body, reviewed=reviewed)
@@ -446,8 +462,6 @@ def _open_pull_request(
     whatever the label on the issue it closes. The repository's maintainer reviews it. An issue an
     earlier failure handed to a human loses its ready-for-human label.
     """
-    if not body:
-        raise MissingPullRequestBody("The coding session wrote no pull request body.")
     found = _issue(workspace, issue)
     pulls = _agent_pull_requests(workspace)
     existing = next((pull for pull in pulls if pull.branch == branch), None)
@@ -476,6 +490,40 @@ def _open_pull_request(
     if READY_FOR_HUMAN_LABEL in found.labels:
         _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
     return {"pr": number}
+
+
+def _landed_base(context: ToolContext, branch: str, base: str, run_id: str) -> str:
+    """*base*, or the branch it landed on when its pull request merged and took it from origin.
+
+    A blocker's pull request can merge while the run stacked on it is still coding. The run's
+    own commits, those past the blocker's last head, then move onto the branch it merged into, as
+    GitHub retargets a pull request already open. A base gone unmerged needs a human, and so do
+    commits that conflict there.
+    """
+    workspace = context.workspace
+    head = None
+    while not _git(workspace, "ls-remote", "--heads", "origin", f"refs/heads/{base}").strip():
+        merged = json.loads(
+            _gh(
+                workspace,
+                *("pr", "list", "--state", "merged", "--head", base),
+                *("--json", "headRefOid,baseRefName", "--limit", "1"),
+            )
+        )
+        if not merged:
+            raise LostBase(f"Branch {base} is gone from origin, and no pull request of it merged.")
+        head = head or merged[0]["headRefOid"]
+        base = merged[0]["baseRefName"]
+    if head is None:
+        return base
+    worktree = run_worktree(context.instance, branch, run_id)
+    _git(worktree, "fetch", "origin", head, base)
+    try:
+        _git(worktree, "rebase", "--onto", f"origin/{base}", head, branch)
+    except CommandFailed as failed:
+        _git(worktree, "rebase", "--abort")
+        raise LostBase(f"Branch {branch} does not rebase onto {base}: {failed}") from failed
+    return base
 
 
 def _push_fix_round(

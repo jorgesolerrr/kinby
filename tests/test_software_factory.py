@@ -2203,8 +2203,11 @@ def test_prepare_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
     asyncio.run(scenario())
 
 
-def implemented(workspace: Path, branch: str) -> None:
-    """The workspace as the implement step leaves it: a commit on the branch."""
+def implemented(workspace: Path, branch: str, base: str = "main") -> None:
+    """The workspace as the implement step leaves it: a commit on the branch, its base on
+    origin."""
+    if base != "main":
+        git(workspace, "push", "origin", f"origin/main:refs/heads/{base}")
     git(workspace, "switch", "-c", branch, "origin/main")
     commit(workspace, "theme.py", "DARK = True\n")
 
@@ -2288,7 +2291,7 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme")
+    implemented(workspace, "agent/8-dark-theme", "agent/7-light-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -2329,7 +2332,7 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
 def test_publish_stacks_on_a_blocker_whose_issue_was_handed_to_a_human(tmp_path, monkeypatch):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme")
+    implemented(workspace, "agent/8-dark-theme", "agent/7-light-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -2377,6 +2380,102 @@ def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert not any("POST" in arguments for arguments in github.calls)
+
+    asyncio.run(scenario())
+
+
+def stacked_on_a_merged_blocker(instance: Instance, github: FakeGitHub, *on_main: str) -> None:
+    """The run's branch, one commit on blocker 6's branch, once 6's pull request squash-merged
+    into main and took its branch from origin. Main also holds a theme.py of each of *on_main*.
+    GitHub answers with the merged pull request."""
+    workspace = instance.manifest.workspace.path
+    blocker = pushed(workspace, 6)
+    head = git(workspace, "rev-parse", f"origin/{blocker}")
+    git(workspace, "switch", "-c", BRANCH["branch"], f"origin/{blocker}")
+    commit(workspace, "theme.py", "DARK = True\n")
+    git(workspace, "switch", "--detach", "origin/main")
+    commit(workspace, "step6.py", "STEP = 6\n")
+    for content in on_main:
+        commit(workspace, "theme.py", content)
+    git(workspace, "push", "origin", "HEAD:main", f":{blocker}")
+    git(workspace, "switch", BRANCH["branch"])
+    # GitHub serves a merged pull request's head after its branch is gone.
+    origin = git(workspace, "remote", "get-url", "origin")
+    git(Path(origin), "config", "uploadpack.allowAnySHA1InWant", "true")
+    merged = [{"headRefOid": head, "baseRefName": "main"}]
+    github.answer("pr", "list", "--state", "merged", "--head", blocker, output=merged)
+
+
+def test_publish_opens_on_where_a_merged_base_landed_with_only_the_runs_commits(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    stacked_on_a_merged_blocker(instance, github)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
+        result = await opened(dispatcher, 7, stacked | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert created_pull_request(github)[4:6] == ["--base", "main"]
+        origin = tmp_path / "origin.git"
+        assert git(origin, "rev-parse", f"{BRANCH['branch']}^") == git(origin, "rev-parse", "main")
+
+    asyncio.run(scenario())
+
+
+def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_landed(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    stacked_on_a_merged_blocker(instance, github, "DARK = False\n")
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repo", "view", output=REPOSITORY)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
+        result = await opened(dispatcher, 7, stacked | BODY)
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary.startswith(
+            'Tool "publish_pull_request" failed: LostBase: '
+            f"Branch {BRANCH['branch']} does not rebase onto main:"
+        )
+        worktree = instance.path / "worktrees" / BRANCH["branch"]
+        assert git(worktree, "status", "--porcelain") == ""
+        assert git(worktree, "rev-parse", "HEAD^") != git(worktree, "rev-parse", "origin/main")
+        assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
+
+    asyncio.run(scenario())
+
+
+def test_publish_hands_a_human_a_base_gone_with_no_merged_pull_request(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    implemented(workspace, BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("pr", "list", "--state", "merged", output=[])
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
+        result = await opened(dispatcher, 7, stacked | BODY)
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary == (
+            'Tool "publish_pull_request" failed: LostBase: '
+            "Branch agent/6-step is gone from origin, and no pull request of it merged."
+        )
+        assert git(tmp_path / "origin.git", "branch", "--list", BRANCH["branch"]) == ""
 
     asyncio.run(scenario())
 
@@ -2501,7 +2600,7 @@ def test_publish_run_again_stacks_its_pull_request_only_when_it_is_in_no_stack(
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme")
+    implemented(workspace, "agent/8-dark-theme", "agent/7-light-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
