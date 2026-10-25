@@ -178,9 +178,11 @@ async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> 
     request opens or it goes to a human, and handing it again returns its run, so the factory
     implements one issue at a time. Runs babysitting their pull requests go on meanwhile.
 
-    An eligible issue a human labeled ready-for-agent again while it is still ready-for-human is
-    handed over too, which retries its run, and loses its ready-for-human label once the retry
-    starts. It is never the oldest, so younger issues don't wait behind it.
+    An issue a human labeled ready-for-agent again while it is still ready-for-human is handed
+    over too, which retries its run, and loses its ready-for-human label once the retry starts.
+    Its blockers must be as an eligible issue's, but it may have an agent pull request, since a
+    run can stop after opening one. It is never the oldest, so younger issues don't wait behind
+    it.
     """
     if context.routine is None:
         raise ValueError("Only the factory's intake routine scans for its work.")
@@ -666,8 +668,8 @@ def _names_ready_label(body: dict) -> bool:
 
 
 def _eligible_issues(workspace: Path, labeled: int | None) -> tuple[list[int], int | None]:
-    """The eligible issues still labeled ready-for-human, and the oldest other eligible issue,
-    among those labeled ready-for-agent and *labeled*.
+    """The issues still labeled ready-for-human that may be handed over, agent pull request or
+    not, and the oldest other eligible issue, among those labeled ready-for-agent and *labeled*.
 
     GitHub's issue list can lag a label, a close or a merge, so an issue is read again on its own
     before it is chosen. Past the oldest, only the issues the list shows ready-for-human are read.
@@ -683,8 +685,8 @@ def _eligible_issues(workspace: Path, labeled: int | None) -> tuple[list[int], i
     relabeled: list[int] = []
     oldest: int | None = None
     for issue in issues:
-        if issue.number in covered or (
-            oldest is not None and READY_FOR_HUMAN_LABEL not in issue.labels
+        if READY_FOR_HUMAN_LABEL not in issue.labels and (
+            issue.number in covered or oldest is not None
         ):
             continue
         stack = issue.parent or issue.number
@@ -698,7 +700,7 @@ def _eligible_issues(workspace: Path, labeled: int | None) -> tuple[list[int], i
             continue
         if READY_FOR_HUMAN_LABEL in found.labels:
             relabeled.append(found.number)
-        elif oldest is None:
+        elif oldest is None and found.number not in covered:
             oldest = found.number
     return relabeled, oldest
 

@@ -2707,6 +2707,7 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
         "repos/{owner}/{repo}/issues",
         output=[
             [
+                issue(2, "Back from a human", labels=("ready-for-agent", "ready-for-human")),
                 issue(3, "Has a pull request"),
                 issue(4, "Blocked"),
                 issue(6, "Eligible"),
@@ -2718,14 +2719,16 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
         "repos/{owner}/{repo}/pulls",
         output=[
             [
+                pull_request(29, "agent/2-back-from-a-human", 2),
                 pull_request(30, "agent/3-has-a-pull-request", 3),
                 pull_request(31, "agent/6-eligible", 6, head_repository="stranger/project"),
                 pull_request(32, "agent/6-eligible", 6, head_repository=None),
             ]
         ],
     )
-    for number, blocking in ((4, blockers(9)), (6, blockers()), (8, blockers())):
+    for number, blocking in ((2, blockers()), (4, blockers(9)), (6, blockers()), (8, blockers())):
         github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blocking)
+    github.answer(ISSUE.format(number=2), output=issue(2, "Back from a human"))
     github.answer(ISSUE.format(number=6), output=issue(6, "Eligible"))
 
     async def scenario() -> None:
@@ -2739,8 +2742,13 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "pulls",
+    [[], [pull_request(30, "agent/6-relabeled", 6)]],
+    ids=["no-pull-request", "pull-request-open"],
+)
 def test_a_relabel_retries_the_run_that_needs_human_takes_its_label_off_and_holds_no_scan(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, pulls
 ):
     control = FakeControl()
     control.step_results = [StepResult(ending=StepEnding.FAILED, summary="GitHub is down.")]
@@ -2749,7 +2757,7 @@ def test_a_relabel_retries_the_run_that_needs_human_takes_its_label_off_and_hold
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     relabeled = issue(6, "Relabeled", labels=("ready-for-agent", "ready-for-human"))
     github.answer("repos/{owner}/{repo}/issues", output=[[relabeled, issue(8, "Younger")]])
-    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repos/{owner}/{repo}/pulls", output=[pulls])
     for found in (relabeled, issue(8, "Younger")):
         number = found["number"]
         github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blockers())
