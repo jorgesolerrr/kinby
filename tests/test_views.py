@@ -1,6 +1,7 @@
 """A turn keeps a view with the view tools, and a client reads it with view.list and view.get."""
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -329,6 +330,21 @@ def test_a_routine_turn_writes_a_view_without_parking(tmp_path: Path, mode: str)
         events = await fire_routine(dispatcher)
 
         assert not any(isinstance(event.payload, ApprovalRequested) for event in events)
+        assert [change.change for change in changes(events)] == [ViewChange.CREATED]
+        assert await listed(dispatcher) == ["applications"]
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_whose_code_step_is_view_write_records_the_change(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        arguments = json.dumps(board())
+        routine_file(instance, f"description: News\nrun: view_write\narguments: {arguments}")
+        dispatcher = runtime(instance)
+
+        events = await fire_routine(dispatcher)
+
         assert [change.change for change in changes(events)] == [ViewChange.CREATED]
         assert await listed(dispatcher) == ["applications"]
 
