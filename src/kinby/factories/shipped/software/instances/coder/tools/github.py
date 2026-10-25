@@ -276,6 +276,8 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
     unless one already does. Threads only trusted authors wrote are feedback for a fix round.
     Another author's thread needs a human. With no thread to answer, checks that failed or timed
     out go to a check repair. Anything else waits for the next wake. Nothing here ever merges.
+
+    Only the newest run of each check on the head counts.
     """
     workspace = context.workspace
     pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
@@ -284,8 +286,8 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
             return HookResult(values={"merge_ready": True}, outcome="merged")
         return HookResult(outcome="closed")
     head = pull["head"]["sha"]
-    checks = _pages(
-        workspace, f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", key="check_runs"
+    checks = _newest_runs(
+        _pages(workspace, f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs", key="check_runs")
     )
     if any(check["status"] != "completed" for check in checks):
         return HookResult(outcome="waiting")
@@ -613,6 +615,19 @@ def _review_comment(node: dict) -> ReviewComment:
     return ReviewComment(
         author=author["login"], body=node["body"], trusted=_trusted(node["authorAssociation"], app)
     )
+
+
+def _newest_runs(runs: list[dict]) -> list[dict]:
+    """The newest run of each check, a check being its app and name (ADR 0109).
+
+    A run not started yet has no start, and is the newest.
+    """
+    newest: dict[tuple[str | None, str], dict] = {}
+    for run in sorted(
+        runs, key=lambda run: (run["started_at"] is None, run["started_at"] or "", run["id"])
+    ):
+        newest[(run["app"] or {}).get("slug"), run["name"]] = run
+    return list(newest.values())
 
 
 def _from_trusted_app(check: dict) -> bool:
