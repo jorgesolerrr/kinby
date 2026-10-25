@@ -1,4 +1,10 @@
-import type { InstanceClient, InstanceSummary, ThreadFilter, ThreadSummary } from "@kinby/contract"
+import type {
+  InstanceClient,
+  InstanceSummary,
+  ThreadFilter,
+  ThreadSummary,
+  ViewSummary,
+} from "@kinby/contract"
 import {
   type FakeClock,
   fakeClock,
@@ -41,12 +47,19 @@ function inSet(threads: ThreadSummary[], filter: ThreadFilter | undefined): Thre
   }
 }
 
-/** A hub whose instances list the threads `threads` holds for them, on connections that stay up. */
-function fakeHub(threads: Record<string, ThreadSummary[]>) {
+/**
+ * A hub whose instances list the threads `threads` and the views `views` hold for them, on
+ * connections that stay up.
+ */
+function fakeHub(
+  threads: Record<string, ThreadSummary[]>,
+  views: Record<string, ViewSummary[]> = {},
+) {
   const opened: string[] = []
   const closed: string[] = []
   return {
     threads,
+    views,
     opened,
     closed,
     instance(instanceId: string): InstanceClient {
@@ -58,6 +71,7 @@ function fakeHub(threads: Record<string, ThreadSummary[]>) {
             ceiling: "full-access",
             cursor: null,
           }),
+          "view.list": () => ({ views: views[instanceId] ?? [] }),
         }),
         ...stubSubscriber(),
         state: () => "connected",
@@ -75,7 +89,7 @@ function sidebar(
   clock: FakeClock,
   instances: InstanceSummary[],
   selected?: InstanceSummary,
-  selectedClient?: Pick<InstanceClient, "call">,
+  selectedClient?: Pick<InstanceClient, "call" | "state" | "onStateChange">,
 ): React.ReactElement {
   return (
     <SidebarProvider>
@@ -288,19 +302,89 @@ describe("the needs-you count on an instance that is not selected", () => {
   it("counts the selected instance's threads from the list its threads column keeps", async () => {
     const ada = instanceSummary({ instance_id: "instance-1", persona_name: "Ada", needs_human: 1 })
     const hub = fakeHub({})
-    const selectedClient = stubCaller({
-      "thread.list": () => ({
-        threads: [thread({ id: "t1", status: "failed" }), thread({ id: "t2" })],
-        ceiling: "full-access",
-        cursor: null,
+    const selectedClient = {
+      ...stubCaller({
+        "thread.list": () => ({
+          threads: [thread({ id: "t1", status: "failed" }), thread({ id: "t2" })],
+          ceiling: "full-access",
+          cursor: null,
+        }),
+        "view.list": () => ({ views: [] }),
       }),
-    })
+      state: () => "connected" as const,
+      onStateChange: () => () => {},
+    }
     render(sidebar(hub, fakeClock(), [ada], ada, selectedClient))
     expect(needsYou(rowOf("Ada"))).toBe("1 waiting for you")
 
     await act(() => threadList(selectedClient, "sidebar").list())
 
     expect(needsYou(rowOf("Ada"))).toBe("2 waiting for you")
+    expect(hub.opened).toEqual([])
+  })
+})
+
+describe("an instance's views in the sidebar", () => {
+  const board = { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" }
+  const reading = { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" }
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
+
+  /** The sidebar listing Ada, running with `views`, and Grace, stopped. */
+  function withViews(views: ViewSummary[], selectedClient?: InstanceClient) {
+    const ada = instanceSummary({ instance_id: "instance-1", persona_name: "Ada" })
+    const grace = instanceSummary({
+      instance_id: "instance-2",
+      persona_name: "Grace",
+      intended_state: "stopped",
+      process: "stopped",
+    })
+    const hub = fakeHub({}, { "instance-1": views })
+    const clock = fakeClock()
+    const selected = selectedClient === undefined ? undefined : ada
+    render(sidebar(hub, clock, [ada, grace], selected, selectedClient))
+    return { hub, clock }
+  }
+
+  it("lists a running instance's views under it, each opening its view page", async () => {
+    withViews([board, reading])
+
+    const ada = rowOf("Ada")
+    await ada.findByRole("link", { name: "Job board" })
+    const links = ada.getAllByRole("link").map((link) => link.textContent)
+    expect(links.slice(1)).toEqual(["Job board", "Reading list"])
+    expect(rowOf("Grace").getAllByRole("link")).toHaveLength(1)
+
+    await userEvent.setup().click(ada.getByRole("link", { name: "Reading list" }))
+
+    expect(window.location.pathname).toBe("/instances/instance-1/views/reading")
+  })
+
+  it("lists a view a turn created on the next poll", async () => {
+    const { hub, clock } = withViews([])
+    await act(() => clock.advance(0))
+    expect(rowOf("Ada").queryByRole("link", { name: "Job board" })).toBeNull()
+
+    hub.views["instance-1"] = [board]
+    await act(() => clock.advance(5_000))
+
+    expect(rowOf("Ada").getByRole("link", { name: "Job board" })).toBeDefined()
+  })
+
+  it("lists the selected instance's views on its connection, marking the one open", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/views/applications")
+    const selectedClient = fakeHub({}, { "instance-1": [board, reading] }).instance("instance-1")
+    const { hub } = withViews([], selectedClient)
+
+    const open = await rowOf("Ada").findByRole("link", { name: "Job board" })
+
+    expect(open.getAttribute("aria-current")).toBe("page")
+    expect(
+      rowOf("Ada").getByRole("link", { name: "Reading list" }).getAttribute("aria-current"),
+    ).toBeNull()
     expect(hub.opened).toEqual([])
   })
 })

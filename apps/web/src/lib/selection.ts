@@ -64,7 +64,7 @@ export function statsPath(instanceId: string): string {
 }
 
 /** One of an instance's views, on its own page. */
-function viewPath(instanceId: string, viewId: string): string {
+export function viewPath(instanceId: string, viewId: string): string {
   return `${instancePath(instanceId)}/${VIEWS}/${encodeURIComponent(viewId)}`
 }
 
