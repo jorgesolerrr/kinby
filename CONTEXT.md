@@ -682,6 +682,18 @@ A **library** kind: an outside server whose tools an **instance** that picks it 
 The user's standing allow for one **tool** inside one **routine**, given from an **approval** raised in that routine's **turn**. Any edit to the routine, by the user or the agent, revokes it.
 _Avoid_: standing approval, always-allow
 
+### Browser service
+
+The one browser the **hub** runs for every **instance** that has the browser turned on. An instance asks the hub for a browser for one **turn**, and every turn gets a fresh one that shares nothing with another turn or instance. The browser reaches the internet only, never the hub, another instance or the user's own network.
+
+### Browser profile
+
+A named signed-in state an **instance** can open a page with, such as its LinkedIn session. It is kept with the **browser service**, never in the instance, so the agent names a profile but never reads it. The user creates and removes profiles.
+
+### Vault
+
+An **instance**'s sign-in credentials, each bound to one site, which the **browser service** types into that site's page for the agent. The user adds entries; the agent sees only their names and sites, never their values. Unlike a **hub secret**, a vault entry never reaches the instance.
+
 ### View
 
 A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
