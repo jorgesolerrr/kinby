@@ -94,12 +94,13 @@ def evaluate(
         return GateDecision(override, GateRule(f"tools.{call.name}"))
     if granted and mode is not PermissionMode.READ_ONLY:
         return GateDecision(GateAction.ALLOW, GateRule("routine.grant"))
-    if call.name in URL_READS:
-        if call.arguments.get("url") in seen_urls:
-            return GateDecision(GateAction.ALLOW, GateRule("web.seen_url"))
-        return GateDecision(_PRESETS[mode][True], GateRule("web.unseen_url"))
     if tool is not None and tool.authored and not marked_read_only:
         return GateDecision(_PRESETS[mode][True], AUTHORED_RULE)
+    if call.name in URL_READS:
+        url = call.arguments.get("url")
+        if isinstance(url, str) and url in seen_urls:
+            return GateDecision(GateAction.ALLOW, GateRule("web.seen_url"))
+        return GateDecision(_PRESETS[mode][True], GateRule("web.unseen_url"))
     writes = tool is not None and tool.write and not tool.authored
     if (
         mode is PermissionMode.AUTO

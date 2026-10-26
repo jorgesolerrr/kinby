@@ -4,6 +4,7 @@ rule the gate judges it by (ADR 0110)."""
 import asyncio
 import socket
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -11,21 +12,26 @@ from uuid import uuid4
 import httpx
 import pytest
 from langchain_core.messages import AIMessageChunk
+from pydantic import JsonValue
 
 from kinby.contracts import (
     ApprovalRequested,
     Event,
     GateOutcome,
     Payload,
+    PermissionMode,
     SystemPrompt,
+    ToolCall,
     ToolGated,
     ToolResult,
     is_turn_closing,
 )
 from kinby.core import LangGraphRunner
+from kinby.core.gate import AUTHORED_RULE, GateDecision, evaluate
 from kinby.core.turns import PreparedTurnRequest, TurnContext
 from kinby.instance import Instance, load_instance
-from kinby.plugins import ToolContext
+from kinby.instance.permissions import SHIPPED_POLICY, GateAction
+from kinby.plugins import Tool, ToolContext
 from kinby.plugins.defaults.web import PAGE_CHARACTERS, RefusedUrl, web_fetch
 from tests.test_plugins import ScriptedModel
 from tests.test_routine_grants import gates, run_routine
@@ -406,3 +412,22 @@ def test_the_manifest_switches_off_web_fetch_alone(tmp_path) -> None:
     names = {tool.name for tool in model.bound_tools[0]}
     assert "web_fetch" not in names
     assert "read" in names
+
+
+def _gate(tool: Tool, url: JsonValue, mode: PermissionMode) -> GateDecision:
+    call = ToolCall(call_id="call", name=tool.name, arguments={"url": url}, write=tool.write)
+    return evaluate(SHIPPED_POLICY, mode, call, tool, Path("."), seen_urls=frozenset({_ARTICLE}))
+
+
+def test_an_authored_tool_named_like_a_web_read_stays_a_write_for_a_seen_url() -> None:
+    authored = replace(web_fetch, name="browser_open", authored=True)
+
+    decision = _gate(authored, _ARTICLE, PermissionMode.READ_ONLY)
+
+    assert (decision.action, decision.rule) == (GateAction.DENY, AUTHORED_RULE)
+
+
+def test_a_url_that_is_not_a_string_is_not_seen() -> None:
+    decision = _gate(web_fetch, {"href": _ARTICLE}, PermissionMode.ASK)
+
+    assert (decision.action, decision.rule) == (GateAction.ASK, "web.unseen_url")
