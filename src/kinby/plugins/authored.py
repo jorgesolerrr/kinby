@@ -2,7 +2,8 @@
 
 Each one is a function decorated with `tool` in its own module of the instance code. kinby never
 imports that module itself: a child process on the venv's Python describes the tool at turn start
-and runs each call, so the tool sees the packages the instance code added.
+and runs each call, so the tool sees the packages the instance code added. Both run the module as
+it was when the tool loaded, so a tool kept from the last valid set still runs.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from kinby.instance.code import authored_tool_module, code_python, script_environment
 from kinby.instance.layout import CODE_DIR
-from kinby.plugins.defaults.shell import run_capped
+from kinby.plugins.defaults.shell import OUTPUT_CAP, run_capped
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool, ToolContext
 
@@ -50,7 +51,8 @@ def load_authored_tool(instance_path: Path, name: str, *, timeout_seconds: int) 
     tool *name* of the shape the registry expects.
     """
     module = instance_path / authored_tool_module(name)
-    described = _describe(instance_path, name, module.stat().st_mtime_ns, timeout_seconds)
+    source = module.read_bytes()
+    described = _describe(instance_path, name, source, timeout_seconds)
     return Tool(
         name=name,
         write=described.write,
@@ -59,7 +61,7 @@ def load_authored_tool(instance_path: Path, name: str, *, timeout_seconds: int) 
             name=name,
             description=described.description,
             args_schema=described.parameters,
-            coroutine=partial(_call, instance_path, name),
+            coroutine=partial(_call, instance_path, name, source),
         ),
         context_parameter=_CONTEXT,
         authored=True,
@@ -67,33 +69,42 @@ def load_authored_tool(instance_path: Path, name: str, *, timeout_seconds: int) 
 
 
 @lru_cache(maxsize=64)
-def _describe(instance_path: Path, name: str, modified_ns: int, timeout_seconds: int) -> _Described:
+def _describe(instance_path: Path, name: str, source: bytes, timeout_seconds: int) -> _Described:
     """Describe the tool, once per version of its module."""
     if not code_python(instance_path).exists():
         raise ValueError(f"The instance code has no venv yet, so {name} cannot load.")
     with TemporaryDirectory(prefix="kinby-authored-") as exchange:
         exchanged = Path(exchange) / "described.json"
-        _run_child("describe", instance_path, name, exchanged, timeout_seconds)
+        _run_child("describe", instance_path, name, source, exchanged, timeout_seconds)
         return _DESCRIBED.validate_json(exchanged.read_bytes())
 
 
-async def _call(instance_path: Path, name: str, /, **arguments: object) -> str | None:
+async def _call(
+    instance_path: Path, name: str, source: bytes, /, **arguments: object
+) -> str | None:
     context = cast(ToolContext, arguments.pop(_CONTEXT))
     timeout_seconds = context.instance.manifest.tools.bash_timeout_seconds
     with TemporaryDirectory(prefix="kinby-authored-") as exchange:
         exchanged = Path(exchange) / "exchange.json"
         exchanged.write_text(json.dumps(arguments), encoding="utf-8")
-        await asyncio.to_thread(_run_child, "call", instance_path, name, exchanged, timeout_seconds)
-        return _RESULT.validate_json(exchanged.read_bytes())
+        await asyncio.to_thread(
+            _run_child, "call", instance_path, name, source, exchanged, timeout_seconds
+        )
+        result = _RESULT.validate_json(exchanged.read_bytes())
+        return None if result is None else result[:OUTPUT_CAP]
 
 
 def _run_child(
     command: Literal["describe", "call"],
     instance_path: Path,
     name: str,
+    source: bytes,
     exchanged: Path,
     timeout_seconds: int,
 ) -> None:
+    """Run *command* on the tool *name* of *source*, a copy of its module beside *exchanged*."""
+    module = exchanged.with_name(f"{name}.py")
+    module.write_bytes(source)
     # The child imports kinby from where this process does, ahead of the venv's own packages.
     env = {
         **script_environment(instance_path),
@@ -105,7 +116,7 @@ def _run_child(
             "-m",
             __name__,
             command,
-            str(instance_path / authored_tool_module(name)),
+            str(module),
             name,
             str(exchanged),
         ),
@@ -141,7 +152,7 @@ def _child(command: str, module: Path, name: str, exchanged: Path) -> None:
         return
     arguments = json.loads(exchanged.read_text(encoding="utf-8"))
     result = asyncio.run(tool.runnable.ainvoke(arguments))
-    exchanged.write_bytes(_RESULT.dump_json(None if result is None else str(result)))
+    exchanged.write_bytes(_RESULT.dump_json(None if result is None else str(result)[:OUTPUT_CAP]))
 
 
 if __name__ == "__main__":

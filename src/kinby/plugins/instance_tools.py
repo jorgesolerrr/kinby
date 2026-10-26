@@ -295,6 +295,7 @@ def _uv(context: ToolContext, command: str, *arguments: str) -> None:
 def _write_code(path: str, content: str, context: ToolContext) -> str:
     file = _code_file(context.instance, path)
     target = context.instance.path / file
+    _refuse_unless_own_module(context.instance, file)
     with _recorded(context, file):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -306,10 +307,7 @@ def _delete_code(path: str, context: ToolContext) -> str:
     target = context.instance.path / file
     if not target.is_file():
         raise LookupError(f'"{path}" is not a file in the instance code.')
-    exposed = exposed_tools(context.instance.path)
-    exposing = next((name for name in exposed if authored_tool_module(name) == file), None)
-    if exposing is not None:
-        _refuse_unless_exposed_by_agent(context.instance, exposing)
+    _refuse_unless_own_module(context.instance, file)
     with _recorded(context, file):
         target.unlink()
     return f"Deleted {file}."
@@ -361,6 +359,16 @@ def _refuse_unless_exposed_by_agent(instance: Instance, name: str) -> None:
         raise PermissionError(
             f'You did not expose the tool "{name}", so you cannot change or remove it.'
         )
+
+
+def _refuse_unless_own_module(instance: Instance, file: ConfigFile) -> None:
+    """Refuse a change to *file* when it is the module of an exposed tool the agent did not
+    expose."""
+    exposing = next(
+        (name for name in exposed_tools(instance.path) if authored_tool_module(name) == file), None
+    )
+    if exposing is not None:
+        _refuse_unless_exposed_by_agent(instance, exposing)
 
 
 def _with_exposed(project: str, names: list[str]) -> str:

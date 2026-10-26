@@ -11,7 +11,7 @@ from time import monotonic
 
 from kinby.plugins import ToolContext, tool
 
-_OUTPUT_CAP = 30_000
+OUTPUT_CAP = 30_000
 _DRAIN_SECONDS = 2
 _POLL_SECONDS = 0.1
 
@@ -82,7 +82,7 @@ def _read_until(selector: BaseSelector, seconds: float, done: Callable[[], bool]
             return False
         for key, _ in selector.select(min(remaining, _POLL_SECONDS)):
             if chunk := os.read(key.fd, 8_192):
-                key.data.extend(chunk[: _OUTPUT_CAP - len(key.data)])
+                key.data.extend(chunk[: OUTPUT_CAP - len(key.data)])
             else:
                 selector.unregister(key.fileobj)
     return True
@@ -98,4 +98,4 @@ def _render_output(stdout: bytearray, stderr: bytearray) -> str:
 
 
 def _capped(text: str) -> str:
-    return text[:_OUTPUT_CAP]
+    return text[:OUTPUT_CAP]

@@ -4,6 +4,7 @@ user marks them read-only (ADR 0109)."""
 import asyncio
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -21,6 +22,7 @@ from kinby.contracts import (
 from kinby.instance import Instance, Tools
 from kinby.instance.code import exposed_tools
 from kinby.instance.config_changes import ConfigChangeLog
+from kinby.plugins import ToolContext
 from kinby.plugins.registry import ToolRegistry
 from tests.test_instance_code import call, greeting_wheel, turn
 from tests.test_routine_grants import CallingModel, answer, gates, next_stop, run_routine
@@ -133,10 +135,26 @@ def test_a_broken_module_keeps_the_last_valid_tools_with_a_warning(tmp_path: Pat
 
     kept, warnings = registry.refresh()
 
-    assert kept.get("echo") is loaded.get("echo") is not None
+    echo = kept.get("echo")
+    assert echo is not None
+    assert echo is loaded.get("echo")
     [warning] = warnings
     assert warning.sources == (str(module),)
     assert "missing_package" in warning.message
+    called = asyncio.run(echo.ainvoke({"text": "hi"}, ToolContext(instance, uuid4())))
+    assert called == "echo: hi"
+
+
+def test_an_authored_tool_result_is_cut_at_the_bash_cap(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    expose(instance, module=ECHO.replace('f"echo: {text}"', "text * 40_000"))
+    tools, _ = ToolRegistry(tmp_path, tools=Tools(defaults=False)).refresh()
+    echo = tools.get("echo")
+    assert echo is not None
+
+    called = asyncio.run(echo.ainvoke({"text": "x"}, ToolContext(instance, uuid4())))
+
+    assert called == "x" * 30_000
 
 
 def test_an_authored_tool_that_declares_it_reads_still_asks_in_ask_mode(tmp_path: Path) -> None:
@@ -212,13 +230,21 @@ def test_the_agent_cannot_delete_or_reexpose_a_tool_it_did_not_expose(tmp_path: 
     with pytest.raises(PermissionError, match="did not expose"):
         asyncio.run(call(instance, "code_delete", {"path": "tools/shout.py"}))
     with pytest.raises(PermissionError, match="did not expose"):
+        asyncio.run(call(instance, "code_write", {"path": "tools/shout.py", "content": ECHO}))
+    with pytest.raises(PermissionError, match="did not expose"):
         asyncio.run(call(instance, "code_expose_tool", {"name": "shout"}))
     with pytest.raises(ValueError, match="inside the instance code"):
         asyncio.run(call(instance, "code_delete", {"path": "../tools/post.py"}))
+    rewritten = asyncio.run(
+        call(instance, "code_write", {"path": "tools/echo.py", "content": ECHO})
+    )
     deleted = asyncio.run(call(instance, "code_delete", {"path": "tools/echo.py"}))
 
+    assert rewritten == "Wrote code/tools/echo.py."
     assert deleted == "Deleted code/tools/echo.py."
-    assert (tmp_path / "code" / "tools" / "shout.py").is_file()
+    assert (tmp_path / "code" / "tools" / "shout.py").read_text(encoding="utf-8") == ECHO.replace(
+        "echo", "shout"
+    )
 
 
 def test_a_routine_code_step_naming_an_authored_tool_runs_only_once_marked_read_only(
