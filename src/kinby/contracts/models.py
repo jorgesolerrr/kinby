@@ -9,6 +9,7 @@ from typing import Annotated, Literal, NewType, Self, TypeIs
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -2409,6 +2410,7 @@ class FactoryDescription(ContractModel):
 
 class LibraryKind(StrEnum):
     FACTORY = "factory"
+    MCP_SERVER = "mcp_server"
     SKILL = "skill"
 
 
@@ -2558,6 +2560,80 @@ class LibraryGitAddCommand(ContractModel):
 class LibraryGitAddResult(ContractModel):
     #: The entries added, by name.
     entries: list[LibraryEntry]
+
+
+#: No underscore, so a tool named ``<server>__<tool>`` splits back into its server and tool.
+type McpServerName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+
+_HIJACKING_VARIABLES = frozenset({"PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV"})
+_HIJACKING_PREFIXES = ("LD_", "DYLD_", "PYTHON", "UV_", "PIP_")
+
+
+def _harmless(name: str) -> str:
+    if name.upper() in _HIJACKING_VARIABLES or name.upper().startswith(_HIJACKING_PREFIXES):
+        raise ValueError(f"{name} could hijack the server's process, so no server declares it.")
+    return name
+
+
+#: A variable in the instance's ``.env``.
+type EnvVariable = Annotated[
+    str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"), AfterValidator(_harmless)
+]
+
+
+class McpUrlTransport(ContractModel):
+    """A remote server, reached at its URL."""
+
+    type: Literal["url"] = "url"
+    url: Annotated[str, Field(pattern=r"^https?://\S+$")]
+    #: Each header sent to the server, by name, and the variable that holds its value.
+    headers: dict[str, EnvVariable] = Field(default_factory=dict)
+
+
+class McpUvxTransport(ContractModel):
+    """A local server ``uvx`` runs in the instance's container."""
+
+    type: Literal["uvx"] = "uvx"
+    #: Never an option, which uvx would take as its own.
+    package: Annotated[str, Field(pattern=r"^[^-\s]\S*$")]
+    args: list[str] = Field(default_factory=list)
+
+
+McpTransport = Annotated[McpUrlTransport | McpUvxTransport, Field(discriminator="type")]
+
+
+class McpServer(ContractModel):
+    """An MCP server's definition, as the library keeps it."""
+
+    transport: McpTransport
+    #: The variables a local server gets, and the only ones.
+    env: list[EnvVariable] = Field(default_factory=list)
+    #: The server's tools a turn is offered, by name. The others are left out.
+    include: list[str] = Field(default_factory=list)
+
+
+class LibraryMcpServerReadCommand(ContractModel):
+    name: McpServerName
+
+
+class McpServerResult(ContractModel):
+    name: McpServerName
+    server: McpServer
+    #: The hash of the definition's file.
+    hash: FileHash
+
+
+class LibraryMcpServerWriteCommand(ContractModel):
+    """Write an MCP server's definition, adding the server when ``hash`` is null."""
+
+    name: McpServerName
+    server: McpServer
+    hash: FileHash | None
+
+
+class LibraryMcpServerDeleteCommand(ContractModel):
+    name: McpServerName
+    hash: FileHash
 
 
 class InstancePicksGetCommand(ContractModel):

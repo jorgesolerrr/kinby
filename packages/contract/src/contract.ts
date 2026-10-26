@@ -90,7 +90,9 @@ export type CommandListName = string;
  */
 export type LoginState = "pending" | "signed_in" | "failed";
 export type GitCommit = string;
-export type LibraryKind = "factory" | "skill";
+export type LibraryKind = "factory" | "mcp_server" | "skill";
+export type McpServerName = string;
+export type EnvVariable = string;
 export type PriceSource = "shipped" | "manifest";
 /**
  * When kinby asks the user to rate a completed turn.
@@ -402,6 +404,18 @@ export interface Contract {
     "library.list": {
       command: LibraryListCommand;
       result: LibraryListResult;
+    };
+    "library.mcp_server.delete": {
+      command: LibraryMcpServerDeleteCommand;
+      result: LibraryListResult;
+    };
+    "library.mcp_server.read": {
+      command: LibraryMcpServerReadCommand;
+      result: McpServerResult;
+    };
+    "library.mcp_server.write": {
+      command: LibraryMcpServerWriteCommand;
+      result: McpServerResult;
     };
     "library.skill.check": {
       command: LibrarySkillCheckCommand;
@@ -1399,6 +1413,52 @@ export interface PreviewedSkill {
 export interface LibraryListCommand {}
 export interface LibraryListResult {
   entries: LibraryEntry[];
+}
+export interface LibraryMcpServerDeleteCommand {
+  hash: string;
+  name: McpServerName;
+}
+export interface LibraryMcpServerReadCommand {
+  name: McpServerName;
+}
+export interface McpServerResult {
+  hash: string;
+  name: McpServerName;
+  server: McpServer;
+}
+/**
+ * An MCP server's definition, as the library keeps it.
+ */
+export interface McpServer {
+  env?: EnvVariable[];
+  include?: string[];
+  transport: McpUrlTransport | McpUvxTransport;
+}
+/**
+ * A remote server, reached at its URL.
+ */
+export interface McpUrlTransport {
+  headers?: {
+    [k: string]: EnvVariable;
+  };
+  type: "url";
+  url: string;
+}
+/**
+ * A local server ``uvx`` runs in the instance's container.
+ */
+export interface McpUvxTransport {
+  args?: string[];
+  package: string;
+  type: "uvx";
+}
+/**
+ * Write an MCP server's definition, adding the server when ``hash`` is null.
+ */
+export interface LibraryMcpServerWriteCommand {
+  hash: string | null;
+  name: McpServerName;
+  server: McpServer;
 }
 /**
  * Look for a newer version of a shipped or git skill, and change nothing. A git skill's ref

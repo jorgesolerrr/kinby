@@ -30,6 +30,7 @@ from kinby.contracts import (
     LibraryGitAddResult,
     LibrarySkillCheckResult,
     LifecycleOperationResult,
+    McpServer,
     NewerVersion,
     OperationKind,
     OperationState,
@@ -40,6 +41,7 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
     TurnCompleted,
+    TurnStarted,
     is_turn_closing,
 )
 from kinby.core import LangGraphRunner
@@ -698,6 +700,42 @@ def test_kinby_writes_a_skill_into_the_library_once_the_user_approves(tmp_path, 
             "library_skill_write"
         ]
         assert "grill" in library_names(listed)
+
+    asyncio.run(scenario())
+
+
+def test_kinby_adds_an_mcp_server_to_the_library_only_once_the_user_approves_in_full_access(
+    tmp_path, monkeypatch
+):
+    fetch = {"transport": {"type": "uvx", "package": "mcp-server-fetch"}, "include": ["fetch"]}
+
+    def script(_: UUID) -> list[AIMessageChunk]:
+        server = {"name": "fetch", "server": fetch, "hash": None}
+        return [
+            calling("fetch-1", "library_mcp_server_write", server),
+            AIMessageChunk(content="Fetch is in the library."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            (tmp_path / "instance" / "permissions.toml").write_text(
+                'mode = "full-access"\n', encoding="utf-8"
+            )
+            payloads = await relayed_turn(kinby)
+            [read] = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("library.mcp_server.read", {"name": "fetch"}),
+            )
+
+        tool_results(payloads)
+        [started] = [payload for payload in payloads if isinstance(payload, TurnStarted)]
+        assert started.permission_mode is PermissionMode.FULL_ACCESS
+        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+            "library_mcp_server_write"
+        ]
+        assert isinstance(read["result"], dict), read
+        assert McpServer.model_validate(read["result"]["server"]) == McpServer.model_validate(fetch)
 
     asyncio.run(scenario())
 

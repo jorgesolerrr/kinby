@@ -1,4 +1,4 @@
-"""The hub's library: the skills it keeps, beside the factories it serves."""
+"""The hub's library: the skills and MCP servers it keeps, beside the factories it serves."""
 
 from __future__ import annotations
 
@@ -26,6 +26,9 @@ from kinby.contracts import (
     LibraryKind,
     LibraryListCommand,
     LibraryListResult,
+    LibraryMcpServerDeleteCommand,
+    LibraryMcpServerReadCommand,
+    LibraryMcpServerWriteCommand,
     LibrarySkillCheckCommand,
     LibrarySkillCheckResult,
     LibrarySkillDeleteCommand,
@@ -33,6 +36,9 @@ from kinby.contracts import (
     LibrarySkillReadCommand,
     LibrarySkillWriteCommand,
     LibrarySource,
+    McpServer,
+    McpServerName,
+    McpServerResult,
     NewerVersion,
     PickState,
     PreviewedSkill,
@@ -41,7 +47,7 @@ from kinby.contracts import (
     SkillResult,
 )
 from kinby.core.config import skill_result
-from kinby.core.errors import InvalidConfig, SkillNotFound, StaleWrite
+from kinby.core.errors import InvalidConfig, McpServerNotFound, SkillNotFound, StaleWrite
 from kinby.hub.factories import FactoryStore
 from kinby.hub.git_skills import Address, checked_out, found_skills, parse_address
 from kinby.hub.registry import HubRegistry
@@ -83,12 +89,19 @@ class PickSync:
 
 
 class Library:
-    """Serve the library's entries: the skill folders in *directory* and the hub's factories."""
+    """Serve the library's entries: the skill folders in *directory*, the MCP server definitions
+    in *mcp_servers*, and the hub's factories."""
 
     def __init__(
-        self, directory: Path, shipped: Path, factories: FactoryStore, registry: HubRegistry
+        self,
+        directory: Path,
+        mcp_servers: Path,
+        shipped: Path,
+        factories: FactoryStore,
+        registry: HubRegistry,
     ) -> None:
         self._directory = directory
+        self._mcp_servers = mcp_servers
         self._shipped = shipped
         self._factories = factories
         self._registry = registry
@@ -141,6 +154,15 @@ class Library:
                     for factory in factories.factories
                 ),
                 *(
+                    LibraryEntry(
+                        kind=LibraryKind.MCP_SERVER,
+                        name=name,
+                        description=None,
+                        source=LibrarySource.WRITTEN,
+                    )
+                    for name in sorted(file.stem for file in self._mcp_servers.glob("*.json"))
+                ),
+                *(
                     self._entry(name, folder)
                     for name, folder in sorted(_skill_folders(self._directory).items())
                 ),
@@ -176,6 +198,28 @@ class Library:
         with TemporaryDirectory(prefix=".delete-", dir=self._directory) as temporary:
             folder.rename(Path(temporary) / command.name)
         self._registry.forget_git_skill(command.name)
+
+    async def read_mcp_server(self, command: LibraryMcpServerReadCommand) -> McpServerResult:
+        return _mcp_server_result(command.name, self._mcp_server_file(command.name))
+
+    async def write_mcp_server(self, command: LibraryMcpServerWriteCommand) -> McpServerResult:
+        file = self._mcp_servers / f"{command.name}.json"
+        if command.hash is not None:
+            self._mcp_server_as_read(command.name, command.hash)
+        elif file.exists():
+            raise InvalidConfig(
+                {"name": f'The library already holds an MCP server "{command.name}".'}
+            )
+        self._mcp_servers.mkdir(exist_ok=True)
+        staging = file.with_name(f".{file.name}.staging")
+        staging.write_text(f"{command.server.model_dump_json(indent=2)}\n", encoding="utf-8")
+        staging.replace(file)
+        return _mcp_server_result(command.name, file)
+
+    async def delete_mcp_server(self, command: LibraryMcpServerDeleteCommand) -> LibraryListResult:
+        """Delete the MCP server from the library."""
+        self._mcp_server_as_read(command.name, command.hash).unlink()
+        return await self.list(LibraryListCommand())
 
     async def check(self, command: LibrarySkillCheckCommand) -> LibrarySkillCheckResult:
         return LibrarySkillCheckResult(newer=await asyncio.to_thread(self._check, command.name))
@@ -442,6 +486,22 @@ class Library:
             )
         return folder
 
+    def _mcp_server_file(self, name: McpServerName) -> Path:
+        file = self._mcp_servers / f"{name}.json"
+        if not file.is_file():
+            raise McpServerNotFound(f'The library has no MCP server "{name}".')
+        return file
+
+    def _mcp_server_as_read(self, name: McpServerName, read: FileHash) -> Path:
+        """The definition file of the MCP server *name*, unless it changed since the client read it
+        as *read*."""
+        file = self._mcp_server_file(name)
+        if file_hash(file.read_bytes()) != read:
+            raise StaleWrite(
+                f'The library\'s MCP server "{name}" changed since it was read. Read it again.'
+            )
+        return file
+
     def _entry(self, name: SkillName, folder: Path) -> LibraryEntry:
         origin = self._origin(name)
         return LibraryEntry(
@@ -476,6 +536,13 @@ class Library:
         if name in self._registry.shipped_skills():
             return LibrarySource.SHIPPED
         return LibrarySource.WRITTEN
+
+
+def _mcp_server_result(name: McpServerName, file: Path) -> McpServerResult:
+    content = file.read_bytes()
+    return McpServerResult(
+        name=name, server=McpServer.model_validate_json(content), hash=file_hash(content)
+    )
 
 
 def _refuse_links(instance_path: Path) -> None:

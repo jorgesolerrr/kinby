@@ -1208,6 +1208,10 @@
       "title": "EndFrame",
       "type": "object"
     },
+    "EnvVariable": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    },
     "ErrorCode": {
       "enum": [
         "NOT_FOUND",
@@ -3387,6 +3391,7 @@
     "LibraryKind": {
       "enum": [
         "factory",
+        "mcp_server",
         "skill"
       ],
       "title": "LibraryKind",
@@ -3412,6 +3417,65 @@
         "entries"
       ],
       "title": "LibraryListResult",
+      "type": "object"
+    },
+    "LibraryMcpServerDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/McpServerName"
+        }
+      },
+      "required": [
+        "name",
+        "hash"
+      ],
+      "title": "LibraryMcpServerDeleteCommand",
+      "type": "object"
+    },
+    "LibraryMcpServerReadCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/McpServerName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "LibraryMcpServerReadCommand",
+      "type": "object"
+    },
+    "LibraryMcpServerWriteCommand": {
+      "additionalProperties": false,
+      "description": "Write an MCP server's definition, adding the server when ``hash`` is null.",
+      "properties": {
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/McpServerName"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServer"
+        }
+      },
+      "required": [
+        "name",
+        "server",
+        "hash"
+      ],
+      "title": "LibraryMcpServerWriteCommand",
       "type": "object"
     },
     "LibrarySkillCheckCommand": {
@@ -3894,6 +3958,125 @@
         "feedback"
       ],
       "title": "ManifestValues",
+      "type": "object"
+    },
+    "McpServer": {
+      "additionalProperties": false,
+      "description": "An MCP server's definition, as the library keeps it.",
+      "properties": {
+        "env": {
+          "items": {
+            "$ref": "#/$defs/EnvVariable"
+          },
+          "type": "array"
+        },
+        "include": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "transport": {
+          "discriminator": {
+            "mapping": {
+              "url": "#/$defs/McpUrlTransport",
+              "uvx": "#/$defs/McpUvxTransport"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/McpUrlTransport"
+            },
+            {
+              "$ref": "#/$defs/McpUvxTransport"
+            }
+          ]
+        }
+      },
+      "required": [
+        "transport"
+      ],
+      "title": "McpServer",
+      "type": "object"
+    },
+    "McpServerName": {
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "type": "string"
+    },
+    "McpServerResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/McpServerName"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServer"
+        }
+      },
+      "required": [
+        "name",
+        "server",
+        "hash"
+      ],
+      "title": "McpServerResult",
+      "type": "object"
+    },
+    "McpUrlTransport": {
+      "additionalProperties": false,
+      "description": "A remote server, reached at its URL.",
+      "properties": {
+        "headers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvVariable"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "url",
+          "default": "url",
+          "type": "string"
+        },
+        "url": {
+          "pattern": "^https?://\\S+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "type"
+      ],
+      "title": "McpUrlTransport",
+      "type": "object"
+    },
+    "McpUvxTransport": {
+      "additionalProperties": false,
+      "description": "A local server ``uvx`` runs in the instance's container.",
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "package": {
+          "pattern": "^[^-\\s]\\S*$",
+          "type": "string"
+        },
+        "type": {
+          "const": "uvx",
+          "default": "uvx",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package",
+        "type"
+      ],
+      "title": "McpUvxTransport",
       "type": "object"
     },
     "MemoryAddCommand": {
@@ -11029,6 +11212,54 @@
           ],
           "type": "object"
         },
+        "library.mcp_server.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibraryMcpServerDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LibraryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "library.mcp_server.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibraryMcpServerReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/McpServerResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "library.mcp_server.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibraryMcpServerWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/McpServerResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "library.skill.check": {
           "additionalProperties": false,
           "properties": {
@@ -12118,6 +12349,9 @@
         "library.skill.move",
         "library.git.preview",
         "library.git.add",
+        "library.mcp_server.read",
+        "library.mcp_server.write",
+        "library.mcp_server.delete",
         "instance.picks.get",
         "instance.picks.set",
         "hub.secret.list",

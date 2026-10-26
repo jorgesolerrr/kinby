@@ -89,6 +89,9 @@ from kinby.contracts.models import (
     LibraryGitPreviewResult,
     LibraryListCommand,
     LibraryListResult,
+    LibraryMcpServerDeleteCommand,
+    LibraryMcpServerReadCommand,
+    LibraryMcpServerWriteCommand,
     LibrarySkillCheckCommand,
     LibrarySkillCheckResult,
     LibrarySkillDeleteCommand,
@@ -99,6 +102,7 @@ from kinby.contracts.models import (
     ManifestGetCommand,
     ManifestResult,
     ManifestSetCommand,
+    McpServerResult,
     MemoryAddCommand,
     MemoryCorrectCommand,
     MemoryForgetCommand,
@@ -453,6 +457,15 @@ LIBRARY_GIT_PREVIEW = Method(
 LIBRARY_GIT_ADD = Method(
     "library.git.add", Scope.HUB_ADMIN, LibraryGitAddCommand, LibraryGitAddResult
 )
+LIBRARY_MCP_SERVER_READ = Method(
+    "library.mcp_server.read", Scope.HUB_READ, LibraryMcpServerReadCommand, McpServerResult
+)
+LIBRARY_MCP_SERVER_WRITE = Method(
+    "library.mcp_server.write", Scope.HUB_ADMIN, LibraryMcpServerWriteCommand, McpServerResult
+)
+LIBRARY_MCP_SERVER_DELETE = Method(
+    "library.mcp_server.delete", Scope.HUB_ADMIN, LibraryMcpServerDeleteCommand, LibraryListResult
+)
 INSTANCE_PICKS_GET = Method(
     "instance.picks.get", Scope.HUB_READ, InstancePicksGetCommand, InstancePicksResult
 )
@@ -586,6 +599,9 @@ METHODS = (
     LIBRARY_SKILL_MOVE,
     LIBRARY_GIT_PREVIEW,
     LIBRARY_GIT_ADD,
+    LIBRARY_MCP_SERVER_READ,
+    LIBRARY_MCP_SERVER_WRITE,
+    LIBRARY_MCP_SERVER_DELETE,
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
     HUB_SECRET_LIST,

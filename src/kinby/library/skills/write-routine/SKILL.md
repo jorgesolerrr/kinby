@@ -36,8 +36,8 @@ The hub tools are `hub_read`, `instance_create`, `instance_lifecycle`,
 `instance_picks_set`, `instance_prompt_set`, `instance_routine_write`,
 `instance_routine_set_enabled`, `instance_routine_run`,
 `instance_routine_delete`, `instance_ask`, `library_skill_write`,
-`library_git_add`, `library_move`, `factory_write`, `channel_mute` and
-`channel_unmute`.
+`library_git_add`, `library_move`, `library_mcp_server_write`, `factory_write`,
+`channel_mute` and `channel_unmute`.
 
 Never write a step that calls one into a routine's prompt. A routine that needs
 hub data gets it another way, such as `routine_list` for the instance's own
