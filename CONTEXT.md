@@ -195,7 +195,7 @@ One recorded stage of a **lifecycle operation**, kept in the order the **hub** r
 
 ### Force stop
 
-A user's request to stop an **instance** without waiting for its accepted work. It interrupts running **turns** and parked **approvals** through the **instance runtime**, then takes the container down within a bounded grace period. A running instance whose lifecycle endpoint does not answer is terminated without a drain. A force stop may also escalate an **instance draining** that is already pending, inside the same **lifecycle operation**.
+A user's request to stop an **instance** without waiting for its accepted work. It interrupts running **turns** and parked **approvals** through the **instance runtime**, then takes the container down within a bounded grace period. A running instance whose lifecycle endpoint does not answer is terminated without a drain. A force stop may also escalate an **instance draining** that is already pending, inside whichever **lifecycle operation** is draining, and that operation carries on.
 
 ### Container recreation
 
@@ -297,7 +297,7 @@ The hub's explicit record of storage owned by an instance. Each entry distinguis
 
 ### Instance draining
 
-The period when an **instance** stops accepting new work and waits for its accepted work to finish before stopping. Reads and **approval** responses remain available, while new **deliveries** wait for the next start.
+The period when an **instance** stops accepting new work and waits for its running **turns** to finish before stopping. A parked **approval** is not waited on: it stays parked and resumes at the next start. Reads remain available, and so do **approval** responses until the running turns finish, while new **deliveries** wait for the next start.
 
 ### Instance discovery
 

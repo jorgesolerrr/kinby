@@ -14,6 +14,7 @@ from kinby.contracts import (
     INSTANCE_ADOPT_PREVIEW,
     INSTANCE_LIST,
     INSTANCE_RECREATE,
+    INSTANCE_STOP,
     OPERATION_GET,
     AdoptionFindingKind,
     Capability,
@@ -24,6 +25,7 @@ from kinby.contracts import (
     InstanceAdoptPreviewCommand,
     InstanceListCommand,
     InstanceRecreateCommand,
+    InstanceStopCommand,
     IntendedState,
     LifecycleOperationResult,
     OperationGetCommand,
@@ -256,6 +258,37 @@ def test_the_handoff_drains_the_previous_runtime_before_it_starts_the_replacemen
         secrets = (directory / ".env").read_text(encoding="utf-8")
         assert GITHUB_TOKEN in secrets
         assert OLD_CONTROL_TOKEN not in secrets
+
+    asyncio.run(scenario())
+
+
+def test_a_force_stop_escalates_the_previous_runtime_s_drain_and_the_handoff_carries_on(
+    tmp_path,
+):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        control = FakeControl(holds=True)
+        hub = hub_at(tmp_path / "hub", runtime=runtime, images=FakeImages(), control=control)
+        directory = existing_coder(runtime, tmp_path / "box" / "coder")
+        client = hub_client(hub)
+
+        accepted = await client.call(
+            INSTANCE_ADOPT,
+            InstanceAdoptCommand(path=directory, runtime_id=CODER_CONTAINER, relinquished=True),
+        )
+        assert isinstance(accepted, LifecycleOperationResult)
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+        escalated = await client.call(
+            INSTANCE_STOP,
+            InstanceStopCommand(instance_id=accepted.instance_id, force=True),
+        )
+        assert isinstance(escalated, LifecycleOperationResult)
+        outcome = await finished_operation(client, accepted)
+
+        assert escalated.operation_id == accepted.operation_id
+        assert outcome.state is OperationState.SUCCEEDED
+        assert control.forces == [False, True]
+        assert runtime.started == [CODER_CONTAINER]
 
     asyncio.run(scenario())
 

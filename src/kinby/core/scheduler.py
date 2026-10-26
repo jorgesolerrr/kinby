@@ -444,10 +444,11 @@ class Scheduler:
             await self._handle_failures()
 
     async def wait_idle(self) -> None:
-        """Wait for every accepted turn, parked approval and resumed approval to finish.
+        """Wait for every live turn, including a resumed approval, to finish, then take no more
+        approval answers. A parked approval stays parked.
 
         Holds no lock while it waits, so a force stop can still escalate a closed instance.
         """
-        await self._turns.wait_idle()
+        await self._turns.seal()
         await self.stop()
         await self.drain()

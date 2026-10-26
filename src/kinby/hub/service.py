@@ -556,6 +556,8 @@ class Hub:
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
+            #: The drain each operation is waiting on, whichever operation it is.
+            self._draining: dict[UUID, PendingStop] = {}
             self._tasks: set[asyncio.Task[None]] = set()
             self.dispatcher = Dispatcher()
             self._serve_hub(self.dispatcher)
@@ -1594,7 +1596,19 @@ class Hub:
     async def stop(
         self, command: InstanceStopCommand, requester: UUID | None = None
     ) -> LifecycleOperationResult:
-        """Stop the instance gracefully, or escalate the stop already running to a force stop."""
+        """Stop the instance gracefully, or escalate the stop already running to a force stop.
+
+        A force stop also escalates the drain any other operation is waiting on, which then
+        carries on as it would after a forced stop. That includes an adoption's, whose instance
+        the hub does not operate yet.
+        """
+        draining = self._draining.get(command.instance_id)
+        if command.force and draining is not None:
+            draining.force.set()
+            return LifecycleOperationResult(
+                operation_id=draining.operation_id,
+                instance_id=command.instance_id,
+            )
         record = self._active_instance(command.instance_id)
         pending = self._stopping.get(record.instance_id)
         if pending is None:
@@ -2353,7 +2367,12 @@ class Hub:
     async def _take_down(self, record: ManagedInstance, pending: PendingStop) -> None:
         """Wait for the instance's own drain, then take its container down and watch it go."""
         operation_id = pending.operation_id
-        state = await self._drain(operation_id, await self._endpoint(record), pending)
+        endpoint = await self._endpoint(record)
+        self._draining[record.instance_id] = pending
+        try:
+            state = await self._drain(operation_id, endpoint, pending)
+        finally:
+            del self._draining[record.instance_id]
         await self._terminate(
             operation_id,
             record.runtime_id,
