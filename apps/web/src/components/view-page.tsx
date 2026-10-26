@@ -1,5 +1,5 @@
-import type { InstanceClient, View } from "@kinby/contract"
-import { EllipsisIcon } from "lucide-react"
+import { CallError, type InstanceClient, type View } from "@kinby/contract"
+import { EllipsisIcon, Trash2Icon } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ViewRenderer } from "@/components/view-renderer"
 import { when } from "@/lib/config-changes"
@@ -27,7 +28,8 @@ import { landOn } from "@/lib/selection"
 /**
  * One of an instance's views: its title, when it last changed, and the view. It follows the view
  * while open, showing each snapshot the instance sends after a write. Its ⋯ menu offers Delete,
- * and a delete that succeeds goes back to the instance.
+ * and a delete that succeeds goes back to the instance. A view that is gone, because its
+ * subscription ended or the instance did not find it, shows as deleted.
  */
 export function ViewPage({
   client,
@@ -38,7 +40,11 @@ export function ViewPage({
   instanceId: string
   viewId: string
 }) {
-  const [{ view, failure }, setShown] = useState<{ view?: View; failure?: unknown }>({})
+  const [{ view, failure, deleted }, setShown] = useState<{
+    view?: View
+    failure?: unknown
+    deleted?: boolean
+  }>({})
   useEffect(() => {
     const snapshots = client.subscribe("view.subscribe", { id: viewId })
     let following = true
@@ -47,8 +53,11 @@ export function ViewPage({
         for await (const snapshot of snapshots) {
           if (following) setShown({ view: snapshot })
         }
+        if (following) setShown({ deleted: true })
       } catch (error) {
-        if (following) setShown((last) => ({ view: last.view, failure: error }))
+        if (!following) return
+        if (error instanceof CallError && error.code === "NOT_FOUND") setShown({ deleted: true })
+        else setShown((last) => ({ view: last.view, failure: error }))
       }
     }
     void read()
@@ -68,6 +77,18 @@ export function ViewPage({
     }
   }
 
+  if (deleted) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Trash2Icon />
+          </EmptyMedia>
+          <EmptyTitle>This view was deleted</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
   return (
     <div className="flex max-w-4xl flex-col gap-6 p-6">
       {failure !== undefined && <Failure error={failure} />}
