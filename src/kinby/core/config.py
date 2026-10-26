@@ -39,6 +39,9 @@ from kinby.contracts import (
     RoutineDeleteCommand,
     RoutineDeleteResult,
     RoutineFile,
+    RoutineGrantListCommand,
+    RoutineGrantListResult,
+    RoutineGrantRevokeCommand,
     RoutineName,
     RoutineReadCommand,
     RoutineRenameCommand,
@@ -104,6 +107,7 @@ from kinby.instance.permissions import (
     parse_permissions,
 )
 from kinby.instance.recap import DEFAULT_RECAP_LENS
+from kinby.instance.routine_grants import RoutineGrants
 from kinby.plugins.core import core_tools
 from kinby.plugins.instance_tools import (
     delete_routine,
@@ -250,6 +254,17 @@ class InstanceConfig:
     async def rename_routine(self, command: RoutineRenameCommand) -> RoutineFile:
         async with self._instance.routine_lock:
             return await asyncio.to_thread(self._rename_routine, command)
+
+    async def list_routine_grants(self, command: RoutineGrantListCommand) -> RoutineGrantListResult:
+        grants = RoutineGrants(self._instance.manifest.state_dir)
+        return RoutineGrantListResult(grants=grants.of(command.name))
+
+    async def revoke_routine_grant(
+        self, command: RoutineGrantRevokeCommand
+    ) -> RoutineGrantListResult:
+        grants = RoutineGrants(self._instance.manifest.state_dir)
+        await asyncio.to_thread(grants.revoke, command.name, command.tool)
+        return RoutineGrantListResult(grants=grants.of(command.name))
 
     async def get_manifest(self, command: ManifestGetCommand) -> ManifestResult:
         return _manifest_result((self._instance.path / MANIFEST_NAME).read_bytes())
@@ -410,6 +425,9 @@ class InstanceConfig:
         with recorded_changes(self._instance, (old, new), ConfigActor.APP):
             # One rename, so the scheduler's next read finds the old directory or the new one.
             (self._instance.path / old).rename(self._instance.path / new)
+        grants = RoutineGrants(self._instance.manifest.state_dir)
+        grants.clear(command.name)
+        grants.clear(command.new_name)
         return self._read_routine(command.new_name)
 
     def _read_routine(self, name: RoutineName) -> RoutineFile:

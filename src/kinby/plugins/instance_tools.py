@@ -40,6 +40,7 @@ from kinby.instance.layout import (
 )
 from kinby.instance.manifest import with_repository_commands
 from kinby.instance.permissions import load_permissions
+from kinby.instance.routine_grants import RoutineGrants
 from kinby.plugins.defaults.shell import run_capped
 from kinby.plugins.routines import (
     Routine,
@@ -165,7 +166,8 @@ def write_routine(
     *,
     code_step_allowed: bool = True,
 ) -> Routine:
-    """Create or replace a routine once its staged copy loads. Hold the routine lock."""
+    """Create or replace a routine once its staged copy loads, revoking its grants. Hold the
+    routine lock."""
     validate_name(name)
     routines = instance.path / ROUTINES_DIR
     routines.mkdir(parents=True, exist_ok=True)
@@ -198,19 +200,21 @@ def write_routine(
             if previous.exists():
                 previous.rename(target)
             raise
+    RoutineGrants(instance.manifest.state_dir).clear(name)
     return routine
 
 
 def enable_routine(
     instance: Instance, name: RoutineName, recorded: Recorder, *, enabled: bool
 ) -> Routine:
-    """Change only a routine's enabled line. Hold the routine lock."""
+    """Change only a routine's enabled line, and revoke its grants. Hold the routine lock."""
     validate_name(name)
     routine = load_routine(instance, name)
     if routine is None:
         raise LookupError(f'Routine "{name}" was not found.')
     with recorded(routine_config_file(name)):
         set_routine_enabled(routine, enabled=enabled)
+    RoutineGrants(instance.manifest.state_dir).clear(name)
     return routine
 
 
@@ -233,7 +237,7 @@ def refuse_pending(
 
 
 def delete_routine(instance: Instance, name: RoutineName, recorded: Recorder) -> None:
-    """Delete a routine unless deliveries wait on it. Hold the routine lock."""
+    """Delete a routine and its grants unless deliveries wait on it. Hold the routine lock."""
     validate_name(name)
     target = instance.path / ROUTINES_DIR / name
     if not target.is_dir():
@@ -241,6 +245,7 @@ def delete_routine(instance: Instance, name: RoutineName, recorded: Recorder) ->
     refuse_pending(instance, name, "deleted")
     with recorded(routine_config_file(name)):
         shutil.rmtree(target)
+    RoutineGrants(instance.manifest.state_dir).clear(name)
 
 
 def _code_file(instance: Instance, path: str) -> ConfigFile:

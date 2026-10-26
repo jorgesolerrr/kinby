@@ -128,6 +128,9 @@ from kinby.contracts.models import (
     RoutineDeleteCommand,
     RoutineDeleteResult,
     RoutineFile,
+    RoutineGrantListCommand,
+    RoutineGrantListResult,
+    RoutineGrantRevokeCommand,
     RoutineListCommand,
     RoutineListResult,
     RoutineReadCommand,
@@ -291,6 +294,13 @@ ROUTINE_DELETE = Method(
     "routine.delete", Scope.INSTANCE_ADMIN, RoutineDeleteCommand, RoutineDeleteResult
 )
 ROUTINE_RENAME = Method("routine.rename", Scope.INSTANCE_ADMIN, RoutineRenameCommand, RoutineFile)
+ROUTINE_GRANT_LIST = Method(
+    "routine.grant.list", Scope.INSTANCE_READ, RoutineGrantListCommand, RoutineGrantListResult
+)
+#: Answers with the routine's grants that remain.
+ROUTINE_GRANT_REVOKE = Method(
+    "routine.grant.revoke", Scope.INSTANCE_ADMIN, RoutineGrantRevokeCommand, RoutineGrantListResult
+)
 PROMPT_GET = Method("prompt.get", Scope.INSTANCE_READ, PromptGetCommand, PromptResult)
 PROMPT_SET = Method("prompt.set", Scope.INSTANCE_ADMIN, PromptSetCommand, PromptResult)
 MANIFEST_GET = Method("manifest.get", Scope.INSTANCE_READ, ManifestGetCommand, ManifestResult)
@@ -510,6 +520,8 @@ METHODS = (
     ROUTINE_SET_ENABLED,
     ROUTINE_DELETE,
     ROUTINE_RENAME,
+    ROUTINE_GRANT_LIST,
+    ROUTINE_GRANT_REVOKE,
     PROMPT_GET,
     PROMPT_SET,
     MANIFEST_GET,

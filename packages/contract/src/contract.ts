@@ -134,6 +134,7 @@ export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
  */
 export type GateAction = "allow" | "ask" | "deny";
 export type PromptName = "behavior" | "recap";
+export type ToolName = string;
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
@@ -155,8 +156,7 @@ export type CodingClient = "claude" | "codex";
  */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
-export type ToolName = string;
-export type ApprovalDecision = "approve" | "deny";
+export type ApprovalDecision = "approve" | "deny" | "allow_in_routine";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_reply" | "failed";
 export type ThreadFilter = "sidebar" | "all" | "archived";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
@@ -494,6 +494,14 @@ export interface Contract {
     "routine.delete": {
       command: RoutineDeleteCommand;
       result: RoutineDeleteResult;
+    };
+    "routine.grant.list": {
+      command: RoutineGrantListCommand;
+      result: RoutineGrantListResult;
+    };
+    "routine.grant.revoke": {
+      command: RoutineGrantRevokeCommand;
+      result: RoutineGrantListResult;
     };
     "routine.list": {
       command: RoutineListCommand;
@@ -1720,6 +1728,25 @@ export interface RoutineDeleteCommand {
   name: string;
 }
 export interface RoutineDeleteResult {}
+export interface RoutineGrantListCommand {
+  name: string;
+}
+export interface RoutineGrantListResult {
+  grants: RoutineGrant[];
+}
+/**
+ * The user's standing allow for one tool in one routine's turns, whatever its arguments.
+ */
+export interface RoutineGrant {
+  approval_id: string;
+  granted_at: string;
+  routine: string;
+  tool: ToolName;
+}
+export interface RoutineGrantRevokeCommand {
+  name: string;
+  tool: ToolName;
+}
 export interface RoutineListCommand {}
 export interface RoutineListResult {
   routines: RoutineSummary[];

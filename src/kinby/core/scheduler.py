@@ -50,6 +50,7 @@ from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, inspect_instance
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import ROUTINES_DIR
+from kinby.instance.routine_grants import RoutineGrants
 from kinby.plugins.notify import pending_notifications, raise_recorded, raises_notifications
 from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
 
@@ -405,6 +406,7 @@ class Scheduler:
                     turn_id=failure.event.turn_id,
                 ):
                     disable_routine(routine)
+                RoutineGrants(self._instance.manifest.state_dir).clear(failure.name)
                 by_name.pop(failure.name)
                 notice = RoutineNotice(
                     kind=RoutineNoticeKind.DISABLED,

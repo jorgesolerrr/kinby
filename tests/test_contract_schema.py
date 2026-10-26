@@ -138,7 +138,11 @@ def test_an_approval_answer_is_a_decision_with_an_optional_reason() -> None:
 
     assert set(_object(respond["properties"])) == {"thread_id", "approval_id", "decision", "reason"}
     assert "decision" in cast(list[str], respond["required"])
-    assert _object(definitions["ApprovalDecision"])["enum"] == ["approve", "deny"]
+    assert _object(definitions["ApprovalDecision"])["enum"] == [
+        "approve",
+        "deny",
+        "allow_in_routine",
+    ]
     assert "reason" in _object(gated["properties"])
 
 

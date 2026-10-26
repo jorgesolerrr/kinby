@@ -57,6 +57,7 @@ function openSection(answers: Answers = {}) {
     "config.history": ({ file }) => ({
       changes: file === "routines/issues" ? [disabledByThePolicy] : [],
     }),
+    "routine.grant.list": () => ({ grants: [] }),
     ...answers,
   })
   render(<RoutinesSection client={caller} clock={fakeClock()} />)
@@ -124,6 +125,42 @@ describe("RoutinesSection", () => {
 
     await screen.findByRole("listitem", { name: "news" })
     expect(screen.queryByRole("listitem", { name: "issues" })).toBeNull()
+  })
+
+  it("lists the tools a routine always allows, and revokes one", async () => {
+    let grants = [
+      {
+        routine: "news",
+        tool: "post",
+        granted_at: new Date(2026, 8, 28, 9, 5).toISOString(),
+        approval_id: "a1",
+      },
+    ]
+    const { caller, user } = openSection({
+      "routine.grant.list": ({ name }) => ({ grants: name === "news" ? grants : [] }),
+      "routine.grant.revoke": ({ tool }) => {
+        grants = grants.filter((grant) => grant.tool !== tool)
+        return { grants }
+      },
+    })
+
+    const item = await screen.findByRole("listitem", { name: "news" })
+    const allowed = await within(item).findByRole("list", { name: "Always allowed" })
+    expect(allowed.textContent).toContain("post, since Sep 28, 2026, 9:05 AM")
+    expect(
+      within(screen.getByRole("listitem", { name: "issues" })).queryByRole("list", {
+        name: "Always allowed",
+      }),
+    ).toBeNull()
+
+    await user.click(within(allowed).getByRole("button", { name: "Revoke post" }))
+
+    await waitFor(() =>
+      expect(within(item).queryByRole("list", { name: "Always allowed" })).toBeNull(),
+    )
+    expect(caller.calls.filter((call) => call.method === "routine.grant.revoke")).toEqual([
+      { method: "routine.grant.revoke", params: { name: "news", tool: "post" } },
+    ])
   })
 
   it("turns a routine off with its switch and shows it off", async () => {
