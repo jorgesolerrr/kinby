@@ -1,4 +1,4 @@
-import type { View, ViewComponent } from "@kinby/contract"
+import type { InstanceClient, View, ViewComponent } from "@kinby/contract"
 import { CallError } from "@kinby/contract"
 import { type Answers, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
@@ -105,6 +105,60 @@ describe("ViewPage", () => {
 
     expect(await screen.findByText("The instance broke.")).toBeTruthy()
     expect(screen.getByText("Globex")).toBeTruthy()
+  })
+
+  it("says the view was deleted when its subscription ends, and drops what it showed", async () => {
+    let end = () => {}
+    const ended = new Promise<void>((resolve) => (end = resolve))
+    async function* snapshots() {
+      yield view()
+      await ended
+    }
+    const subscribe = (() =>
+      Object.assign(snapshots(), {
+        head: new Promise<number>(() => {}),
+        cancel() {},
+      })) as InstanceClient["subscribe"]
+    render(
+      <ViewPage
+        client={{ subscribe, call: stubCaller({}).call }}
+        instanceId="hub-ada"
+        viewId="applications"
+      />,
+    )
+    expect(await screen.findByText("Globex")).toBeTruthy()
+
+    act(() => end())
+
+    expect(await screen.findByText("This view was deleted")).toBeTruthy()
+    expect(screen.queryByRole("heading", { name: "Job board" })).toBeNull()
+    expect(screen.queryByText(/Changed/)).toBeNull()
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull()
+    expect(screen.queryByText("Globex")).toBeNull()
+  })
+
+  it("says the view was deleted when the instance does not find it", async () => {
+    const subscriber = stubSubscriber()
+    render(
+      <ViewPage
+        client={{ subscribe: subscriber.subscribe, call: stubCaller({}).call }}
+        instanceId="hub-ada"
+        viewId="applications"
+      />,
+    )
+
+    act(() =>
+      subscriber.subscriptions[0].fail(
+        new CallError({
+          code: "NOT_FOUND",
+          message: 'View "applications" was not found.',
+          retryable: false,
+        }),
+      ),
+    )
+
+    expect(await screen.findByText("This view was deleted")).toBeTruthy()
+    expect(screen.queryByText("The instance refused it")).toBeNull()
   })
 
   it("stops following the view when the page closes", async () => {
