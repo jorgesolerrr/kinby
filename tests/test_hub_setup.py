@@ -31,6 +31,7 @@ from tests.test_hub import (
     FakeImages,
     FakeRuntime,
     finished_operation,
+    hold_search_key,
     hub_at,
     hub_client,
     prepared,
@@ -52,6 +53,13 @@ TOKEN = SetupField(
     kind=SetupFieldKind.SECRET,
     type=SetupFieldType.TEXT,
     required=True,
+)
+SEARCH_KEY = SecretSetup(
+    name="BRAVE_API_KEY",
+    variable="BRAVE_API_KEY",
+    label="Web search key",
+    required=True,
+    is_set=True,
 )
 WEBHOOK = SetupField(
     name="WRITER_WEBHOOK",
@@ -127,6 +135,13 @@ def test_a_created_instance_reads_its_logins_pending_and_which_secrets_are_set(t
                     required=False,
                     is_set=False,
                 ),
+                SecretSetup(
+                    name="BRAVE_API_KEY",
+                    variable="BRAVE_API_KEY",
+                    label="Web search key",
+                    required=True,
+                    is_set=False,
+                ),
             ],
             missing_commands=[],
         )
@@ -191,6 +206,7 @@ def test_signing_in_again_after_a_success_that_fails_stays_signed_in(tmp_path):
         runtime.setup_exits.set()
         hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)), runtime)
         instance_id = (await created_writer(hub)).instance_id
+        hold_search_key(hub, instance_id)
         await finished_operation(hub_client(hub), await login_started(hub, instance_id, "editor"))
 
         runtime.setup_exit_code = 1
@@ -271,6 +287,7 @@ def test_setup_is_pending_until_every_login_signs_in(tmp_path):
         runtime.setup_exits.set()
         hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR, CODEX)), runtime)
         instance_id = (await created_writer(hub)).instance_id
+        hold_search_key(hub, instance_id)
         seeded = await pending_by_instance(hub)
 
         await finished_operation(hub_client(hub), await login_started(hub, instance_id, "editor"))
@@ -289,6 +306,7 @@ def test_setup_is_pending_while_a_required_secret_is_not_set(tmp_path):
         images = FakeImages(declared=writer())
         hub = setup_hub(tmp_path, images)
         instance_id = (await created_writer(hub)).instance_id
+        hold_search_key(hub, instance_id)
         complete = await pending_by_instance(hub)
 
         # A rebuilt image asks for a secret the instance was created without.
@@ -316,6 +334,7 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
         instance_id = (await created_writer(hub)).instance_id
         # An instance whose secrets lost the key, which only a hand edit can bring about.
         (hub.instances_directory / str(instance_id) / ".env").write_text("")
+        hold_search_key(hub, instance_id)
         missing = await setup_of(hub, instance_id)
 
         replaced = await hub_client(hub).call(
@@ -332,7 +351,8 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
                 label="API key",
                 required=True,
                 is_set=False,
-            )
+            ),
+            SEARCH_KEY,
         ]
         assert (await setup_of(hub, instance_id)).secrets == [
             SecretSetup(
@@ -341,7 +361,8 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
                 label="API key",
                 required=True,
                 is_set=True,
-            )
+            ),
+            SEARCH_KEY,
         ]
         assert await pending_by_instance(hub) == {instance_id: False}
 
@@ -357,6 +378,7 @@ def test_a_secret_the_instance_code_declares_is_pending_until_it_is_set(tmp_path
         project = record.path / "code" / "pyproject.toml"
         project.parent.mkdir()
         project.write_text('[tool.kinby]\nsecrets = ["SEARCH_TOKEN"]\n', encoding="utf-8")
+        hold_search_key(hub, instance_id)
         declared = await setup_of(hub, instance_id)
         asked = await pending_by_instance(hub)
         replaced = await hub_client(hub).call(
@@ -388,6 +410,7 @@ def test_an_optional_secret_the_instance_code_declares_becomes_required(tmp_path
         project = record.path / "code" / "pyproject.toml"
         project.parent.mkdir()
         project.write_text('[tool.kinby]\nsecrets = ["WRITER_WEBHOOK"]\n', encoding="utf-8")
+        hold_search_key(hub, instance_id)
 
         setup = await setup_of(hub, instance_id)
 
@@ -409,6 +432,7 @@ def test_an_instance_created_before_logins_were_tracked_reads_complete(tmp_path)
     async def scenario() -> None:
         hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))
         instance_id = (await created_writer(hub)).instance_id
+        hold_search_key(hub, instance_id)
         hub.close()
         with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
             connection.execute("DROP TABLE logins")
@@ -459,6 +483,7 @@ def test_each_secret_names_the_variable_its_value_lands_in(tmp_path):
             "api_key": "ANTHROPIC_API_KEY",
             "WRITER_TOKEN": "WRITER_TOKEN",
             "WRITER_WEBHOOK": "WRITER_WEBHOOK",
+            "BRAVE_API_KEY": "BRAVE_API_KEY",
         }
 
     asyncio.run(scenario())
@@ -486,6 +511,7 @@ def test_setup_names_the_lists_its_factory_role_needs_until_each_is_recorded(tmp
         hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
         # Pending setup never blocks the start, so the coder can run the survey.
         coder = await started_coder(hub, runtime)
+        hold_search_key(hub, coder)
         none_held = await setup_of(hub, coder)
         none_pending = await pending_by_instance(hub)
         hold_commands(hub.instances_directory / str(coder), "checks = []\n")
@@ -506,6 +532,7 @@ def test_an_instance_whose_factory_names_no_list_has_no_commands_pending(tmp_pat
         runtime = FakeRuntime()
         hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
         coder = await started_coder(hub, runtime)
+        hold_search_key(hub, coder)
 
         assert (await setup_of(hub, coder)).missing_commands == []
         assert await pending_by_instance(hub) == {coder: False}

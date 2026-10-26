@@ -156,7 +156,7 @@ def _print_instance(instance: Instance) -> None:
 def _print_turn_inputs(instance: Instance, today: date) -> None:
     skills, skill_warnings = load_skills(instance)
     sections = assemble_system_prompt(instance, skills, today)
-    registry = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults)
+    registry = ToolRegistry(instance.path, tools=instance.manifest.tools)
     discovered_tools, tool_warnings = registry.refresh()
     tools, core_tool_warnings = discovered_tools.with_core(*core_tools(instance, skills))
 

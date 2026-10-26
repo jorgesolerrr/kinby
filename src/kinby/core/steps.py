@@ -247,7 +247,7 @@ async def _run_code_step(
 
     A mapping the tool returns is the result's values. A HookResult also names its outcome.
     """
-    tools, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
+    tools, _ = ToolRegistry(instance.path, tools=instance.manifest.tools).refresh()
     try:
         tool = resolve_code_step(SharedCodeStep(step.call), tools)
     except ValueError:

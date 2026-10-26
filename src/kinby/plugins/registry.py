@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ from types import ModuleType
 from uuid import uuid4
 
 from kinby.contracts import Warning
+from kinby.instance import Tools
 from kinby.instance.layout import TOOLS_DIR
 from kinby.plugins.entry_points import distribution_label
 from kinby.plugins.errors import exception_message
@@ -56,11 +58,11 @@ class _FileTools:
 
 
 class ToolRegistry:
-    def __init__(self, instance_path: Path, *, defaults: bool = True) -> None:
+    def __init__(self, instance_path: Path, *, tools: Tools) -> None:
         self._instance_path = instance_path
         self._tools_path = instance_path / TOOLS_DIR
         self._installed, self._installed_origins, self._installed_warnings = _load_entry_points(
-            defaults=defaults
+            tools
         )
         self._signature: FileSignature | None = None
         self._files: dict[Path, _FileTools] = {}
@@ -155,26 +157,42 @@ def _module_tools(module: ModuleType) -> tuple[Tool, ...]:
 
 
 def _load_entry_points(
-    *, defaults: bool
+    configured: Tools,
 ) -> tuple[tuple[Tool, ...], dict[str, str], tuple[Warning, ...]]:
     """Load the tools installed distributions export, with the distribution that ships each."""
     tools: list[Tool] = []
     origins: dict[str, str] = {}
     warnings: list[Warning] = []
     for entry_point in entry_points(group="kinby.tools"):
-        if not defaults and entry_point.name == "defaults":
-            distribution = entry_point.dist
-            if distribution is not None and distribution.name == "kinby":
-                continue
+        defaults = _is_kinby_defaults(entry_point)
+        if defaults and not configured.defaults:
+            continue
         try:
             loaded = _entry_point_tools(entry_point)
         except Exception as exc:
             warnings.append(Warning(sources=(entry_point.value,), message=exception_message(exc)))
             continue
+        if defaults:
+            loaded = tuple(tool for tool in loaded if _offered(configured, tool.name))
         tools.extend(loaded)
         origins.update((tool.name, distribution_label(entry_point)) for tool in loaded)
     installed, duplicates = _deduplicate_installed_tools(tuple(tools))
     return installed, origins, (*warnings, *duplicates)
+
+
+def _is_kinby_defaults(entry_point: EntryPoint) -> bool:
+    distribution = entry_point.dist
+    return (
+        entry_point.name == "defaults" and distribution is not None and distribution.name == "kinby"
+    )
+
+
+def _offered(configured: Tools, name: str) -> bool:
+    """Whether the manifest leaves the default tool on. Web search also needs its backend's key."""
+    if name == "web_search":
+        key = configured.search_key
+        return key is not None and bool(os.environ.get(key, "").strip())
+    return configured.offers(name)
 
 
 def _entry_point_tools(entry_point: EntryPoint) -> tuple[Tool, ...]:

@@ -469,6 +469,7 @@ def test_a_required_secret_left_empty_is_created_pending_setup(tmp_path, secrets
         assert [(secret.name, secret.is_set) for secret in status.setup.secrets] == [
             ("api_key", False),
             ("SEARCH_TOKEN", False),
+            ("BRAVE_API_KEY", False),
         ]
         environment = instance_environment(hub, accepted.instance_id)
         assert "OPENAI_API_KEY" not in environment

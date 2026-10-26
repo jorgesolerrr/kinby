@@ -264,6 +264,7 @@ from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
+    Manifest,
     ManifestError,
     ModelName,
     init_from_template,
@@ -2693,11 +2694,16 @@ class Hub:
         return self.registry.description()
 
     @staticmethod
-    def _model(record: ManagedInstance) -> ModelName | None:
+    def _manifest(record: ManagedInstance) -> Manifest | None:
         try:
-            return inspect_instance(record.path).manifest.models.main
+            return inspect_instance(record.path).manifest
         except ManifestError:
             return None
+
+    @classmethod
+    def _model(cls, record: ManagedInstance) -> ModelName | None:
+        manifest = cls._manifest(record)
+        return None if manifest is None else manifest.models.main
 
     @staticmethod
     def _code_secrets(record: ManagedInstance) -> tuple[str, ...]:
@@ -2717,13 +2723,15 @@ class Hub:
             for login in declared
             if (running := self.registry.running_login(record.instance_id, login.id))
         }
+        manifest = self._manifest(record)
         return instance_setup(
             description,
             logins=self.registry.login_states(record.instance_id),
             running=running,
             secrets=self._environment(record.path),
             links=self.registry.secret_links(record.instance_id),
-            model=self._model(record),
+            model=manifest.models.main if manifest is not None else None,
+            search_key=manifest.tools.search_key if manifest is not None else None,
             missing_commands=self.runs.missing_commands(record),
             code_secrets=self._code_secrets(record),
         )

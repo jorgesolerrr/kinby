@@ -358,9 +358,7 @@ class InstanceConfig:
 
     async def list_tools(self, command: ToolListCommand) -> ToolListResult:
         skills, _ = load_skills(self._instance)
-        registry = ToolRegistry(
-            self._instance.path, defaults=self._instance.manifest.tools.defaults
-        )
+        registry = ToolRegistry(self._instance.path, tools=self._instance.manifest.tools)
         discovered, tool_warnings = registry.refresh()
         core = core_tools(self._instance, skills)
         tools, core_warnings = discovered.with_core(*core)
