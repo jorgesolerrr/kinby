@@ -218,7 +218,7 @@ _Avoid_: upgrade, rollout
 
 ### Instance notice
 
-Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the **instance template** its **factory** serves now differs from the files the **hub** recorded when it copied them, or the instance's environment lacks the hub route and the scopes the registry grants it. An **instance update** answers all three.
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the **instance template** its **factory** serves now differs from the files the **hub** recorded when it copied them, the instance's environment lacks the hub route and the scopes the registry grants it, or an **MCP server** it picked did not start or list its tools at its last **turn**. An **instance update** answers the first three.
 _Avoid_: warning, alert
 
 ### Instance removal
@@ -604,7 +604,7 @@ An **instance** that picked no **factory role**, created from kinby's built-in d
 
 ### Library
 
-The **hub**'s store of what an **instance** can pick: **skills** and **factories**. kinby ships a default library, and the user adds to it, edits it and removes from it. Nothing in it reaches an instance until picked.
+The **hub**'s store of what an **instance** can pick: **skills**, **MCP servers** and **factories**. kinby ships a default library, and the user adds to it, edits it and removes from it. Nothing in it reaches an instance until picked.
 _Avoid_: registry, marketplace, skill repository, package list
 
 ### Library entry
@@ -613,7 +613,7 @@ One pickable thing in the **library**, of one kind. An entry added from git reco
 
 ### Pick
 
-An **instance**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill and records the version copied, and a running instance can add or drop one. An **instance update** brings a picked skill up to the library's unless the instance changed it. Picking a **factory role** happens once, at creation.
+An **instance**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill and records the version copied, and a running instance can add or drop one. Picking an **MCP server** records a copy of its definition. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always. Picking a **factory role** happens once, at creation.
 _Avoid_: install (of a skill or a factory), package
 
 ### Suggested pick
@@ -684,7 +684,7 @@ _Avoid_: dynamic tool, self-made tool
 
 ### MCP server
 
-A **library** kind: an outside server whose tools an **instance** that picks it gets on its **turns**. The user or the **home instance** adds it to the library; an instance never adds one to itself. Every call to its tools is gated as a write unless the user trusts the server's own read-only hints.
+A **library** kind: an outside server whose tools an **instance** that picks it gets on its **turns**, each named `<server>__<tool>`. The user or the **home instance** adds it to the library; an instance never adds one to itself. Every call to its tools is gated as a write unless the user trusts the server's own read-only hints, a choice held on the **pick**.
 
 ### Routine grant
 

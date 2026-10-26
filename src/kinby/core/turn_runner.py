@@ -124,6 +124,7 @@ from kinby.plugins.browser_tools import browser_takeover
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.instance_tools import routine_config_file
+from kinby.plugins.mcp import mcp_tools
 from kinby.plugins.notify import (
     UNTITLED,
     approval_notification,
@@ -557,10 +558,24 @@ class LangGraphRunner:
         config: RunnableConfig,
         progress: _BudgetProgress,
     ) -> TurnResult:
+        async with mcp_tools(self._instance) as picked:
+            return await self._invoke_with(turn, context, graph_input, config, progress, picked)
+
+    async def _invoke_with(
+        self,
+        turn: PreparedTurnRequest,
+        context: TurnContext,
+        graph_input: ModelState | Command,
+        config: RunnableConfig,
+        progress: _BudgetProgress,
+        picked: tuple[Tool, ...],
+    ) -> TurnResult:
+        """Run the turn with the tools of the MCP servers the instance *picked*."""
         budgets = progress.budgets
         emit = context.emit
         skills, skill_warnings = load_skills(self._instance)
         discovered_tools, tool_warnings = self._tools.refresh()
+        discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked))
         tools, core_tool_warnings = discovered_tools.with_core(
             *core_tools(self._instance, skills, today=self._today)
         )

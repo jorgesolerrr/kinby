@@ -5,6 +5,8 @@ import type {
   InstanceClient,
   InstancePicksResult,
   LibraryEntry,
+  McpServerChoice,
+  McpServerPick,
   SkillListResult,
   SkillPick,
   SkillSummary,
@@ -31,6 +33,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { lastChanged } from "@/lib/config-changes"
@@ -49,10 +52,14 @@ import { CircleXIcon, PlusIcon, SparklesIcon } from "lucide-react"
 type Caller = Pick<InstanceClient, "call">
 type HubCaller = Pick<Client, "call">
 
-/** The instance's picks with the hash of its lock, and the library's skills it could pick. */
+/**
+ * The instance's picks with the hash of its lock, and the library's skills and MCP servers it
+ * could pick.
+ */
 interface Picked {
   held: InstancePicksResult
   library: LibraryEntry[]
+  servers: LibraryEntry[]
 }
 
 /** The skill open below the list, or the form for a new one. */
@@ -112,6 +119,7 @@ export function SkillsSection({
           setPicked({
             held,
             library: library.entries.filter((entry) => entry.kind === "skill"),
+            servers: library.entries.filter((entry) => entry.kind === "mcp_server"),
           })
           setPicksFailure(undefined)
         },
@@ -259,9 +267,9 @@ const STATES: Record<SkillPick["state"], string> = {
 }
 
 /**
- * The instance's picks, each to drop, and the library's other skills, each to add. A change
- * carries the hash of the picks it read, so one over a change made since is refused, and "Load
- * theirs" reads them again.
+ * The instance's picks, each to drop, and the library's other skills and MCP servers, each to
+ * add. A picked server's switch trusts its read-only hints. A change carries the hash of the
+ * picks it read, so one over a change made since is refused, and "Load theirs" reads them again.
  */
 function Picks({
   caller,
@@ -283,8 +291,13 @@ function Picks({
   const picks = picked.held.picks
   const names = picks.map((pick) => pick.name)
   const offered = picked.library.filter((entry) => !names.includes(entry.name))
+  const servers = picked.held.mcp_servers
+  const choices: McpServerChoice[] = servers.map(({ name, trust_hints }) => ({ name, trust_hints }))
+  const offeredServers = picked.servers.filter(
+    (entry) => !servers.some((server) => server.name === entry.name),
+  )
 
-  const pick = async (skills: string[]) => {
+  const pick = async (skills: string[], mcpServers: McpServerChoice[] = choices) => {
     setBusy(true)
     setStale(false)
     setRefusal(undefined)
@@ -294,14 +307,16 @@ function Picks({
         await caller.call("instance.picks.set", {
           instance_id: instanceId,
           skills,
+          mcp_servers: mcpServers,
           hash: picked.held.hash,
         }),
       )
     } catch (error) {
+      const refused =
+        error instanceof CallError ? (error.fields.skills ?? error.fields.mcp_servers) : undefined
       if (error instanceof CallError && error.code === "STALE") setStale(true)
-      else if (error instanceof CallError && error.fields.skills !== undefined) {
-        setRefusal(error.fields.skills)
-      } else setFailure(error)
+      else if (refused !== undefined) setRefusal(refused)
+      else setFailure(error)
     } finally {
       setBusy(false)
     }
@@ -388,7 +403,99 @@ function Picks({
           </ItemGroup>
         </>
       )}
+      <h3 className="text-sm font-medium">MCP servers</h3>
+      {servers.length === 0 ? (
+        <p className="text-sm text-muted-foreground">The instance has picked no MCP server.</p>
+      ) : (
+        <ItemGroup aria-label="MCP server picks">
+          {servers.map((each) => (
+            <li key={each.name} className="list-none">
+              <ServerPick
+                server={each}
+                busy={busy}
+                onTrust={(trust_hints) =>
+                  void pick(
+                    names,
+                    choices.map((choice) =>
+                      choice.name === each.name ? { ...choice, trust_hints } : choice,
+                    ),
+                  )
+                }
+                onDrop={() =>
+                  void pick(
+                    names,
+                    choices.filter((choice) => choice.name !== each.name),
+                  )
+                }
+              />
+            </li>
+          ))}
+        </ItemGroup>
+      )}
+      {offeredServers.length > 0 && (
+        <ItemGroup aria-label="Library MCP servers">
+          {offeredServers.map((entry) => (
+            <li key={entry.name} className="list-none">
+              <Item size="sm">
+                <ItemContent>
+                  <ItemTitle>{entry.name}</ItemTitle>
+                </ItemContent>
+                <ItemActions>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    aria-label={`Add ${entry.name}`}
+                    onClick={() => void pick(names, [...choices, { name: entry.name }])}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    Add
+                  </Button>
+                </ItemActions>
+              </Item>
+            </li>
+          ))}
+        </ItemGroup>
+      )}
     </section>
+  )
+}
+
+/** A picked MCP server. Until its read-only hints are trusted, every call to its tools asks. */
+function ServerPick({
+  server,
+  busy,
+  onTrust,
+  onDrop,
+}: {
+  server: McpServerPick
+  busy: boolean
+  onTrust: (trust: boolean) => void
+  onDrop: () => void
+}) {
+  const id = useId()
+  return (
+    <Item size="sm" variant="outline">
+      <ItemContent>
+        <ItemTitle>{server.name}</ItemTitle>
+        <ItemDescription>{STATES[server.state]}</ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <Field orientation="horizontal" className="w-auto">
+          <Switch id={id} checked={server.trust_hints} disabled={busy} onCheckedChange={onTrust} />
+          <FieldLabel htmlFor={id}>Trust read-only hints</FieldLabel>
+        </Field>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          aria-label={`Drop ${server.name}`}
+          onClick={onDrop}
+        >
+          Drop
+        </Button>
+      </ItemActions>
+    </Item>
   )
 }
 

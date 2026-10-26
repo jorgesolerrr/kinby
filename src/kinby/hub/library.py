@@ -37,7 +37,9 @@ from kinby.contracts import (
     LibrarySkillWriteCommand,
     LibrarySource,
     McpServer,
+    McpServerChoice,
     McpServerName,
+    McpServerPick,
     McpServerResult,
     NewerVersion,
     PickState,
@@ -60,6 +62,7 @@ from kinby.instance.config_changes import (
 )
 from kinby.instance.layout import SKILL_FILE, SKILLS_DIR, SKILLS_LOCK_NAME
 from kinby.instance.skills_lock import (
+    LockedMcpServer,
     LockedSkill,
     SkillsLock,
     lock_hash,
@@ -75,7 +78,7 @@ from kinby.plugins.skills import load_skill_file
 class PickSync:
     """The picks an update wrote from the library and kept, by name."""
 
-    written: tuple[SkillName, ...]
+    written: tuple[str, ...]
     kept: tuple[SkillName, ...]
 
     @property
@@ -349,17 +352,33 @@ class Library:
                 )
                 for name, entry in sorted(lock.skills.items())
             ],
+            mcp_servers=[
+                McpServerPick(
+                    name=name,
+                    trust_hints=entry.trust_hints,
+                    state=PickState.BEHIND
+                    if self._library_server(name) not in (None, entry.server)
+                    else PickState.UP_TO_DATE,
+                )
+                for name, entry in sorted(lock.mcp_servers.items())
+            ],
             hash=lock_hash(instance_path),
         )
 
     def pick(
-        self, instance: Instance, skills: Sequence[SkillName], read: FileHash | None
+        self,
+        instance: Instance,
+        skills: Sequence[SkillName],
+        read: FileHash | None,
+        mcp_servers: Sequence[McpServerChoice] = (),
     ) -> InstancePicksResult:
-        """Make *skills* the instance's picks, recorded as config changes.
+        """Make *skills* and *mcp_servers* the instance's picks, recorded as config changes.
 
         Each new pick's folder is copied in from the library, and each dropped one's removed. A
         skill without a lock entry is the agent's own, and is never touched. Every copy and the
-        new lock are written aside first, so a failed copy leaves the instance as it was.
+        new lock are written aside first, so a failed copy leaves the instance as it was. A new MCP
+        server's definition is copied into the lock, and a held one keeps its copy, so a library
+        change reaches it only through an update.
         """
         _refuse_links(instance.path)
         if lock_hash(instance.path) != read:
@@ -374,10 +393,11 @@ class Library:
         )
         if refusal is not None:
             raise InvalidConfig({"skills": refusal})
+        servers = self._picked_servers(lock.mcp_servers, mcp_servers)
         # The lock is a file the agent can edit, so a name in it must stay inside skills/.
         for name in dropped:
             validate_name(name)
-        if not added and not dropped:
+        if not added and not dropped and servers == lock.mcp_servers:
             return self.picks(instance.path)
         changed = [ConfigFile(f"{SKILLS_DIR}/{name}") for name in (*added, *dropped)]
         with TemporaryDirectory(prefix=".pick-", dir=instance.path) as temporary:
@@ -387,7 +407,7 @@ class Library:
             for name in added:
                 shutil.copytree(folders[name], staged / name)
                 picked[name] = LockedSkill.of(staged / name, self._origin(name))
-            write_lock(Path(temporary), SkillsLock(skills=picked))
+            write_lock(Path(temporary), SkillsLock(skills=picked, mcp_servers=servers))
             with recorded_changes(
                 instance, (*changed, ConfigFile(SKILLS_LOCK_NAME)), ConfigActor.APP
             ):
@@ -410,7 +430,7 @@ class Library:
         lock = read_lock(instance_path)
         folders = _skill_folders(self._directory)
         held = instance_path / SKILLS_DIR
-        written: list[SkillName] = []
+        written: list[str] = []
         kept: list[SkillName] = []
         relocked = False
         for name, entry in sorted(lock.skills.items()):
@@ -427,6 +447,12 @@ class Library:
                 written.append(name)
             lock.skills[name] = LockedSkill.of(held / name, self._origin(name))
             relocked = True
+        for name, entry in sorted(lock.mcp_servers.items()):
+            library = self._library_server(name)
+            if library is not None and library != entry.server:
+                lock.mcp_servers[name] = entry.model_copy(update={"server": library})
+                written.append(name)
+                relocked = True
         if relocked:
             write_lock(instance_path, lock)
         return PickSync(written=tuple(written), kept=tuple(kept))
@@ -485,6 +511,32 @@ class Library:
                 f'The library\'s skill "{name}" changed since it was read. Read it again.'
             )
         return folder
+
+    def _picked_servers(
+        self, held: dict[McpServerName, LockedMcpServer], choices: Sequence[McpServerChoice]
+    ) -> dict[McpServerName, LockedMcpServer]:
+        """The lock's MCP servers once *choices* are made: a held server keeps its copy."""
+        servers: dict[McpServerName, LockedMcpServer] = {}
+        missing: list[str] = []
+        for choice in choices:
+            server = (
+                held[choice.name].server
+                if choice.name in held
+                else self._library_server(choice.name)
+            )
+            if server is None:
+                missing.append(f'The library has no MCP server "{choice.name}".')
+            else:
+                servers[choice.name] = LockedMcpServer(
+                    server=server, trust_hints=choice.trust_hints
+                )
+        if missing:
+            raise InvalidConfig({"mcp_servers": " ".join(missing)})
+        return servers
+
+    def _library_server(self, name: McpServerName) -> McpServer | None:
+        file = self._mcp_servers / f"{name}.json"
+        return McpServer.model_validate_json(file.read_bytes()) if file.is_file() else None
 
     def _mcp_server_file(self, name: McpServerName) -> Path:
         file = self._mcp_servers / f"{name}.json"
@@ -561,7 +613,8 @@ def _present(lock: SkillsLock, held: Path) -> SkillsLock:
             name: entry
             for name, entry in lock.skills.items()
             if (held / name).exists(follow_symlinks=False)
-        }
+        },
+        mcp_servers=lock.mcp_servers,
     )
 
 

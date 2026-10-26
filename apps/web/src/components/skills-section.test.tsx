@@ -1,6 +1,7 @@
 import { CallError } from "@kinby/contract"
 import type {
   LibraryEntry,
+  McpServerPick,
   SkillListResult,
   SkillPick,
   SkillResult,
@@ -70,7 +71,7 @@ function openSection(answers: Answers) {
     "skill.list": () => listed,
     "skill.read": ({ name, tier }) => read[`${name} ${tier}`],
     "config.history": () => ({ changes: [] }),
-    "instance.picks.get": () => ({ picks: [], hash: null }),
+    "instance.picks.get": () => ({ picks: [], mcp_servers: [], hash: null }),
     "library.list": () => ({ entries: [] }),
     ...answers,
   })
@@ -328,11 +329,15 @@ describe("SkillsSection", () => {
       { kind: "factory", name: "software", description: null, source: "shipped" },
       { kind: "skill", name: "tdd", description: "Test first.", source: "shipped" },
       { kind: "skill", name: "unslop", description: "Cut AI tells.", source: "shipped" },
+      { kind: "mcp_server", name: "fetch", description: null, source: "written" },
+      { kind: "mcp_server", name: "github", description: null, source: "written" },
     ]
     const pickedTdd: SkillPick = { name: "tdd", source: "shipped", state: "up-to-date" }
+    const pickedFetch: McpServerPick = { name: "fetch", trust_hints: false, state: "up-to-date" }
 
     function openWithPicks(answers: Answers = {}) {
       let picks = [pickedTdd]
+      let servers = [pickedFetch]
       let hash = "lock-1"
       return openSection({
         "skill.list": () => ({ skills: [planning, tdd], warnings: [] }),
@@ -340,12 +345,17 @@ describe("SkillsSection", () => {
           name === "tdd"
             ? { content: skillText("tdd", "Test first."), files: [], hash: "h-tdd" }
             : read[`${name} ${tier}`],
-        "instance.picks.get": () => ({ picks, hash }),
+        "instance.picks.get": () => ({ picks, mcp_servers: servers, hash }),
         "library.list": () => ({ entries: library }),
-        "instance.picks.set": ({ skills }) => {
+        "instance.picks.set": ({ skills, mcp_servers }) => {
           picks = skills.map((name) => ({ name, source: "shipped", state: "up-to-date" }))
+          servers = mcp_servers.map(({ name, trust_hints = false }) => ({
+            name,
+            trust_hints,
+            state: "up-to-date",
+          }))
           hash = `lock-${skills.length + 2}`
-          return { picks, hash }
+          return { picks, mcp_servers: servers, hash }
         },
         ...answers,
       })
@@ -372,6 +382,7 @@ describe("SkillsSection", () => {
             { name: "unslop", source: "shipped", state: "behind" },
             { name: "ponytail", source: "written", state: "edited" },
           ],
+          mcp_servers: [],
           hash: "lock-1",
         }),
       })
@@ -391,7 +402,11 @@ describe("SkillsSection", () => {
     it("shows a pick edited locally once its copy is saved", async () => {
       let state: SkillPick["state"] = "behind"
       const { user } = openWithPicks({
-        "instance.picks.get": () => ({ picks: [{ ...pickedTdd, state }], hash: "lock-1" }),
+        "instance.picks.get": () => ({
+          picks: [{ ...pickedTdd, state }],
+          mcp_servers: [],
+          hash: "lock-1",
+        }),
         "skill.read": () => ({ content: skillText("tdd", "Test first."), files: [], hash: "h-9" }),
         "skill.write": ({ content }) => {
           state = "edited"
@@ -417,7 +432,12 @@ describe("SkillsSection", () => {
       await user.click(within(offered).getByRole("button", { name: "Add unslop" }))
 
       expect(called(caller, "instance.picks.set")).toEqual([
-        { instance_id: "instance-1", skills: ["tdd", "unslop"], hash: "lock-1" },
+        {
+          instance_id: "instance-1",
+          skills: ["tdd", "unslop"],
+          mcp_servers: [{ name: "fetch", trust_hints: false }],
+          hash: "lock-1",
+        },
       ])
       const picks = screen.getByRole("list", { name: "Picks" })
       expect(await within(picks).findByText("unslop")).toBeDefined()
@@ -430,7 +450,12 @@ describe("SkillsSection", () => {
       await user.click(await screen.findByRole("button", { name: "Drop tdd" }))
 
       expect(called(caller, "instance.picks.set")).toEqual([
-        { instance_id: "instance-1", skills: [], hash: "lock-1" },
+        {
+          instance_id: "instance-1",
+          skills: [],
+          mcp_servers: [{ name: "fetch", trust_hints: false }],
+          hash: "lock-1",
+        },
       ])
       expect(await screen.findByText("The instance has picked no library skill.")).toBeDefined()
     })
@@ -463,6 +488,7 @@ describe("SkillsSection", () => {
       expect(called(caller, "instance.picks.set").at(-1)).toEqual({
         instance_id: "instance-1",
         skills: ["unslop"],
+        mcp_servers: [{ name: "fetch", trust_hints: false }],
         hash: "lock-4",
       })
     })
@@ -474,9 +500,10 @@ describe("SkillsSection", () => {
           theirs
             ? {
                 picks: [pickedTdd, { name: "unslop", source: "shipped", state: "up-to-date" }],
+                mcp_servers: [],
                 hash: "lock-9",
               }
-            : { picks: [pickedTdd], hash: "lock-1" },
+            : { picks: [pickedTdd], mcp_servers: [], hash: "lock-1" },
         "instance.picks.set": () => {
           theirs = true
           throw new CallError({
@@ -495,6 +522,41 @@ describe("SkillsSection", () => {
       const picks = screen.getByRole("list", { name: "Picks" })
       expect(await within(picks).findByText("unslop")).toBeDefined()
       expect(screen.queryByRole("alert")).toBeNull()
+    })
+
+    it("shows the picked MCP servers and trusts one's read-only hints", async () => {
+      const { caller, user } = openWithPicks()
+
+      const servers = await screen.findByRole("list", { name: "MCP server picks" })
+      const trust = within(servers).getByRole("switch", { name: "Trust read-only hints" })
+      expect(trust.getAttribute("aria-checked")).toBe("false")
+      await user.click(trust)
+
+      expect(called(caller, "instance.picks.set")).toEqual([
+        {
+          instance_id: "instance-1",
+          skills: ["tdd"],
+          mcp_servers: [{ name: "fetch", trust_hints: true }],
+          hash: "lock-1",
+        },
+      ])
+      await waitFor(() => expect(trust.getAttribute("aria-checked")).toBe("true"))
+    })
+
+    it("adds an MCP server from the library and drops one", async () => {
+      const { caller, user } = openWithPicks()
+
+      const offered = await screen.findByRole("list", { name: "Library MCP servers" })
+      expect(within(offered).queryByText("fetch")).toBeNull()
+      await user.click(within(offered).getByRole("button", { name: "Add github" }))
+      await user.click(await screen.findByRole("button", { name: "Drop fetch" }))
+
+      expect(called(caller, "instance.picks.set")).toEqual([
+        expect.objectContaining({
+          mcp_servers: [{ name: "fetch", trust_hints: false }, { name: "github" }],
+        }),
+        expect.objectContaining({ mcp_servers: [{ name: "github", trust_hints: false }] }),
+      ])
     })
 
     it("reads the picks again when a picked skill is deleted", async () => {

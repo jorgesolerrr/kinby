@@ -71,15 +71,16 @@ export type AvatarShape = "circle" | "squircle" | "square";
  */
 export type DrainState = "drained" | "interrupted";
 export type IntendedState = "stopped" | "running" | "removed" | "deleted";
+export type McpServerName = string;
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
-/**
- * Where a library entry came from.
- */
-export type LibrarySource = "shipped" | "written" | "git";
 /**
  * How a pick stands against its lock entry and the library.
  */
 export type PickState = "up-to-date" | "behind" | "edited";
+/**
+ * Where a library entry came from.
+ */
+export type LibrarySource = "shipped" | "written" | "git";
 export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "unknown";
 /**
  * A change a running instance applies only once it is recreated.
@@ -92,7 +93,6 @@ export type CommandListName = string;
 export type LoginState = "pending" | "signed_in" | "failed";
 export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
-export type McpServerName = string;
 export type EnvVariable = string;
 export type PriceSource = "shipped" | "manifest";
 /**
@@ -1325,7 +1325,7 @@ export interface InstanceSummary {
   intended_state: IntendedState;
   manifest_id: string;
   needs_human: number;
-  notices: (RevisionBehind | TemplateBehind | HubRouteMissing)[];
+  notices: (RevisionBehind | TemplateBehind | HubRouteMissing | McpServerFailed)[];
   persona_name: string | null;
   process: ProcessState;
   runtime_id: string;
@@ -1359,6 +1359,15 @@ export interface HubRouteMissing {
   message: string;
 }
 /**
+ * An MCP server the instance picked failed to start or list its tools at its last turn, which
+ * ran without them.
+ */
+export interface McpServerFailed {
+  code: "mcp_server_failed";
+  message: string;
+  server: McpServerName;
+}
+/**
  * Run one of the instance's subscription logins in a setup container.
  */
 export interface InstanceLoginStartCommand {
@@ -1378,7 +1387,13 @@ export interface InstancePicksGetCommand {
 }
 export interface InstancePicksResult {
   hash: string | null;
+  mcp_servers: McpServerPick[];
   picks: SkillPick[];
+}
+export interface McpServerPick {
+  name: McpServerName;
+  state: PickState;
+  trust_hints: boolean;
 }
 export interface SkillPick {
   name: string;
@@ -1388,7 +1403,15 @@ export interface SkillPick {
 export interface InstancePicksSetCommand {
   hash: string | null;
   instance_id: string;
+  mcp_servers: McpServerChoice[];
   skills: string[];
+}
+/**
+ * An MCP server an instance should hold, and whether the user trusts its read-only hints.
+ */
+export interface McpServerChoice {
+  name: McpServerName;
+  trust_hints?: boolean;
 }
 export interface InstanceProbeCommand {}
 export interface InstanceProbeResult {
