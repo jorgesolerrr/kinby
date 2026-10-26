@@ -41,7 +41,8 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
-import { lastChanged } from "@/lib/config-changes"
+import { useRead } from "@/hooks/use-read"
+import { lastChanged, when } from "@/lib/config-changes"
 import { type Pace, pace, retried } from "@/lib/operation"
 import {
   deleteRoutine,
@@ -59,6 +60,7 @@ import {
   PencilIcon,
   PlayIcon,
   PlusIcon,
+  ShieldCheckIcon,
   TextCursorInputIcon,
   Trash2Icon,
 } from "lucide-react"
@@ -154,6 +156,8 @@ export function RoutinesSection({
         {routines.map((listed) => (
           <RoutineItem
             key={listed.summary.name}
+            client={client}
+            clock={clock}
             listed={listed}
             onToggle={(enabled) => void toggle(listed.summary.name, enabled)}
             onRun={() => void run(listed.summary.name)}
@@ -167,12 +171,16 @@ export function RoutinesSection({
 }
 
 function RoutineItem({
+  client,
+  clock,
   listed: { summary, hash, lastChange },
   onToggle,
   onRun,
   onEdit,
   onRename,
 }: {
+  client: Caller
+  clock: Clock
   listed: ListedRoutine
   onToggle: (enabled: boolean) => void
   onRun: () => void
@@ -201,6 +209,8 @@ function RoutineItem({
           </div>
         )}
         <ItemDescription>{lastChanged(lastChange, hash)}</ItemDescription>
+        {/* Any change to the routine revokes its grants, so they are read again with each hash. */}
+        <RoutineGrants key={hash} client={client} clock={clock} name={summary.name} />
       </ItemContent>
       <ItemActions>
         <Switch aria-label="On" checked={summary.enabled} onCheckedChange={onToggle} />
@@ -215,6 +225,47 @@ function RoutineItem({
         <RenameDialog summary={summary} onRename={onRename} />
       </ItemActions>
     </Item>
+  )
+}
+
+/** The tools the routine always allows, each with its revoke. Nothing when it allows none. */
+function RoutineGrants({ client, clock, name }: { client: Caller; clock: Clock; name: string }) {
+  const list = useCallback(() => client.call("routine.grant.list", { name }), [client, name])
+  const { value, failure, readAgain } = useRead(list, clock)
+  const [refusal, setRefusal] = useState<unknown>()
+
+  const revoke = (tool: string) =>
+    client.call("routine.grant.revoke", { name, tool }).then(
+      () => {
+        setRefusal(undefined)
+        readAgain()
+      },
+      (error: unknown) => setRefusal(error),
+    )
+
+  const shown = refusal ?? failure
+  if (shown !== undefined) return <Failure error={shown} />
+  if (value === undefined || value.grants.length === 0) return null
+  return (
+    <ul aria-label="Always allowed" className="flex flex-col gap-1 text-sm text-muted-foreground">
+      {value.grants.map((grant) => (
+        <li key={grant.tool} className="flex items-center gap-2">
+          <ShieldCheckIcon aria-hidden className="size-3.5" />
+          <span>
+            Always allows <span className="font-mono text-foreground">{grant.tool}</span>, since{" "}
+            {when(grant.granted_at)}
+          </span>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label={`Revoke ${grant.tool}`}
+            onClick={() => void revoke(grant.tool)}
+          >
+            Revoke
+          </Button>
+        </li>
+      ))}
+    </ul>
   )
 }
 

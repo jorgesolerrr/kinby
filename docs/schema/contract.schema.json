@@ -146,7 +146,8 @@
     "ApprovalDecision": {
       "enum": [
         "approve",
-        "deny"
+        "deny",
+        "allow_in_routine"
       ],
       "title": "ApprovalDecision",
       "type": "string"
@@ -5814,6 +5815,80 @@
       "title": "RoutineFile",
       "type": "object"
     },
+    "RoutineGrant": {
+      "additionalProperties": false,
+      "description": "The user's standing allow for one tool in one routine's turns, whatever its arguments.",
+      "properties": {
+        "approval_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "granted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "routine": {
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "routine",
+        "tool",
+        "granted_at",
+        "approval_id"
+      ],
+      "title": "RoutineGrant",
+      "type": "object"
+    },
+    "RoutineGrantListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "RoutineGrantListCommand",
+      "type": "object"
+    },
+    "RoutineGrantListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/RoutineGrant"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "grants"
+      ],
+      "title": "RoutineGrantListResult",
+      "type": "object"
+    },
+    "RoutineGrantRevokeCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "name",
+        "tool"
+      ],
+      "title": "RoutineGrantRevokeCommand",
+      "type": "object"
+    },
     "RoutineLastRun": {
       "additionalProperties": false,
       "properties": {
@@ -11322,6 +11397,38 @@
           ],
           "type": "object"
         },
+        "routine.grant.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineGrantListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineGrantListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "routine.grant.revoke": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineGrantRevokeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineGrantListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.list": {
           "additionalProperties": false,
           "properties": {
@@ -11945,6 +12052,8 @@
         "routine.set_enabled",
         "routine.delete",
         "routine.rename",
+        "routine.grant.list",
+        "routine.grant.revoke",
         "prompt.get",
         "prompt.set",
         "manifest.get",

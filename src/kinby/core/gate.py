@@ -43,13 +43,16 @@ def evaluate(
     call: ToolCall,
     tool: Tool | None,
     workspace: Path,
+    *,
+    granted: bool = False,
 ) -> GateDecision:
     """Evaluate one call without running the tool or changing state.
 
     A hub tool's write asks in every mode but read-only, ahead of any rule (ADR 0096).
     Consolidation's own write runs unasked in every mode but read-only, where it is denied,
     also ahead of any rule (ADR 0100). So do notify and a view write, unless a rule names the
-    tool (ADR 0103, ADR 0108).
+    tool (ADR 0103, ADR 0108). A routine grant, when *granted*, allows the call ahead of the mode
+    in every mode but read-only, so the ceiling still bounds it (ADR 0112).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
@@ -77,6 +80,8 @@ def evaluate(
     override = policy.tools.get(call.name)
     if override is not None:
         return GateDecision(override, GateRule(f"tools.{call.name}"))
+    if granted and mode is not PermissionMode.READ_ONLY:
+        return GateDecision(GateAction.ALLOW, GateRule("routine.grant"))
     writes = tool is not None and tool.write
     if (
         mode is PermissionMode.AUTO

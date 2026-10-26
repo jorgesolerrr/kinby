@@ -1,4 +1,5 @@
 import type {
+  ApprovalDecision,
   Avatar as AvatarChoice,
   Client,
   Clock,
@@ -73,6 +74,7 @@ import {
   BanIcon,
   BellIcon,
   BrainIcon,
+  CheckCheckIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleStopIcon,
@@ -188,6 +190,7 @@ export function ThreadPanel({
                 client={client}
                 threadId={threadId}
                 approval={approval}
+                routine={latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined}
                 speaker={speaker}
               />
             )}
@@ -362,11 +365,12 @@ function Composer({
 }
 
 /** The button pressed in an approval panel. */
-type Answer = "approve" | "deny" | "stop"
+type Answer = ApprovalDecision | "stop"
 
 /**
  * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
- * the model reads, or stop the turn. Enter in the reason denies with it.
+ * the model reads, or stop the turn. Enter in the reason denies with it. On a routine's turn it
+ * also offers to approve the tool in every run of that routine.
  */
 function ApprovalPanel({
   ref,
@@ -374,6 +378,7 @@ function ApprovalPanel({
   client,
   threadId,
   approval,
+  routine,
   speaker,
 }: {
   ref: Ref<HTMLElement>
@@ -381,6 +386,8 @@ function ApprovalPanel({
   client: Pick<InstanceClient, "call">
   threadId: string
   approval: ParkedApproval
+  /** The routine whose turn parked on the approval. */
+  routine: string | undefined
   speaker: Speaker
 }) {
   const reasonId = useId()
@@ -400,7 +407,7 @@ function ApprovalPanel({
       setAnswering(undefined)
     }
   }
-  const respond = (decision: "approve" | "deny") => {
+  const respond = (decision: ApprovalDecision) => {
     const denial = typed.trim()
     return answer(decision, () =>
       client.call("thread.approval.respond", {
@@ -470,6 +477,22 @@ function ApprovalPanel({
                 )}
                 Approve
               </Button>
+              {routine !== undefined && (
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  className="max-md:h-11"
+                  disabled={busy}
+                  onClick={() => void respond("allow_in_routine")}
+                >
+                  {answering === "allow_in_routine" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <CheckCheckIcon data-icon="inline-start" />
+                  )}
+                  Always allow in this routine
+                </Button>
+              )}
               <Button
                 size="lg"
                 variant="outline"

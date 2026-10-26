@@ -46,6 +46,7 @@ from kinby.contracts import (
     PermissionMode,
     ProfileCounted,
     ProfileVersion,
+    RoutineGrant,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
@@ -64,6 +65,7 @@ from kinby.core.errors import (
     BudgetExceeded,
     CodeStepFailed,
     CodeStepNotFound,
+    GrantOutsideRoutine,
     InvalidApprovalRequest,
     InvalidParkedTurn,
     ModelNoResponse,
@@ -84,7 +86,7 @@ from kinby.core.prompt import (
     render_system_prompt,
     render_wake,
 )
-from kinby.core.threads import ThreadStore
+from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
     ApprovalAnswer,
@@ -105,6 +107,7 @@ from kinby.instance.permissions import (
     load_permissions,
     validate_bash_regexes,
 )
+from kinby.instance.routine_grants import RoutineGrants
 from kinby.memory import GraphStore
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
@@ -176,6 +179,11 @@ class ModelState:
     messages: Annotated[list[AnyMessage], add_messages] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
+    #: The tools the routine's grants allow in this turn: those granted when it started, and those
+    #: the user allowed in the routine since. A resume replays the gate over the parked step and
+    #: matches answers to asks in order, so a grant made or revoked elsewhere meanwhile must not
+    #: change which calls ask.
+    granted: tuple[str, ...] = ()
 
 
 _MODEL_STATE = TypeAdapter(ModelState)
@@ -380,7 +388,7 @@ class LangGraphRunner:
         return await self._invoke(
             turn,
             context,
-            ModelState(turn=turn),
+            ModelState(turn=turn, granted=self._granted_tools(turn)),
             config,
             progress,
         )
@@ -418,12 +426,35 @@ class LangGraphRunner:
         if seconds_budget is not None and progress.seconds_used >= seconds_budget:
             raise BudgetExceeded("seconds", seconds_budget)
         self._restore_emitted_tool_calls(turn)
+        if answer.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
+            self._grant_parked_tool(turn)
         return await self._invoke(
             turn,
             context,
             Command(resume=answer),
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
+        )
+
+    def _granted_tools(self, turn: PreparedTurnRequest) -> tuple[str, ...]:
+        """The tools the routine's grants allow, when a routine started the turn."""
+        if not isinstance(turn.origin, RoutineOrigin):
+            return ()
+        grants = RoutineGrants(self._instance.manifest.state_dir).of(turn.origin.name)
+        return tuple(grant.tool for grant in grants)
+
+    def _grant_parked_tool(self, turn: PreparedTurnRequest) -> None:
+        """Grant the tool of the approval the turn is parked on to the routine that started it."""
+        pending = pending_approval(self._event_log.stored(turn.thread_id))
+        if not isinstance(turn.origin, RoutineOrigin) or pending is None:
+            raise GrantOutsideRoutine("Only a routine's parked turn grants a tool to the routine.")
+        RoutineGrants(self._instance.manifest.state_dir).grant(
+            RoutineGrant(
+                routine=turn.origin.name,
+                tool=pending.request.name,
+                granted_at=datetime.now(UTC),
+                approval_id=pending.request.approval_id,
+            )
         )
 
     async def _count_profiles(self, model: ModelName, emit: Emit) -> None:
@@ -886,6 +917,7 @@ class LangGraphRunner:
             messages=returned_messages,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            granted=state.granted,
         )
 
     async def _call_tools(
@@ -897,6 +929,7 @@ class LangGraphRunner:
         if not isinstance(response, AIMessage):
             raise ModelNoResponse("The model returned an invalid tool call response.")
         calls: list[ToolCallResolution] = []
+        granted = list(state.granted)
         message_index = len(state.messages) - 1
         for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
@@ -918,6 +951,7 @@ class LangGraphRunner:
                 call,
                 selected,
                 runtime.context.tool_context.workspace,
+                granted=name in granted,
             )
             approval_id = None
             if gate_decision.action is GateAction.ASK:
@@ -931,7 +965,9 @@ class LangGraphRunner:
                         rule=gate_decision.rule,
                     )
                 )
-                approved = answer.decision is ApprovalDecision.APPROVE
+                approved = answer.decision is not ApprovalDecision.DENY
+                if answer.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
+                    granted.append(name)
                 gate = ToolGated(
                     call_id=call.call_id,
                     name=call.name,
@@ -994,6 +1030,7 @@ class LangGraphRunner:
             messages=messages,
             input_tokens=state.input_tokens,
             output_tokens=state.output_tokens,
+            granted=tuple(granted),
         )
 
     async def _emit_tool_call_once(

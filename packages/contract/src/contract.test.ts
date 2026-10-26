@@ -213,7 +213,7 @@ test("thread.approval.respond takes a decision and, on a denial, a reason", () =
   type Respond = Contract["methods"]["thread.approval.respond"]["command"]
   type Gated = Extract<Event["payload"], { type: "tool.gated" }>
 
-  expectTypeOf<Respond["decision"]>().toEqualTypeOf<"approve" | "deny">()
+  expectTypeOf<Respond["decision"]>().toEqualTypeOf<"approve" | "deny" | "allow_in_routine">()
   expectTypeOf<Respond["reason"]>().toEqualTypeOf<string | null | undefined>()
   expectTypeOf<Gated["reason"]>().toEqualTypeOf<string | null | undefined>()
 })
