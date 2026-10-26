@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -70,12 +71,41 @@ class Feedback:
     ask: FeedbackPolicy
 
 
+class SearchBackend(StrEnum):
+    """The one service an instance sends its web searches to."""
+
+    BRAVE = "brave"
+    TAVILY = "tavily"
+    EXA = "exa"
+    SEARXNG = "searxng"
+
+    @property
+    def key_variable(self) -> str:
+        """Where the instance holds the backend's key. SearXNG runs on the user's own server,
+        so its variable holds that server's URL instead."""
+        if self is SearchBackend.SEARXNG:
+            return "SEARXNG_URL"
+        return f"{self.upper()}_API_KEY"
+
+
 @dataclass(frozen=True)
 class Tools:
     """How the manifest configures kinby's tools."""
 
     defaults: bool = True
+    #: Default tools switched off by name, while the others stay on.
+    off: frozenset[str] = frozenset()
+    search: SearchBackend = SearchBackend.BRAVE
     bash_timeout_seconds: int = 120
+
+    def offers(self, name: str) -> bool:
+        """Whether the manifest leaves the default tool *name* on."""
+        return self.defaults and name not in self.off
+
+    @property
+    def search_key(self) -> str | None:
+        """The variable holding the search backend's key, while web search is on."""
+        return self.search.key_variable if self.offers("web_search") else None
 
 
 @dataclass(frozen=True)

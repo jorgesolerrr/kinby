@@ -16,6 +16,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     InstanceCreateCommand,
     InstanceSecretsSetCommand,
+    InstanceSetup,
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
@@ -23,6 +24,7 @@ from kinby.contracts import (
     OperationGetResult,
     OperationState,
     RecreateReason,
+    SecretSetup,
     SetupField,
     SetupFieldKind,
     SetupFieldType,
@@ -84,7 +86,11 @@ def test_linked_fields_hold_the_hub_secrets_values_and_status_shows_the_links(tm
 
         assert [
             (secret.name, secret.is_set, secret.hub_secret) for secret in status.setup.secrets
-        ] == [("api_key", True, "ANTHROPIC_API_KEY"), ("GITHUB_TOKEN", True, "WORK_GITHUB_TOKEN")]
+        ] == [
+            ("api_key", True, "ANTHROPIC_API_KEY"),
+            ("GITHUB_TOKEN", True, "WORK_GITHUB_TOKEN"),
+            ("BRAVE_API_KEY", False, None),
+        ]
         environment = instance_environment(hub, status.instance_id)
         assert environment["ANTHROPIC_API_KEY"] == "sk-hub"
         assert environment["GITHUB_TOKEN"] == "ghp-work"
@@ -109,6 +115,7 @@ def test_a_typed_field_links_no_hub_secret(tmp_path):
         assert [(secret.name, secret.hub_secret) for secret in status.setup.secrets] == [
             ("api_key", None),
             ("GITHUB_TOKEN", None),
+            ("BRAVE_API_KEY", None),
         ]
         assert instance_environment(hub, status.instance_id)["GITHUB_TOKEN"] == "ghp-typed"
 
@@ -138,6 +145,7 @@ def test_save_to_the_hub_stores_the_typed_value_and_links_the_field_to_it(tmp_pa
         assert [(secret.name, secret.hub_secret) for secret in status.setup.secrets] == [
             ("api_key", "OPENAI_API_KEY"),
             ("GITHUB_TOKEN", "PERSONAL_TOKEN"),
+            ("BRAVE_API_KEY", None),
         ]
         environment = instance_environment(hub, status.instance_id)
         assert environment["OPENAI_API_KEY"] == "sk-typed"
@@ -322,6 +330,7 @@ def test_linking_a_field_of_an_existing_instance_writes_the_value_and_status_sho
         assert await _linked(client, created.instance_id) == [
             ("api_key", True, "OPENAI_API_KEY"),
             ("GITHUB_TOKEN", True, "WORK_GITHUB_TOKEN"),
+            ("BRAVE_API_KEY", False, None),
         ]
         environment = instance_environment(hub, created.instance_id)
         assert environment["OPENAI_API_KEY"] == "sk-hub"
@@ -358,6 +367,7 @@ def test_a_typed_value_for_a_linked_field_replaces_it_and_unlinks_the_field(tmp_
         assert await _linked(client, status.instance_id) == [
             ("api_key", True, None),
             ("GITHUB_TOKEN", True, None),
+            ("BRAVE_API_KEY", False, None),
         ]
         environment = instance_environment(hub, status.instance_id)
         assert environment["OPENAI_API_KEY"] == "sk-typed"
@@ -472,6 +482,92 @@ def test_a_link_that_does_not_fit_fails_the_operation_and_changes_nothing(
         assert await _linked(client, status.instance_id) == [
             ("api_key", True, "OPENAI_API_KEY"),
             ("GITHUB_TOKEN", True, None),
+            ("BRAVE_API_KEY", False, None),
+        ]
+
+    asyncio.run(scenario())
+
+
+async def _setup(client: ContractClient, instance_id) -> InstanceSetup:
+    status = await client.call(INSTANCE_STATUS, InstanceStatusCommand(instance_id=instance_id))
+    assert isinstance(status, InstanceStatusResult)
+    return status.setup
+
+
+def test_web_search_waits_as_pending_setup_until_a_hub_secret_fills_its_key(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=FakeImages())
+        client = hub_client(hub)
+        created = await created_instance(client)
+
+        before = await _setup(client, created.instance_id)
+        await set_hub_secret(client, "BRAVE", "brave-key")
+        outcome = await _secrets_set(
+            client,
+            InstanceSecretsSetCommand(
+                instance_id=created.instance_id, hub_secrets={"BRAVE_API_KEY": "BRAVE"}
+            ),
+        )
+        after = await _setup(client, created.instance_id)
+
+        assert before.pending
+        assert before.secrets[-1] == SecretSetup(
+            name="BRAVE_API_KEY",
+            variable="BRAVE_API_KEY",
+            label="Web search key",
+            required=True,
+            is_set=False,
+        )
+        assert outcome.state is OperationState.SUCCEEDED
+        assert not after.pending
+        assert (after.secrets[-1].is_set, after.secrets[-1].hub_secret) == (True, "BRAVE")
+        assert instance_environment(hub, created.instance_id)["BRAVE_API_KEY"] == "brave-key"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("tools", "variable"),
+    [
+        ('search = "tavily"', "TAVILY_API_KEY"),
+        ('search = "searxng"', "SEARXNG_URL"),
+        ('off = ["web_search"]', None),
+        ("defaults = false", None),
+    ],
+)
+def test_the_search_key_pending_setup_follows_the_manifest(tmp_path, tools, variable):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub", images=FakeImages())
+        client = hub_client(hub)
+        created = await created_instance(client)
+        manifest = hub.instances_directory / str(created.instance_id) / "kinby.toml"
+        manifest.write_text(
+            f"{manifest.read_text(encoding='utf-8')}\n[tools]\n{tools}\n", encoding="utf-8"
+        )
+
+        setup = await _setup(client, created.instance_id)
+
+        assert [secret.variable for secret in setup.secrets] == [
+            "OPENAI_API_KEY",
+            *([variable] if variable else []),
+        ]
+        assert setup.pending is (variable is not None)
+
+    asyncio.run(scenario())
+
+
+def test_a_template_declaring_the_search_key_shows_it_once(tmp_path):
+    async def scenario() -> None:
+        brave = _GITHUB_TOKEN.model_copy(update={"name": "BRAVE_API_KEY", "label": "Brave key"})
+        hub = hub_at(tmp_path / "hub", images=declaring(brave))
+        client = hub_client(hub)
+        created = await created_instance(client, secrets={"BRAVE_API_KEY": "brave-key"})
+
+        setup = await _setup(client, created.instance_id)
+
+        assert [(secret.label, secret.is_set) for secret in setup.secrets] == [
+            ("API key", True),
+            ("Brave key", True),
         ]
 
     asyncio.run(scenario())

@@ -279,7 +279,7 @@ _Avoid_: login container, helper container
 
 ### Pending setup
 
-What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, or **repository commands** its **factory**'s steps name and it does not hold. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
+What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, its **search backend**'s key while web search is on, or **repository commands** its **factory**'s steps name and it does not hold. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
 _Avoid_: incomplete instance, onboarding
 
 ### Avatar
@@ -635,7 +635,12 @@ A native Python capability the model can call during a **turn**. Every tool decl
 
 ### Default tools
 
-The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob and bash.
+The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob, bash and web_search. The manifest can switch them all off, or switch off one by name and keep the rest. web_search is offered only while the instance holds its **search backend**'s key.
+
+### Search backend
+
+The one service an **instance** sends its web searches to: Brave, Tavily, Exa or SearXNG, named in its **manifest**, Brave when it names none. Its key sits under a variable fixed per backend, filled from a **hub secret**. SearXNG needs no key, so its variable holds the URL of the user's own server. Searches never go to any other backend.
+_Avoid_: search provider, search engine
 
 ### Tool registry
 

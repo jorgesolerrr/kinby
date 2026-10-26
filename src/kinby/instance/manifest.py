@@ -24,7 +24,7 @@ from pydantic import (
 )
 from tomlkit.items import InlineTable
 
-from kinby.contracts import CommandListName, ManifestValues, NewModelPrice
+from kinby.contracts import CommandListName, ContractModel, ManifestValues, NewModelPrice
 from kinby.instance.dataclasses import (
     Budgets,
     Conventions,
@@ -38,6 +38,7 @@ from kinby.instance.dataclasses import (
     Models,
     RecapPolicy,
     Routines,
+    SearchBackend,
     Serve,
     Tools,
     Workspace,
@@ -110,6 +111,9 @@ class RawFeedback(_Section):
 
 class RawTools(_Section):
     defaults: bool = True
+    #: Default tools switched off by name, while the others stay on.
+    off: list[NonEmpty] = []
+    search: SearchBackend = Field(default=SearchBackend.BRAVE, strict=False)
     bash_timeout_seconds: Annotated[int, Field(gt=0)] = 120
 
 
@@ -192,7 +196,18 @@ def parse_manifest(text: str) -> RawManifest:
 
 def offered_values(raw: RawManifest) -> ManifestValues:
     """The fields of the manifest a client may change."""
-    return ManifestValues.model_validate(raw.model_dump(include=set(ManifestValues.model_fields)))
+    return ManifestValues.model_validate(raw.model_dump(include=_fields(ManifestValues)))
+
+
+def _fields(model: type[ContractModel]) -> dict[str, object]:
+    """Each field of *model*, and of each table inside it, as ``model_dump`` includes them."""
+    return {
+        name: _fields(annotation)
+        if isinstance(annotation := field.annotation, type)
+        and issubclass(annotation, ContractModel)
+        else True
+        for name, field in model.model_fields.items()
+    }
 
 
 def edited_manifest(text: str, values: ManifestValues, prices: Mapping[str, NewModelPrice]) -> str:
@@ -315,6 +330,8 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         feedback=Feedback(ask=raw.feedback.ask),
         tools=Tools(
             defaults=raw.tools.defaults,
+            off=frozenset(raw.tools.off),
+            search=raw.tools.search,
             bash_timeout_seconds=raw.tools.bash_timeout_seconds,
         ),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),

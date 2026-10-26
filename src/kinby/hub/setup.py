@@ -158,34 +158,45 @@ def instance_setup(
     secrets: Mapping[str, str],
     links: Mapping[str, HubSecretName],
     model: ModelName | None,
+    search_key: str | None,
     missing_commands: Sequence[CommandListName],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
-    and the lists of repository commands it is missing.
+    the key its web search needs, and the lists of repository commands it is missing.
 
     `running` names the sign-in each login has running, by login id. `links` names the hub
-    secret each linked variable took.
+    secret each linked variable took. `search_key` names the variable of the search backend's
+    key, while the instance's manifest leaves web search on.
 
     A login the hub never tracked belongs to an instance created before it tracked logins, and
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
     Blank text counts as not set, the way creation reads it.
     """
     if description is None:
-        return InstanceSetup(logins=[], secrets=[], missing_commands=list(missing_commands))
+        description = DeclaredSetup(setup_fields=[])
 
     def variable(field: SetupField) -> str | None:
         if field.name != API_KEY_FIELD.name:
             return field.name
         return None if model is None else api_key_variable(model)
 
-    def is_set(field: SetupField) -> bool:
-        held = variable(field)
-        return held is not None and bool(secrets.get(held, "").strip())
+    def secret(name: str, held: str | None, label: str, *, required: bool) -> SecretSetup:
+        return SecretSetup(
+            name=name,
+            variable=held,
+            label=label,
+            required=required,
+            is_set=held is not None and bool(secrets.get(held, "").strip()),
+            hub_secret=None if held is None else links.get(held),
+        )
 
-    def hub_secret(field: SetupField) -> HubSecretName | None:
-        held = variable(field)
-        return None if held is None else links.get(held)
-
+    needed = [
+        secret(field.name, variable(field), field.label, required=field.required)
+        for field in description.setup_fields
+        if field.kind is SetupFieldKind.SECRET
+    ]
+    if search_key is not None and search_key not in {held.variable for held in needed}:
+        needed.append(secret(search_key, search_key, "Web search key", required=True))
     return InstanceSetup(
         logins=[
             LoginSetup(
@@ -197,18 +208,7 @@ def instance_setup(
             )
             for login in description.logins
         ],
-        secrets=[
-            SecretSetup(
-                name=field.name,
-                variable=variable(field),
-                label=field.label,
-                required=field.required,
-                is_set=is_set(field),
-                hub_secret=hub_secret(field),
-            )
-            for field in description.setup_fields
-            if field.kind is SetupFieldKind.SECRET
-        ],
+        secrets=needed,
         missing_commands=list(missing_commands),
     )
 

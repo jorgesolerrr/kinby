@@ -37,7 +37,7 @@ from kinby.contracts import (
     Warning,
 )
 from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher
-from kinby.instance import Instance, load_instance
+from kinby.instance import Instance, SearchBackend, load_instance
 from kinby.plugins import Tool, ToolContext, tool
 from kinby.plugins.defaults.files import grep
 from kinby.plugins.defaults.shell import bash
@@ -300,6 +300,7 @@ def test_default_entry_point_declares_tool_gate_metadata() -> None:
         ("grep", False, ()),
         ("glob", False, ()),
         ("bash", True, ()),
+        ("web_search", False, ()),
     ]
 
 
@@ -565,6 +566,8 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
 
         assert asdict(instance.manifest)["tools"] == {
             "defaults": False,
+            "off": frozenset(),
+            "search": SearchBackend.BRAVE,
             "bash_timeout_seconds": 120,
         }
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [

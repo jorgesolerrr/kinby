@@ -301,7 +301,7 @@ class LangGraphRunner:
         instance.manifest.state_dir.mkdir(parents=True, exist_ok=True)
         self._tools = ToolRegistry(
             instance.path,
-            defaults=instance.manifest.tools.defaults,
+            tools=instance.manifest.tools,
         )
         self._emitted_tool_calls: set[tuple[UUID, UUID, str]] = set()
         self._checkpoint_path = instance.manifest.state_dir / _CHECKPOINTS_NAME
@@ -316,8 +316,8 @@ class LangGraphRunner:
 
     def prepare_for_turn(self) -> TurnPreparation:
         manifest = reload_manifest(self._instance, model_override=self._model_override)
-        if manifest.tools.defaults != self._instance.manifest.tools.defaults:
-            self._tools = ToolRegistry(self._instance.path, defaults=manifest.tools.defaults)
+        if manifest.tools != self._instance.manifest.tools:
+            self._tools = ToolRegistry(self._instance.path, tools=manifest.tools)
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
         sections = self._prompt_sections()

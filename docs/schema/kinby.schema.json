@@ -259,6 +259,19 @@
           "default": true,
           "title": "Defaults",
           "type": "boolean"
+        },
+        "off": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Off",
+          "type": "array"
+        },
+        "search": {
+          "$ref": "#/$defs/SearchBackend",
+          "default": "brave"
         }
       },
       "title": "RawTools",
@@ -328,6 +341,17 @@
         "off"
       ],
       "title": "RecapPolicy",
+      "type": "string"
+    },
+    "SearchBackend": {
+      "description": "The one service an instance sends its web searches to.",
+      "enum": [
+        "brave",
+        "tavily",
+        "exa",
+        "searxng"
+      ],
+      "title": "SearchBackend",
       "type": "string"
     }
   },
@@ -412,7 +436,9 @@
       "$ref": "#/$defs/RawTools",
       "default": {
         "bash_timeout_seconds": 120,
-        "defaults": true
+        "defaults": true,
+        "off": [],
+        "search": "brave"
       }
     },
     "workspace": {

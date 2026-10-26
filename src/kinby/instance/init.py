@@ -213,6 +213,12 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "# seconds = 300\n"
             "# usd_per_day = 5.0\n"
             "\n"
+            "# [tools]\n"
+            "# Switch off one default tool by name, or all of them with defaults = false.\n"
+            '# off = ["web_search"]\n'
+            "# Where web_search sends queries: brave, tavily, exa or searxng.\n"
+            '# search = "brave"\n'
+            "\n"
             "# [serve]\n"
             '# listen = "127.0.0.1:8484"\n'
         ),

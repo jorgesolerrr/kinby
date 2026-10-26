@@ -38,6 +38,7 @@ from kinby.factories.file import (
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     InstanceExistsError,
+    Tools,
     init_from_template,
     inspect_instance,
 )
@@ -94,7 +95,7 @@ def check_factory(folder: Path) -> tuple[str, ...]:
 
 
 def _template(folder: Path, template: Path) -> _Template:
-    snapshot, tool_warnings = ToolRegistry(template).refresh()
+    snapshot, tool_warnings = ToolRegistry(template, tools=Tools()).refresh()
     hooks, hook_warnings = load_hooks(template)
     return _Template(
         tools=frozenset(tool.name for tool in snapshot.tools),

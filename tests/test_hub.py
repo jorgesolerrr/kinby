@@ -497,6 +497,12 @@ async def created_instance(
     return created
 
 
+def hold_search_key(hub: Hub, instance_id: UUID) -> None:
+    """Give one instance the key its web search waits on, which leaves it pending otherwise."""
+    with (hub.instances_directory / str(instance_id) / ".env").open("a", encoding="utf-8") as env:
+        env.write("BRAVE_API_KEY='brave-key'\n")
+
+
 def instance_environment(hub: Hub, instance_id: UUID) -> dict[str, str]:
     """Read the secrets file the hub wrote for one instance."""
     path = hub.instances_directory / str(instance_id) / ".env"
@@ -646,7 +652,8 @@ def test_a_registry_from_before_factories_keeps_its_instances_and_drops_its_pack
         assert [summary.instance_id for summary in listed.instances] == [created.instance_id]
         assert not isinstance(status, ErrorEnvelope)
         assert [(secret.name, secret.is_set) for secret in status.setup.secrets] == [
-            ("api_key", True)
+            ("api_key", True),
+            ("BRAVE_API_KEY", False),
         ]
         assert described == declared
         with sqlite3.connect(directory / "registry.sqlite") as connection:

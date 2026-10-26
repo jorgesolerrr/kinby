@@ -153,7 +153,7 @@ def _signal_code_step(code_step: SharedCodeStep | Tool | None, instance: Instanc
         return None
     if isinstance(code_step, Tool):
         return code_step
-    snapshot, _ = ToolRegistry(instance.path, defaults=instance.manifest.tools.defaults).refresh()
+    snapshot, _ = ToolRegistry(instance.path, tools=instance.manifest.tools).refresh()
     return resolve_code_step(code_step, snapshot)
 
 
