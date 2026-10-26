@@ -1,4 +1,10 @@
-import { CallError, type Event, type Notification, type ViewChange } from "@kinby/contract"
+import {
+  CallError,
+  type Event,
+  type Notification,
+  type NotificationRaised,
+  type ViewChange,
+} from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -1048,7 +1054,7 @@ describe("a thread's panel", () => {
   })
 
   describe("a notification", () => {
-    const raised: Payload = {
+    const raised: NotificationRaised = {
       type: "notification.raised",
       source: "inbox-sort",
       title: "Inbox sorted",
@@ -1200,6 +1206,113 @@ describe("a thread's panel", () => {
       )
 
       expect(await within(card).findByText("Answered “Archive them”")).toBeDefined()
+    })
+
+    describe("raised while a turn is parked on an approval", () => {
+      const request = {
+        type: "approval.requested" as const,
+        approval_id: "a1",
+        name: "bash",
+        arguments: { command: "make deploy" },
+        rule: "mode.ask.write",
+      }
+      const parked: Payload[] = [
+        started("Deploy it"),
+        { type: "tool.call", call_id: "c1", name: "bash", arguments: { command: "make deploy" } },
+        request,
+      ]
+      const asks: NotificationRaised = {
+        type: "notification.raised",
+        source: "Deploy it",
+        title: "Approval waiting",
+        text: "bash: command=make deploy",
+        options: ["Approve", "Deny"],
+        approval: { turn_id: "turn-1", request },
+      }
+      const approved: Payload = {
+        type: "tool.gated",
+        call_id: "c1",
+        name: "bash",
+        action: "allow",
+        decided_by: "user",
+        rule: "mode.ask.write",
+      }
+
+      /** Open thread t1 parked on approval a1, with `notification` raised and kept by the hub as n1. */
+      async function opened(notification: NotificationRaised, hubAnswers: Answers = {}) {
+        const { title, options } = notification
+        const hub = stubCaller({
+          "notification.list": () => ({ notifications: [kept({ title, options })] }),
+          ...hubAnswers,
+        })
+        const events = thread(
+          ...[
+            ...parked,
+            notification,
+            { type: "notification.accepted", raised: 4, notification_id: "n1" } as const,
+          ].map((payload): [string, Payload] => ["turn-1", payload]),
+        )
+        const { subscription } = openThread(
+          {
+            "thread.approval.respond": () => ({ sequence: 5, thread_id: "t1", turn_id: "turn-1" }),
+          },
+          undefined,
+          hub,
+        )
+        await act(async () => {
+          subscription().subscribed(events.length)
+          for (const event of events) subscription().deliver(event)
+        })
+        const card = screen.getByRole("article", { name: title })
+        await within(card).findByText("Delivered")
+        const deliver = (payload: Payload) =>
+          act(async () =>
+            subscription().deliver({
+              sequence: events.length + 1,
+              thread_id: "t1",
+              turn_id: "turn-1",
+              timestamp: "2026-09-28T10:00:00Z",
+              payload,
+            }),
+          )
+        return { hub, card, deliver }
+      }
+
+      it("shows the answer given through the approval panel in place of its options", async () => {
+        const { card, deliver } = await opened(asks)
+        const panel = screen.getByRole("region", { name: "Approve bash make deploy?" })
+
+        await userEvent.click(within(panel).getByRole("button", { name: "Approve" }))
+        await deliver(approved)
+
+        expect(within(card).getByText("Approved")).toBeDefined()
+        expect(within(card).queryByRole("button", { name: "Approve" })).toBeNull()
+        expect(within(card).queryByRole("button", { name: "Deny" })).toBeNull()
+        expect(screen.getByText("bash make deploy · approved by you · running")).toBeDefined()
+      })
+
+      it("answers an option through the hub while the turn waits", async () => {
+        const { hub, card } = await opened(asks, {
+          "notification.reply": () => reply("received"),
+        })
+
+        expect(within(card).getByRole("button", { name: "Approve" })).toBeDefined()
+        await userEvent.click(within(card).getByRole("button", { name: "Deny" }))
+
+        expect(hub.calls).toContainEqual({
+          method: "notification.reply",
+          params: { notification_id: "n1", option: "Deny" },
+        })
+      })
+
+      it("keeps the options of a notification that asks about no approval", async () => {
+        const { card, deliver } = await opened(raised)
+
+        await deliver(approved)
+
+        expect(within(card).getByRole("button", { name: "Archive them" })).toBeDefined()
+        expect(within(card).getByRole("button", { name: "Leave them" })).toBeDefined()
+      })
     })
   })
 

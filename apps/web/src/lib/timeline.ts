@@ -75,6 +75,11 @@ export interface NotificationStep {
   options: string[]
   /** The hub's answer: the notification it sends, or why it refused it. None while it is pending. */
   hub?: { kind: "accepted"; notificationId: string } | { kind: "refused"; reason: string }
+  /**
+   * The approval it asks the user to answer: the call it gates, and how it settled, by the gate's
+   * decision on the call or by the turn ending first. Unsettled while the turn is parked on it.
+   */
+  approval?: { callId: string; settled?: GateOutcome | "ended" }
 }
 
 /** A view the turn wrote. */
@@ -165,8 +170,8 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
       }
       return { ...turn, approval }
     }
-    case "tool.gated":
-      return updateTool(turn, payload.call_id, (step) => ({
+    case "tool.gated": {
+      const gated = updateTool(turn, payload.call_id, (step) => ({
         ...step,
         gate: {
           action: payload.action,
@@ -175,15 +180,25 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
           reason: payload.reason,
         },
       }))
+      return settleApprovals(gated, payload.action, payload.call_id)
+    }
     case "tool.result":
       return updateTool(turn, payload.call_id, (step) =>
         payload.duration_ms == null ? step : { ...step, durationMs: payload.duration_ms },
       )
     case "notification.raised": {
       const { title, text, options = [] } = payload
+      const parked = turn.approval
+      const approval =
+        parked !== undefined && payload.approval?.request.approval_id === parked.approvalId
+          ? { callId: parked.callId }
+          : undefined
       return {
         ...turn,
-        steps: [...turn.steps, { kind: "notification", raised: sequence, title, text, options }],
+        steps: [
+          ...turn.steps,
+          { kind: "notification", raised: sequence, title, text, options, approval },
+        ],
       }
     }
     case "notification.accepted":
@@ -198,14 +213,17 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
       return { ...turn, steps: [...turn.steps, { kind: "view", view, title, change }] }
     }
     case "turn.completed":
-      return {
-        ...turn,
-        end: { kind: "done", tokens: payload.input_tokens + payload.output_tokens },
-      }
+      return settleApprovals(
+        { ...turn, end: { kind: "done", tokens: payload.input_tokens + payload.output_tokens } },
+        "ended",
+      )
     case "turn.failed":
-      return { ...turn, end: { kind: "failed", code: payload.code, message: payload.message } }
+      return settleApprovals(
+        { ...turn, end: { kind: "failed", code: payload.code, message: payload.message } },
+        "ended",
+      )
     case "turn.interrupted":
-      return { ...turn, end: { kind: "stopped" } }
+      return settleApprovals({ ...turn, end: { kind: "stopped" } }, "ended")
     case "memory.recapped":
       return {
         ...turn,
@@ -242,6 +260,25 @@ function updateNotification(
     ...turn,
     steps: turn.steps.map((step) =>
       step.kind === "notification" && step.raised === raised ? { ...step, hub } : step,
+    ),
+  }
+}
+
+/** The turn with each unsettled approval notification settled, or only the one on `callId`. */
+function settleApprovals(
+  turn: TurnBlock,
+  settled: GateOutcome | "ended",
+  callId?: string,
+): TurnBlock {
+  return {
+    ...turn,
+    steps: turn.steps.map((step) =>
+      step.kind === "notification" &&
+      step.approval !== undefined &&
+      step.approval.settled === undefined &&
+      (callId === undefined || step.approval.callId === callId)
+        ? { ...step, approval: { ...step.approval, settled } }
+        : step,
     ),
   }
 }
