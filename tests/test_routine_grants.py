@@ -23,6 +23,7 @@ from kinby.contracts import (
     RoutineName,
     ToolCall,
     ToolGated,
+    Warning,
     is_turn_closing,
 )
 from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
@@ -283,6 +284,37 @@ def test_rewriting_the_routine_makes_the_next_run_ask(tmp_path: Path) -> None:
             hash=read.hash,
         )
 
+        second = await run_routine(dispatcher)
+        assert isinstance(second.payload, ApprovalRequested)
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_rewritten_while_its_turn_waits_is_not_granted_the_approved_tool(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        _, dispatcher = news_runtime(tmp_path)
+        parked = await run_routine(dispatcher)
+        read = await call(dispatcher, "routine.read", name="news")
+        await call(
+            dispatcher,
+            "routine.write",
+            name="news",
+            content="---\ndescription: News\n---\nPost everything.\n",
+            hash=read.hash,
+        )
+
+        await answer(dispatcher, parked, "allow_in_routine")
+
+        events = await turn_events(dispatcher, parked.thread_id)
+        [gate] = [event.payload for event in events if isinstance(event.payload, ToolGated)]
+        assert (gate.action, gate.decided_by) == (GateOutcome.ALLOW, GateDecider.USER)
+        assert any(
+            isinstance(event.payload, Warning) and "changed since" in event.payload.message
+            for event in events
+        )
+        assert (await call(dispatcher, "routine.grant.list", name="news")).grants == []
         second = await run_routine(dispatcher)
         assert isinstance(second.payload, ApprovalRequested)
 

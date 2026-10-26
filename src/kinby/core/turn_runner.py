@@ -39,6 +39,7 @@ from kinby.contracts import (
     Delivery,
     EventType,
     FactoryRunOrigin,
+    FileHash,
     GateDecider,
     GateOutcome,
     MemoryRecalled,
@@ -100,6 +101,7 @@ from kinby.core.turns import (
     TurnResult,
 )
 from kinby.instance import Budgets, Instance, ModelName, reload_manifest
+from kinby.instance.config_changes import directory_hash
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
     GateAction,
@@ -114,6 +116,7 @@ from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
+from kinby.plugins.instance_tools import routine_config_file
 from kinby.plugins.notify import (
     UNTITLED,
     approval_notification,
@@ -184,6 +187,9 @@ class ModelState:
     #: matches answers to asks in order, so a grant made or revoked elsewhere meanwhile must not
     #: change which calls ask.
     granted: tuple[str, ...] = ()
+    #: The hash of the routine's directory when the turn started. A grant from the turn holds
+    #: only while the routine is unchanged, since any edit revokes its grants (ADR 0112).
+    revision: FileHash | None = None
 
 
 _MODEL_STATE = TypeAdapter(ModelState)
@@ -388,7 +394,11 @@ class LangGraphRunner:
         return await self._invoke(
             turn,
             context,
-            ModelState(turn=turn, granted=self._granted_tools(turn)),
+            ModelState(
+                turn=turn,
+                granted=self._granted_tools(turn),
+                revision=self._routine_revision(turn),
+            ),
             config,
             progress,
         )
@@ -427,7 +437,7 @@ class LangGraphRunner:
             raise BudgetExceeded("seconds", seconds_budget)
         self._restore_emitted_tool_calls(turn)
         if answer.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
-            self._grant_parked_tool(turn)
+            await self._grant_parked_tool(turn, context.emit)
         return await self._invoke(
             turn,
             context,
@@ -443,11 +453,30 @@ class LangGraphRunner:
         grants = RoutineGrants(self._instance.manifest.state_dir).of(turn.origin.name)
         return tuple(grant.tool for grant in grants)
 
-    def _grant_parked_tool(self, turn: PreparedTurnRequest) -> None:
-        """Grant the tool of the approval the turn is parked on to the routine that started it."""
+    def _routine_revision(self, turn: PreparedTurnRequest) -> FileHash | None:
+        if not isinstance(turn.origin, RoutineOrigin):
+            return None
+        return directory_hash(self._instance.path / routine_config_file(turn.origin.name))
+
+    async def _grant_parked_tool(self, turn: PreparedTurnRequest, emit: Emit) -> None:
+        """Grant the tool of the approval the turn is parked on to the routine that started it,
+        unless the routine changed since the turn started."""
         pending = pending_approval(self._event_log.stored(turn.thread_id))
         if not isinstance(turn.origin, RoutineOrigin) or pending is None:
             raise GrantOutsideRoutine("Only a routine's parked turn grants a tool to the routine.")
+        async with self._graph() as (graph, _):
+            state = await graph.aget_state(_graph_config(turn))
+        if state.values.get("revision") != self._routine_revision(turn):
+            await emit(
+                Warning(
+                    sources=(routine_config_file(turn.origin.name),),
+                    message=(
+                        f'Routine "{turn.origin.name}" changed since this turn started, so '
+                        f"{pending.request.name} was approved once and not allowed in it."
+                    ),
+                )
+            )
+            return
         RoutineGrants(self._instance.manifest.state_dir).grant(
             RoutineGrant(
                 routine=turn.origin.name,
@@ -918,6 +947,7 @@ class LangGraphRunner:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             granted=state.granted,
+            revision=state.revision,
         )
 
     async def _call_tools(
@@ -1031,6 +1061,7 @@ class LangGraphRunner:
             input_tokens=state.input_tokens,
             output_tokens=state.output_tokens,
             granted=tuple(granted),
+            revision=state.revision,
         )
 
     async def _emit_tool_call_once(
