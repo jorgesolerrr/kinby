@@ -36,14 +36,20 @@ class FakeBrowserRuntime:
         self.starts = 0
         self.stops = 0
         self.stopped = asyncio.Event()
+        self.up = False
 
     async def start(self) -> str:
         self.starts += 1
+        self.up = True
         self.stopped.clear()
         return self.address
 
+    async def running(self) -> bool:
+        return self.up
+
     async def stop(self) -> None:
         self.stops += 1
+        self.up = False
         self.stopped.set()
 
 
@@ -251,3 +257,17 @@ def test_the_hub_starts_the_service_on_the_first_request_and_stops_it_once_idle(
         assert runtime.starts == 2
 
     asyncio.run(scenario())
+
+
+def test_a_service_that_died_starts_again_on_the_next_request(tmp_path):
+    async def scenario() -> tuple[int, int | str]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            _result(await hub.open(hub.alice, uuid4()))
+            hub.runtime.up = False
+            opened = _result(await hub.open(hub.alice, uuid4()))
+            return hub.runtime.starts, await _connects(hub.browser(hub.alice), opened["token"])
+
+    starts, connected = asyncio.run(scenario())
+
+    assert starts == 2
+    assert connected == "echo hello"

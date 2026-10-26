@@ -541,6 +541,13 @@ class DockerBrowserRuntime:
                 writer.close()
                 return f"ws://{self._name}:{BROWSER_PORT}/"
 
+    async def running(self) -> bool:
+        try:
+            container = await asyncio.to_thread(self._client.containers.get, self._name)
+        except NotFound:
+            return False
+        return container.status == "running"
+
     async def stop(self) -> None:
         try:
             container = await asyncio.to_thread(self._client.containers.get, self._name)

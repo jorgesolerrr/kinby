@@ -33,6 +33,9 @@ class BrowserRuntime(Protocol):
     async def start(self) -> str:
         """Start the browser service, and return the address its browser server listens at."""
 
+    async def running(self) -> bool:
+        """Whether the service started last still runs, or died since."""
+
     async def stop(self) -> None: ...
 
 
@@ -79,7 +82,7 @@ class HubBrowsers:
             self._idle = None
         try:
             async with self._starting:
-                if self._address is None:
+                if self._address is None or not await self._runtime.running():
                     self._address = await self._runtime.start()
         except BaseException:
             self._give_back()
