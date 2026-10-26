@@ -873,7 +873,7 @@ An unresolved **review thread** whose latest reply is not from the coding **inst
 
 ### Merge-ready
 
-An **agent PR** with no **actionable threads** and no check still running or failed on its current head, that a trusted reviewer reviewed on that head. A trusted review app's successful check run on the head is a review of it. A pull request no reviewer answered within **babysitting**'s quiet time is merge-ready too, and a comment on it says so. The label reports readiness; the **software factory** never merges it.
+An **agent PR** with no **actionable threads** and no check whose newest run on its current head is still running or failed, that a trusted reviewer reviewed on that head. A trusted review app's successful check run on the head is a review of it. A pull request no reviewer answered within **babysitting**'s quiet time is merge-ready too, and a comment on it says so. The label reports readiness; the **software factory** never merges it.
 
 ### Agent PR
 

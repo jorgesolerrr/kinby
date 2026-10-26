@@ -2995,14 +2995,22 @@ def submitted(author: str, association: str, commit: str = "head2") -> dict[str,
 
 
 def check_run(
-    status: str, app: str = "github-actions", conclusion: str = "success", name: str = "lint"
+    status: str,
+    app: str = "github-actions",
+    conclusion: str = "success",
+    name: str = "lint",
+    *,
+    run: int = 1,
+    started_at: str | None = "2026-10-25T10:00:00Z",
 ) -> dict:
     """A check run as GitHub's REST API lists it."""
     return {
+        "id": run,
         "name": name,
         "status": status,
         "conclusion": conclusion,
-        "html_url": f"https://github.com/owner/project/runs/{name}",
+        "started_at": started_at,
+        "html_url": f"https://github.com/owner/project/runs/{run}",
         "app": {"slug": app},
     }
 
@@ -3019,9 +3027,12 @@ def answer_pull_request(
     labels: Sequence[str] = ("merge-ready",),
 ) -> None:
     """Answer what assess reads of pull request 42 as the coder: its check runs, one successful
-    for each of *checks* by its status and then *runs*, its review threads, its reviews, its
+    check for each of *checks* by its status and then *runs*, its review threads, its reviews, its
     comments, and the repository's *labels*."""
-    runs = [*(check_run(status) for status in checks), *runs]
+    runs = [
+        *(check_run(status, name=f"build {index}") for index, status in enumerate(checks)),
+        *runs,
+    ]
     github.answer("repos/{owner}/{repo}/labels", output=[[{"name": name} for name in labels]])
     github.answer("repos/{owner}/{repo}/pulls/42/reviews", output=[list(reviews)])
     github.answer("repos/{owner}/{repo}/issues/42/comments", output=[list(comments)])
@@ -3291,7 +3302,7 @@ def test_assess_sends_a_check_that_failed_on_the_head_back_for_repair(
         result = await assessed(dispatcher, quiet=quiet)
         failure = (
             "Checks failed on the pull request's head:\n"
-            f"- pytest ({conclusion}): https://github.com/owner/project/runs/pytest"
+            f"- pytest ({conclusion}): https://github.com/owner/project/runs/1"
         )
 
         assert result.ending is StepEnding.CLEAN, result.summary
@@ -3332,6 +3343,141 @@ def test_assess_waits_on_a_check_no_coding_session_can_repair_and_passes_one_tha
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.outcome == outcome
         assert len(labelled(github)) == (outcome == "merge-ready")
+
+    asyncio.run(scenario())
+
+
+OLDER = "2026-10-25T10:00:00Z"
+NEWER = "2026-10-25T10:00:05Z"
+#: A workflow run's checks that a newer workflow run on the same head replaced, newest first.
+REPLACED = [
+    check_run("completed", run=2, started_at=NEWER),
+    check_run("completed", conclusion="cancelled", run=1, started_at=OLDER),
+]
+
+
+@pytest.mark.parametrize(
+    ("runs", "outcome"),
+    [
+        (REPLACED, "merge-ready"),
+        (
+            [
+                check_run("completed", conclusion="failure", run=1, started_at=OLDER),
+                check_run("completed", run=2, started_at=NEWER),
+            ],
+            "merge-ready",
+        ),
+        (
+            [
+                check_run("completed", run=2),
+                check_run("completed", conclusion="failure", run=1),
+            ],
+            "merge-ready",
+        ),
+        (
+            [
+                check_run("completed", run=1, started_at=OLDER),
+                check_run("in_progress", run=2, started_at=NEWER),
+            ],
+            "waiting",
+        ),
+        (
+            [
+                check_run("completed", run=1, started_at=OLDER),
+                check_run("queued", run=2, started_at=None),
+            ],
+            "waiting",
+        ),
+        (
+            [
+                check_run("completed", run=1, started_at=OLDER),
+                check_run("completed", conclusion="cancelled", run=2, started_at=NEWER),
+            ],
+            "waiting",
+        ),
+    ],
+    ids=[
+        "replaced-run-cancelled",
+        "failed-then-passed",
+        "same-start-higher-id-passed",
+        "newest-running",
+        "newest-not-started",
+        "newest-cancelled",
+    ],
+)
+def test_assess_judges_only_the_newest_run_of_each_check(tmp_path, monkeypatch, runs, outcome):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, checks=(), runs=runs, reviews=[submitted("owner", "OWNER")])
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == outcome
+        assert len(labelled(github)) == (outcome == "merge-ready")
+
+    asyncio.run(scenario())
+
+
+def test_assess_after_a_quiet_wait_passes_a_check_whose_replaced_run_was_cancelled(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, checks=(), runs=REPLACED)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher, quiet=True)
+        commented = [arguments for arguments in github.calls if arguments[:2] == ["pr", "comment"]]
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert (result.outcome, result.values) == ("merge-ready", {"merge_ready": True})
+        [(*_, said)] = commented
+        assert said.startswith("No reviewer answered on this head")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("runs", "failed"),
+    [
+        (
+            [
+                check_run("completed", run=1, started_at=OLDER),
+                check_run("completed", conclusion="failure", run=2, started_at=NEWER),
+            ],
+            2,
+        ),
+        (
+            [
+                check_run("completed", conclusion="failure", run=1, started_at=OLDER),
+                check_run("completed", "circleci", run=2, started_at=NEWER),
+            ],
+            1,
+        ),
+    ],
+    ids=["passed-then-failed", "same-name-from-another-app"],
+)
+def test_assess_sends_back_the_newest_run_of_a_check_that_failed(
+    tmp_path, monkeypatch, runs, failed
+):
+    instance = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_pull_request(github, checks=(), runs=runs, reviews=[submitted("owner", "OWNER")])
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await assessed(dispatcher)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert result.outcome == "checks-failed"
+        assert result.summary == (
+            "Checks failed on the pull request's head:\n"
+            f"- lint (failure): https://github.com/owner/project/runs/{failed}"
+        )
 
     asyncio.run(scenario())
 
