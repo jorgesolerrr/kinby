@@ -161,6 +161,8 @@ class ReviewThread:
 class AgentPullRequest:
     number: int
     branch: str
+    #: The branch it merges into.
+    base: str
     #: The issue its body closes.
     closes: int | None
     #: The stack GitHub keeps it in, if any.
@@ -459,8 +461,10 @@ def _open_pull_request(
 ) -> dict[str, int]:
     """Push the branch and open its pull request, which closes the issue, with the title and body
     the coding client wrote. With no title written, it takes the issue's. A pull request the
-    branch already has takes the base, title and body instead, and the maintainer's review request
-    when it lacks one, so opening twice opens one.
+    branch already has takes the title and body instead, and the maintainer's review request when
+    it lacks one, so opening twice opens one. It takes the base too when it is in no stack:
+    GitHub refuses any base change to a stacked pull request, and retargets it itself when the
+    one under it merges.
 
     A pull request based on another agent pull request's branch joins that pull request's stack,
     whatever the label on the issue it closes. The repository's maintainer reviews it. An issue an
@@ -472,23 +476,18 @@ def _open_pull_request(
     under = next((pull for pull in pulls if pull.branch == base), None)
     maintainer = _repository(workspace).maintainer
     _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
-    fields = (
-        "--base",
-        base,
-        "--title",
-        title or found.title,
-        "--body",
-        _body(issue, body, reviewed=reviewed),
-    )
+    words = ("--title", title or found.title, "--body", _body(issue, body, reviewed=reviewed))
     if existing is None:
         reviewer = () if maintainer is None else ("--reviewer", maintainer)
-        url = _gh(workspace, "pr", "create", "--head", branch, *fields, *reviewer)
+        url = _gh(workspace, "pr", "create", "--head", branch, "--base", base, *words, *reviewer)
         number = int(url.strip().rsplit("/", 1)[1])
     else:
         number = existing.number
+        moved = existing.stack is None and existing.base != base
+        rebased = ("--base", base) if moved else ()
         asked = maintainer is None or maintainer in existing.requested
         reviewer = () if asked else ("--add-reviewer", maintainer)
-        _gh(workspace, "pr", "edit", str(number), *fields, *reviewer)
+        _gh(workspace, "pr", "edit", str(number), *rebased, *words, *reviewer)
     if under is not None and (existing is None or existing.stack is None):
         _stack(workspace, under, number)
     if READY_FOR_HUMAN_LABEL in found.labels:
@@ -834,6 +833,7 @@ def _agent_pull_requests(workspace: Path) -> list[AgentPullRequest]:
         AgentPullRequest(
             number=value["number"],
             branch=value["head"]["ref"],
+            base=value["base"]["ref"],
             closes=int(closes[1])
             if (closes := _CLOSES_ISSUE.search(value["body"] or ""))
             else None,

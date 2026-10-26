@@ -1830,10 +1830,12 @@ def pull_request(
     closes: int,
     stack: int | None = None,
     *,
+    base: str = "main",
     head_repository: str | None = "owner/project",
     requested: Sequence[str] = (),
 ) -> dict[str, object]:
-    """An open agent pull request, as GitHub's REST API lists it, asking *requested* for reviews.
+    """An open agent pull request on *base*, as GitHub's REST API lists it, asking *requested*
+    for reviews.
 
     A fork's has another *head_repository*, and one whose fork is gone has None.
     """
@@ -1845,7 +1847,7 @@ def pull_request(
             "sha": "abc123",
             "repo": None if head_repository is None else {"full_name": head_repository},
         },
-        "base": {"repo": {"full_name": "owner/project"}},
+        "base": {"ref": base, "repo": {"full_name": "owner/project"}},
         "body": f"Closes #{closes}\n\nWhat changed.",
         "stack": None if stack is None else {"number": stack},
         "requested_reviewers": [{"login": login} for login in requested],
@@ -2556,8 +2558,6 @@ def test_publish_run_twice_opens_one_pull_request_and_updates_it_the_second_time
                 "pr",
                 "edit",
                 "43",
-                "--base",
-                "main",
                 "--title",
                 "Add dark mode",
                 "--body",
@@ -2594,9 +2594,17 @@ def test_publish_run_again_asks_the_maintainer_for_a_review_an_earlier_run_never
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(("stack", "stacks"), [(3, 0), (None, 1)], ids=["stacked", "unstacked"])
-def test_publish_run_again_stacks_its_pull_request_only_when_it_is_in_no_stack(
-    tmp_path, monkeypatch, stack, stacks
+@pytest.mark.parametrize(
+    ("stack", "base", "rebased", "stacks"),
+    [
+        (3, "main", [], 0),
+        (None, "agent/7-light-theme", [], 1),
+        (None, "main", ["--base", "agent/7-light-theme"], 1),
+    ],
+    ids=["stacked", "unstacked-on-its-base", "unstacked-elsewhere"],
+)
+def test_publish_run_again_moves_and_stacks_its_pull_request_only_when_it_is_in_no_stack(
+    tmp_path, monkeypatch, stack, base, rebased, stacks
 ):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
@@ -2607,7 +2615,7 @@ def test_publish_run_again_stacks_its_pull_request_only_when_it_is_in_no_stack(
         "repos/{owner}/{repo}/pulls",
         output=[
             [
-                pull_request(43, "agent/8-dark-theme", closes=8, stack=stack),
+                pull_request(43, "agent/8-dark-theme", closes=8, stack=stack, base=base),
                 pull_request(41, "agent/7-light-theme", closes=7, stack=3),
             ]
         ],
@@ -2622,6 +2630,15 @@ def test_publish_run_again_stacks_its_pull_request_only_when_it_is_in_no_stack(
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"pr": 43}
         assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
+        edited = [arguments for arguments in github.calls if arguments[:2] == ["pr", "edit"]]
+        assert edited == [
+            [
+                *("pr", "edit", "43", *rebased),
+                *("--title", "Dark theme"),
+                *("--body", f"Closes #8\n\nAdds dark mode.{REVIEW_NOT_RUN}"),
+                *("--add-reviewer", "owner"),
+            ]
+        ]
         assert sum("POST" in arguments for arguments in github.calls) == stacks
 
     asyncio.run(scenario())
