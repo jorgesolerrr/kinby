@@ -10,10 +10,11 @@ from kinby.contracts.methods import METHODS
 from kinby.instance import init_instance, inspect_instance
 from kinby.instance.layout import SKILL_FILE
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
-from kinby.plugins import defaults
+from kinby.plugins import defaults, hub
 from kinby.plugins.core import core_tools
 from kinby.plugins.hub import HUB_URL_VARIABLE
 from kinby.plugins.skills import load_skill_file
+from kinby.plugins.tools import Tool
 
 _CITED = re.compile(r"`([^`\n]+)`")
 _METHOD = re.compile(r"[a-z]+(\.[a-z_]+)+")
@@ -78,3 +79,10 @@ def test_a_home_skill_names_no_other_skill_of_the_library(name):
     shipped = {folder.name for folder in SHIPPED_SKILLS.iterdir() if folder.is_dir()}
 
     assert not _cited(name) & (shipped - {name})
+
+
+def test_write_routine_names_every_hub_tool_a_routine_lacks():
+    """A new hub tool fails this until write-routine says a routine's turns lack it."""
+    declared = {each.name for each in vars(hub).values() if isinstance(each, Tool) and each.hub}
+
+    assert declared <= _cited("write-routine")

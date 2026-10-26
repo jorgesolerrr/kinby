@@ -26,6 +26,24 @@ schedule: 0 18 * * *
 Read today's notes. Summarize decisions and unfinished work in this turn.
 ```
 
+## Tools a run holds
+
+A routine's prompt runs with its instance's own tools: the routine tools, the
+`memory_*` and `view_*` tools, `notify`, and the instance's plugins. It never
+holds a hub tool, even in the home instance, because hub tools exist only on
+turns the user starts. A run that calls one fails with the tool not available.
+The hub tools are `hub_read`, `instance_create`, `instance_lifecycle`,
+`instance_picks_set`, `instance_prompt_set`, `instance_routine_write`,
+`instance_routine_set_enabled`, `instance_routine_run`,
+`instance_routine_delete`, `instance_ask`, `library_skill_write`,
+`library_git_add`, `library_move`, `factory_write`, `channel_mute` and
+`channel_unmute`.
+
+Never write a step that calls one into a routine's prompt. A routine that needs
+hub data gets it another way, such as `routine_list` for the instance's own
+routines or memory for what earlier turns learned. When no other way exists,
+tell the user the work can't run as a routine.
+
 ## Frontmatter
 
 Use one `key: value` per line between `---` delimiters.
@@ -240,7 +258,9 @@ Every routine tool above has a twin that takes the target's `instance_id`:
 and `instance_routine_delete`. Each one asks the user. Read the target with
 `hub_read` first: `routine.list` for what it already runs, `routine.read` for one
 routine's file and hash, and `manifest.get` for its routines timezone. The target
-must be running.
+must be running. These `hub_read` reads and `instance_routine_*` calls belong to
+this turn, the one writing the routine. They are never steps in the routine's
+prompt, which runs without hub tools.
 
 1. Draft the file as above, in the target's terms: its prompt runs in that
    instance, with that instance's tools, skills and memory, not yours.
