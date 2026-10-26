@@ -8,6 +8,8 @@ export interface McpServerDraft {
   headers: string
   package: string
   args: string
+  /** The arguments as read, which `args` cannot always show: an empty one, or one with a newline. */
+  readArgs: string[]
   env: string
   include: string
 }
@@ -18,6 +20,7 @@ export const EMPTY_DRAFT: McpServerDraft = {
   headers: "",
   package: "",
   args: "",
+  readArgs: [],
   env: "",
   include: "",
 }
@@ -39,6 +42,7 @@ export function draftOf({ transport, env = [], include = [] }: McpServer): McpSe
         transport: "uvx",
         package: transport.package,
         args: (transport.args ?? []).join("\n"),
+        readArgs: transport.args ?? [],
       }
 }
 
@@ -56,7 +60,11 @@ export function serverOf(draft: McpServerDraft): McpServer {
               }),
             ),
           }
-        : { type: "uvx", package: draft.package.trim(), args: lines(draft.args) },
+        : {
+            type: "uvx",
+            package: draft.package.trim(),
+            args: draft.args === draft.readArgs.join("\n") ? draft.readArgs : lines(draft.args),
+          },
     env: lines(draft.env),
     include: lines(draft.include),
   }

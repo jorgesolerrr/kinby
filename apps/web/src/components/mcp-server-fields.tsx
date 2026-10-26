@@ -24,7 +24,11 @@ export function McpServerFields({
   onChange: (draft: McpServerDraft) => void
 }) {
   const id = useId()
-  const field = (name: keyof McpServerDraft, label: string, description: string) => (
+  const field = (
+    name: Exclude<keyof McpServerDraft, "transport" | "readArgs">,
+    label: string,
+    description: string,
+  ) => (
     <Field>
       <FieldLabel htmlFor={`${id}-${name}`}>{label}</FieldLabel>
       {name === "url" || name === "package" ? (

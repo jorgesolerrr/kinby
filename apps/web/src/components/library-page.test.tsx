@@ -523,21 +523,28 @@ const fetchServer: McpServer = {
   include: ["fetch"],
 }
 
-/** A page over a library holding the MCP server fetch, which writes and deletes change. */
-function openServersPage(write?: () => never) {
+/**
+ * A page over a library holding the MCP server fetch, defined as `server`, which writes and
+ * deletes change. Each read of it returns the next hash.
+ */
+function openServersPage({
+  write,
+  server = fetchServer,
+}: { write?: () => void; server?: McpServer } = {}) {
+  let reads = 0
   let entries: LibraryEntry[] = [
     ...listed.entries,
     { kind: "mcp_server", name: "fetch", description: null, source: "written" },
   ]
   const caller = stubCaller({
     "library.list": () => ({ entries }),
-    "library.mcp_server.read": ({ name }) => ({ name, server: fetchServer, hash: "h-1" }),
+    "library.mcp_server.read": ({ name }) => ({ name, server, hash: `h-${++reads}` }),
     "library.mcp_server.write": ({ name, server }) => {
       write?.()
       if (!entries.some((entry) => entry.name === name)) {
         entries = [...entries, { kind: "mcp_server", name, description: null, source: "written" }]
       }
-      return { name, server, hash: "h-2" }
+      return { name, server, hash: "w-1" }
     },
     "library.mcp_server.delete": ({ name }) => {
       entries = entries.filter((entry) => entry.name !== name)
@@ -627,8 +634,10 @@ describe("LibraryPage, MCP servers", () => {
   })
 
   it("shows why the hub refused a server", async () => {
-    const { user } = openServersPage(() => {
-      throw refused({ name: 'The library already holds an MCP server "fetch".' })
+    const { user } = openServersPage({
+      write: () => {
+        throw refused({ name: 'The library already holds an MCP server "fetch".' })
+      },
     })
 
     await user.click(await screen.findByRole("tab", { name: /MCP servers/ }))
@@ -683,5 +692,55 @@ describe("LibraryPage, MCP servers", () => {
       { method: "library.mcp_server.delete", params: { name: "fetch", hash: "h-1" } },
     ])
     expect(screen.queryByRole("textbox", { name: "Package" })).toBeNull()
+  })
+
+  it("reloads a server that changed since it was opened, and saves over the new version", async () => {
+    let stale = true
+    const { caller, user } = openServersPage({
+      write: () => {
+        if (!stale) return
+        stale = false
+        throw new CallError({ code: "STALE", message: "Changed.", retryable: false })
+      },
+    })
+
+    await user.click(await screen.findByRole("tab", { name: /MCP servers/ }))
+    await user.click(screen.getByRole("button", { name: "fetch, written MCP server" }))
+    await user.type(await screen.findByRole("textbox", { name: "Tools" }), "\nfetch_many")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    expect(await screen.findByText("Changed since you opened it")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Load again" }))
+
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "Tools" }) as HTMLTextAreaElement).value).toBe(
+        "fetch",
+      ),
+    )
+    expect(screen.queryByText("Changed since you opened it")).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    await screen.findByText(/Saved\./)
+    expect(serverWrites(caller).map((call) => call.params)).toEqual([
+      { name: "fetch", server: { ...fetchServer, include: ["fetch", "fetch_many"] }, hash: "h-1" },
+      { name: "fetch", server: fetchServer, hash: "h-2" },
+    ])
+  })
+
+  it("keeps arguments the form cannot show one a line until they are edited", async () => {
+    const server: McpServer = {
+      transport: { type: "uvx", package: "odd", args: ["", " --flag ", "two\nlines"] },
+      env: [],
+      include: ["fetch"],
+    }
+    const { caller, user } = openServersPage({ server })
+
+    await user.click(await screen.findByRole("tab", { name: /MCP servers/ }))
+    await user.click(screen.getByRole("button", { name: "fetch, written MCP server" }))
+    await user.type(await screen.findByRole("textbox", { name: "Tools" }), "\nfetch_many")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    await screen.findByText(/Saved\./)
+    expect(serverWrites(caller).map((call) => call.params)).toEqual([
+      { name: "fetch", server: { ...server, include: ["fetch", "fetch_many"] }, hash: "h-1" },
+    ])
   })
 })

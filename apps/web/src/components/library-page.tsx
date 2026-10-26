@@ -1086,11 +1086,21 @@ function McpServerEditor({
   const [current, setCurrent] = useState(opened)
   const [draft, setDraft] = useState(() => draftOf(opened.server))
   const [saved, setSaved] = useState(false)
+  const [stale, setStale] = useState(false)
   const { busy, refusal, failure, ask } = useHubCall()
   const { name, hash } = current
 
-  const save = () =>
+  const unlessStale = (call: () => Promise<void>) =>
     ask(async () => {
+      try {
+        await call()
+      } catch (error) {
+        if (!(error instanceof CallError && error.code === "STALE")) throw error
+        setStale(true)
+      }
+    })
+  const save = () =>
+    unlessStale(async () => {
       setCurrent(
         await client.call("library.mcp_server.write", { name, server: serverOf(draft), hash }),
       )
@@ -1098,9 +1108,16 @@ function McpServerEditor({
       onSaved()
     })
   const remove = () =>
-    ask(async () => {
+    unlessStale(async () => {
       await client.call("library.mcp_server.delete", { name, hash })
       onDeleted()
+    })
+  const loadAgain = () =>
+    ask(async () => {
+      const read = await client.call("library.mcp_server.read", { name })
+      setCurrent(read)
+      setDraft(draftOf(read.server))
+      setStale(false)
     })
 
   const actions = (
@@ -1133,6 +1150,21 @@ function McpServerEditor({
   return (
     <EntryPane entry={entry} actions={actions} onBack={onBack}>
       {saved && <p className="text-sm text-muted-foreground">Saved.</p>}
+      {stale && (
+        <Alert variant="destructive">
+          <CircleXIcon />
+          <AlertTitle>Changed since you opened it</AlertTitle>
+          <AlertDescription>
+            {name} was saved since you opened it. Load it again to see it. Your edits here are
+            dropped.
+          </AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void loadAgain()}>
+              Load again
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
       {failure !== undefined && <Failure error={failure} />}
       {refusal !== undefined && <Refusal reason={refusal} />}
       <div className="max-w-2xl">
