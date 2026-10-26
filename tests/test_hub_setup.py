@@ -348,6 +348,63 @@ def test_an_api_key_set_from_the_setup_card_reads_set(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_secret_the_instance_code_declares_is_pending_until_it_is_set(tmp_path):
+    async def scenario() -> None:
+        hub = setup_hub(tmp_path, FakeImages(declared=writer()))
+        instance_id = (await created_writer(hub)).instance_id
+        record = hub.registry.instance(instance_id)
+        assert record is not None
+        project = record.path / "code" / "pyproject.toml"
+        project.parent.mkdir()
+        project.write_text('[tool.kinby]\nsecrets = ["SEARCH_TOKEN"]\n', encoding="utf-8")
+        declared = await setup_of(hub, instance_id)
+        asked = await pending_by_instance(hub)
+        replaced = await hub_client(hub).call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(instance_id=instance_id, secrets={"SEARCH_TOKEN": "tok"}),
+        )
+        assert isinstance(replaced, LifecycleOperationResult)
+        await finished_operation(hub_client(hub), replaced)
+
+        assert declared.secrets[-1] == SecretSetup(
+            name="SEARCH_TOKEN",
+            variable="SEARCH_TOKEN",
+            label="SEARCH_TOKEN",
+            required=True,
+            is_set=False,
+        )
+        assert asked == {instance_id: True}
+        assert await pending_by_instance(hub) == {instance_id: False}
+
+    asyncio.run(scenario())
+
+
+def test_an_optional_secret_the_instance_code_declares_becomes_required(tmp_path):
+    async def scenario() -> None:
+        hub = setup_hub(tmp_path, FakeImages(declared=writer(fields=(WEBHOOK,))))
+        instance_id = (await created_writer(hub)).instance_id
+        record = hub.registry.instance(instance_id)
+        assert record is not None
+        project = record.path / "code" / "pyproject.toml"
+        project.parent.mkdir()
+        project.write_text('[tool.kinby]\nsecrets = ["WRITER_WEBHOOK"]\n', encoding="utf-8")
+
+        setup = await setup_of(hub, instance_id)
+
+        assert [s for s in setup.secrets if s.variable == "WRITER_WEBHOOK"] == [
+            SecretSetup(
+                name="WRITER_WEBHOOK",
+                variable="WRITER_WEBHOOK",
+                label="Webhook secret",
+                required=True,
+                is_set=False,
+            )
+        ]
+        assert await pending_by_instance(hub) == {instance_id: True}
+
+    asyncio.run(scenario())
+
+
 def test_an_instance_created_before_logins_were_tracked_reads_complete(tmp_path):
     async def scenario() -> None:
         hub = setup_hub(tmp_path, FakeImages(declared=writer(EDITOR)))

@@ -47,6 +47,13 @@ if [ -n "${workspace_source:-}" ] && [ -z "$(ls -A "$workspace_path" 2>/dev/null
     git clone "$workspace_source" "$workspace_path"
 fi
 
+# Rebuild the instance code's venv from its lockfile, so a recreated container keeps the
+# packages the agent added. A failed sync leaves code_run to report it rather than stop kinby.
+if [ -f "$instance/code/uv.lock" ]; then
+    uv sync --project "$instance/code" --frozen \
+        || echo "kinby-entrypoint: could not sync the instance code's venv" >&2
+fi
+
 # When a package's image ships Codex, share the workspace's Claude skills with it. Codex
 # config addresses one skill directory at a time, while repository discovery uses .agents/skills.
 codex_home="${CODEX_HOME:-/root/.codex}"

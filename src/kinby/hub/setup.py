@@ -159,9 +159,11 @@ def instance_setup(
     links: Mapping[str, HubSecretName],
     model: ModelName | None,
     missing_commands: Sequence[CommandListName],
+    code_secrets: Sequence[str],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
-    and the lists of repository commands it is missing.
+    each secret its instance code declares as a required one, whether or not the descriptor
+    declares it, and the lists of repository commands it is missing.
 
     `running` names the sign-in each login has running, by login id. `links` names the hub
     secret each linked variable took.
@@ -170,8 +172,6 @@ def instance_setup(
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
     Blank text counts as not set, the way creation reads it.
     """
-    if description is None:
-        return InstanceSetup(logins=[], secrets=[], missing_commands=list(missing_commands))
 
     def variable(field: SetupField) -> str | None:
         if field.name != API_KEY_FIELD.name:
@@ -186,6 +186,12 @@ def instance_setup(
         held = variable(field)
         return None if held is None else links.get(held)
 
+    fields = [
+        field
+        for field in (description.setup_fields if description is not None else [])
+        if field.kind is SetupFieldKind.SECRET
+    ]
+    held = {variable(field) for field in fields}
     return InstanceSetup(
         logins=[
             LoginSetup(
@@ -195,19 +201,30 @@ def instance_setup(
                 state=logins.get(login.id, LoginState.SIGNED_IN),
                 operation_id=running.get(login.id),
             )
-            for login in description.logins
+            for login in (description.logins if description is not None else [])
         ],
         secrets=[
             SecretSetup(
                 name=field.name,
                 variable=variable(field),
                 label=field.label,
-                required=field.required,
+                required=field.required or variable(field) in code_secrets,
                 is_set=is_set(field),
                 hub_secret=hub_secret(field),
             )
-            for field in description.setup_fields
-            if field.kind is SetupFieldKind.SECRET
+            for field in fields
+        ]
+        + [
+            SecretSetup(
+                name=name,
+                variable=name,
+                label=name,
+                required=True,
+                is_set=bool(secrets.get(name, "").strip()),
+                hub_secret=links.get(name),
+            )
+            for name in code_secrets
+            if name not in held
         ],
         missing_commands=list(missing_commands),
     )
