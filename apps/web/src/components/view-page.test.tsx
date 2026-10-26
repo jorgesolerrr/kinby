@@ -336,6 +336,15 @@ describe("ViewPage, with every catalogue component", () => {
     )
   })
 
+  it("wraps the text in a table's cells", async () => {
+    openPage(view(CATALOGUE, SEARCH))
+
+    const table = await screen.findByRole("table")
+    for (const cell of within(table).getAllByRole("cell")) {
+      expect(cell.className).not.toMatch(/whitespace-nowrap/)
+    }
+  })
+
   it.each([
     ["bar", ".recharts-bar"],
     ["area", ".recharts-area"],

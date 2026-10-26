@@ -124,7 +124,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           selectedClient={columnFor !== undefined ? instanceClient : undefined}
           onSignOut={() => void client.signOut()}
         />
-        <SidebarInset className={cn(fixed && "h-svh", "md:flex-row")}>
+        <SidebarInset className={cn(fixed && "h-svh", "min-w-0 md:flex-row")}>
           {column !== false && !isMobile && (
             <div className="flex w-80 shrink-0 flex-col border-r">{column}</div>
           )}
