@@ -32,7 +32,11 @@ from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 _logger = logging.getLogger(__name__)
 _UNKNOWN = "Not known whether the instance got this answer. Answer again from the web app."
-_DECIDED = {ApprovalDecision.APPROVE: "Approved.", ApprovalDecision.DENY: "Denied."}
+_DECIDED = {
+    ApprovalDecision.APPROVE: "Approved.",
+    ApprovalDecision.ALLOW_IN_ROUTINE: "Always allowed in this routine.",
+    ApprovalDecision.DENY: "Denied.",
+}
 
 #: Start a user turn in one of an instance's threads.
 type StartTurn = Callable[[UUID, ThreadTurnStartCommand], Awaitable[object]]

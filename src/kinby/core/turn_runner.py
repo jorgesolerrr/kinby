@@ -603,7 +603,13 @@ class LangGraphRunner:
             if raises_notifications():
                 source = self._notification_source(turn) or UNTITLED
                 await raise_notification(
-                    approval_notification(source, turn.turn_id, approval), emit
+                    approval_notification(
+                        source,
+                        turn.turn_id,
+                        approval,
+                        in_routine=isinstance(turn.origin, RoutineOrigin),
+                    ),
+                    emit,
                 )
             return ParkedTurn()
         result = _MODEL_STATE.validate_python(graph_result)

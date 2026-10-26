@@ -21,6 +21,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     ErrorFrame,
+    Event,
     NotificationAccepted,
     NotificationRaiseCommand,
     NotificationRaised,
@@ -38,7 +39,9 @@ from kinby.core.scheduler import SchedulerConfig
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from tests.helpers import thread_events
 from tests.test_gate import ScriptedModel, _instance, _run_turn, _write_store_tool
+from tests.test_routine_grants import news_runtime
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import (
     FailingRunner,
@@ -378,6 +381,26 @@ def test_a_turn_parked_on_an_approval_raises_one_notification_naming_the_call(
         assert command.approval is not None
         assert command.approval.request == approval
         assert isinstance(payloads[-1], NotificationAccepted)
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_turn_parked_on_an_approval_offers_to_allow_the_tool_in_the_routine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        _, dispatcher = news_runtime(tmp_path)
+        async with recording_hub(monkeypatch) as hub:
+            accepted = await call(dispatcher, "routine.run", name="news")
+            items = await thread_events(dispatcher, {"thread_id": accepted.thread_id})
+            async with asyncio.timeout(5):
+                async for item in items:
+                    if isinstance(item, Event) and isinstance(item.payload, NotificationAccepted):
+                        break
+            await items.aclose()
+
+        [command] = hub.raised
+        assert command.options == ["Approve", "Always allow in this routine", "Deny"]
 
     asyncio.run(scenario())
 
