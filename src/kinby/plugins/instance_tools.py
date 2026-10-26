@@ -1,21 +1,24 @@
 """Expose routine and skill files, repository commands, and instance code as gated core tools."""
 
+import ast
 import asyncio
 import json
 import os
 import re
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 
+import tomlkit
 from cronsim import CronSim
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from kinby.contracts import (
     CommandListName,
@@ -26,11 +29,17 @@ from kinby.contracts import (
     SkillName,
 )
 from kinby.instance import Instance
-from kinby.instance.code import declared_secrets
-from kinby.instance.config_changes import recorded_change
+from kinby.instance.code import (
+    authored_tool_module,
+    code_python,
+    exposed_tools,
+    script_environment,
+)
+from kinby.instance.config_changes import ConfigChangeLog, recorded_change
 from kinby.instance.layout import (
     CODE_DIR,
     CODE_PROJECT_NAME,
+    CODE_VENV_DIR,
     MANIFEST_NAME,
     ROUTINE_CODE_FILE,
     ROUTINE_FILE,
@@ -41,6 +50,7 @@ from kinby.instance.layout import (
 from kinby.instance.manifest import with_repository_commands
 from kinby.instance.permissions import load_permissions
 from kinby.instance.routine_grants import RoutineGrants
+from kinby.plugins.authored import load_authored_tool
 from kinby.plugins.defaults.shell import run_capped
 from kinby.plugins.routines import (
     Routine,
@@ -54,8 +64,6 @@ from kinby.plugins.tools import Tool, ToolContext, tool
 
 _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 _COMMAND_LIST_NAME = TypeAdapter(CommandListName)
-_SECRET_NAME = re.compile("KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
-_CODE_VENV = ".venv"
 _CODE_PROJECT = f"""[project]
 name = "instance-code"
 version = "0.0.0"
@@ -272,7 +280,7 @@ def _uv(context: ToolContext, command: str, *arguments: str) -> None:
     code = _code_project(context)
     # Keep the venv where code_run looks for it, even when kinby's own environment points uv
     # elsewhere.
-    env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(code / _CODE_VENV)}
+    env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(code / CODE_VENV_DIR)}
     returncode, output = run_capped(
         ("uv", command, "--project", str(code), *arguments),
         cwd=code,
@@ -298,6 +306,10 @@ def _delete_code(path: str, context: ToolContext) -> str:
     target = context.instance.path / file
     if not target.is_file():
         raise LookupError(f'"{path}" is not a file in the instance code.')
+    exposed = exposed_tools(context.instance.path)
+    exposing = next((name for name in exposed if authored_tool_module(name) == file), None)
+    if exposing is not None:
+        _refuse_unless_exposed_by_agent(context.instance, exposing)
     with _recorded(context, file):
         target.unlink()
     return f"Deleted {file}."
@@ -309,28 +321,127 @@ def _add_package(name: str, context: ToolContext) -> str:
     return f"Added {name} to the instance code."
 
 
+def _code_venv(context: ToolContext) -> Path:
+    """The instance code's directory, its venv synced first when it has none."""
+    code = _code_project(context)
+    if not code_python(context.instance.path).exists():
+        _uv(context, "sync")
+    return code
+
+
 def _run_code(script: str, arguments: list[str], context: ToolContext) -> str:
     target = context.instance.path / _code_file(context.instance, script)
     if not target.is_file():
         raise LookupError(f'Script "{script}" was not found in the instance code.')
-    code = _code_project(context)
-    python = code / _CODE_VENV / "bin" / "python"
-    if not python.exists():
-        _uv(context, "sync")
-    declared = set(declared_secrets(context.instance.path))
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if name in declared or _SECRET_NAME.search(name) is None
-    }
+    code = _code_venv(context)
     _, output = run_capped(
-        (str(python), str(target), *arguments),
+        (str(code_python(context.instance.path)), str(target), *arguments),
         cwd=code,
         timeout_seconds=context.instance.manifest.tools.bash_timeout_seconds,
         label=script,
-        env=env,
+        env=script_environment(context.instance.path),
     )
     return output
+
+
+def _exposed_by_agent(instance: Instance, name: str) -> bool:
+    """Whether a change the agent made added *name* to the instance code's exposed tools."""
+    listed = f'+    "{name}",'
+    changes = ConfigChangeLog(instance.manifest.state_dir).history(
+        ConfigFile(f"{CODE_DIR}/{CODE_PROJECT_NAME}"), sys.maxsize
+    )
+    return any(
+        change.actor is ConfigActor.AGENT and listed in change.diff.splitlines()
+        for change in changes
+    )
+
+
+def _refuse_unless_exposed_by_agent(instance: Instance, name: str) -> None:
+    if not _exposed_by_agent(instance, name):
+        raise PermissionError(
+            f'You did not expose the tool "{name}", so you cannot change or remove it.'
+        )
+
+
+def _with_exposed(project: str, names: list[str]) -> str:
+    """The text of the instance code's pyproject.toml with *names* as its exposed tools, one a
+    line, so a change's diff names each tool it adds."""
+    document = tomlkit.parse(project)
+    tool = document.setdefault("tool", tomlkit.table(is_super_table=True))
+    tools = tomlkit.array()
+    tools.extend(names)
+    tool.setdefault("kinby", tomlkit.table())["tools"] = tools.multiline(multiline=True)
+    return tomlkit.dumps(document)
+
+
+def _expose_preview(arguments: Mapping[str, JsonValue], instance: Instance) -> str | None:
+    """The tool's declared write flag and its module, as an approval to expose it shows them."""
+    name = arguments.get("name")
+    if not isinstance(name, str) or not name.isidentifier():
+        return None
+    file = authored_tool_module(name)
+    try:
+        source = (instance.path / file).read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
+        return None
+    return f"{name} declares {_declared_write(source, name)}.\n\n{file}:\n{source}"
+
+
+def _declared_write(source: str, name: str) -> str:
+    """The write flag the function *name* in *source* passes its decorator, read without
+    running it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return "a module that does not parse"
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            for decorator in node.decorator_list:
+                for keyword in decorator.keywords if isinstance(decorator, ast.Call) else ():
+                    if keyword.arg == "write" and isinstance(keyword.value, ast.Constant):
+                        return f"write={keyword.value.value}"
+    return "no write flag"
+
+
+def _expose_tool(name: str, context: ToolContext) -> str:
+    # Imported here: the core tools include these instance tools.
+    from kinby.plugins.core import core_tools
+    from kinby.plugins.registry import ToolRegistry
+
+    instance = context.instance
+    if not name.isidentifier():
+        raise ValueError(f'"{name}" is not a Python function name.')
+    exposed = list(exposed_tools(instance.path))
+    if name in exposed:
+        _refuse_unless_exposed_by_agent(instance, name)
+    plugins, _ = ToolRegistry(instance.path, tools=instance.manifest.tools).refresh()
+    taken = {tool.name for tool in (*plugins.tools, *core_tools(instance, ())) if not tool.authored}
+    if name in taken:
+        raise ValueError(f'"{name}" is the name of a tool you did not author. Choose another.')
+    file = authored_tool_module(name)
+    module = instance.path / file
+    if not module.is_file():
+        raise LookupError(f"{file} was not found. Write the tool's module there first.")
+    try:
+        ast.parse(module.read_bytes(), str(module))
+    except SyntaxError as exc:
+        raise ValueError(f"{file} does not parse: {exc}") from exc
+    _code_venv(context)
+    try:
+        load_authored_tool(
+            instance.path, name, timeout_seconds=instance.manifest.tools.bash_timeout_seconds
+        )
+    except ValueError as exc:
+        raise ValueError(f"{file} does not load as a tool: {exc}") from exc
+    project = instance.path / CODE_DIR / CODE_PROJECT_NAME
+    names = exposed if name in exposed else [*exposed, name]
+    edited = _with_exposed(project.read_text(encoding="utf-8"), names)
+    with _recorded(context, ConfigFile(f"{CODE_DIR}/{CODE_PROJECT_NAME}")):
+        project.write_text(edited, encoding="utf-8")
+    return (
+        f"Exposed {name}. It is one of your tools from your next turn on, and asks as a write "
+        "until the user marks it read-only."
+    )
 
 
 def instance_tools(instance: Instance) -> tuple[Tool, ...]:
@@ -527,9 +638,23 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
         """
         return await asyncio.to_thread(_run_code, script, arguments, context)
 
+    @tool(write=True)
+    async def code_expose_tool(name: str, context: ToolContext) -> str:
+        """Expose a function of your instance code as a tool you can call from your next turn on.
+
+        The function *name* lives in tools/<name>.py of the instance code, decorated with
+        `@tool(write=...)` from kinby.plugins, with typed parameters and a docstring. It runs in
+        the instance code's venv, and the gate asks for each call as a write until the user marks
+        the tool read-only.
+        """
+        return await asyncio.to_thread(_expose_tool, name, context)
+
+    code_expose_tool = replace(code_expose_tool, preview=_expose_preview)
+
     return (
         code_add_package,
         code_delete,
+        code_expose_tool,
         code_run,
         code_write,
         repository_commands_write,

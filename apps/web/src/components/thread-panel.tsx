@@ -73,6 +73,7 @@ import type {
 import {
   BanIcon,
   BellIcon,
+  BookCheckIcon,
   BrainIcon,
   CheckCheckIcon,
   CheckIcon,
@@ -364,13 +365,17 @@ function Composer({
   )
 }
 
+/** The gate rule of a call to an authored tool, which the user can mark read-only. */
+const AUTHORED_RULE = "authored.write"
+
 /** The button pressed in an approval panel. */
 type Answer = ApprovalDecision | "stop"
 
 /**
  * The approval a turn is parked on, in the composer's place: approve, deny with an optional reason
  * the model reads, or stop the turn. Enter in the reason denies with it. On a routine's turn it
- * also offers to approve the tool in every run of that routine.
+ * also offers to approve the tool in every run of that routine, and on an authored tool's call to
+ * mark the tool read-only.
  */
 function ApprovalPanel({
   ref,
@@ -444,6 +449,11 @@ function ApprovalPanel({
             <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-4 font-mono text-xs whitespace-pre-wrap">
               {JSON.stringify(approval.arguments, null, 2)}
             </pre>
+            {approval.preview !== undefined && (
+              <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-4 font-mono text-xs whitespace-pre-wrap">
+                {approval.preview}
+              </pre>
+            )}
             <Field data-invalid={failure !== undefined || undefined}>
               <FieldLabel htmlFor={reasonId}>Reason to deny (optional)</FieldLabel>
               <Input
@@ -491,6 +501,22 @@ function ApprovalPanel({
                     <CheckCheckIcon data-icon="inline-start" />
                   )}
                   Always allow in this routine
+                </Button>
+              )}
+              {approval.rule === AUTHORED_RULE && (
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  className="max-md:h-11"
+                  disabled={busy}
+                  onClick={() => void respond("mark_read_only")}
+                >
+                  {answering === "mark_read_only" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <BookCheckIcon data-icon="inline-start" />
+                  )}
+                  Mark read-only
                 </Button>
               )}
               <Button

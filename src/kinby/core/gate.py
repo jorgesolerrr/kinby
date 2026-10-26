@@ -17,6 +17,9 @@ class GateDecision:
     rule: GateRule
 
 
+#: The rule of a call the gate treats as a write because an authored tool makes it.
+AUTHORED_RULE = GateRule("authored.write")
+
 _PRESETS = {
     PermissionMode.READ_ONLY: {
         False: GateAction.ALLOW,
@@ -45,6 +48,7 @@ def evaluate(
     workspace: Path,
     *,
     granted: bool = False,
+    marked_read_only: bool = False,
 ) -> GateDecision:
     """Evaluate one call without running the tool or changing state.
 
@@ -52,7 +56,8 @@ def evaluate(
     Consolidation's own write runs unasked in every mode but read-only, where it is denied,
     also ahead of any rule (ADR 0100). So do notify and a view write, unless a rule names the
     tool (ADR 0103, ADR 0108). A routine grant, when *granted*, allows the call ahead of the mode
-    in every mode but read-only, so the ceiling still bounds it (ADR 0112).
+    in every mode but read-only, so the ceiling still bounds it (ADR 0112). An authored tool is a
+    write whatever it declares, unless the user *marked_read_only* it (ADR 0109).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
@@ -82,7 +87,9 @@ def evaluate(
         return GateDecision(override, GateRule(f"tools.{call.name}"))
     if granted and mode is not PermissionMode.READ_ONLY:
         return GateDecision(GateAction.ALLOW, GateRule("routine.grant"))
-    writes = tool is not None and tool.write
+    if tool is not None and tool.authored and not marked_read_only:
+        return GateDecision(_PRESETS[mode][True], AUTHORED_RULE)
+    writes = tool is not None and tool.write and not tool.authored
     if (
         mode is PermissionMode.AUTO
         and writes

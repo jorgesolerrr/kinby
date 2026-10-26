@@ -8,6 +8,7 @@ import os
 import shutil
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -59,10 +60,12 @@ from kinby.contracts import (
     SkillWriteCommand,
     ToolListCommand,
     ToolListResult,
+    ToolReadOnlySetCommand,
     ToolRule,
     ToolSummary,
 )
 from kinby.core.errors import (
+    AuthoredToolNotFound,
     InvalidConfig,
     RoutineNotFound,
     RoutineRefused,
@@ -106,6 +109,7 @@ from kinby.instance.permissions import (
     load_permissions,
     parse_permissions,
 )
+from kinby.instance.read_only_tools import set_read_only
 from kinby.instance.recap import DEFAULT_RECAP_LENS
 from kinby.instance.routine_grants import RoutineGrants
 from kinby.plugins.core import core_tools
@@ -376,6 +380,15 @@ class InstanceConfig:
             ],
             warnings=(*tool_warnings, *core_warnings),
         )
+
+    async def set_tool_read_only(self, command: ToolReadOnlySetCommand) -> ToolListResult:
+        try:
+            await asyncio.to_thread(
+                partial(set_read_only, read_only=command.read_only), self._instance, command.name
+            )
+        except LookupError as exc:
+            raise AuthoredToolNotFound(str(exc)) from exc
+        return await self.list_tools(ToolListCommand())
 
     async def history(self, command: ConfigHistoryCommand) -> ConfigHistoryResult:
         log = ConfigChangeLog(self._instance.manifest.state_dir)

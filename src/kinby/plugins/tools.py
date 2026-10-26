@@ -31,6 +31,8 @@ NotificationReporter = Callable[
     [NotificationRaised | NotificationAccepted | NotificationRefused], Awaitable[Event]
 ]
 ViewReporter = Callable[[ViewChanged], Awaitable[object]]
+#: What an approval of a call shows beside its arguments, from the call's arguments.
+Preview = Callable[[Mapping[str, JsonValue], Instance], str | None]
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,10 @@ class Tool:
     notify: bool = False
     #: A view write, which runs unasked unless a rule names it (ADR 0108).
     view: bool = False
+    #: An authored tool, a write whatever it declares until the user marks it read-only
+    #: (ADR 0109).
+    authored: bool = False
+    preview: Preview | None = field(default=None, repr=False)
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(

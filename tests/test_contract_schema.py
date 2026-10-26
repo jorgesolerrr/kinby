@@ -142,6 +142,7 @@ def test_an_approval_answer_is_a_decision_with_an_optional_reason() -> None:
         "approve",
         "deny",
         "allow_in_routine",
+        "mark_read_only",
     ]
     assert "reason" in _object(gated["properties"])
 

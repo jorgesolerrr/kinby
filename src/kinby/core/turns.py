@@ -66,6 +66,7 @@ from kinby.core.errors import (
     InvalidParkedTurn,
     NoActiveTurn,
     PermissionDenied,
+    ReadOnlyMarkRefused,
     SnapshotUnavailable,
     ThreadBusy,
     ThreadNotFound,
@@ -73,6 +74,7 @@ from kinby.core.errors import (
     TurnNotFound,
 )
 from kinby.core.events import EventLog
+from kinby.core.gate import AUTHORED_RULE
 from kinby.core.snapshots import (
     SnapshotBoundary,
     SnapshotError,
@@ -747,6 +749,11 @@ class Turns:
             raise GrantOutsideRoutine(
                 "Only an approval raised in a routine's turn can allow its tool in the routine."
             )
+        if (
+            command.decision is ApprovalDecision.MARK_READ_ONLY
+            and pending.request.rule != AUTHORED_RULE
+        ):
+            raise ReadOnlyMarkRefused("Only an authored tool's approval marks it read-only.")
         if self._holds_only_its_thread(origin):
             # A parked stage let other work in, so it takes the instance back like a new turn.
             self.require_available(origin)

@@ -24,3 +24,7 @@ ROUTINE_FILE = "ROUTINE.md"
 ROUTINE_CODE_FILE = "run.py"
 CODE_DIR = "code"
 CODE_PROJECT_NAME = "pyproject.toml"
+CODE_VENV_DIR = ".venv"
+#: The authored tools exposed from instance code, one module each, named by its tool.
+CODE_TOOLS_DIR = "tools"
+READ_ONLY_TOOLS_NAME = "read-only-tools.json"

@@ -53,6 +53,7 @@ class CoreSkillModel:
         assert [tool.name for tool in tools] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",

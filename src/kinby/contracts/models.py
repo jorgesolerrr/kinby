@@ -319,6 +319,8 @@ class ApprovalRequested(ContractModel):
     name: str
     arguments: dict[str, JsonValue]
     rule: GateRule
+    #: What the approval shows beside the arguments, for a tool that says more about its call.
+    preview: str | None = None
 
 
 class TokenTotals(ContractModel):
@@ -721,6 +723,8 @@ class ApprovalDecision(StrEnum):
     DENY = "deny"
     #: Approve, and grant the tool to the routine whose turn asked (ADR 0112).
     ALLOW_IN_ROUTINE = "allow_in_routine"
+    #: Approve, and mark the authored tool that asked read-only (ADR 0109).
+    MARK_READ_ONLY = "mark_read_only"
 
 
 #: The options of a notification that asks for an approval, and the decision each one gives.
@@ -2229,6 +2233,13 @@ class ToolListResult(ContractModel):
     #: By name.
     tools: list[ToolSummary]
     warnings: tuple[Warning, ...]
+
+
+class ToolReadOnlySetCommand(ContractModel):
+    """Mark an authored tool read-only, so the gate lets it run as a read, or unmark it."""
+
+    name: ToolName
+    read_only: bool
 
 
 class NodeKind(StrEnum):

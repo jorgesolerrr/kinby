@@ -13,7 +13,9 @@ from uuid import uuid4
 
 from kinby.contracts import Warning
 from kinby.instance import Tools
-from kinby.instance.layout import TOOLS_DIR
+from kinby.instance.code import authored_tool_module, exposed_tools
+from kinby.instance.layout import CODE_DIR, CODE_PROJECT_NAME, TOOLS_DIR
+from kinby.plugins.authored import LOAD_SECONDS, load_authored_tool
 from kinby.plugins.entry_points import distribution_label
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool
@@ -67,8 +69,63 @@ class ToolRegistry:
         self._signature: FileSignature | None = None
         self._files: dict[Path, _FileTools] = {}
         self._snapshot = ToolSnapshot(tuple(sorted(self._installed, key=lambda tool: tool.name)))
+        self._authored: tuple[Tool, ...] = ()
+        self._authored_signature: tuple[tuple[str, int], ...] | None = None
 
     def refresh(self) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
+        """The instance's tool files, the installed tools they don't replace, and the authored
+        tools no other takes the name of."""
+        snapshot, warnings = self._refresh_plugins()
+        authored, authored_warnings = self._refresh_authored()
+        taken = {tool.name for tool in snapshot.tools}
+        shadowing = tuple(
+            Warning(
+                sources=(str(tool.source),),
+                message=f'Authored tool "{tool.name}" takes the name of another tool, so it is '
+                "left out.",
+            )
+            for tool in authored
+            if tool.name in taken
+        )
+        return (
+            ToolSnapshot((*snapshot.tools, *(tool for tool in authored if tool.name not in taken))),
+            (*warnings, *authored_warnings, *shadowing),
+        )
+
+    def _refresh_authored(self) -> tuple[tuple[Tool, ...], tuple[Warning, ...]]:
+        """The tools the instance code exposes, or its last valid set while one fails to load."""
+        project = self._instance_path / CODE_DIR / CODE_PROJECT_NAME
+        try:
+            names = exposed_tools(self._instance_path)
+            signature = tuple(
+                (name, (self._instance_path / authored_tool_module(name)).stat().st_mtime_ns)
+                for name in names
+            )
+        except (OSError, ValueError) as exc:
+            return self._authored, (
+                Warning(sources=(str(project),), message=exception_message(exc)),
+            )
+        if signature == self._authored_signature:
+            return self._authored, ()
+        tools: list[Tool] = []
+        warnings: list[Warning] = []
+        for name in names:
+            try:
+                tools.append(
+                    load_authored_tool(self._instance_path, name, timeout_seconds=LOAD_SECONDS)
+                )
+            except Exception as exc:
+                # Authored tools are the agent's code. Report each broken one and keep the last
+                # valid set.
+                module = self._instance_path / authored_tool_module(name)
+                warnings.append(Warning(sources=(str(module),), message=exception_message(exc)))
+        if warnings:
+            return self._authored, tuple(warnings)
+        self._authored = tuple(tools)
+        self._authored_signature = signature
+        return self._authored, ()
+
+    def _refresh_plugins(self) -> tuple[ToolSnapshot, tuple[Warning, ...]]:
         try:
             signature = _directory_signature(self._tools_path)
         except OSError as exc:
@@ -119,7 +176,7 @@ class ToolRegistry:
     def origin(self, tool: Tool) -> str:
         """The instance file that defines *tool*, or the distribution and version that ship it."""
         tools_path = self._tools_path.resolve()
-        if tool.source.is_relative_to(tools_path):
+        if tool.authored or tool.source.is_relative_to(tools_path):
             return tool.source.relative_to(self._instance_path.resolve()).as_posix()
         return self._installed_origins[tool.name]
 
