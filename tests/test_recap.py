@@ -64,6 +64,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
 )
 
@@ -305,6 +306,7 @@ def test_recap_model_receives_the_turn_frame_as_a_user_message(tmp_path: Path) -
 
         resume = does_not_park
         restore = cannot_restore
+        routine_mode = no_routines
 
     async def scenario() -> None:
         state_dir = tmp_path / ".state"
@@ -848,6 +850,7 @@ class ToolRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class ClosingRunner:
@@ -873,6 +876,7 @@ class ClosingRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class BlockingGraphStore(GraphStore):
@@ -1255,6 +1259,7 @@ def test_tool_call_summary_is_one_bounded_line(tmp_path: Path) -> None:
 
         resume = does_not_park
         restore = cannot_restore
+        routine_mode = no_routines
 
     async def scenario() -> None:
         state_dir = tmp_path / ".state"
@@ -1442,6 +1447,7 @@ def test_no_work_turn_writes_marker_without_node(tmp_path: Path) -> None:
 
         resume = does_not_park
         restore = cannot_restore
+        routine_mode = no_routines
 
     def no_model(model: str) -> ScriptedRecapModel:
         raise AssertionError(f"a no-work turn called the recap model {model}")

@@ -44,6 +44,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
     turn_config_stub,
 )
@@ -113,6 +114,7 @@ class FakeClock:
 
 class ScriptedRunner:
     restore = cannot_restore
+    routine_mode = no_routines
     resume = does_not_park
 
     async def run(self, turn, context):

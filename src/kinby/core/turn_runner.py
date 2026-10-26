@@ -46,6 +46,7 @@ from kinby.contracts import (
     PermissionMode,
     ProfileCounted,
     ProfileVersion,
+    RoutineName,
     RoutineOrigin,
     RoutineTrigger,
     RunDelegated,
@@ -227,7 +228,6 @@ class _BudgetProgress:
 class _PreparedTurn:
     tools: ToolSnapshot
     progress: _BudgetProgress
-    permission_mode: PermissionMode
     message: str
     payload: str | None
 
@@ -356,6 +356,10 @@ class LangGraphRunner:
             daily_budget=daily_budget,
             budgets=manifest.budgets,
         )
+
+    def routine_mode(self, name: RoutineName) -> PermissionMode | None:
+        routines, _ = load_routines(self._instance, policy=self._gate_policy)
+        return next((routine.mode for routine in routines if routine.name == name), None)
 
     def permission_ceiling(self) -> PermissionMode:
         return self._load_gate_policy().ceiling
@@ -496,7 +500,7 @@ class LangGraphRunner:
                             model=bound_model,
                             system_message=SystemMessage(content=turn.system_prompt),
                             gate_policy=self._gate_policy,
-                            permission_mode=prepared.permission_mode,
+                            permission_mode=turn.permission_mode,
                             tools=tools,
                             tool_context=ToolContext(
                                 instance=self._instance,
@@ -557,7 +561,6 @@ class LangGraphRunner:
         emit: Emit,
     ) -> _PreparedTurn | TurnOutcome:
         budgets = progress.budgets
-        permission_mode = turn.permission_mode
         message = turn.message
         payload = None
         if not isinstance(turn.origin, UserOrigin):
@@ -575,7 +578,6 @@ class LangGraphRunner:
             progress = replace(progress, budgets=budgets)
             for warning in budget_warnings:
                 await emit(warning)
-            permission_mode = routine.mode
             message = routine.prompt
             delivery = self._delivery_for_turn(turn)
             declared = routine.code_step
@@ -598,7 +600,7 @@ class LangGraphRunner:
                 )
                 unasked = evaluate(
                     self._gate_policy,
-                    routine.mode,
+                    turn.permission_mode,
                     writes,
                     consolidate,
                     self._instance.manifest.workspace.path,
@@ -637,6 +639,7 @@ class LangGraphRunner:
                 output = await self._run_code_step(
                     routine,
                     code_step,
+                    turn.permission_mode,
                     turn.origin,
                     turn.thread_id,
                     delivery,
@@ -654,7 +657,7 @@ class LangGraphRunner:
                 payload = output
             elif delivery is not None:
                 payload = delivery.body
-        return _PreparedTurn(tools, progress, permission_mode, message, payload)
+        return _PreparedTurn(tools, progress, message, payload)
 
     def _opened_with_dreaming_step(self, turn: PreparedTurnRequest) -> bool:
         """Whether a routine turn's code step was a dreaming stage's. The log keeps the call
@@ -697,6 +700,7 @@ class LangGraphRunner:
         self,
         routine: Routine,
         code_step: Tool,
+        mode: PermissionMode,
         origin: RoutineOrigin,
         thread_id: UUID,
         delivery: Delivery | None,
@@ -725,7 +729,7 @@ class LangGraphRunner:
         await emit(call)
         decision = evaluate(
             self._gate_policy,
-            routine.mode,
+            mode,
             call,
             code_step,
             self._instance.manifest.workspace.path,

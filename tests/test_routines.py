@@ -24,6 +24,7 @@ from kinby.contracts import (
     PermissionMode,
     RoutineName,
     RoutineOrigin,
+    RoutineRunCommand,
     RoutineTrigger,
     SignalReceived,
     ThreadApprovalRespondCommand,
@@ -661,6 +662,47 @@ def test_signal_body_reaches_model_under_signal_cue(
         "Handle the issue."
     )
     assert "<routine-data>\nissue 128 opened\n</routine-data>" in content
+
+
+@pytest.mark.parametrize(
+    ("permissions", "recorded"),
+    [
+        ('mode = "ask"\n', PermissionMode.FULL_ACCESS),
+        ('mode = "read-only"\nceiling = "ask"\n', PermissionMode.ASK),
+    ],
+)
+@pytest.mark.parametrize("trigger", [RoutineTrigger.MANUAL, RoutineTrigger.SIGNAL])
+def test_routine_turn_started_records_the_routine_mode(
+    tmp_path: Path, permissions: str, recorded: PermissionMode, trigger: RoutineTrigger
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        (tmp_path / "permissions.toml").write_text(permissions)
+        routine_file(instance, "description: News\nmode: full-access")
+        dispatcher, log = signal_runtime(instance, RoutineModel())
+        scheduler = dispatcher.scheduler
+
+        if trigger is RoutineTrigger.SIGNAL:
+            delivery = Delivery(
+                headers={},
+                content_type="text/plain",
+                body="news",
+                received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+            )
+            accepted = (await scheduler.receive(RoutineName("news"), delivery, trigger)).accepted
+            await scheduler.tick()
+        else:
+            accepted = await scheduler.run(RoutineRunCommand(name=RoutineName("news")))
+        await scheduler.drain()
+
+        started = next(
+            event.payload
+            for event in log.stored(accepted.thread_id)
+            if isinstance(event.payload, TurnStarted)
+        )
+        assert started.permission_mode is recorded
+
+    asyncio.run(scenario())
 
 
 def test_malformed_json_signal_fails_with_specific_message(

@@ -55,6 +55,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
 )
 
@@ -89,6 +90,7 @@ class ScriptedRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class NoWorkAfterModelCallRunner:
@@ -109,6 +111,7 @@ class NoWorkAfterModelCallRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class WaitingRunner:
@@ -123,6 +126,7 @@ class WaitingRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class ModeRecordingRunner:
@@ -135,6 +139,7 @@ class ModeRecordingRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class FailingRunner:
@@ -143,9 +148,12 @@ class FailingRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class ParkingRunner:
+    routine_mode = no_routines
+
     def __init__(self, parked: PreparedTurnRequest | None = None) -> None:
         self.parked = parked
         self.resumed_modes: list[PermissionMode] = []
@@ -221,6 +229,7 @@ class CancellationSuppressingRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class PausingEventLog(EventLog):

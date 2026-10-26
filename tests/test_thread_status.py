@@ -22,6 +22,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
 )
 
@@ -53,6 +54,7 @@ class ScriptedRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 def _dispatcher(tmp_path: Path, runner: ScriptedRunner) -> Dispatcher:
