@@ -469,6 +469,7 @@ def test_the_schema_exports_the_view_catalogue() -> None:
 
     assert _object(definitions["ViewComponent"])["oneOf"] == [
         {"$ref": "#/$defs/ViewCard"},
+        {"$ref": "#/$defs/ViewRow"},
         {"$ref": "#/$defs/ViewText"},
         {"$ref": "#/$defs/ViewLink"},
         {"$ref": "#/$defs/ViewTable"},

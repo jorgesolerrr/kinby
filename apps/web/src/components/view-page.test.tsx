@@ -347,3 +347,76 @@ describe("ViewPage, with every catalogue component", () => {
     expect(document.querySelector(drawn)).toBeTruthy()
   })
 })
+
+/** Hub health: a row of figures over two cards side by side, and a row repeated from the data. */
+const HEALTH: ViewComponent[] = [
+  { id: "root", component: "Card", title: "Hub health", children: ["figures", "panels"] },
+  { id: "figures", component: "Row", children: ["runs", "stopped", "spend"] },
+  { id: "runs", component: "Stat", label: "Factory runs started", value: { path: "/runs" } },
+  {
+    id: "stopped",
+    component: "Stat",
+    label: "Factory runs stopped by a failed check",
+    value: { path: "/stopped" },
+  },
+  {
+    id: "spend",
+    component: "Stat",
+    label: "Model spend",
+    value: { path: "/spend" },
+    description: "Oct 14–25, per-token prices",
+  },
+  { id: "panels", component: "Row", children: ["instances", "coders"] },
+  {
+    id: "instances",
+    component: "Card",
+    title: "Instances",
+    children: { path: "/instances", template: "instance" },
+  },
+  { id: "instance", component: "Text", text: { path: "/name" } },
+  { id: "coders", component: "Card", title: "Coders", children: ["coder-row"] },
+  { id: "coder-row", component: "Row", children: { path: "/coders", template: "coder" } },
+  { id: "coder", component: "Badge", label: { path: "/name" } },
+]
+
+const HEALTH_DATA: View["data"] = {
+  runs: 41,
+  stopped: 3,
+  spend: "$12.40",
+  instances: [{ name: "Kinby" }, { name: "Ada" }],
+  coders: [{ name: "claude" }, { name: "codex" }],
+}
+
+describe("ViewPage, with rows", () => {
+  it("sets a row's stats side by side in one wrapping container, each with its full label", async () => {
+    openPage(view(HEALTH, HEALTH_DATA))
+
+    const labels = ["Factory runs started", "Factory runs stopped by a failed check", "Model spend"]
+    const stats = await Promise.all(
+      labels.map((label) => screen.findByRole("region", { name: label })),
+    )
+    const rows = new Set(stats.map((stat) => stat.parentElement))
+    expect(rows.size).toBe(1)
+    expect([...rows][0]?.classList).toContain("flex-wrap")
+    stats.forEach((stat, index) => expect(within(stat).getByText(labels[index])).toBeTruthy())
+    expect(screen.getByText("Oct 14–25, per-token prices")).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("sets cards side by side in a row inside a card", async () => {
+    openPage(view(HEALTH, HEALTH_DATA))
+
+    const instances = (await screen.findByText("Instances")).closest("[data-slot=card]")
+    const coders = screen.getByText("Coders").closest("[data-slot=card]")
+    expect(instances?.parentElement).toBe(coders?.parentElement)
+    expect(within(instances as HTMLElement).getByText("Ada")).toBeTruthy()
+  })
+
+  it("repeats a row's template once per item, reading its paths in the item", async () => {
+    openPage(view(HEALTH, HEALTH_DATA))
+
+    const claude = await screen.findByText("claude")
+    expect(screen.getByText("codex").parentElement).toBe(claude.parentElement)
+    expect(claude.parentElement?.classList).toContain("flex-wrap")
+  })
+})

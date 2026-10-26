@@ -97,6 +97,12 @@ function Shown({ component, scope }: { component: ViewComponent; scope: Scope })
   switch (component.component) {
     case "Card":
       return <ViewCardShown card={component} scope={scope} />
+    case "Row":
+      return (
+        <div className="flex flex-wrap gap-3 *:min-w-48 *:flex-1">
+          <Children named={component.children ?? []} scope={scope} />
+        </div>
+      )
     case "Text":
       return <p>{text(component.text, scope)}</p>
     case "Link":

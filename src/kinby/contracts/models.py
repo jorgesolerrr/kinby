@@ -3152,6 +3152,15 @@ class ViewCard(ContractModel):
     children: list[ViewComponentId] | ListBinding = Field(default_factory=list)
 
 
+class ViewRow(ContractModel):
+    """Its children side by side, sharing the width, and wrapping onto the next line when they
+    run out of room."""
+
+    id: ViewComponentId
+    component: Literal["Row"] = "Row"
+    children: list[ViewComponentId] | ListBinding = Field(default_factory=list)
+
+
 class ViewText(ContractModel):
     """A paragraph of text."""
 
@@ -3252,6 +3261,7 @@ class ViewChecklist(ContractModel):
 #: The view catalogue: every component a view can be composed from.
 type ViewComponent = Annotated[
     ViewCard
+    | ViewRow
     | ViewText
     | ViewLink
     | ViewTable
@@ -3297,10 +3307,11 @@ def _named_components(component: ViewComponent) -> list[str]:
     match component:
         case (
             ViewCard(children=ListBinding(template=template))
+            | ViewRow(children=ListBinding(template=template))
             | ViewKanban(cards=ListBinding(template=template))
         ):
             return [template]
-        case ViewCard(children=list() as children):
+        case ViewCard(children=list() as children) | ViewRow(children=list() as children):
             return children
         case ViewTable(columns=columns):
             return [column.cell for column in columns]

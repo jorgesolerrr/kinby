@@ -166,7 +166,7 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 export type ToolRule = "allow" | "ask" | "deny" | "mode";
 export type ViewId = string;
 export type ViewComponent =
-  ViewCard | ViewText | ViewLink | ViewTable | ViewBadge | ViewKanban | ViewStat | ViewChart | ViewChecklist;
+  ViewCard | ViewRow | ViewText | ViewLink | ViewTable | ViewBadge | ViewKanban | ViewStat | ViewChart | ViewChecklist;
 export type ViewComponentId = string;
 export type JsonPointer = string;
 export type TextProp = string | Binding;
@@ -2495,6 +2495,15 @@ export interface ListBinding {
  */
 export interface Binding {
   path: JsonPointer;
+}
+/**
+ * Its children side by side, sharing the width, and wrapping onto the next line when they
+ * run out of room.
+ */
+export interface ViewRow {
+  children?: ViewComponentId[] | ListBinding;
+  component: "Row";
+  id: ViewComponentId;
 }
 /**
  * A paragraph of text.
