@@ -161,7 +161,7 @@ function ViewTableShown({ table, scope }: { table: ViewTable; scope: Scope }) {
         {items(table.rows, scope).map((row, index) => (
           <TableRow key={index}>
             {table.columns.map((column, cell) => (
-              <TableCell key={cell}>
+              <TableCell key={cell} className="whitespace-normal">
                 <Rendered id={column.cell} scope={{ ...scope, data: row }} />
               </TableCell>
             ))}
