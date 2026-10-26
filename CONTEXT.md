@@ -279,7 +279,7 @@ _Avoid_: login container, helper container
 
 ### Pending setup
 
-What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, or **repository commands** its **factory**'s steps name and it does not hold. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
+What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, a secret its **instance code** declares and its instance secrets lack, or **repository commands** its **factory**'s steps name and it does not hold. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
 _Avoid_: incomplete instance, onboarding
 
 ### Avatar

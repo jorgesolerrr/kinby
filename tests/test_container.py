@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.test_instance_code import greeting_wheel
+
 PROJECT_ROOT = Path(__file__).parents[1]
 
 
@@ -275,6 +277,57 @@ def test_entrypoint_shares_claude_skills_with_codex_without_dirtying_the_workspa
     assert (workspace / ".agents" / "skills" / "tdd" / "SKILL.md").is_file()
     assert status.stdout == ""
     assert exclude.splitlines().count("/.agents/skills") == 1
+
+
+def test_entrypoint_restores_the_instance_code_venv_from_its_lockfile(tmp_path: Path) -> None:
+    instance = tmp_path / "instance"
+    code = instance / "code"
+    code.mkdir(parents=True)
+    (instance / "kinby.toml").write_text(
+        'id = "coder"\n[models]\nmain = "openai:gpt-5"\n', encoding="utf-8"
+    )
+    (code / "pyproject.toml").write_text(
+        '[project]\nname = "instance-code"\nversion = "0.0.0"\ndependencies = []\n',
+        encoding="utf-8",
+    )
+    (code / "greet.py").write_text("import greeting\n\nprint(greeting.hello())\n", encoding="utf-8")
+    programs = tmp_path / "bin"
+    programs.mkdir()
+    (programs / "kinby").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (programs / "kinby").chmod(0o755)
+    env: dict[str, str] = {
+        **os.environ,
+        "PATH": os.pathsep.join(
+            [str(programs), str(Path(sys.executable).parent), os.environ["PATH"]]
+        ),
+        "HOME": str(tmp_path / "home"),
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+        "KINBY_INSTANCE": str(instance),
+        "UV_OFFLINE": "1",
+    }
+    # The container's uv keeps the venv in the project, whatever the host's uv is told.
+    env.pop("UV_PROJECT_ENVIRONMENT", None)
+    wheel = greeting_wheel(tmp_path)
+    subprocess.run(
+        ["uv", "add", "--project", str(code), str(wheel)], env=env, check=True, capture_output=True
+    )
+    # A recreated container on a new image finds no venv it can use.
+    shutil.rmtree(code / ".venv")
+
+    subprocess.run(
+        ["sh", str(PROJECT_ROOT / "docker" / "entrypoint.sh")],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    ran = subprocess.run(
+        [str(code / ".venv" / "bin" / "python"), str(code / "greet.py")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert ran.stdout == "hello from greeting\n"
 
 
 def _compose(name: str) -> dict[str, object]:
