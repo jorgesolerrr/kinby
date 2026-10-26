@@ -362,5 +362,70 @@ describe("a thread's timeline", () => {
         gate: { action: "allow", decidedBy: "user" },
       })
     })
+
+    describe("the notification that asks about its approval", () => {
+      const notified: Payload = {
+        type: "notification.raised",
+        source: "Fix the runtime",
+        title: "Approval waiting",
+        text: "write: path=runtime.py, content=fixed",
+        options: ["Approve", "Deny"],
+        approval: {
+          turn_id: "turn-1",
+          request: {
+            type: "approval.requested",
+            approval_id: "a1",
+            name: "write",
+            arguments: write,
+            rule: "ask mode: writes need approval",
+          },
+        },
+      }
+      const gated = (action: "allow" | "deny"): Payload => ({
+        type: "tool.gated",
+        call_id: "c2",
+        name: "write",
+        action,
+        decided_by: "user",
+        rule: "ask mode: writes need approval",
+      })
+      const notification = (...after: Payload[]) =>
+        replay(["turn-1", ...parked, notified, ...after]).turns[0]?.steps.find(
+          (step) => step.kind === "notification",
+        )
+
+      it("waits on the approval's call while the turn is parked", () => {
+        expect(notification()).toMatchObject({ approval: { callId: "c2" } })
+        expect(notification()).not.toHaveProperty("approval.settled")
+      })
+
+      it("settles as approved once the user allows the call", () => {
+        expect(notification(gated("allow"))).toMatchObject({
+          approval: { callId: "c2", settled: "allow" },
+        })
+      })
+
+      it("settles as denied once the user denies the call", () => {
+        expect(notification(gated("deny"))).toMatchObject({
+          approval: { callId: "c2", settled: "deny" },
+        })
+      })
+
+      it("settles as no longer waiting when the turn ends before a decision", () => {
+        expect(notification({ type: "turn.interrupted" })).toMatchObject({
+          approval: { callId: "c2", settled: "ended" },
+        })
+      })
+
+      it("keeps its decision once the turn ends", () => {
+        expect(
+          notification(gated("deny"), {
+            type: "turn.completed",
+            input_tokens: 9,
+            output_tokens: 1,
+          }),
+        ).toMatchObject({ approval: { settled: "deny" } })
+      })
+    })
   })
 })

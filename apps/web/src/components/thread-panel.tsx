@@ -743,6 +743,8 @@ function NotificationCard({
     latest?.status === "failed" || latest?.status === "stale" ? latest.outcome : undefined
   const shown = failure ?? unapplied ?? undefined
   const status = notificationStatus(step, kept)
+  const settled =
+    step.approval?.settled === undefined ? undefined : SETTLED_APPROVALS[step.approval.settled]
 
   const answer = async (id: string, option: string) => {
     setAnswering(option)
@@ -775,7 +777,12 @@ function NotificationCard({
         <CardContent>
           <div className="flex flex-col gap-3">
             <p className="whitespace-pre-wrap">{step.text}</p>
-            {applied !== undefined ? (
+            {settled !== undefined ? (
+              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                <settled.icon aria-hidden className="size-3.5" />
+                {settled.label}
+              </p>
+            ) : applied !== undefined ? (
               <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                 <CheckIcon aria-hidden className="size-3.5" />
                 {`Answered “${applied.option}”`}
@@ -814,6 +821,13 @@ function NotificationCard({
     </article>
   )
 }
+
+/** What an approval's notification shows in place of its options once the approval settled. */
+const SETTLED_APPROVALS = {
+  allow: { icon: CheckIcon, label: "Approved" },
+  deny: { icon: BanIcon, label: "Denied" },
+  ended: { icon: CircleStopIcon, label: "No longer waiting" },
+} satisfies Record<string, { icon: LucideIcon; label: string }>
 
 /**
  * Where a notification stands: waiting for the hub, refused by it, or how its channels took it.
