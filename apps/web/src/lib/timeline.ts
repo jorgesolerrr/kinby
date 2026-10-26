@@ -61,8 +61,8 @@ export interface ToolStep {
   arguments: Record<string, JsonValue>
   /** How the gate decided the call, and the user's reason for a denial. An undecided call has none yet. */
   gate?: { action: GateOutcome; decidedBy: GateDecider; rule: string; reason?: string | null }
-  /** How long the call ran, once it returned. */
-  durationMs?: number
+  /** What the call returned: how long it ran, when the result says, and its output if it failed. */
+  result?: { durationMs?: number; error?: string }
 }
 
 /** A notification the turn raised on the instance's hub route. */
@@ -176,9 +176,13 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
         },
       }))
     case "tool.result":
-      return updateTool(turn, payload.call_id, (step) =>
-        payload.duration_ms == null ? step : { ...step, durationMs: payload.duration_ms },
-      )
+      return updateTool(turn, payload.call_id, (step) => ({
+        ...step,
+        result: {
+          ...(payload.duration_ms != null && { durationMs: payload.duration_ms }),
+          ...(payload.error && { error: payload.output }),
+        },
+      }))
     case "notification.raised": {
       const { title, text, options = [] } = payload
       return {
