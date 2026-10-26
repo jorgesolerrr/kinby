@@ -19,6 +19,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6",
     "tomlkit>=0.13",
+    "trafilatura>=2.0",
 ]
 
 [project.scripts]

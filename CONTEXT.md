@@ -635,7 +635,11 @@ A native Python capability the model can call during a **turn**. Every tool decl
 
 ### Default tools
 
-The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob, bash and web_search. The manifest can switch them all off, or switch off one by name and keep the rest. web_search is offered only while the instance holds its **search backend**'s key.
+The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob, bash, web_search and web_fetch. The manifest can switch them all off, or switch off one by name and keep the rest. web_search is offered only while the instance holds its **search backend**'s key.
+
+### Seen URL
+
+A URL that already appeared in the **thread**: in a user message, a **routine**'s prompt, or what web_search or web_fetch returned. The **gate** lets web_fetch open a seen URL in every **permission mode**, and treats any other URL as a write, so the model cannot send data it holds to a URL it built itself.
 
 ### Search backend
 

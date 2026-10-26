@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,9 @@ class GateDecision:
 
 #: The rule of a call the gate treats as a write because an authored tool makes it.
 AUTHORED_RULE = GateRule("authored.write")
+#: The tools that open a URL. Each runs unasked for a URL already seen in the thread, and as a
+#: write for any other (ADR 0110).
+URL_READS = frozenset({"web_fetch", "browser_open"})
 
 _PRESETS = {
     PermissionMode.READ_ONLY: {
@@ -49,6 +53,7 @@ def evaluate(
     *,
     granted: bool = False,
     marked_read_only: bool = False,
+    seen_urls: Collection[str] = (),
 ) -> GateDecision:
     """Evaluate one call without running the tool or changing state.
 
@@ -57,7 +62,9 @@ def evaluate(
     also ahead of any rule (ADR 0100). So do notify and a view write, unless a rule names the
     tool (ADR 0103, ADR 0108). A routine grant, when *granted*, allows the call ahead of the mode
     in every mode but read-only, so the ceiling still bounds it (ADR 0112). An authored tool is a
-    write whatever it declares, unless the user *marked_read_only* it (ADR 0109).
+    write whatever it declares, unless the user *marked_read_only* it (ADR 0109). A tool that
+    opens a URL is allowed for one of the thread's *seen_urls*, and a write for any other
+    (ADR 0110).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
@@ -87,6 +94,10 @@ def evaluate(
         return GateDecision(override, GateRule(f"tools.{call.name}"))
     if granted and mode is not PermissionMode.READ_ONLY:
         return GateDecision(GateAction.ALLOW, GateRule("routine.grant"))
+    if call.name in URL_READS:
+        if call.arguments.get("url") in seen_urls:
+            return GateDecision(GateAction.ALLOW, GateRule("web.seen_url"))
+        return GateDecision(_PRESETS[mode][True], GateRule("web.unseen_url"))
     if tool is not None and tool.authored and not marked_read_only:
         return GateDecision(_PRESETS[mode][True], AUTHORED_RULE)
     writes = tool is not None and tool.write and not tool.authored
