@@ -200,6 +200,31 @@ def _text(component: str = "root") -> dict[str, object]:
             ],
             "Components must not contain themselves: root -> inner -> root.",
         ),
+        (
+            [{"id": "root", "component": "Row", "children": ["missing"]}],
+            'Component "root" names components that do not exist: missing.',
+        ),
+        (
+            [
+                {
+                    "id": "root",
+                    "component": "Row",
+                    "children": {"path": "/items", "template": "stat"},
+                }
+            ],
+            'Component "root" names components that do not exist: stat.',
+        ),
+        (
+            [{"id": "root", "component": "Row", "children": []}, _text()],
+            "Component ids must be unique; repeated: root.",
+        ),
+        (
+            [
+                {"id": "root", "component": "Row", "children": ["inner"]},
+                {"id": "inner", "component": "Card", "children": ["root"]},
+            ],
+            "Components must not contain themselves: root -> inner -> root.",
+        ),
         ([{"id": "root", "component": "Marquee"}], "Input tag 'Marquee'"),
     ],
 )
@@ -222,7 +247,12 @@ def test_a_spec_the_catalogue_refuses_is_a_tool_error_and_writes_nothing(
 
 CATALOGUE: dict[str, list[dict[str, object]]] = {
     "components": [
-        {"id": "root", "component": "Card", "children": ["open", "board", "list", "trend", "todo"]},
+        {
+            "id": "root",
+            "component": "Card",
+            "children": ["numbers", "board", "list", "trend", "todo"],
+        },
+        {"id": "numbers", "component": "Row", "children": ["open"]},
         {"id": "open", "component": "Stat", "label": "Open", "value": {"path": "/open"}},
         {
             "id": "board",
@@ -261,6 +291,26 @@ CATALOGUE: dict[str, list[dict[str, object]]] = {
 def test_a_view_from_every_catalogue_component_is_written(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = runtime(instance_at(tmp_path), writing(board(CATALOGUE, {})))
+
+        events = await turn(dispatcher)
+
+        assert [result.error for result in tool_results(events)] == [False]
+        assert await listed(dispatcher) == ["applications"]
+
+    asyncio.run(scenario())
+
+
+def test_a_view_whose_root_is_a_row_of_stats_is_written(tmp_path: Path) -> None:
+    row = {
+        "components": [
+            {"id": "root", "component": "Row", "children": ["open", "sent"]},
+            {"id": "open", "component": "Stat", "label": "Open", "value": {"path": "/open"}},
+            {"id": "sent", "component": "Stat", "label": "Sent", "value": {"path": "/sent"}},
+        ]
+    }
+
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), writing(board(row, {"open": 3, "sent": 9})))
 
         events = await turn(dispatcher)
 

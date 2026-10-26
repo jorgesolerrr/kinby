@@ -47,10 +47,12 @@ async def view_write(
     as a board a routine updates every morning.
 
     id is a short slug. The spec lists components from the view catalogue, each with a unique id;
-    the one with id "root" is rendered, and a Card names its children, and a Table column its
-    cell, by id. A prop is a literal or {"path": "<JSON Pointer>"} into data. Card children may
-    instead be {"path": "/items", "template": "<component id>"}, which renders the template once
-    per item of the array, with the template's paths read in the item. Table rows, Kanban columns,
+    the one with id "root" is rendered, and a Card or Row names its children, and a Table column
+    its cell, by id. A Card stacks its children; a Row sets them side by side, such as a few
+    Stats, and wraps them when they run out of room. A prop is a literal or
+    {"path": "<JSON Pointer>"} into data. Card and Row children may instead be
+    {"path": "/items", "template": "<component id>"}, which renders the template once per item of
+    the array, with the template's paths read in the item. Table rows, Kanban columns,
     Chart points and Checklist items repeat over an array the same way; each component says which
     of its props are read in the item. A view is capped at 1 MB.
     """
