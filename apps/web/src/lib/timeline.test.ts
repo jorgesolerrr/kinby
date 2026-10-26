@@ -79,7 +79,7 @@ describe("a thread's timeline", () => {
               name: "read",
               arguments: { path: "runtime.py" },
               gate: { action: "allow", decidedBy: "policy", rule: "reads are allowed" },
-              durationMs: 38,
+              result: { durationMs: 38 },
             },
             { kind: "text", text: "Done." },
           ],
@@ -87,6 +87,32 @@ describe("a thread's timeline", () => {
         },
       ],
     })
+  })
+
+  it("marks a call whose result is an error, with its output, though the result has no duration", () => {
+    const [turn] = replay([
+      "turn-1",
+      started("List the routines"),
+      { type: "tool.call", call_id: "c1", name: "hub_read", arguments: { path: "routine.list" } },
+      {
+        type: "tool.result",
+        call_id: "c1",
+        name: "hub_read",
+        output: 'Tool "hub_read" is not available in this turn.',
+        error: true,
+        duration_ms: null,
+      },
+    ]).turns
+
+    expect(turn?.steps).toEqual([
+      {
+        kind: "tool",
+        callId: "c1",
+        name: "hub_read",
+        arguments: { path: "routine.list" },
+        result: { error: 'Tool "hub_read" is not available in this turn.' },
+      },
+    ])
   })
 
   it("ends a failed turn with the code and message", () => {
