@@ -12,7 +12,6 @@ import pytest
 from aiohttp import web
 
 from kinby.contracts import (
-    APPROVAL_OPTIONS,
     CHANNEL_MUTE,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
@@ -522,7 +521,9 @@ def test_the_web_app_replies_only_with_an_option_the_notification_offers_and_onl
     asyncio.run(scenario())
 
 
-def approval_notification(key: str, approval_id: UUID) -> NotificationRaiseCommand:
+def approval_notification(
+    key: str, approval_id: UUID, options: tuple[str, ...] = ("Approve", "Deny")
+) -> NotificationRaiseCommand:
     """What an instance raises when a turn parks on an approval."""
     request = ApprovalRequested(
         approval_id=approval_id,
@@ -534,18 +535,26 @@ def approval_notification(key: str, approval_id: UUID) -> NotificationRaiseComma
         update={
             "title": "Approval waiting",
             "text": "store: path=notes.md",
-            "options": list(APPROVAL_OPTIONS),
+            "options": list(options),
             "approval": WaitingApproval(turn_id=UUID(int=2), request=request),
         }
     )
 
 
+IN_ROUTINE = ("Approve", "Always allow in this routine", "Deny")
+
+
 @pytest.mark.parametrize(
-    ("option", "decision", "outcome"),
-    [(0, ApprovalDecision.APPROVE, "Approved."), (1, ApprovalDecision.DENY, "Denied.")],
+    ("options", "option", "decision", "outcome"),
+    [
+        (("Approve", "Deny"), 0, ApprovalDecision.APPROVE, "Approved."),
+        (("Approve", "Deny"), 1, ApprovalDecision.DENY, "Denied."),
+        (IN_ROUTINE, 1, ApprovalDecision.ALLOW_IN_ROUTINE, "Always allowed in this routine."),
+        (IN_ROUTINE, 2, ApprovalDecision.DENY, "Denied."),
+    ],
 )
-def test_approve_and_deny_answer_the_approval_a_notification_asks_for_through_the_relay(
-    tmp_path, option, decision, outcome
+def test_each_option_answers_the_approval_a_notification_asks_for_through_the_relay(
+    tmp_path, options, option, decision, outcome
 ):
     async def scenario() -> None:
         runtime = FakeRuntime()
@@ -558,14 +567,14 @@ def test_approve_and_deny_answer_the_approval_a_notification_asks_for_through_th
         async with served(hub) as address, running(runtime, hub, alice_id, threads):
             channel = await paired_channel(client, address)
             await raising(hub, alice_id).call(
-                NOTIFICATION_RAISE, approval_notification("approval", approval_id)
+                NOTIFICATION_RAISE, approval_notification("approval", approval_id, options)
             )
             sent = await next_sent(service)
             await replied(address, channel, sent.ref, option)
             answered = await asyncio.wait_for(threads.answered.get(), timeout=5)
             edited = await next_edit(service)
 
-        assert sent.notification.options == ("Approve", "Deny", "Mute this instance")
+        assert sent.notification.options == (*options, "Mute this instance")
         assert answered == ThreadApprovalRespondCommand(
             thread_id=UUID(int=1), approval_id=approval_id, decision=decision
         )

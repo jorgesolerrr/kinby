@@ -723,7 +723,11 @@ class ApprovalDecision(StrEnum):
 
 
 #: The options of a notification that asks for an approval, and the decision each one gives.
-APPROVAL_OPTIONS = {"Approve": ApprovalDecision.APPROVE, "Deny": ApprovalDecision.DENY}
+APPROVAL_OPTIONS = {
+    "Approve": ApprovalDecision.APPROVE,
+    "Always allow in this routine": ApprovalDecision.ALLOW_IN_ROUTINE,
+    "Deny": ApprovalDecision.DENY,
+}
 
 
 class ThreadApprovalRespondCommand(ContractModel):
