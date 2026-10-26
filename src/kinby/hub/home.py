@@ -23,6 +23,7 @@ from kinby.contracts import (
     InstanceStartCommand,
     InstanceStopCommand,
     LibraryGitAddCommand,
+    LibraryMcpServerWriteCommand,
     LibrarySkillMoveCommand,
     LibrarySkillWriteCommand,
     Method,
@@ -43,6 +44,7 @@ from kinby.plugins.hub import (
     instance_routine_set_enabled,
     instance_routine_write,
     library_git_add,
+    library_mcp_server_write,
     library_move,
     library_skill_write,
 )
@@ -89,6 +91,7 @@ type HomeWrite = (
     | LibrarySkillWriteCommand
     | LibraryGitAddCommand
     | LibraryMove
+    | LibraryMcpServerWriteCommand
     | FactoryEditCommand
     | ChannelMute
     | ChannelUnmute
@@ -145,6 +148,8 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                 return LibraryGitAddCommand.model_validate(arguments)
             case library_move.name:
                 return LibraryMove.model_validate(arguments)
+            case library_mcp_server_write.name:
+                return LibraryMcpServerWriteCommand.model_validate(arguments)
             case factory_write.name:
                 return FactoryEditCommand.model_validate(arguments)
             case channel_mute.name:

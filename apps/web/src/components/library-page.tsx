@@ -6,6 +6,7 @@ import type {
   LibraryGitPreviewResult,
   LibraryKind,
   LibrarySkillCheckResult,
+  McpServerResult,
   NewerVersion,
   PreviewedSkill,
   SkillResult,
@@ -24,6 +25,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState
 
 import { Failure } from "@/components/config-alerts"
 import { FactoryInstances } from "@/components/factory-instances"
+import { McpServerFields } from "@/components/mcp-server-fields"
 import { NewSkill, type WriteNew } from "@/components/new-skill"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -61,19 +63,22 @@ import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { useRead } from "@/hooks/use-read"
 import { type Pace, pace, retried } from "@/lib/operation"
+import { draftOf, EMPTY_DRAFT, serverOf } from "@/lib/mcp-servers"
 import { LIBRARY_SOURCES } from "@/lib/skills"
 
 type Caller = Pick<Client, "call">
 
-const KINDS: { kind: LibraryKind; title: string }[] = [
-  { kind: "skill", title: "Skills" },
-  { kind: "factory", title: "Factories" },
+const KINDS: { kind: LibraryKind; title: string; noun: string; none: string }[] = [
+  { kind: "skill", title: "Skills", noun: "skill", none: "No skills yet" },
+  { kind: "mcp_server", title: "MCP servers", noun: "MCP server", none: "No MCP servers yet" },
+  { kind: "factory", title: "Factories", noun: "factory", none: "No factories yet" },
 ]
 
 /**
- * The hub's library: the skills and factories an instance can pick, listed on the left with a
- * search, and the open entry, or a skill being written or added from git, filling the rest. Any
- * entry opens to read, and a skill to edit or delete. A narrow screen shows one side at a time.
+ * The hub's library: its skills, MCP servers and factories, listed on the left with a search, and
+ * the open entry, or a skill being written or added from git or a server being added, filling the
+ * rest. Any entry opens to read, and a skill or a server to edit or delete. A narrow screen shows
+ * one side at a time.
  */
 export function LibraryPage({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(() => client.call("library.list", {}), [client])
@@ -81,7 +86,7 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
   const [kind, setKind] = useState<LibraryKind>("skill")
   const [query, setQuery] = useState("")
   const [opened, setOpened] = useState<LibraryEntry>()
-  const [form, setForm] = useState<"write" | "git">()
+  const [form, setForm] = useState<"write" | "git" | "mcp_server">()
   // A git skill's newer commit is known only from a check, which the list does not run.
   const [checkedNewer, setCheckedNewer] = useState<string[]>([])
   const marked = (name: string, newer: boolean) =>
@@ -97,7 +102,7 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
       entry.kind === kind &&
       `${entry.name} ${entry.description ?? ""}`.toLocaleLowerCase().includes(wanted),
   )
-  const title = KINDS.find((each) => each.kind === kind)?.title
+  const shownKind = KINDS.find((each) => each.kind === kind)
   const back = () => {
     setForm(undefined)
     setOpened(undefined)
@@ -125,14 +130,23 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
         <div className="flex flex-col gap-3 border-b p-4">
           <div className="flex items-center gap-2">
             <h1 className="flex-1 font-heading text-xl font-semibold">Library</h1>
-            <Button variant="outline" size="sm" onClick={() => setForm("git")}>
-              <GitBranchIcon data-icon="inline-start" />
-              Add from git
-            </Button>
-            <Button size="sm" onClick={() => setForm("write")}>
-              <PlusIcon data-icon="inline-start" />
-              Write
-            </Button>
+            {kind === "mcp_server" ? (
+              <Button size="sm" onClick={() => setForm("mcp_server")}>
+                <PlusIcon data-icon="inline-start" />
+                Add a server
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setForm("git")}>
+                  <GitBranchIcon data-icon="inline-start" />
+                  Add from git
+                </Button>
+                <Button size="sm" onClick={() => setForm("write")}>
+                  <PlusIcon data-icon="inline-start" />
+                  Write
+                </Button>
+              </>
+            )}
           </div>
           <InputGroup>
             <InputGroupInput
@@ -167,18 +181,17 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
             <Empty>
               <EmptyHeader>
                 <EmptyTitle>
-                  {wanted === ""
-                    ? `No ${title?.toLowerCase()} yet`
-                    : `Nothing matches "${query.trim()}"`}
+                  {wanted === "" ? shownKind?.none : `Nothing matches "${query.trim()}"`}
                 </EmptyTitle>
               </EmptyHeader>
             </Empty>
           ) : (
-            <ItemGroup aria-label={title}>
+            <ItemGroup aria-label={shownKind?.title}>
               {entries.map((entry) => (
                 <EntryItem
                   key={entry.name}
                   entry={entry}
+                  noun={shownKind?.noun ?? entry.kind}
                   newer={isNewer(entry)}
                   selected={
                     form === undefined && opened?.kind === kind && opened.name === entry.name
@@ -221,6 +234,17 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
             onCancel={() => setForm(undefined)}
           />
         </Pane>
+      ) : form === "mcp_server" ? (
+        <Pane title="Add an MCP server" onBack={back}>
+          <NewMcpServer
+            client={client}
+            onAdded={() => {
+              setForm(undefined)
+              readAgain()
+            }}
+            onCancel={() => setForm(undefined)}
+          />
+        </Pane>
       ) : shown?.kind === "skill" ? (
         <SkillEntry
           key={shown.name}
@@ -240,6 +264,19 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
             readAgain()
           }}
         />
+      ) : shown?.kind === "mcp_server" ? (
+        <McpServerEntry
+          key={shown.name}
+          client={client}
+          clock={clock}
+          entry={shown}
+          onBack={back}
+          onSaved={readAgain}
+          onDeleted={() => {
+            setOpened(undefined)
+            readAgain()
+          }}
+        />
       ) : shown?.kind === "factory" ? (
         <FactoryEntry key={shown.name} client={client} clock={clock} entry={shown} onBack={back} />
       ) : (
@@ -249,7 +286,9 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
               <LibraryIcon />
             </EmptyMedia>
             <EmptyTitle>Nothing open</EmptyTitle>
-            <EmptyDescription>Pick a skill or a factory to read it here.</EmptyDescription>
+            <EmptyDescription>
+              Pick a skill, an MCP server or a factory to read it here.
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
@@ -260,11 +299,14 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
 /** One entry's dense row: its name, where it came from, an ember dot for a newer version, and its description. */
 function EntryItem({
   entry,
+  noun,
   newer,
   selected,
   onSelect,
 }: {
   entry: LibraryEntry
+  /** What the entry's kind is called. */
+  noun: string
   newer: boolean
   selected: boolean
   onSelect: () => void
@@ -277,7 +319,7 @@ function EntryItem({
       render={
         <button
           type="button"
-          aria-label={`${entry.name}, ${entry.source} ${entry.kind}${entry.edited ? ", edited" : ""}${newer ? ", newer" : ""}`}
+          aria-label={`${entry.name}, ${entry.source} ${noun}${entry.edited ? ", edited" : ""}${newer ? ", newer" : ""}`}
           aria-current={selected || undefined}
           onClick={onSelect}
         />
@@ -932,6 +974,177 @@ function FactoryEntry({
           <FactoryInstances client={client} clock={clock} factory={name} />
         </>
       )}
+    </EntryPane>
+  )
+}
+
+/** A new MCP server: its name and its definition. */
+function NewMcpServer({
+  client,
+  onAdded,
+  onCancel,
+}: {
+  client: Caller
+  onAdded: () => void
+  onCancel: () => void
+}) {
+  const id = useId()
+  const [name, setName] = useState("")
+  const [draft, setDraft] = useState(EMPTY_DRAFT)
+  const { busy, refusal, failure, ask } = useHubCall()
+
+  const add = () =>
+    ask(async () => {
+      await client.call("library.mcp_server.write", { name, server: serverOf(draft), hash: null })
+      onAdded()
+    })
+
+  return (
+    <div className="flex max-w-2xl flex-col gap-4 p-6">
+      {failure !== undefined && <Failure error={failure} />}
+      {refusal !== undefined && <Refusal reason={refusal} />}
+      <Field>
+        <FieldLabel htmlFor={id}>Name</FieldLabel>
+        <Input id={id} value={name} onChange={(event) => setName(event.target.value)} />
+        <FieldDescription>
+          Lowercase letters, digits and hyphens. Its tools are named after it.
+        </FieldDescription>
+      </Field>
+      <McpServerFields draft={draft} disabled={busy} onChange={setDraft} />
+      <Field orientation="horizontal">
+        <Button disabled={busy || name === ""} onClick={() => void add()}>
+          {busy && <Spinner data-icon="inline-start" />}
+          Add
+        </Button>
+        <Button variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+      </Field>
+    </div>
+  )
+}
+
+/** A library MCP server, read from the hub, to edit or delete. */
+function McpServerEntry({
+  client,
+  clock,
+  entry,
+  onBack,
+  onSaved,
+  onDeleted,
+}: {
+  client: Caller
+  clock: Clock
+  entry: LibraryEntry
+  onBack: () => void
+  onSaved: () => void
+  onDeleted: () => void
+}) {
+  const { name } = entry
+  const read = useCallback(() => client.call("library.mcp_server.read", { name }), [client, name])
+  const { value: opened, failure } = useRead(read, clock)
+
+  if (opened === undefined) {
+    return (
+      <EntryPane entry={entry} onBack={onBack}>
+        {failure === undefined ? (
+          <Skeleton className="min-h-72 w-full flex-1" />
+        ) : (
+          <Failure error={failure} />
+        )}
+      </EntryPane>
+    )
+  }
+  return (
+    <McpServerEditor
+      client={client}
+      entry={entry}
+      opened={opened}
+      onBack={onBack}
+      onSaved={onSaved}
+      onDeleted={onDeleted}
+    />
+  )
+}
+
+/** An MCP server's definition to edit, saved and deleted over the version `opened` read. */
+function McpServerEditor({
+  client,
+  entry,
+  opened,
+  onBack,
+  onSaved,
+  onDeleted,
+}: {
+  client: Caller
+  entry: LibraryEntry
+  opened: McpServerResult
+  onBack: () => void
+  onSaved: () => void
+  onDeleted: () => void
+}) {
+  const [current, setCurrent] = useState(opened)
+  const [draft, setDraft] = useState(() => draftOf(opened.server))
+  const [saved, setSaved] = useState(false)
+  const { busy, refusal, failure, ask } = useHubCall()
+  const { name, hash } = current
+
+  const save = () =>
+    ask(async () => {
+      setCurrent(
+        await client.call("library.mcp_server.write", { name, server: serverOf(draft), hash }),
+      )
+      setSaved(true)
+      onSaved()
+    })
+  const remove = () =>
+    ask(async () => {
+      await client.call("library.mcp_server.delete", { name, hash })
+      onDeleted()
+    })
+
+  const actions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <AlertDialog>
+        <AlertDialogTrigger render={<Button variant="destructive" size="sm" disabled={busy} />}>
+          <Trash2Icon data-icon="inline-start" />
+          Delete
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+            <AlertDialogDescription>Its definition leaves the library.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <Button size="sm" disabled={busy} onClick={() => void save()}>
+        {busy && <Spinner data-icon="inline-start" />}
+        Save
+      </Button>
+    </div>
+  )
+
+  return (
+    <EntryPane entry={entry} actions={actions} onBack={onBack}>
+      {saved && <p className="text-sm text-muted-foreground">Saved.</p>}
+      {failure !== undefined && <Failure error={failure} />}
+      {refusal !== undefined && <Refusal reason={refusal} />}
+      <div className="max-w-2xl">
+        <McpServerFields
+          draft={draft}
+          disabled={busy}
+          onChange={(changed) => {
+            setDraft(changed)
+            setSaved(false)
+          }}
+        />
+      </div>
     </EntryPane>
   )
 }

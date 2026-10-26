@@ -72,6 +72,9 @@ from kinby.contracts import (
     LIBRARY_GIT_ADD,
     LIBRARY_GIT_PREVIEW,
     LIBRARY_LIST,
+    LIBRARY_MCP_SERVER_DELETE,
+    LIBRARY_MCP_SERVER_READ,
+    LIBRARY_MCP_SERVER_WRITE,
     LIBRARY_SKILL_CHECK,
     LIBRARY_SKILL_DELETE,
     LIBRARY_SKILL_MOVE,
@@ -148,6 +151,7 @@ from kinby.contracts import (
     IntendedState,
     LibraryGitAddCommand,
     LibraryListResult,
+    LibraryMcpServerWriteCommand,
     LibrarySkillCheckCommand,
     LibrarySkillWriteCommand,
     LifecycleOperationResult,
@@ -527,7 +531,11 @@ class Hub:
             public_url = public_url.rstrip("/") if public_url is not None else None
             self.factories = FactoryStore(self.directory / "factories", shipped_factories)
             self.library = Library(
-                self.directory / "skills", shipped_skills, self.factories, self.registry
+                self.directory / "skills",
+                self.directory / "mcp-servers",
+                shipped_skills,
+                self.factories,
+                self.registry,
             )
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
@@ -610,6 +618,9 @@ class Hub:
         dispatcher.register(LIBRARY_SKILL_MOVE, self.library.move)
         dispatcher.register(LIBRARY_GIT_PREVIEW, self.library.preview)
         dispatcher.register(LIBRARY_GIT_ADD, self.library.add)
+        dispatcher.register(LIBRARY_MCP_SERVER_READ, self.library.read_mcp_server)
+        dispatcher.register(LIBRARY_MCP_SERVER_WRITE, self.library.write_mcp_server)
+        dispatcher.register(LIBRARY_MCP_SERVER_DELETE, self.library.delete_mcp_server)
         dispatcher.register(INSTANCE_PICKS_GET, self.picks)
         dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
         dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
@@ -684,6 +695,8 @@ class Hub:
                 result = await self.library.add(write)
             case LibraryMove():
                 result = await self._move(write)
+            case LibraryMcpServerWriteCommand():
+                result = await self.library.write_mcp_server(write)
             case FactoryEditCommand():
                 result = await self.edit_factory(write)
             case ChannelMute():

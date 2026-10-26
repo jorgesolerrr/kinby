@@ -33,8 +33,11 @@ from kinby.contracts import (
     InstancePicksSetCommand,
     InstanceRelayReadResult,
     LibraryGitAddCommand,
+    LibraryMcpServerWriteCommand,
     LibrarySkillMoveCommand,
     LibrarySkillWriteCommand,
+    McpServer,
+    McpServerName,
     PromptName,
     PromptSetCommand,
     ResultFrame,
@@ -81,6 +84,7 @@ def hub_tools() -> tuple[Tool, ...]:
         library_skill_write,
         library_git_add,
         library_move,
+        library_mcp_server_write,
         factory_write,
         channel_mute,
         channel_unmute,
@@ -94,10 +98,10 @@ async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
     Hub reads include instance.list, instance.status, instance.logs, instance.picks.get,
     stats.summary, stats.runs, factory.list, factory.get, factory.check, factory.run.list,
     library.list, library.skill.read, library.skill.check, library.git.preview,
-    hub.secret.list and channel.list. An instance's own reads are memory.list, memory.open,
-    thread.list, thread.turn.list, routine.list, routine.read, usage.get, stats.get,
-    prompt.get, manifest.get, permissions.get and config.history: name the instance in params
-    as instance_id, beside the read's own params.
+    library.mcp_server.read, hub.secret.list and channel.list. An instance's own reads are
+    memory.list, memory.open, thread.list, thread.turn.list, routine.list, routine.read,
+    usage.get, stats.get, prompt.get, manifest.get, permissions.get and config.history: name
+    the instance in params as instance_id, beside the read's own params.
     """
     if method not in RELAYED_READS:
         return json.dumps(await call_hub(method, params, "the read"), ensure_ascii=False)
@@ -273,6 +277,20 @@ async def library_move(
     """
     command = LibrarySkillMoveCommand(name=name, hash=hash, commit=commit, overwrite=overwrite)
     return await _write(library_move, {**command.model_dump(mode="json"), "diff": diff}, context)
+
+
+@tool(write=True, hub=True)
+async def library_mcp_server_write(
+    name: McpServerName, server: McpServer, hash: FileHash | None, context: ToolContext
+) -> str:
+    """Write an MCP server's definition into the library, and return it as JSON.
+
+    server holds its transport, a url or a uvx package, the env variables a local server gets
+    from an instance's .env, and include, the names of its tools a turn is offered. hash is the
+    one library.mcp_server.read returned, or null to add a new server to the library.
+    """
+    command = LibraryMcpServerWriteCommand(name=name, server=server, hash=hash)
+    return await _write(library_mcp_server_write, command.model_dump(mode="json"), context)
 
 
 @tool(write=True, hub=True)
