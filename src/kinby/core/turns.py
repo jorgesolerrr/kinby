@@ -27,6 +27,7 @@ from kinby.contracts import (
     PermissionMode,
     ProfileVersion,
     PromptVersion,
+    RoutineName,
     RoutineOrigin,
     SystemPrompt,
     ThreadApprovalRespondCommand,
@@ -166,6 +167,7 @@ class TurnContext:
 
 
 class TurnRunner(Protocol):
+    def routine_mode(self, name: RoutineName, /) -> PermissionMode | None: ...
     async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None: ...
     async def run(self, turn: PreparedTurnRequest, context: TurnContext, /) -> TurnResult: ...
     async def resume(
@@ -631,10 +633,9 @@ class Turns:
                 message=message,
                 model=preparation.model,
                 origin=origin,
-                permission_mode=_permission_mode(
-                    events,
-                    preparation.default_mode,
-                    preparation.ceiling,
+                permission_mode=self._turn_mode(
+                    origin,
+                    _permission_mode(events, preparation.default_mode, preparation.ceiling),
                 ),
                 system_prompt=preparation.system_prompt,
             )
@@ -754,9 +755,9 @@ class Turns:
                 raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
             turn = replace(
                 turn,
-                permission_mode=constrain_mode(
-                    turn.permission_mode,
-                    preparation.ceiling,
+                permission_mode=self._turn_mode(
+                    turn.origin,
+                    constrain_mode(turn.permission_mode, preparation.ceiling),
                 ),
             )
             answer = ApprovalAnswer(command.decision, command.reason)
@@ -769,6 +770,12 @@ class Turns:
             turn_id=turn.turn_id,
             sequence=pending.event.sequence,
         )
+
+    def _turn_mode(self, origin: Origin, mode: PermissionMode) -> PermissionMode:
+        """The routine's mode for a routine turn, or *mode* for other turns and missing routines."""
+        if isinstance(origin, RoutineOrigin):
+            return self._runner.routine_mode(origin.name) or mode
+        return mode
 
     def _title_untitled(self, thread_id: UUID, message: str) -> None:
         thread = self._store.thread(thread_id)

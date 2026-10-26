@@ -82,6 +82,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
 )
 from tests.test_routines import RoutineModel, instance_at
@@ -155,6 +156,7 @@ class MetricsRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 async def _record_metrics_turn(dispatcher: Dispatcher) -> AcceptedResult:

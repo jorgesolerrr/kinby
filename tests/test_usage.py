@@ -33,6 +33,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
 )
 
@@ -53,6 +54,7 @@ class UsageRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 @dataclass(frozen=True)

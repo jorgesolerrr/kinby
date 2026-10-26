@@ -59,6 +59,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
 )
 
 
@@ -550,6 +551,7 @@ class ReplRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class InterruptibleReplRunner:
@@ -567,6 +569,7 @@ class InterruptibleReplRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class ToolEventRunner:
@@ -591,6 +594,7 @@ class ToolEventRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class DeniedToolEventRunner:
@@ -617,6 +621,7 @@ class DeniedToolEventRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class FailingReplRunner:
@@ -625,9 +630,12 @@ class FailingReplRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class ApprovalReplRunner:
+    routine_mode = no_routines
+
     def __init__(self, arguments: dict[str, JsonValue] | None = None) -> None:
         self.answers: list[ApprovalAnswer] = []
         self.parked = asyncio.Event()

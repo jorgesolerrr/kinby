@@ -6,6 +6,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     PermissionMode,
     PromptVersion,
+    RoutineName,
     Scope,
     SystemPrompt,
     TreeId,
@@ -61,6 +62,10 @@ async def cannot_restore(
     thread_id: UUID,
     turn_id: UUID,
 ) -> PreparedTurnRequest | None:
+    return None
+
+
+def no_routines(self: object, name: RoutineName) -> PermissionMode | None:
     return None
 
 

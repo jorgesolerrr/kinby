@@ -49,6 +49,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     thread_events,
 )
 from tests.test_turns import (
@@ -119,6 +120,7 @@ class ParksTheSecondTurnRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 class FailingRestoreSnapshotStore(FakeSnapshotStore):
@@ -567,6 +569,7 @@ class StubbornRunner:
 
     resume = does_not_park
     restore = cannot_restore
+    routine_mode = no_routines
 
 
 def test_an_interrupt_does_not_wait_forever_on_a_runner_that_swallows_cancellation(

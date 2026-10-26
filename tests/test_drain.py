@@ -68,6 +68,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    no_routines,
     turn_config_stub,
 )
 from tests.test_contract_server import connected, frame, health, served
@@ -83,6 +84,7 @@ class WaitingRunner:
     """Hold a turn open until the test releases it."""
 
     restore = cannot_restore
+    routine_mode = no_routines
     resume = does_not_park
 
     def __init__(self) -> None:
@@ -98,6 +100,8 @@ class WaitingRunner:
 
 class ParkingRunner:
     """Park on an approval, then finish when the answer arrives."""
+
+    routine_mode = no_routines
 
     def __init__(self) -> None:
         self.parked: PreparedTurnRequest | None = None
