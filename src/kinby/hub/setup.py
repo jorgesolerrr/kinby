@@ -162,8 +162,8 @@ def instance_setup(
     code_secrets: Sequence[str],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
-    each secret its instance code declares as a required one, and the lists of repository
-    commands it is missing.
+    each secret its instance code declares as a required one, whether or not the descriptor
+    declares it, and the lists of repository commands it is missing.
 
     `running` names the sign-in each login has running, by login id. `links` names the hub
     secret each linked variable took.
@@ -208,7 +208,7 @@ def instance_setup(
                 name=field.name,
                 variable=variable(field),
                 label=field.label,
-                required=field.required,
+                required=field.required or variable(field) in code_secrets,
                 is_set=is_set(field),
                 hub_secret=hub_secret(field),
             )
