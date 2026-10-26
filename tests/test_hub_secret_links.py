@@ -571,3 +571,23 @@ def test_a_template_declaring_the_search_key_shows_it_once(tmp_path):
         ]
 
     asyncio.run(scenario())
+
+
+def test_an_optional_template_field_holding_the_search_key_reads_required(tmp_path):
+    async def scenario() -> None:
+        brave = _GITHUB_TOKEN.model_copy(
+            update={"name": "BRAVE_API_KEY", "label": "Brave key", "required": False}
+        )
+        hub = hub_at(tmp_path / "hub", images=declaring(brave))
+        client = hub_client(hub)
+        created = await created_instance(client)
+
+        setup = await _setup(client, created.instance_id)
+
+        assert [(secret.label, secret.required, secret.is_set) for secret in setup.secrets] == [
+            ("API key", True, True),
+            ("Brave key", True, False),
+        ]
+        assert setup.pending
+
+    asyncio.run(scenario())

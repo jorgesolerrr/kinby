@@ -191,7 +191,12 @@ def instance_setup(
         )
 
     needed = [
-        secret(field.name, variable(field), field.label, required=field.required)
+        secret(
+            field.name,
+            variable(field),
+            field.label,
+            required=field.required or (search_key is not None and variable(field) == search_key),
+        )
         for field in description.setup_fields
         if field.kind is SetupFieldKind.SECRET
     ]
