@@ -51,6 +51,10 @@ def _load_test_instance(tmp_path: Path) -> Instance:
 class CoreSkillModel:
     def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
         assert [tool.name for tool in tools] == [
+            "code_add_package",
+            "code_delete",
+            "code_run",
+            "code_write",
             "forget",
             "memory_open",
             "memory_search",

@@ -1,9 +1,11 @@
-"""Expose routine and skill files, and repository commands, as gated core tools."""
+"""Expose routine and skill files, repository commands, and instance code as gated core tools."""
 
 import asyncio
 import json
+import os
 import re
 import shutil
+import sys
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import datetime
@@ -24,8 +26,11 @@ from kinby.contracts import (
     SkillName,
 )
 from kinby.instance import Instance
+from kinby.instance.code import declared_secrets
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import (
+    CODE_DIR,
+    CODE_PROJECT_NAME,
     MANIFEST_NAME,
     ROUTINE_CODE_FILE,
     ROUTINE_FILE,
@@ -35,6 +40,8 @@ from kinby.instance.layout import (
 )
 from kinby.instance.manifest import with_repository_commands
 from kinby.instance.permissions import load_permissions
+from kinby.instance.routine_grants import RoutineGrants
+from kinby.plugins.defaults.shell import run_capped
 from kinby.plugins.routines import (
     Routine,
     load_routine,
@@ -47,6 +54,18 @@ from kinby.plugins.tools import Tool, ToolContext, tool
 
 _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 _COMMAND_LIST_NAME = TypeAdapter(CommandListName)
+_SECRET_NAME = re.compile("KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+_CODE_VENV = ".venv"
+_CODE_PROJECT = f"""[project]
+name = "instance-code"
+version = "0.0.0"
+requires-python = ">={sys.version_info.major}.{sys.version_info.minor}"
+dependencies = []
+
+# A variable named like a secret reaches a script only when this list names it.
+[tool.kinby]
+secrets = []
+"""
 
 #: Records what its body changes in one configuration file or directory, as one config change.
 type Recorder = Callable[[ConfigFile], AbstractContextManager[None]]
@@ -147,7 +166,8 @@ def write_routine(
     *,
     code_step_allowed: bool = True,
 ) -> Routine:
-    """Create or replace a routine once its staged copy loads. Hold the routine lock."""
+    """Create or replace a routine once its staged copy loads, revoking its grants. Hold the
+    routine lock."""
     validate_name(name)
     routines = instance.path / ROUTINES_DIR
     routines.mkdir(parents=True, exist_ok=True)
@@ -180,19 +200,21 @@ def write_routine(
             if previous.exists():
                 previous.rename(target)
             raise
+    RoutineGrants(instance.manifest.state_dir).clear(name)
     return routine
 
 
 def enable_routine(
     instance: Instance, name: RoutineName, recorded: Recorder, *, enabled: bool
 ) -> Routine:
-    """Change only a routine's enabled line. Hold the routine lock."""
+    """Change only a routine's enabled line, and revoke its grants. Hold the routine lock."""
     validate_name(name)
     routine = load_routine(instance, name)
     if routine is None:
         raise LookupError(f'Routine "{name}" was not found.')
     with recorded(routine_config_file(name)):
         set_routine_enabled(routine, enabled=enabled)
+    RoutineGrants(instance.manifest.state_dir).clear(name)
     return routine
 
 
@@ -215,7 +237,7 @@ def refuse_pending(
 
 
 def delete_routine(instance: Instance, name: RoutineName, recorded: Recorder) -> None:
-    """Delete a routine unless deliveries wait on it. Hold the routine lock."""
+    """Delete a routine and its grants unless deliveries wait on it. Hold the routine lock."""
     validate_name(name)
     target = instance.path / ROUTINES_DIR / name
     if not target.is_dir():
@@ -223,6 +245,92 @@ def delete_routine(instance: Instance, name: RoutineName, recorded: Recorder) ->
     refuse_pending(instance, name, "deleted")
     with recorded(routine_config_file(name)):
         shutil.rmtree(target)
+    RoutineGrants(instance.manifest.state_dir).clear(name)
+
+
+def _code_file(instance: Instance, path: str) -> ConfigFile:
+    """The file *path* names in the instance code, refused when it falls outside."""
+    code = (instance.path / CODE_DIR).resolve()
+    target = (code / path).resolve()
+    if target == code or not target.is_relative_to(code):
+        raise ValueError(f'"{path}" is not a path inside the instance code, {CODE_DIR}/.')
+    return ConfigFile(f"{CODE_DIR}/{target.relative_to(code).as_posix()}")
+
+
+def _code_project(context: ToolContext) -> Path:
+    """The instance code's directory, given a pyproject.toml first when it has none."""
+    code = context.instance.path / CODE_DIR
+    project = code / CODE_PROJECT_NAME
+    if not project.is_file():
+        code.mkdir(parents=True, exist_ok=True)
+        with _recorded(context, ConfigFile(f"{CODE_DIR}/{CODE_PROJECT_NAME}")):
+            project.write_text(_CODE_PROJECT, encoding="utf-8")
+    return code
+
+
+def _uv(context: ToolContext, command: str, *arguments: str) -> None:
+    code = _code_project(context)
+    # Keep the venv where code_run looks for it, even when kinby's own environment points uv
+    # elsewhere.
+    env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(code / _CODE_VENV)}
+    returncode, output = run_capped(
+        ("uv", command, "--project", str(code), *arguments),
+        cwd=code,
+        timeout_seconds=context.instance.manifest.tools.bash_timeout_seconds,
+        label=f"uv {command}",
+        env=env,
+    )
+    if returncode:
+        raise RuntimeError(output)
+
+
+def _write_code(path: str, content: str, context: ToolContext) -> str:
+    file = _code_file(context.instance, path)
+    target = context.instance.path / file
+    with _recorded(context, file):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return f"Wrote {file}."
+
+
+def _delete_code(path: str, context: ToolContext) -> str:
+    file = _code_file(context.instance, path)
+    target = context.instance.path / file
+    if not target.is_file():
+        raise LookupError(f'"{path}" is not a file in the instance code.')
+    with _recorded(context, file):
+        target.unlink()
+    return f"Deleted {file}."
+
+
+def _add_package(name: str, context: ToolContext) -> str:
+    with _recorded(context, ConfigFile(f"{CODE_DIR}/{CODE_PROJECT_NAME}")):
+        _uv(context, "add", "--", name)
+    return f"Added {name} to the instance code."
+
+
+def _run_code(script: str, arguments: list[str], context: ToolContext) -> str:
+    target = context.instance.path / _code_file(context.instance, script)
+    if not target.is_file():
+        raise LookupError(f'Script "{script}" was not found in the instance code.')
+    code = _code_project(context)
+    python = code / _CODE_VENV / "bin" / "python"
+    if not python.exists():
+        _uv(context, "sync")
+    declared = set(declared_secrets(context.instance.path))
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name in declared or _SECRET_NAME.search(name) is None
+    }
+    _, output = run_capped(
+        (str(python), str(target), *arguments),
+        cwd=code,
+        timeout_seconds=context.instance.manifest.tools.bash_timeout_seconds,
+        label=script,
+        env=env,
+    )
+    return output
 
 
 def instance_tools(instance: Instance) -> tuple[Tool, ...]:
@@ -390,7 +498,40 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
             )
         return f'Recorded the repository commands "{name}", {len(commands)} commands.'
 
+    @tool(write=True)
+    async def code_write(path: str, content: str, context: ToolContext) -> str:
+        """Write a whole file in your instance code, the Python project under code/ that keeps
+        your scripts and the packages they need.
+
+        A secret a script needs reaches it only when `secrets` in the [tool.kinby] table of its
+        pyproject.toml lists the variable. One the instance does not hold yet shows the user as
+        pending setup.
+        """
+        return await asyncio.to_thread(_write_code, path, content, context)
+
+    @tool(write=True)
+    async def code_delete(path: str, context: ToolContext) -> str:
+        """Delete one file from your instance code."""
+        return await asyncio.to_thread(_delete_code, path, context)
+
+    @tool(write=True)
+    async def code_add_package(name: str, context: ToolContext) -> str:
+        """Add a package to your instance code with `uv add`, so its scripts can import it."""
+        return await asyncio.to_thread(_add_package, name, context)
+
+    @tool(write=True)
+    async def code_run(script: str, arguments: list[str], context: ToolContext) -> str:
+        """Run a script from your instance code with its venv's Python, and return its output.
+
+        It runs in the instance code's directory, with bash's timeout and output cap.
+        """
+        return await asyncio.to_thread(_run_code, script, arguments, context)
+
     return (
+        code_add_package,
+        code_delete,
+        code_run,
+        code_write,
         repository_commands_write,
         routine_list,
         routine_read,

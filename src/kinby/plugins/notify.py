@@ -11,6 +11,7 @@ from uuid import UUID
 from kinby.contracts import (
     APPROVAL_OPTIONS,
     NOTIFICATION_RAISE,
+    ApprovalDecision,
     ApprovalRequested,
     Event,
     NotificationAccepted,
@@ -82,10 +83,11 @@ async def raise_notification(
 
 
 def approval_notification(
-    source: str, turn_id: UUID, request: ApprovalRequested
+    source: str, turn_id: UUID, request: ApprovalRequested, *, in_routine: bool
 ) -> NotificationRaised:
     """kinby's notification for an approval a turn parked on: the tool and its arguments on one
-    line, each value cut short, and the options that answer it."""
+    line, each value cut short, and the options that answer it. Only a routine's turn offers to
+    allow the tool in the routine."""
     arguments = ", ".join(
         f"{name}={_shown(value if isinstance(value, str) else json.dumps(value))}"
         for name, value in request.arguments.items()
@@ -94,7 +96,11 @@ def approval_notification(
         source=source,
         title="Approval waiting",
         text=f"{request.name}: {arguments}",
-        options=list(APPROVAL_OPTIONS),
+        options=[
+            option
+            for option, decision in APPROVAL_OPTIONS.items()
+            if in_routine or decision is not ApprovalDecision.ALLOW_IN_ROUTINE
+        ],
         approval=WaitingApproval(turn_id=turn_id, request=request),
     )
 

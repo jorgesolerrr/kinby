@@ -350,6 +350,12 @@ class ApprovalNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class GrantOutsideRoutine(CoreError):
+    """Only an approval raised in a routine's turn allows its tool in the routine (ADR 0112)."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class InvalidParkedTurn(CoreError):
     """The live runner state for a parked turn is unavailable."""
 

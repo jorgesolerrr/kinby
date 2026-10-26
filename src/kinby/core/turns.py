@@ -60,6 +60,7 @@ from kinby.core.budgets import DailyBudget, check_daily_budget
 from kinby.core.errors import (
     ApprovalNotFound,
     CoreError,
+    GrantOutsideRoutine,
     InstanceBusy,
     InstanceDraining,
     InvalidParkedTurn,
@@ -740,6 +741,12 @@ class Turns:
         if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
         origin = _turn_origin(events, pending.event.turn_id)
+        if command.decision is ApprovalDecision.ALLOW_IN_ROUTINE and not isinstance(
+            origin, RoutineOrigin
+        ):
+            raise GrantOutsideRoutine(
+                "Only an approval raised in a routine's turn can allow its tool in the routine."
+            )
         if self._holds_only_its_thread(origin):
             # A parked stage let other work in, so it takes the instance back like a new turn.
             self.require_available(origin)

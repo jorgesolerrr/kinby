@@ -718,10 +718,16 @@ class ThreadTurnRateCommand(ContractModel):
 class ApprovalDecision(StrEnum):
     APPROVE = "approve"
     DENY = "deny"
+    #: Approve, and grant the tool to the routine whose turn asked (ADR 0112).
+    ALLOW_IN_ROUTINE = "allow_in_routine"
 
 
 #: The options of a notification that asks for an approval, and the decision each one gives.
-APPROVAL_OPTIONS = {"Approve": ApprovalDecision.APPROVE, "Deny": ApprovalDecision.DENY}
+APPROVAL_OPTIONS = {
+    "Approve": ApprovalDecision.APPROVE,
+    "Always allow in this routine": ApprovalDecision.ALLOW_IN_ROUTINE,
+    "Deny": ApprovalDecision.DENY,
+}
 
 
 class ThreadApprovalRespondCommand(ContractModel):
@@ -733,7 +739,7 @@ class ThreadApprovalRespondCommand(ContractModel):
 
     @model_validator(mode="after")
     def _reason_only_on_deny(self) -> Self:
-        if self.decision is ApprovalDecision.APPROVE and self.reason is not None:
+        if self.decision is not ApprovalDecision.DENY and self.reason is not None:
             raise ValueError("An approval takes no reason; only a denial does.")
         return self
 
@@ -2010,6 +2016,29 @@ class RoutineRenameCommand(ContractModel):
     #: The routine's new name, and so its new directory and signal path.
     new_name: RoutineName
     hash: FileHash
+
+
+class RoutineGrant(ContractModel):
+    """The user's standing allow for one tool in one routine's turns, whatever its arguments."""
+
+    routine: RoutineName
+    tool: ToolName
+    granted_at: datetime
+    #: The approval the user answered with "always allow in this routine".
+    approval_id: UUID
+
+
+class RoutineGrantListCommand(ContractModel):
+    name: RoutineName
+
+
+class RoutineGrantRevokeCommand(ContractModel):
+    name: RoutineName
+    tool: ToolName
+
+
+class RoutineGrantListResult(ContractModel):
+    grants: list[RoutineGrant]
 
 
 class RecapPolicy(StrEnum):

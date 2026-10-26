@@ -886,6 +886,41 @@ describe("a thread's panel", () => {
       ])
     })
 
+    it("does not offer to always allow it on a turn the user started", async () => {
+      await reopenParked()
+
+      expect(screen.queryByRole("button", { name: "Always allow in this routine" })).toBeNull()
+    })
+
+    it("always allows it in the routine whose turn parked on it", async () => {
+      const opened = openThread({ "thread.approval.respond": accepted })
+      const [, ...rest] = parked
+      const routineStarted = thread([
+        "turn-1",
+        {
+          type: "turn.started",
+          message: "Post the news",
+          model: "claude",
+          origin: { kind: "routine", name: "news", trigger: "scheduled" },
+        },
+      ])
+      await act(async () => {
+        opened.subscription().subscribed(parked.length)
+        for (const event of [...routineStarted, ...rest]) opened.subscription().deliver(event)
+      })
+
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Always allow in this routine" }))
+
+      expect(opened.sent()).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: { thread_id: "t1", approval_id: "a1", decision: "allow_in_routine" },
+        },
+      ])
+    })
+
     it("denies it with the reason typed", async () => {
       const { sent } = await reopenParked()
       const user = userEvent.setup()

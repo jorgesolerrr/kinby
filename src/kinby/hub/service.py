@@ -271,6 +271,7 @@ from kinby.instance import (
     init_instance,
     inspect_instance,
 )
+from kinby.instance.code import declared_secrets
 from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
@@ -2704,6 +2705,14 @@ class Hub:
         manifest = cls._manifest(record)
         return None if manifest is None else manifest.models.main
 
+    @staticmethod
+    def _code_secrets(record: ManagedInstance) -> tuple[str, ...]:
+        try:
+            return declared_secrets(record.path)
+        except ValueError:
+            # code_run reports a malformed project to the agent; setup reads it as declaring none.
+            return ()
+
     def _setup(self, record: ManagedInstance) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, how they stand, and
         the lists of repository commands it is missing."""
@@ -2724,6 +2733,7 @@ class Hub:
             model=manifest.models.main if manifest is not None else None,
             search_key=manifest.tools.search_key if manifest is not None else None,
             missing_commands=self.runs.missing_commands(record),
+            code_secrets=self._code_secrets(record),
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:

@@ -160,9 +160,11 @@ def instance_setup(
     model: ModelName | None,
     search_key: str | None,
     missing_commands: Sequence[CommandListName],
+    code_secrets: Sequence[str],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
-    the key its web search needs, and the lists of repository commands it is missing.
+    the key its web search needs, each secret its instance code declares as a required one,
+    whether or not the descriptor declares it, and the lists of repository commands it is missing.
 
     `running` names the sign-in each login has running, by login id. `links` names the hub
     secret each linked variable took. `search_key` names the variable of the search backend's
@@ -195,13 +197,17 @@ def instance_setup(
             field.name,
             variable(field),
             field.label,
-            required=field.required or (search_key is not None and variable(field) == search_key),
+            required=field.required
+            or variable(field) in code_secrets
+            or (search_key is not None and variable(field) == search_key),
         )
         for field in description.setup_fields
         if field.kind is SetupFieldKind.SECRET
     ]
     if search_key is not None and search_key not in {held.variable for held in needed}:
         needed.append(secret(search_key, search_key, "Web search key", required=True))
+    held = {row.variable for row in needed}
+    needed += [secret(name, name, name, required=True) for name in code_secrets if name not in held]
     return InstanceSetup(
         logins=[
             LoginSetup(
