@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from kinby.contracts.models import (
     AcceptedResult,
+    BrowserOpenCommand,
+    BrowserOpenResult,
     Channel,
     ChannelCreateCommand,
     ChannelDeleteCommand,
@@ -501,6 +503,7 @@ NOTIFICATION_RAISE = Method(
     NotificationRaiseCommand,
     NotificationRaiseResult,
 )
+BROWSER_OPEN = Method("browser.open", Scope.BROWSER_OPEN, BrowserOpenCommand, BrowserOpenResult)
 NOTIFICATION_LIST = Method(
     "notification.list", Scope.HUB_ADMIN, NotificationListCommand, NotificationListResult
 )
@@ -624,6 +627,7 @@ METHODS = (
     CHANNEL_MUTE,
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
+    BROWSER_OPEN,
     NOTIFICATION_LIST,
     NOTIFICATION_REPLY,
 )

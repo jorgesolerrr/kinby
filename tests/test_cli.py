@@ -48,6 +48,7 @@ def test_hub_command_passes_explicit_docker_host_mapping(tmp_path, monkeypatch):
         web_app: Path | None,
         private_url: str,
         public_url: str | None,
+        *browser: object,
     ) -> int:
         received.append((directory, source, docker_host_directory, network))
         return 0
@@ -74,9 +75,11 @@ def test_hub_command_passes_explicit_docker_host_mapping(tmp_path, monkeypatch):
     assert received == [(hub, source, host, "private-network")]
 
 
-def test_hub_command_carries_its_listen_address_web_app_and_urls(tmp_path, monkeypatch):
+def test_hub_command_carries_its_listen_address_web_app_urls_and_browser_service(
+    tmp_path, monkeypatch
+):
     cli_module = import_module("kinby.cli.main")
-    received: list[tuple[Serve, Path | None, str, str | None]] = []
+    received: list[tuple[Serve, Path | None, str, str | None, str | None, str, int]] = []
 
     async def run_hub(
         directory: Path,
@@ -87,8 +90,13 @@ def test_hub_command_carries_its_listen_address_web_app_and_urls(tmp_path, monke
         web_app: Path | None,
         private_url: str,
         public_url: str | None,
+        browser_image: str | None,
+        browser_network: str,
+        browser_cap: int,
     ) -> int:
-        received.append((listen, web_app, private_url, public_url))
+        received.append(
+            (listen, web_app, private_url, public_url, browser_image, browser_network, browser_cap)
+        )
         return 0
 
     monkeypatch.setattr(cli_module, "_run_hub", run_hub)
@@ -106,14 +114,28 @@ def test_hub_command_carries_its_listen_address_web_app_and_urls(tmp_path, monke
             "http://kinby-hub:9000",
             "--public-url",
             "https://kinby.example",
+            "--browser-image",
+            "kinby-hub",
+            "--browser-network",
+            "browsers",
+            "--browser-cap",
+            "2",
         ]
     )
     defaults = main(["hub", str(tmp_path / "hub")])
 
     assert (exit_code, defaults) == (0, 0)
     assert received == [
-        (Serve("127.0.0.1", 9000), app, "http://kinby-hub:9000", "https://kinby.example"),
-        (Serve("0.0.0.0", 8080), None, "http://hub:8080", None),
+        (
+            Serve("127.0.0.1", 9000),
+            app,
+            "http://kinby-hub:9000",
+            "https://kinby.example",
+            "kinby-hub",
+            "browsers",
+            2,
+        ),
+        (Serve("0.0.0.0", 8080), None, "http://hub:8080", None, None, "kinby_browser", 3),
     ]
 
 

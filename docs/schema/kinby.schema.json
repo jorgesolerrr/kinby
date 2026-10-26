@@ -359,6 +359,11 @@
   "additionalProperties": false,
   "description": "The shape of ``kinby.toml``, validated once at load.",
   "properties": {
+    "browser": {
+      "default": false,
+      "title": "Browser",
+      "type": "boolean"
+    },
     "budgets": {
       "$ref": "#/$defs/RawBudgets",
       "title": "Budgets"

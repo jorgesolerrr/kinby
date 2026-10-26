@@ -276,6 +276,39 @@
       "title": "Binding",
       "type": "object"
     },
+    "BrowserOpenCommand": {
+      "additionalProperties": false,
+      "description": "Ask for a browser for one turn of the instance that calls.",
+      "properties": {
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id"
+      ],
+      "title": "BrowserOpenCommand",
+      "type": "object"
+    },
+    "BrowserOpenResult": {
+      "additionalProperties": false,
+      "description": "Where the turn's browser connects, and the token it connects with.",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address",
+        "token"
+      ],
+      "title": "BrowserOpenResult",
+      "type": "object"
+    },
     "CallFrame": {
       "additionalProperties": false,
       "properties": {
@@ -10426,6 +10459,22 @@
     "methods": {
       "additionalProperties": false,
       "properties": {
+        "browser.open": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserOpenCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserOpenResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "channel.create": {
           "additionalProperties": false,
           "properties": {
@@ -12415,6 +12464,7 @@
         "channel.mute",
         "channel.unmute",
         "notification.raise",
+        "browser.open",
         "notification.list",
         "notification.reply"
       ],

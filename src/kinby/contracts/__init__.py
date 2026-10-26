@@ -18,6 +18,7 @@ from kinby.contracts.frames import (
     parse_server_frame,
 )
 from kinby.contracts.methods import (
+    BROWSER_OPEN,
     CHANNEL_CREATE,
     CHANNEL_DELETE,
     CHANNEL_KINDS,
@@ -145,6 +146,7 @@ from kinby.contracts.methods import (
 )
 from kinby.contracts.models import (
     APPROVAL_OPTIONS,
+    BROWSER_SCOPES,
     CONTRACT_VERSION,
     CONTROL_SCOPES,
     DEFAULT_AVATAR,
@@ -170,6 +172,9 @@ from kinby.contracts.models import (
     BashPattern,
     BashPermissions,
     Binding,
+    BrowserOpenCommand,
+    BrowserOpenResult,
+    BrowserToken,
     Capability,
     ChangeStatus,
     Channel,
@@ -584,6 +589,8 @@ from kinby.contracts.streams import Stream
 
 __all__ = [
     "APPROVAL_OPTIONS",
+    "BROWSER_OPEN",
+    "BROWSER_SCOPES",
     "CHANNEL_CREATE",
     "CHANNEL_DELETE",
     "CHANNEL_KINDS",
@@ -731,6 +738,9 @@ __all__ = [
     "BashPattern",
     "BashPermissions",
     "Binding",
+    "BrowserOpenCommand",
+    "BrowserOpenResult",
+    "BrowserToken",
     "CallFrame",
     "CancelFrame",
     "Capability",

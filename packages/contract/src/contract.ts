@@ -201,6 +201,10 @@ export type ViewChange = "created" | "changed" | "deleted";
 export interface Contract {
   client_frame: ClientFrame;
   methods: {
+    "browser.open": {
+      command: BrowserOpenCommand;
+      result: BrowserOpenResult;
+    };
     "channel.create": {
       command: ChannelCreateCommand;
       result: Channel;
@@ -705,6 +709,19 @@ export interface SubscribeFrame {
 export interface CancelFrame {
   id: string;
   type: "cancel";
+}
+/**
+ * Ask for a browser for one turn of the instance that calls.
+ */
+export interface BrowserOpenCommand {
+  turn_id: string;
+}
+/**
+ * Where the turn's browser connects, and the token it connects with.
+ */
+export interface BrowserOpenResult {
+  address: string;
+  token: string;
 }
 /**
  * Set up a channel of one kind. The hub keeps its secret settings as hub secrets.

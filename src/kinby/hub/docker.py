@@ -17,6 +17,7 @@ from docker.types import Mount
 
 import docker
 from kinby.contracts import ContainerOwner, DeclaredSetup, StorageItem, StorageKind
+from kinby.hub.browser_service import PORT as BROWSER_PORT
 from kinby.hub.models import (
     BuildResult,
     ContainerDescription,
@@ -30,6 +31,7 @@ _FROM = re.compile(r"^(FROM\s+)(\S+)(.*)$", re.MULTILINE | re.IGNORECASE)
 _END = object()
 #: Where a setup container mounts the login's volume, beside the scratch home it signs in on.
 _LOGIN_MOUNT = "/kinby/login"
+_BROWSER_START_SECONDS = 60
 
 
 class DockerImageBackend:
@@ -500,6 +502,51 @@ class DockerRuntime:
             if instance_id.startswith("kinby-"):
                 raise
             return await asyncio.to_thread(self._client.containers.get, f"kinby-{instance_id}")
+
+
+class DockerBrowserRuntime:
+    """Run the browser service as one container on *network*, which reaches the internet and
+    neither the hub's instances nor the user's network (ADR 0113)."""
+
+    def __init__(
+        self, hub_id: str, *, image: str, network: str, client: docker.DockerClient | None = None
+    ) -> None:
+        self._name = f"kinby-browser-{hub_id}"
+        self._hub_id = hub_id
+        self._image = image
+        self._network = network
+        self._client = client or docker.from_env()
+
+    async def start(self) -> str:
+        """Start the service, replacing one a hub that died left running, once it listens."""
+        await self.stop()
+        await asyncio.to_thread(
+            self._client.containers.run,
+            self._image,
+            ["-m", "kinby.hub.browser_service"],
+            entrypoint="python",
+            name=self._name,
+            labels={"kinby.hub": self._hub_id, "kinby.browser": "true"},
+            network=self._network,
+            init=True,
+            detach=True,
+        )
+        async with asyncio.timeout(_BROWSER_START_SECONDS):
+            while True:
+                try:
+                    _, writer = await asyncio.open_connection(self._name, BROWSER_PORT)
+                except OSError:
+                    await asyncio.sleep(0.5)
+                    continue
+                writer.close()
+                return f"ws://{self._name}:{BROWSER_PORT}/"
+
+    async def stop(self) -> None:
+        try:
+            container = await asyncio.to_thread(self._client.containers.get, self._name)
+        except NotFound:
+            return
+        await asyncio.to_thread(container.remove, force=True)
 
 
 def _mounted(attributes: dict[str, object]) -> tuple[StorageItem, ...]:

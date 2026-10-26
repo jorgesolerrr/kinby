@@ -23,6 +23,7 @@ from kinby.contracts import (
     ViewChanged,
 )
 from kinby.instance import Instance
+from kinby.plugins.browser import BrowserService
 
 ToolFunction = Callable[..., object]
 RunReporter = Callable[[DelegatedRun], Awaitable[object]]
@@ -56,6 +57,8 @@ class ToolContext:
     recall_reporter: RecallReporter | None = field(default=None, repr=False)
     notification_reporter: NotificationReporter | None = field(default=None, repr=False)
     view_reporter: ViewReporter | None = field(default=None, repr=False)
+    #: Where the browser tools open the turn's browser. None outside a turn.
+    browser: BrowserService | None = field(default=None, repr=False)
 
     @property
     def workspace(self) -> Path:

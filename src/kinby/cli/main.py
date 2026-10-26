@@ -516,6 +516,9 @@ async def _run_hub(
     web_app: Path | None,
     private_url: str,
     public_url: str | None,
+    browser_image: str | None,
+    browser_network: str,
+    browser_cap: int,
 ) -> int:
     from docker.errors import DockerException
 
@@ -538,6 +541,9 @@ async def _run_hub(
                 network=network,
                 private_url=private_url,
                 public_url=public_url,
+                browser_image=browser_image,
+                browser_network=browser_network,
+                browser_cap=browser_cap,
             )
         except (DockerException, HubAlreadyRunning) as exc:
             print(f"Unable to start the Docker-backed hub: {exc}", file=sys.stderr)
@@ -821,6 +827,21 @@ def main(
         help="where the user reaches the hub, which notifications link into",
     )
     hub_parser.add_argument(
+        "--browser-image",
+        help="image to run the browser service from (default: no browser service)",
+    )
+    hub_parser.add_argument(
+        "--browser-network",
+        default="kinby_browser",
+        help="Docker network the browser service shares with the hub alone",
+    )
+    hub_parser.add_argument(
+        "--browser-cap",
+        type=int,
+        default=3,
+        help="how many browsers the browser service runs at once",
+    )
+    hub_parser.add_argument(
         "--web-app",
         type=Path,
         help="directory holding the built web app (default: the one the hub image carries)",
@@ -1040,6 +1061,9 @@ def main(
                 args.web_app,
                 args.private_url,
                 args.public_url,
+                args.browser_image,
+                args.browser_network,
+                args.browser_cap,
             )
         )
     try:

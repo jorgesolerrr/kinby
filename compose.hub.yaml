@@ -7,6 +7,8 @@ services:
     build:
       context: .
       target: hub
+    # The hub runs its browser service from its own image.
+    image: kinby-hub
     entrypoint: ["kinby"]
     command:
       - hub
@@ -19,6 +21,8 @@ services:
       - --listen=0.0.0.0:8080
       # Notifications link into the web app here.
       - --public-url=https://${KINBY_DOMAIN:?set KINBY_DOMAIN in .env next to compose.hub.yaml}
+      - --browser-image=kinby-hub
+      - --browser-network=kinby_browser
     volumes:
       - type: bind
         source: ${KINBY_HUB_DIR:?set KINBY_HUB_DIR to the hub directory on the Docker host}
@@ -34,6 +38,7 @@ services:
     networks:
       - kinby_public
       - kinby_private
+      - kinby_browser
     restart: unless-stopped
 
   caddy:
@@ -61,6 +66,10 @@ networks:
   # normal bridge, so the instance can still reach model providers, git, and GitHub.
   kinby_private:
     name: kinby_private
+  # The browser service runs alone on this network with the hub, so it reaches no instance.
+  # It reaches the internet, and its proxy refuses every address that is not public.
+  kinby_browser:
+    name: kinby_browser
 
 volumes:
   caddy-config:
