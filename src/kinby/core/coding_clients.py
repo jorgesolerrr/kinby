@@ -18,6 +18,7 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryFile
 from time import monotonic
+from uuid import uuid4
 
 from kinby.contracts import (
     CodingClient,
@@ -53,6 +54,8 @@ _RESULT_USAGE = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCr
 #: "at Sep 26th, 2026 3:05 PM."
 _CODEX_RETRY = re.compile(r"try again at ([^.]+)\.")
 _ORDINAL_DAY = re.compile(r"(\d+)(?:st|nd|rd|th),")
+#: Names one run of a client in the environment of every process it starts.
+_LAUNCH = "KINBY_CLIENT_LAUNCH"
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,7 @@ async def _run(
     """One run of *client*, killed at the event loop's *deadline*, and its error output."""
     # Files rather than pipes: a task the client leaves running can hold a pipe open, and what
     # a killed client wrote survives it.
+    launch = uuid4().hex
     with TemporaryFile() as stdin, TemporaryFile() as stdout, TemporaryFile() as stderr:
         stdin.write(prompt.encode())
         stdin.seek(0)
@@ -153,7 +157,8 @@ async def _run(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
                 env=_environment(client, instance, state_dir, timeout_seconds)
-                | session_environment(origin, attempt),
+                | session_environment(origin, attempt)
+                | {_LAUNCH: launch},
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
@@ -174,6 +179,7 @@ async def _run(
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             await process.wait()
+            _kill_leftovers(launch)
         duration_ms = round((monotonic() - started) * 1000)
         stdout.seek(0)
         stderr.seek(0)
@@ -197,6 +203,20 @@ async def _run(
     tail = errors.strip()[-_ERROR_TAIL:]
     reason = f"{client} exited with code {process.returncode}.\n{tail}".strip()
     return _ended(ran, StepEnding.FAILED, reason), errors
+
+
+def _kill_leftovers(launch: str) -> None:
+    """Kill every process the client's run *launch* started that is still running.
+
+    Claude starts each shell command in a process group of its own, and a server a command starts
+    can outlive it, so killing the client's group misses both. Each still carries the launch in
+    its environment. Only Linux has /proc to find them in.
+    """
+    marker = f"{_LAUNCH}={launch}".encode()
+    for environ in Path("/proc").glob("[0-9]*/environ"):
+        with suppress(OSError):
+            if marker in environ.read_bytes().split(b"\0"):
+                os.kill(int(environ.parent.name), signal.SIGKILL)
 
 
 def own_tokens(run: DelegatedRun, earlier: Iterable[DelegatedRun]) -> DelegatedRun:
