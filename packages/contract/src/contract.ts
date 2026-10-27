@@ -7,6 +7,7 @@
 
 export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
+export type BrowserProfileName = string;
 export type ChannelKindName = string;
 export type SetupValue = boolean | number | string;
 /**
@@ -205,6 +206,34 @@ export interface Contract {
     "browser.open": {
       command: BrowserOpenCommand;
       result: BrowserOpenResult;
+    };
+    "browser.profile.delete": {
+      command: BrowserProfileDeleteCommand;
+      result: BrowserProfileListResult;
+    };
+    "browser.profile.list": {
+      command: BrowserProfileListCommand;
+      result: BrowserProfileListResult;
+    };
+    "browser.profile.rename": {
+      command: BrowserProfileRenameCommand;
+      result: BrowserProfileListResult;
+    };
+    "browser.profile.save": {
+      command: BrowserProfileSaveCommand;
+      result: BrowserProfile;
+    };
+    "browser.profiles": {
+      command: BrowserProfilesCommand;
+      result: BrowserProfileListResult;
+    };
+    "browser.takeover.finish": {
+      command: BrowserTakeoverFinishCommand;
+      result: BrowserProfile;
+    };
+    "browser.takeover.input": {
+      command: BrowserTakeoverInputCommand;
+      result: ThreadTakeoverInputResult;
     };
     "channel.create": {
       command: ChannelCreateCommand;
@@ -685,6 +714,10 @@ export interface Contract {
   };
   server_frame: ServerFrame;
   subscriptions: {
+    "browser.takeover.start": {
+      command: BrowserTakeoverStartCommand;
+      item: TakeoverFrame;
+    };
     "factory.run.subscribe": {
       command: FactoryRunSubscribeCommand;
       item: FactoryRun;
@@ -727,6 +760,7 @@ export interface CancelFrame {
  * Ask for a browser for one turn of the instance that calls.
  */
 export interface BrowserOpenCommand {
+  profile?: BrowserProfileName | null;
   turn_id: string;
 }
 /**
@@ -736,6 +770,80 @@ export interface BrowserOpenResult {
   address: string;
   token: string;
 }
+export interface BrowserProfileDeleteCommand {
+  instance_id: string;
+  name: BrowserProfileName;
+}
+export interface BrowserProfileListResult {
+  profiles: BrowserProfile[];
+}
+/**
+ * A named signed-in state of one instance's browser. Its cookies never leave the hub.
+ */
+export interface BrowserProfile {
+  name: BrowserProfileName;
+  site: string;
+}
+export interface BrowserProfileListCommand {
+  instance_id: string;
+}
+export interface BrowserProfileRenameCommand {
+  instance_id: string;
+  name: BrowserProfileName;
+  new_name: BrowserProfileName;
+}
+/**
+ * Save the state of a turn's browser as a profile of the instance that calls, replacing one
+ * by that name. The turn's state is saved back to it when the turn ends.
+ */
+export interface BrowserProfileSaveCommand {
+  name: BrowserProfileName;
+  site: string;
+  turn_id: string;
+}
+/**
+ * List the profiles of the instance that calls.
+ */
+export interface BrowserProfilesCommand {}
+/**
+ * Save the browser of a takeover with no turn as a profile, and close it.
+ */
+export interface BrowserTakeoverFinishCommand {
+  profile: BrowserProfileName;
+  takeover_id: string;
+}
+/**
+ * Pass the user's mouse or keyboard to the browser of a takeover with no turn.
+ */
+export interface BrowserTakeoverInputCommand {
+  input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  takeover_id: string;
+}
+/**
+ * The user's mouse at a point of the page, in the pixels of the live view's frames.
+ */
+export interface TakeoverPointer {
+  action: "move" | "down" | "up";
+  type: "pointer";
+  x: number;
+  y: number;
+}
+/**
+ * The user's wheel, scrolling the page where the mouse is.
+ */
+export interface TakeoverWheel {
+  delta_x: number;
+  delta_y: number;
+  type: "wheel";
+}
+/**
+ * A key the user pressed, as Playwright names it: a character, Enter or Control+A.
+ */
+export interface TakeoverKey {
+  key: string;
+  type: "key";
+}
+export interface ThreadTakeoverInputResult {}
 /**
  * Set up a channel of one kind. The hub keeps its secret settings as hub secrets.
  */
@@ -1337,6 +1445,7 @@ export interface InstanceStatusCommand {
 }
 export interface InstanceStatusResult {
   active_operation_id?: string | null;
+  browser?: boolean;
   detail?: string;
   home: boolean;
   instance_id: string;
@@ -2463,6 +2572,7 @@ export interface ThreadRenameCommand {
  * Resume the turn parked on the takeover, with the browser as the user left it.
  */
 export interface ThreadTakeoverFinishCommand {
+  profile?: BrowserProfileName | null;
   takeover_id: string;
   thread_id: string;
 }
@@ -2474,31 +2584,6 @@ export interface ThreadTakeoverInputCommand {
   takeover_id: string;
   thread_id: string;
 }
-/**
- * The user's mouse at a point of the page, in the pixels of the live view's frames.
- */
-export interface TakeoverPointer {
-  action: "move" | "down" | "up";
-  type: "pointer";
-  x: number;
-  y: number;
-}
-/**
- * The user's wheel, scrolling the page where the mouse is.
- */
-export interface TakeoverWheel {
-  delta_x: number;
-  delta_y: number;
-  type: "wheel";
-}
-/**
- * A key the user pressed, as Playwright names it: a character, Enter or Control+A.
- */
-export interface TakeoverKey {
-  key: string;
-  type: "key";
-}
-export interface ThreadTakeoverInputResult {}
 export interface ThreadTurnDiffCommand {
   thread_id: string;
   turn_id: string;
@@ -2808,6 +2893,20 @@ export interface EndFrame {
   type: "end";
 }
 /**
+ * Open a browser at *url* with no turn, for the user to sign in and save as a profile, and
+ * watch it frame by frame. The browser closes when the watching stops.
+ */
+export interface BrowserTakeoverStartCommand {
+  takeover_id: string;
+  url: string;
+}
+/**
+ * One frame of the live view: the page as a JPEG image, base64-encoded.
+ */
+export interface TakeoverFrame {
+  data: string;
+}
+/**
  * Follow every factory run of the hub as its state changes. Nothing is replayed.
  */
 export interface FactoryRunSubscribeCommand {}
@@ -3070,12 +3169,6 @@ export interface ViewChanged {
 export interface ThreadTakeoverStartCommand {
   takeover_id: string;
   thread_id: string;
-}
-/**
- * One frame of the live view: the page as a JPEG image, base64-encoded.
- */
-export interface TakeoverFrame {
-  data: string;
 }
 /**
  * Follow one view: the view as it is, then the whole view again after each write, until it

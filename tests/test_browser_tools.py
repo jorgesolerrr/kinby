@@ -7,6 +7,7 @@ import socket
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import aiohttp
@@ -15,6 +16,8 @@ from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
     ApprovalRequested,
+    BrowserProfile,
+    BrowserProfileListResult,
     ContractModel,
     ErrorCode,
     ErrorEnvelope,
@@ -26,6 +29,7 @@ from kinby.contracts import (
     RoutineGrant,
     RoutineName,
     Scope,
+    Stream,
     SystemPrompt,
     TakeoverFrame,
     TakeoverInput,
@@ -105,16 +109,31 @@ class FakeBrowser:
         self.snapshots: list[tuple[bool, int]] = []
         self.acted: list[BrowserAction] = []
         self.sent: list[TakeoverInput] = []
+        #: The profile each turn's context opened with.
+        self.signed_in: dict[UUID, str | None] = {}
+        self.saved: list[tuple[UUID, str]] = []
+        self.kept: list[BrowserProfile] = []
         self._refusal = refusal
         self._snapshot = snapshot
         self._downloads = downloads
         self._url = "about:blank"
 
-    async def open(self, turn: UUID) -> None:
+    async def open(self, turn: UUID, profile: str | None = None) -> None:
         if self._refusal is not None:
             raise ConnectionError(self._refusal)
         if turn not in self.opened:
             self.opened.append(turn)
+            self.signed_in[turn] = profile
+
+    async def profiles(self) -> BrowserProfileListResult:
+        return BrowserProfileListResult(profiles=tuple(self.kept))
+
+    async def save_profile(self, turn: UUID, name: str) -> BrowserProfile:
+        assert turn in self.opened
+        self.saved.append((turn, name))
+        profile = BrowserProfile(name=name, site=urlsplit(self._url).hostname or self._url)
+        self.kept.append(profile)
+        return profile
 
     async def run(self, turn: UUID, action: BrowserAction) -> Page:
         assert turn in self.opened
@@ -324,7 +343,47 @@ def test_a_browser_on_instance_has_the_browser_tools(tmp_path) -> None:
         "browser_select",
         "browser_press",
         "browser_upload",
+        "browser_profiles",
     } <= names
+
+
+def test_browser_open_with_a_profile_opens_the_turns_browser_signed_in_with_it(tmp_path) -> None:
+    browser = FakeBrowser()
+    model = _calls(("browser_open", {"url": _JOBS, "profile": "LinkedIn"}))
+
+    turn, payloads = _turn(_instance(tmp_path), model, f"Check {_JOBS}", browser)
+
+    assert not _results(payloads)["browser_open"].error
+    assert browser.signed_in == {turn: "LinkedIn"}
+    assert browser.visited == [_JOBS]
+
+
+def test_browser_profiles_lists_the_instances_profiles_by_name_and_site(tmp_path) -> None:
+    browser = FakeBrowser()
+    browser.kept = [
+        BrowserProfile(name="Indeed", site="secure.indeed.com"),
+        BrowserProfile(name="LinkedIn", site="www.linkedin.com"),
+    ]
+    model = _calls(("browser_profiles", {}))
+
+    _, payloads = _turn(_instance(tmp_path), model, "Which sites can you use?", browser)
+
+    [gate] = [p for p in payloads if isinstance(p, ToolGated)]
+    assert gate.action is GateOutcome.ALLOW
+    assert _results(payloads)["browser_profiles"].output == (
+        "Indeed: secure.indeed.com\nLinkedIn: www.linkedin.com"
+    )
+    assert browser.opened == []
+
+
+def test_browser_profiles_says_when_there_is_none(tmp_path) -> None:
+    model = _calls(("browser_profiles", {}))
+
+    _, payloads = _turn(_instance(tmp_path), model, "Which sites?", FakeBrowser())
+
+    assert _results(payloads)["browser_profiles"].output == (
+        "You have no browser profiles. The user creates them from the instance page."
+    )
 
 
 def test_a_turn_without_a_browser_call_opens_no_context(tmp_path) -> None:
@@ -492,11 +551,14 @@ def test_an_upload_from_outside_the_workspace_is_refused(tmp_path, path: str) ->
 _REASON = "Sign in to LinkedIn: it asks for a code from your phone."
 
 
-def _takeover_runtime(tmp_path: Path, browser: FakeBrowser) -> Dispatcher:
-    """An instance whose turns call browser_takeover once, then finish."""
+def _takeover_runtime(
+    tmp_path: Path, browser: FakeBrowser, *after: tuple[str, dict[str, object]]
+) -> Dispatcher:
+    """An instance whose turns call browser_takeover once, then the tools *after*, then
+    finish."""
     instance = _instance(tmp_path, mode="full-access")
     log = EventLog(instance.manifest.state_dir)
-    model = _calls(("browser_takeover", {"reason": _REASON}))
+    model = _calls(("browser_takeover", {"reason": _REASON}), *after)
     runner = LangGraphRunner(
         instance, event_log=log, model_factory=lambda _: model, browser=browser
     )
@@ -524,13 +586,14 @@ async def _parked_on_takeover(dispatcher: Dispatcher) -> Event:
     raise AssertionError("The thread stopped streaming.")
 
 
-async def _finish(dispatcher: Dispatcher, parked: Event) -> object:
+async def _finish(dispatcher: Dispatcher, parked: Event, profile: str | None = None) -> object:
     assert isinstance(parked.payload, TakeoverRequested)
     return await call(
         dispatcher,
         "thread.takeover.finish",
         thread_id=parked.thread_id,
         takeover_id=parked.payload.takeover_id,
+        profile=profile,
     )
 
 
@@ -556,6 +619,28 @@ def test_a_takeover_parks_the_turn_needing_the_user_and_finishing_resumes_it(tmp
     assert (result.name, result.error) == ("browser_takeover", False)
     assert isinstance(events[-1].payload, TurnCompleted)
     assert browser.closed == [parked.turn_id]
+
+
+def test_a_takeover_finished_as_a_profile_is_in_the_agents_list_by_name_and_site(
+    tmp_path,
+) -> None:
+    browser = FakeBrowser()
+    dispatcher = _takeover_runtime(tmp_path, browser, ("browser_profiles", {}))
+
+    async def scenario() -> tuple[Event, list[Event]]:
+        parked = await _parked_on_takeover(dispatcher)
+        # The user's live view opened the browser, and they signed in.
+        await browser.open(parked.turn_id)
+        await browser.run(parked.turn_id, Navigate("https://www.linkedin.com/feed/"))
+        await _finish(dispatcher, parked, "LinkedIn")
+        return parked, await turn_events(dispatcher, parked.thread_id)
+
+    parked, events = asyncio.run(scenario())
+
+    assert browser.saved == [(parked.turn_id, "LinkedIn")]
+    results = {e.payload.name: e.payload for e in events if isinstance(e.payload, ToolResult)}
+    assert results["browser_profiles"].output == "LinkedIn: www.linkedin.com"
+    assert isinstance(events[-1].payload, TurnCompleted)
 
 
 def test_a_takeover_raises_a_notification_with_its_reason(tmp_path, monkeypatch) -> None:
@@ -754,3 +839,70 @@ def test_through_the_hub_input_reaches_the_browser_and_finishing_resumes_the_tur
     assert finish_result["type"] == FrameType.RESULT.value, finish_result
     assert browser.sent == [TakeoverKey(key="Enter")]
     assert isinstance(events[-1].payload, TurnCompleted)
+
+
+_SIGN_IN = "https://www.linkedin.com/login"
+
+
+async def _watch_takeover(dispatcher: Dispatcher, takeover_id: UUID) -> Stream[ContractModel]:
+    """Start a takeover with no turn, at the sign-in page, and watch it."""
+    stream = await dispatcher.subscribe(
+        "browser.takeover.start", {"takeover_id": takeover_id, "url": _SIGN_IN}, set(Scope)
+    )
+    assert not isinstance(stream, ErrorEnvelope), stream
+    return stream
+
+
+def test_a_takeover_with_no_turn_opens_the_page_takes_input_and_saves_a_profile(tmp_path) -> None:
+    browser = FakeBrowser()
+    dispatcher = _takeover_runtime(tmp_path, browser)
+    takeover_id = uuid4()
+
+    async def scenario() -> tuple[ContractModel, object, list[UUID]]:
+        stream = await _watch_takeover(dispatcher, takeover_id)
+        async with asyncio.timeout(5):
+            frame = await anext(stream.items)
+        await call(
+            dispatcher,
+            "browser.takeover.input",
+            takeover_id=takeover_id,
+            input={"type": "key", "key": "Enter"},
+        )
+        saved = await call(
+            dispatcher, "browser.takeover.finish", takeover_id=takeover_id, profile="LinkedIn"
+        )
+        closed_on_finish = list(browser.closed)
+        await stream.aclose()
+        return frame, saved, closed_on_finish
+
+    frame, saved, closed_on_finish = asyncio.run(scenario())
+
+    assert isinstance(frame, TakeoverFrame)
+    assert base64.b64decode(frame.data) == _FRAME
+    assert browser.visited == [_SIGN_IN]
+    assert browser.sent == [TakeoverKey(key="Enter")]
+    assert saved == BrowserProfile(name="LinkedIn", site="www.linkedin.com")
+    assert browser.saved == [(takeover_id, "LinkedIn")]
+    assert closed_on_finish == [takeover_id]
+
+
+def test_a_takeover_with_no_turn_closes_its_browser_when_nobody_watches_it(tmp_path) -> None:
+    browser = FakeBrowser()
+    dispatcher = _takeover_runtime(tmp_path, browser)
+    takeover_id = uuid4()
+
+    async def scenario() -> object:
+        stream = await _watch_takeover(dispatcher, takeover_id)
+        async with asyncio.timeout(5):
+            await anext(stream.items)
+        await stream.aclose()
+        return await call(
+            dispatcher, "browser.takeover.finish", takeover_id=takeover_id, profile="LinkedIn"
+        )
+
+    late_finish = asyncio.run(scenario())
+
+    assert browser.closed == [takeover_id]
+    assert isinstance(late_finish, ErrorEnvelope)
+    assert late_finish.code is ErrorCode.NOT_FOUND
+    assert browser.saved == []

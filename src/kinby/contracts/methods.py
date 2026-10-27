@@ -9,6 +9,16 @@ from kinby.contracts.models import (
     AcceptedResult,
     BrowserOpenCommand,
     BrowserOpenResult,
+    BrowserProfile,
+    BrowserProfileDeleteCommand,
+    BrowserProfileListCommand,
+    BrowserProfileListResult,
+    BrowserProfileRenameCommand,
+    BrowserProfileSaveCommand,
+    BrowserProfilesCommand,
+    BrowserTakeoverFinishCommand,
+    BrowserTakeoverInputCommand,
+    BrowserTakeoverStartCommand,
     Channel,
     ChannelCreateCommand,
     ChannelDeleteCommand,
@@ -288,6 +298,18 @@ THREAD_TAKEOVER_INPUT = Method(
 THREAD_TAKEOVER_FINISH = Method(
     "thread.takeover.finish", Scope.THREAD_OPERATE, ThreadTakeoverFinishCommand, AcceptedResult
 )
+BROWSER_TAKEOVER_START = Subscription(
+    "browser.takeover.start", Scope.INSTANCE_ADMIN, BrowserTakeoverStartCommand, TakeoverFrame
+)
+BROWSER_TAKEOVER_INPUT = Method(
+    "browser.takeover.input",
+    Scope.INSTANCE_ADMIN,
+    BrowserTakeoverInputCommand,
+    ThreadTakeoverInputResult,
+)
+BROWSER_TAKEOVER_FINISH = Method(
+    "browser.takeover.finish", Scope.INSTANCE_ADMIN, BrowserTakeoverFinishCommand, BrowserProfile
+)
 USAGE_GET = Method("usage.get", Scope.INSTANCE_READ, UsageGetCommand, UsageGetResult)
 STATS_GET = Method("stats.get", Scope.INSTANCE_READ, StatsGetCommand, StatsGetResult)
 THREAD_SUBSCRIBE = Subscription(
@@ -521,6 +543,29 @@ NOTIFICATION_RAISE = Method(
     NotificationRaiseResult,
 )
 BROWSER_OPEN = Method("browser.open", Scope.BROWSER_OPEN, BrowserOpenCommand, BrowserOpenResult)
+BROWSER_PROFILES = Method(
+    "browser.profiles", Scope.BROWSER_OPEN, BrowserProfilesCommand, BrowserProfileListResult
+)
+BROWSER_PROFILE_SAVE = Method(
+    "browser.profile.save", Scope.BROWSER_OPEN, BrowserProfileSaveCommand, BrowserProfile
+)
+BROWSER_PROFILE_LIST = Method(
+    "browser.profile.list", Scope.HUB_READ, BrowserProfileListCommand, BrowserProfileListResult
+)
+#: Answers with the instance's profiles.
+BROWSER_PROFILE_RENAME = Method(
+    "browser.profile.rename",
+    Scope.HUB_ADMIN,
+    BrowserProfileRenameCommand,
+    BrowserProfileListResult,
+)
+#: Answers with the instance's profiles.
+BROWSER_PROFILE_DELETE = Method(
+    "browser.profile.delete",
+    Scope.HUB_ADMIN,
+    BrowserProfileDeleteCommand,
+    BrowserProfileListResult,
+)
 NOTIFICATION_LIST = Method(
     "notification.list", Scope.HUB_ADMIN, NotificationListCommand, NotificationListResult
 )
@@ -546,6 +591,8 @@ METHODS = (
     THREAD_APPROVAL_RESPOND,
     THREAD_TAKEOVER_INPUT,
     THREAD_TAKEOVER_FINISH,
+    BROWSER_TAKEOVER_INPUT,
+    BROWSER_TAKEOVER_FINISH,
     USAGE_GET,
     STATS_GET,
     INSTANCE_PROBE,
@@ -647,6 +694,11 @@ METHODS = (
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
     BROWSER_OPEN,
+    BROWSER_PROFILES,
+    BROWSER_PROFILE_SAVE,
+    BROWSER_PROFILE_LIST,
+    BROWSER_PROFILE_RENAME,
+    BROWSER_PROFILE_DELETE,
     NOTIFICATION_LIST,
     NOTIFICATION_REPLY,
 )
@@ -655,6 +707,7 @@ SUBSCRIPTIONS = (
     FACTORY_RUN_SUBSCRIBE,
     VIEW_SUBSCRIBE,
     THREAD_TAKEOVER_START,
+    BROWSER_TAKEOVER_START,
 )
 
 #: The methods of an instance the hub relays to the home instance: reads only.

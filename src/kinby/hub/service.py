@@ -21,6 +21,11 @@ from pydantic import JsonValue
 
 from kinby.contracts import (
     BROWSER_OPEN,
+    BROWSER_PROFILE_DELETE,
+    BROWSER_PROFILE_LIST,
+    BROWSER_PROFILE_RENAME,
+    BROWSER_PROFILE_SAVE,
+    BROWSER_PROFILES,
     BROWSER_SCOPES,
     CHANNEL_CREATE,
     CHANNEL_DELETE,
@@ -97,6 +102,13 @@ from kinby.contracts import (
     Avatar,
     BrowserOpenCommand,
     BrowserOpenResult,
+    BrowserProfile,
+    BrowserProfileDeleteCommand,
+    BrowserProfileListCommand,
+    BrowserProfileListResult,
+    BrowserProfileRenameCommand,
+    BrowserProfileSaveCommand,
+    BrowserProfilesCommand,
     Capability,
     ChannelKindName,
     ContainerOwner,
@@ -195,6 +207,7 @@ from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
+    BrowserNotOpen,
     FactoryCheckFailed,
     FactoryNotFound,
     HomeInstanceKept,
@@ -216,6 +229,7 @@ from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
 from kinby.hub.browser import BrowserConnection, BrowserLimits, BrowserRuntime, HubBrowsers
+from kinby.hub.browser_profiles import BrowserProfiles
 from kinby.hub.channels import ChannelKind, Channels, installed_kinds
 from kinby.hub.control import (
     ControlConnectionLost,
@@ -552,6 +566,7 @@ class Hub:
             )
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
+            self.browser_profiles = BrowserProfiles(self.directory / "browser-profiles")
             self.approvals = HomeApprovals()
             self.channels = Channels(
                 self.registry,
@@ -574,7 +589,11 @@ class Hub:
                 sleep,
             )
             self._control = control if control is not None else HttpInstanceControl()
-            self._browsers = HubBrowsers(browser, browser_limits) if browser is not None else None
+            self._browsers = (
+                HubBrowsers(browser, browser_limits, self.browser_profiles)
+                if browser is not None
+                else None
+            )
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
@@ -640,6 +659,9 @@ class Hub:
         dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
         dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
         dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
+        dispatcher.register(BROWSER_PROFILE_LIST, self.list_browser_profiles)
+        dispatcher.register(BROWSER_PROFILE_RENAME, self.rename_browser_profile)
+        dispatcher.register(BROWSER_PROFILE_DELETE, self.delete_browser_profile)
         dispatcher.register(STATS_SUMMARY, self.stats_summary)
         dispatcher.register(STATS_RUNS, self.stats_runs)
         dispatcher.register(CHANNEL_KINDS, self.channels.kinds)
@@ -686,6 +708,10 @@ class Hub:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
         if Scope.BROWSER_OPEN in scopes:
             dispatcher.register(BROWSER_OPEN, partial(self.open_browser, instance_id))
+            dispatcher.register(BROWSER_PROFILES, partial(self.own_browser_profiles, instance_id))
+            dispatcher.register(
+                BROWSER_PROFILE_SAVE, partial(self.save_browser_profile, instance_id)
+            )
         if Scope.HUB_HOME in scopes:
             self._serve_hub(dispatcher)
             dispatcher.register(INSTANCE_RELAY_READ, self.relay_read)
@@ -702,7 +728,7 @@ class Hub:
     ) -> BrowserOpenResult:
         """Lend the instance a browser for the turn *command* names, on its browser route."""
         assert self._browsers is not None
-        token = await self._browsers.lend(instance_id)
+        token = await self._browsers.lend(instance_id, command.turn_id, command.profile)
         return BrowserOpenResult(
             address=f"{self._private_url}/instances/{instance_id}/browser".replace("http", "ws", 1),
             token=token,
@@ -710,6 +736,40 @@ class Hub:
 
     def connect_browser(self, instance_id: UUID, token: str) -> BrowserConnection | None:
         return self._browsers.connect(instance_id, token) if self._browsers else None
+
+    async def own_browser_profiles(
+        self, instance_id: UUID, command: BrowserProfilesCommand
+    ) -> BrowserProfileListResult:
+        return self.browser_profiles.list(instance_id)
+
+    async def save_browser_profile(
+        self, instance_id: UUID, command: BrowserProfileSaveCommand
+    ) -> BrowserProfile:
+        """Save the browser of the instance's turn as a profile, which the user's takeover
+        signed in."""
+        session = self._browsers.session(instance_id, command.turn_id) if self._browsers else None
+        if session is None:
+            raise BrowserNotOpen(f'Turn "{command.turn_id}" has no browser open.')
+        return await session.save_as(command.name, command.site)
+
+    async def list_browser_profiles(
+        self, command: BrowserProfileListCommand
+    ) -> BrowserProfileListResult:
+        return self.browser_profiles.list(self._active_instance(command.instance_id).instance_id)
+
+    async def rename_browser_profile(
+        self, command: BrowserProfileRenameCommand
+    ) -> BrowserProfileListResult:
+        return self.browser_profiles.rename(
+            self._active_instance(command.instance_id).instance_id, command.name, command.new_name
+        )
+
+    async def delete_browser_profile(
+        self, command: BrowserProfileDeleteCommand
+    ) -> BrowserProfileListResult:
+        return self.browser_profiles.delete(
+            self._active_instance(command.instance_id).instance_id, command.name
+        )
 
     async def write_for_home(self, home: UUID, command: HubWriteCommand) -> HubWriteResult:
         """Run a hub tool's write once, for the approval the hub saw the user give that call."""
@@ -2714,6 +2774,7 @@ class Hub:
             active_operation_id=self.registry.active_operation(record.instance_id),
             recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
             repository_commands=[*self.runs.held_commands(record)],
+            browser=self._browser_on(record),
         )
 
     async def _recreate_reasons(

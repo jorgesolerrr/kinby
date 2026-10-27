@@ -13,6 +13,9 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from kinby.contracts import (
+    BROWSER_TAKEOVER_FINISH,
+    BROWSER_TAKEOVER_INPUT,
+    BROWSER_TAKEOVER_START,
     CONFIG_HISTORY,
     CONTRACT_VERSION,
     INSTANCE_DRAIN,
@@ -130,6 +133,7 @@ from kinby.core.stats import (
     stats_summary,
 )
 from kinby.core.steps import run_step
+from kinby.core.takeovers import ProfileTakeovers
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -574,6 +578,11 @@ def build_dispatcher(
         dispatcher.register_subscription(THREAD_TAKEOVER_START, turn_service.start_takeover)
         dispatcher.register(THREAD_TAKEOVER_INPUT, turn_service.send_takeover_input)
         dispatcher.register(THREAD_TAKEOVER_FINISH, turn_service.finish_takeover)
+    if turn_settings is not None and turn_settings.browser is not None:
+        takeovers = ProfileTakeovers(turn_settings.browser)
+        dispatcher.register_subscription(BROWSER_TAKEOVER_START, takeovers.start)
+        dispatcher.register(BROWSER_TAKEOVER_INPUT, takeovers.send_input)
+        dispatcher.register(BROWSER_TAKEOVER_FINISH, takeovers.finish)
     return dispatcher
 
 

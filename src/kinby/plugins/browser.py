@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 from uuid import UUID
 
-from kinby.contracts import TakeoverInput
+from kinby.contracts import (
+    BrowserProfile,
+    BrowserProfileListResult,
+    BrowserProfileName,
+    TakeoverInput,
+)
 
 
 @dataclass(frozen=True)
@@ -99,8 +104,9 @@ class PageRead:
 class BrowserService(Protocol):
     """A fresh browser context for each turn, which shares nothing with another turn."""
 
-    async def open(self, turn: UUID) -> None:
-        """Open the turn's context, unless it has one already."""
+    async def open(self, turn: UUID, profile: BrowserProfileName | None = None) -> None:
+        """Open the turn's context, unless it has one already, signed in with the instance's
+        *profile*. A context opened without the profile refuses it."""
 
     async def run(self, turn: UUID, action: BrowserAction) -> Page:
         """Run one action on the turn's page."""
@@ -122,5 +128,12 @@ class BrowserService(Protocol):
     async def send(self, turn: UUID, user_input: TakeoverInput) -> None:
         """Pass the user's mouse or keyboard to the turn's page, during a takeover."""
 
+    async def profiles(self) -> BrowserProfileListResult:
+        """The instance's profiles, by name and site."""
+
+    async def save_profile(self, turn: UUID, name: BrowserProfileName) -> BrowserProfile:
+        """Save the turn's context as the instance's profile *name*, for its site. The context's
+        state is saved back to it when the context closes."""
+
     async def close(self, turn: UUID) -> None:
-        """Close the turn's context, if it opened one."""
+        """Close the turn's context, if it opened one, saving its state back to its profile."""

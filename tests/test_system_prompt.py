@@ -377,6 +377,25 @@ def test_prompt_sections_name_their_sources(tmp_path: Path) -> None:
     ]
 
 
+def test_a_browser_on_instance_is_told_to_report_an_expired_sign_in_rather_than_sign_in(
+    tmp_path: Path,
+) -> None:
+    instance_path = _instance_with_prompt_files(tmp_path)
+    manifest = instance_path / "kinby.toml"
+    manifest.write_text("browser = true\n" + manifest.read_text(encoding="utf-8"), "utf-8")
+    instance = load_instance(instance_path)
+
+    sections = assemble_system_prompt(instance, (), date(2026, 8, 28))
+
+    assert [(section.name, str(section.source)) for section in sections][:2] == [
+        ("preamble", "kinby"),
+        ("browser", "kinby"),
+    ]
+    assert "browser_profiles" in sections[1].text
+    assert "notify" in sections[1].text
+    assert "instead of signing in" in sections[1].text
+
+
 def test_prompt_version_hashes_rendered_sections_without_environment(tmp_path: Path) -> None:
     instance_path = _instance_with_prompt_files(tmp_path)
     instance = load_instance(instance_path)

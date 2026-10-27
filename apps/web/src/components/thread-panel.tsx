@@ -6,12 +6,9 @@ import type {
   InstanceClient,
   JsonValue,
   Notification,
-  TakeoverPointer,
-  ThreadTakeoverInputCommand,
 } from "@kinby/contract"
 import {
   type ComponentProps,
-  type MouseEvent,
   type ReactNode,
   type Ref,
   useCallback,
@@ -25,6 +22,7 @@ import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
+import { LiveBrowser, type LiveBrowserInput } from "@/components/live-browser"
 import { ThreadHeader } from "@/components/thread-header"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -32,7 +30,7 @@ import { Badge } from "@/components/ui/badge"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldError, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   InputGroup,
@@ -568,13 +566,10 @@ function ApprovalPanel({
   )
 }
 
-/** Keys a browser reports on their own while they are held, which only change another key. */
-const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock"])
-
 /**
  * The takeover a turn is parked on, in the composer's place: why the agent asks, and its browser's
  * page live, which takes the user's mouse and keyboard. Finish resumes the turn with the page as
- * the user left it.
+ * the user left it, saved first as a profile when the user names one.
  */
 function TakeoverPanel({
   client,
@@ -588,41 +583,20 @@ function TakeoverPanel({
   speaker: Speaker
 }) {
   const ids = { thread_id: threadId, takeover_id: takeover.takeoverId }
-  const view = useLiveView(client, threadId, takeover.takeoverId)
-  const page = useRef<HTMLImageElement>(null)
-  // Input goes one call at a time, so a release never overtakes its press.
-  const queue = useRef(Promise.resolve())
-  const queued = useRef(0)
+  const watch = useCallback(
+    () =>
+      client.subscribe("thread.takeover.start", {
+        thread_id: threadId,
+        takeover_id: takeover.takeoverId,
+      }),
+    [client, threadId, takeover.takeoverId],
+  )
+  const profileId = useId()
+  const [profile, setProfile] = useState("")
   const [failure, setFailure] = useState<string>()
   const [answering, setAnswering] = useState<"finish" | "stop">()
 
-  const send = (input: ThreadTakeoverInputCommand["input"]) => {
-    // Input after Finish or Stop would reach a turn that already moved on.
-    if (answering !== undefined) return
-    // A move behind other input is stale by the time it would run.
-    if (input.type === "pointer" && input.action === "move" && queued.current > 0) return
-    queued.current += 1
-    queue.current = queue.current
-      .then(() => client.call("thread.takeover.input", { ...ids, input }))
-      .then(
-        () => setFailure(undefined),
-        (error: unknown) => setFailure(reason(error)),
-      )
-      .finally(() => {
-        queued.current -= 1
-      })
-  }
-  const pointer = (action: TakeoverPointer["action"]) => (event: MouseEvent) => {
-    const shown = page.current
-    if (shown === null || (event.button !== 0 && action !== "move")) return
-    const box = shown.getBoundingClientRect()
-    send({
-      type: "pointer",
-      action,
-      x: Math.round(((event.clientX - box.left) * shown.naturalWidth) / box.width),
-      y: Math.round(((event.clientY - box.top) * shown.naturalHeight) / box.height),
-    })
-  }
+  const live = useRef<LiveBrowserInput>(null)
   const answer = async (pressed: "finish" | "stop", work: () => Promise<unknown>) => {
     setAnswering(pressed)
     try {
@@ -633,6 +607,7 @@ function TakeoverPanel({
     }
   }
   const busy = answering !== undefined
+  const name = profile.trim()
 
   return (
     <section aria-label="Take over the browser" className="flex gap-3">
@@ -644,52 +619,31 @@ function TakeoverPanel({
               <h2 className="text-lg font-semibold">Can you take over the browser?</h2>
               <p className="text-sm text-muted-foreground">{takeover.reason}</p>
             </div>
-            {/* A remote screen, which ARIA marks as an application: it passes the page every key,
-                Tab included, and the mouse. */}
-            {/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
-            <div
-              role="application"
-              aria-label="The browser"
-              tabIndex={0}
-              className="overflow-hidden rounded-lg border outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-              onMouseDown={pointer("down")}
-              onMouseUp={pointer("up")}
-              onMouseMove={pointer("move")}
-              onWheel={(event) =>
-                send({ type: "wheel", delta_x: event.deltaX, delta_y: event.deltaY })
-              }
-              onContextMenu={(event) => event.preventDefault()}
-              onKeyDown={(event) => {
-                if (MODIFIERS.has(event.key) || event.nativeEvent.isComposing) return
-                event.preventDefault()
-                const held = [
-                  event.ctrlKey && "Control",
-                  event.altKey && "Alt",
-                  event.metaKey && "Meta",
-                  // A character already reads as shifted.
-                  event.shiftKey && event.key.length > 1 && "Shift",
-                ].filter((key) => key !== false)
-                send({ type: "key", key: [...held, event.key].join("+") })
-              }}
-            >
-              {view.frame === undefined ? (
-                <Skeleton aria-label="Loading the browser" className="aspect-video w-full" />
-              ) : (
-                <img
-                  ref={page}
-                  src={`data:image/jpeg;base64,${view.frame}`}
-                  alt="The browser's page"
-                  draggable={false}
-                  className="w-full select-none"
-                />
-              )}
-            </div>
-            {/* oxlint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
-            {(failure ?? view.failure) !== undefined && (
+            <LiveBrowser
+              ref={live}
+              watch={watch}
+              send={(input) => client.call("thread.takeover.input", { ...ids, input })}
+              // Input after Finish or Stop would reach a turn that already moved on.
+              disabled={busy}
+            />
+            {failure !== undefined && (
               <p role="alert" className="text-sm text-destructive">
-                {failure ?? view.failure}
+                {failure}
               </p>
             )}
+            <Field>
+              <FieldLabel htmlFor={profileId}>Save as a profile</FieldLabel>
+              <Input
+                id={profileId}
+                value={profile}
+                placeholder="LinkedIn"
+                readOnly={busy}
+                onChange={(event) => setProfile(event.target.value)}
+              />
+              <FieldDescription>
+                Name the sign-in to let {speaker.name} open the site signed in later.
+              </FieldDescription>
+            </Field>
             <div className="flex w-full flex-wrap items-center gap-2">
               <Button
                 size="lg"
@@ -698,8 +652,11 @@ function TakeoverPanel({
                 onClick={() =>
                   void answer("finish", async () => {
                     // What the user typed last reaches the page before the turn resumes.
-                    await queue.current
-                    return client.call("thread.takeover.finish", ids)
+                    await live.current?.drained()
+                    return client.call(
+                      "thread.takeover.finish",
+                      name === "" ? ids : { ...ids, profile: name },
+                    )
                   })
                 }
               >
@@ -733,38 +690,6 @@ function TakeoverPanel({
       </Card>
     </section>
   )
-}
-
-/** The newest frame of the takeover's live view, base64-encoded, or why the view stopped. */
-function useLiveView(
-  client: Pick<InstanceClient, "subscribe">,
-  threadId: string,
-  takeoverId: string,
-): { frame?: string; failure?: string } {
-  const [frame, setFrame] = useState<string>()
-  const [failure, setFailure] = useState<string>()
-  useEffect(() => {
-    const frames = client.subscribe("thread.takeover.start", {
-      thread_id: threadId,
-      takeover_id: takeoverId,
-    })
-    let following = true
-    const read = async () => {
-      try {
-        for await (const { data } of frames) {
-          if (following) setFrame(data)
-        }
-      } catch (error) {
-        if (following) setFailure(reason(error))
-      }
-    }
-    void read()
-    return () => {
-      following = false
-      frames.cancel()
-    }
-  }, [client, threadId, takeoverId])
-  return { frame, failure }
 }
 
 /** Focus `field`, unless the user is typing in another one, like the title in the header. */

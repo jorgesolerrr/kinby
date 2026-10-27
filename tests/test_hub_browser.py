@@ -2,9 +2,10 @@
 service, a cap on browsers at once, and a service that runs only while it is needed (ADR 0113)."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -12,7 +13,23 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from kinby.contracts import ControlToken, ErrorCode, FrameType
+from kinby.contracts import (
+    BROWSER_PROFILE_DELETE,
+    BROWSER_PROFILE_LIST,
+    BROWSER_PROFILE_RENAME,
+    INSTANCE_STATUS,
+    BrowserProfile,
+    BrowserProfileDeleteCommand,
+    BrowserProfileListCommand,
+    BrowserProfileListResult,
+    BrowserProfileRenameCommand,
+    ControlToken,
+    ErrorCode,
+    ErrorEnvelope,
+    FrameType,
+    InstanceStatusCommand,
+    InstanceStatusResult,
+)
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.hub import Hub
 from kinby.hub.browser import BrowserLimits
@@ -53,17 +70,44 @@ class FakeBrowserRuntime:
         self.stopped.set()
 
 
+_CONTEXT = "browser-context@1"
+
+
+@dataclass
+class FakeService:
+    """What a stand-in for Playwright's browser server saw, and the state its contexts hold."""
+
+    connected: list[dict[str, str]] = field(default_factory=list)
+    calls: list[dict[str, object]] = field(default_factory=list)
+    state: dict[str, object] = field(default_factory=lambda: {"cookies": [], "origins": []})
+
+
+def _answer(call: dict[str, object], service: FakeService) -> dict[str, object]:
+    match call["method"]:
+        case "newContext":
+            return {"id": call["id"], "result": {"context": {"guid": _CONTEXT}}}
+        case "storageState":
+            return {"id": call["id"], "result": service.state}
+        case _:
+            return {"id": call["id"], "result": {}}
+
+
 @asynccontextmanager
-async def playwright_server(connected: list[dict[str, str]]) -> AsyncIterator[str]:
-    """A stand-in for Playwright's browser server that echoes each frame and records the
-    headers of each connection."""
+async def playwright_server(service: FakeService) -> AsyncIterator[str]:
+    """A stand-in for Playwright's browser server. It answers each protocol call, echoes any
+    other frame, and records the headers of each connection."""
 
     async def socket(request: web.Request) -> web.WebSocketResponse:
-        connected.append(dict(request.headers))
+        service.connected.append(dict(request.headers))
         response = web.WebSocketResponse()
         await response.prepare(request)
         async for message in response:
-            await response.send_str(f"echo {message.data}")
+            if not message.data.startswith("{"):
+                await response.send_str(f"echo {message.data}")
+                continue
+            call = json.loads(message.data)
+            service.calls.append(call)
+            await response.send_str(json.dumps(_answer(call, service)))
         return response
 
     application = web.Application()
@@ -82,6 +126,7 @@ async def playwright_server(connected: list[dict[str, str]]) -> AsyncIterator[st
 class BrowserHub:
     hub: Hub
     runtime: FakeBrowserRuntime
+    service: FakeService
     address: Serve
     alice: UUID
     bob: UUID
@@ -95,11 +140,19 @@ class BrowserHub:
     def token(self, instance_id: UUID) -> ControlToken:
         return control_token(self.hub, str(instance_id))
 
-    async def open(self, instance_id: UUID, turn: UUID) -> dict[str, object]:
+    async def open(
+        self, instance_id: UUID, turn: UUID, profile: str | None = None
+    ) -> dict[str, object]:
+        return await self.call(
+            instance_id, "browser.open", {"turn_id": str(turn), "profile": profile}
+        )
+
+    async def call(
+        self, instance_id: UUID, method: str, params: dict[str, object]
+    ) -> dict[str, object]:
+        """Call *method* on the instance's hub route."""
         (answer,) = await answers(
-            self.route(instance_id),
-            self.token(instance_id),
-            ("browser.open", {"turn_id": str(turn)}),
+            self.route(instance_id), self.token(instance_id), (method, params)
         )
         return answer
 
@@ -112,12 +165,11 @@ def browser_on(hub: Hub, instance_id: UUID) -> None:
 
 
 @asynccontextmanager
-async def browser_hub(
-    directory: Path, limits: BrowserLimits, connected: list[dict[str, str]] | None = None
-) -> AsyncIterator[BrowserHub]:
+async def browser_hub(directory: Path, limits: BrowserLimits) -> AsyncIterator[BrowserHub]:
     """A served hub whose alice has the browser on, beside bob who does not."""
-    async with playwright_server([] if connected is None else connected) as service:
-        runtime = FakeBrowserRuntime(service)
+    service = FakeService()
+    async with playwright_server(service) as address:
+        runtime = FakeBrowserRuntime(address)
         hub = hub_at(
             directory,
             runtime=FakeRuntime(),
@@ -129,8 +181,8 @@ async def browser_hub(
         alice = (await started_instance(client, hub, name="alice")).instance_id
         bob = (await started_instance(client, hub, name="bob")).instance_id
         browser_on(hub, alice)
-        async with served(hub) as address:
-            yield BrowserHub(hub, runtime, address, alice, bob)
+        async with served(hub) as served_at:
+            yield BrowserHub(hub, runtime, service, served_at, alice, bob)
         hub.close()
 
 
@@ -166,8 +218,7 @@ _LIMITS = BrowserLimits(cap=3, wait_seconds=5, idle_seconds=300, connect_seconds
 
 def test_the_route_issues_a_token_for_one_turn_that_connects_only_its_own_instance(tmp_path):
     async def scenario() -> None:
-        connected: list[dict[str, str]] = []
-        async with browser_hub(tmp_path / "hub", _LIMITS, connected) as hub:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
             opened = _result(await hub.open(hub.alice, uuid4()))
             token = opened["token"]
             as_bob = await _connects(hub.browser(hub.bob), token)
@@ -178,7 +229,7 @@ def test_the_route_issues_a_token_for_one_turn_that_connects_only_its_own_instan
         assert as_bob == 401
         assert as_alice == "echo hello"
         assert again == 401
-        (headers,) = connected
+        (headers,) = hub.service.connected
         assert headers["x-playwright-launch-options"] == LAUNCH_OPTIONS
         assert headers["x-playwright-browser"] == "chromium"
         assert "Authorization" not in headers
@@ -271,3 +322,234 @@ def test_a_service_that_died_starts_again_on_the_next_request(tmp_path):
 
     assert starts == 2
     assert connected == "echo hello"
+
+
+class Turn:
+    """A turn's browser, connected through the hub's browser route as a Playwright client is."""
+
+    def __init__(self, socket: aiohttp.ClientWebSocketResponse) -> None:
+        self._socket = socket
+        self._ids = iter(range(1, 1_000))
+
+    async def call(self, guid: str, method: str) -> dict[str, object]:
+        """Make one protocol call, and return what came back for it."""
+        call_id = next(self._ids)
+        await self._socket.send_json(
+            {"id": call_id, "guid": guid, "method": method, "params": {}, "metadata": {}}
+        )
+        while True:
+            answer = json.loads((await self._socket.receive(timeout=5)).data)
+            if answer.get("id") == call_id:
+                return answer
+
+
+@asynccontextmanager
+async def turn_browser(
+    hub: BrowserHub, turn: UUID, profile: str | None = None
+) -> AsyncIterator[Turn]:
+    """Open *turn*'s browser on alice's route, and its context, as the adapter does."""
+    token = _result(await hub.open(hub.alice, turn, profile))["token"]
+    async with (
+        aiohttp.ClientSession(headers={"Authorization": f"Bearer {token}"}) as session,
+        session.ws_connect(hub.browser(hub.alice)) as socket,
+    ):
+        browser = Turn(socket)
+        await browser.call("browser@1", "newContext")
+        yield browser
+
+
+_SIGNED_IN: dict[str, object] = {
+    "cookies": [{"name": "session", "value": "alice-1", "domain": "www.linkedin.com", "path": "/"}],
+    "origins": [],
+}
+_REFRESHED: dict[str, object] = {
+    "cookies": [{"name": "session", "value": "alice-2", "domain": "www.linkedin.com", "path": "/"}],
+    "origins": [],
+}
+
+
+async def _save(hub: BrowserHub, turn: UUID, name: str) -> dict[str, object]:
+    return await hub.call(
+        hub.alice,
+        "browser.profile.save",
+        {"turn_id": str(turn), "name": name, "site": "www.linkedin.com"},
+    )
+
+
+def _opened_with(service: FakeService) -> list[object]:
+    """The storage state each context the service opened started with."""
+    opened_with = []
+    for call in service.calls:
+        if call["method"] == "newContext":
+            params = call["params"]
+            assert isinstance(params, dict)
+            opened_with.append(params.get("storageState"))
+    return opened_with
+
+
+def test_a_turns_browser_saved_as_a_profile_is_listed_by_name_and_site(tmp_path):
+    async def scenario() -> None:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            hub.service.state = _SIGNED_IN
+            turn = uuid4()
+            async with turn_browser(hub, turn):
+                saved = _result(await _save(hub, turn, "LinkedIn"))
+            listed = _result(await hub.call(hub.alice, "browser.profiles", {}))
+            as_the_user = await hub_client(hub.hub).call(
+                BROWSER_PROFILE_LIST, BrowserProfileListCommand(instance_id=hub.alice)
+            )
+            bobs = await hub_client(hub.hub).call(
+                BROWSER_PROFILE_LIST, BrowserProfileListCommand(instance_id=hub.bob)
+            )
+
+        assert saved == {"name": "LinkedIn", "site": "www.linkedin.com"}
+        assert listed == {"profiles": [saved]}
+        assert as_the_user == BrowserProfileListResult(
+            profiles=(BrowserProfile(name="LinkedIn", site="www.linkedin.com"),)
+        )
+        assert bobs == BrowserProfileListResult(profiles=())
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_opened_with_a_profile_starts_with_its_state_and_saves_its_state_back(tmp_path):
+    async def scenario() -> list[object]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            hub.service.state = _SIGNED_IN
+            first = uuid4()
+            async with turn_browser(hub, first):
+                _result(await _save(hub, first, "LinkedIn"))
+            async with turn_browser(hub, uuid4(), "LinkedIn") as browser:
+                hub.service.state = _REFRESHED
+                await browser.call(_CONTEXT, "close")
+            async with turn_browser(hub, uuid4(), "LinkedIn"):
+                pass
+            return _opened_with(hub.service)
+
+    opened_with = asyncio.run(scenario())
+
+    assert opened_with == [None, _SIGNED_IN, _REFRESHED]
+
+
+def test_a_turn_cannot_read_its_contexts_cookies(tmp_path):
+    async def scenario() -> tuple[dict[str, object], dict[str, object], list[str]]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            hub.service.state = _SIGNED_IN
+            async with turn_browser(hub, uuid4()) as browser:
+                state = await browser.call(_CONTEXT, "storageState")
+                cookies = await browser.call(_CONTEXT, "cookies")
+            return state, cookies, [str(call["method"]) for call in hub.service.calls]
+
+    state, cookies, reached = asyncio.run(scenario())
+
+    assert state["error"] == cookies["error"]
+    assert state["error"] == {
+        "error": {"name": "Error", "message": "The hub keeps a browser's cookies to itself."}
+    }
+    assert reached == ["newContext"]
+
+
+def test_opening_a_profile_the_instance_lacks_fails_with_a_clear_error(tmp_path):
+    async def scenario() -> dict[str, object]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            return _error(await hub.open(hub.alice, uuid4(), "LinkedIn"))
+
+    refused = asyncio.run(scenario())
+
+    assert refused["code"] == ErrorCode.NOT_FOUND.value
+    assert refused["message"] == 'The instance has no browser profile named "LinkedIn".'
+
+
+def test_saving_a_turn_with_no_browser_open_fails(tmp_path):
+    async def scenario() -> dict[str, object]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            return _error(await _save(hub, uuid4(), "LinkedIn"))
+
+    refused = asyncio.run(scenario())
+
+    assert refused["code"] == ErrorCode.NOT_FOUND.value
+
+
+def test_a_profile_lives_with_the_hub_and_nothing_of_it_under_the_instance(tmp_path):
+    async def scenario() -> tuple[Path, Path]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            hub.service.state = _SIGNED_IN
+            turn = uuid4()
+            async with turn_browser(hub, turn):
+                _result(await _save(hub, turn, "LinkedIn"))
+            record = hub.hub.registry.instance(hub.alice)
+            assert record is not None
+            return hub.hub.directory, record.path
+
+    hub_directory, instance_directory = asyncio.run(scenario())
+
+    def holding_the_cookie(directory: Path) -> list[Path]:
+        return [
+            path
+            for path in directory.rglob("*")
+            if path.is_file() and b"alice-1" in path.read_bytes()
+        ]
+
+    assert holding_the_cookie(instance_directory) == []
+    (kept,) = holding_the_cookie(hub_directory)
+    assert kept.is_relative_to(hub_directory / "browser-profiles")
+    assert not kept.is_relative_to(instance_directory)
+    assert kept.stat().st_mode & 0o777 == 0o600
+
+
+def test_the_user_renames_and_deletes_an_instances_profiles_and_no_other_instances(tmp_path):
+    async def scenario() -> list[object]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            turn = uuid4()
+            async with turn_browser(hub, turn):
+                _result(await _save(hub, turn, "LinkedIn"))
+            client = hub_client(hub.hub)
+            return [
+                await client.call(
+                    BROWSER_PROFILE_RENAME,
+                    BrowserProfileRenameCommand(
+                        instance_id=hub.bob, name="LinkedIn", new_name="Work"
+                    ),
+                ),
+                await client.call(
+                    BROWSER_PROFILE_DELETE,
+                    BrowserProfileDeleteCommand(instance_id=hub.bob, name="LinkedIn"),
+                ),
+                await client.call(
+                    BROWSER_PROFILE_RENAME,
+                    BrowserProfileRenameCommand(
+                        instance_id=hub.alice, name="LinkedIn", new_name="Work"
+                    ),
+                ),
+                await client.call(
+                    BROWSER_PROFILE_DELETE,
+                    BrowserProfileDeleteCommand(instance_id=hub.alice, name="Work"),
+                ),
+            ]
+
+    bobs_rename, bobs_delete, renamed, deleted = asyncio.run(scenario())
+
+    assert isinstance(bobs_rename, ErrorEnvelope)
+    assert bobs_rename.code is ErrorCode.NOT_FOUND
+    assert isinstance(bobs_delete, ErrorEnvelope)
+    assert bobs_delete.code is ErrorCode.NOT_FOUND
+    assert renamed == BrowserProfileListResult(
+        profiles=(BrowserProfile(name="Work", site="www.linkedin.com"),)
+    )
+    assert deleted == BrowserProfileListResult(profiles=())
+
+
+def test_the_status_says_which_instances_open_browsers(tmp_path):
+    async def scenario() -> list[object]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            client = hub_client(hub.hub)
+            return [
+                await client.call(INSTANCE_STATUS, InstanceStatusCommand(instance_id=instance))
+                for instance in (hub.alice, hub.bob)
+            ]
+
+    alice, bob = asyncio.run(scenario())
+
+    assert isinstance(alice, InstanceStatusResult)
+    assert isinstance(bob, InstanceStatusResult)
+    assert (alice.browser, bob.browser) == (True, False)

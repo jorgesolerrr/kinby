@@ -280,6 +280,17 @@
       "additionalProperties": false,
       "description": "Ask for a browser for one turn of the instance that calls.",
       "properties": {
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserProfileName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "turn_id": {
           "format": "uuid",
           "type": "string"
@@ -307,6 +318,204 @@
         "token"
       ],
       "title": "BrowserOpenResult",
+      "type": "object"
+    },
+    "BrowserProfile": {
+      "additionalProperties": false,
+      "description": "A named signed-in state of one instance's browser. Its cookies never leave the hub.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/BrowserProfileName"
+        },
+        "site": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "site"
+      ],
+      "title": "BrowserProfile",
+      "type": "object"
+    },
+    "BrowserProfileDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/BrowserProfileName"
+        }
+      },
+      "required": [
+        "instance_id",
+        "name"
+      ],
+      "title": "BrowserProfileDeleteCommand",
+      "type": "object"
+    },
+    "BrowserProfileListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "BrowserProfileListCommand",
+      "type": "object"
+    },
+    "BrowserProfileListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "profiles": {
+          "items": {
+            "$ref": "#/$defs/BrowserProfile"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "profiles"
+      ],
+      "title": "BrowserProfileListResult",
+      "type": "object"
+    },
+    "BrowserProfileName": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "BrowserProfileRenameCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/BrowserProfileName"
+        },
+        "new_name": {
+          "$ref": "#/$defs/BrowserProfileName"
+        }
+      },
+      "required": [
+        "instance_id",
+        "name",
+        "new_name"
+      ],
+      "title": "BrowserProfileRenameCommand",
+      "type": "object"
+    },
+    "BrowserProfileSaveCommand": {
+      "additionalProperties": false,
+      "description": "Save the state of a turn's browser as a profile of the instance that calls, replacing one\nby that name. The turn's state is saved back to it when the turn ends.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/BrowserProfileName"
+        },
+        "site": {
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "name",
+        "site"
+      ],
+      "title": "BrowserProfileSaveCommand",
+      "type": "object"
+    },
+    "BrowserProfilesCommand": {
+      "additionalProperties": false,
+      "description": "List the profiles of the instance that calls.",
+      "properties": {},
+      "title": "BrowserProfilesCommand",
+      "type": "object"
+    },
+    "BrowserTakeoverFinishCommand": {
+      "additionalProperties": false,
+      "description": "Save the browser of a takeover with no turn as a profile, and close it.",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/BrowserProfileName"
+        },
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "takeover_id",
+        "profile"
+      ],
+      "title": "BrowserTakeoverFinishCommand",
+      "type": "object"
+    },
+    "BrowserTakeoverInputCommand": {
+      "additionalProperties": false,
+      "description": "Pass the user's mouse or keyboard to the browser of a takeover with no turn.",
+      "properties": {
+        "input": {
+          "discriminator": {
+            "mapping": {
+              "key": "#/$defs/TakeoverKey",
+              "pointer": "#/$defs/TakeoverPointer",
+              "wheel": "#/$defs/TakeoverWheel"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TakeoverPointer"
+            },
+            {
+              "$ref": "#/$defs/TakeoverWheel"
+            },
+            {
+              "$ref": "#/$defs/TakeoverKey"
+            }
+          ]
+        },
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "takeover_id",
+        "input"
+      ],
+      "title": "BrowserTakeoverInputCommand",
+      "type": "object"
+    },
+    "BrowserTakeoverStartCommand": {
+      "additionalProperties": false,
+      "description": "Open a browser at *url* with no turn, for the user to sign in and save as a profile, and\nwatch it frame by frame. The browser closes when the watching stops.",
+      "properties": {
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "takeover_id",
+        "url"
+      ],
+      "title": "BrowserTakeoverStartCommand",
       "type": "object"
     },
     "CallFrame": {
@@ -3059,6 +3268,10 @@
             }
           ],
           "default": null
+        },
+        "browser": {
+          "default": false,
+          "type": "boolean"
         },
         "detail": {
           "default": "",
@@ -8728,6 +8941,17 @@
       "additionalProperties": false,
       "description": "Resume the turn parked on the takeover, with the browser as the user left it.",
       "properties": {
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserProfileName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "takeover_id": {
           "format": "uuid",
           "type": "string"
@@ -10686,6 +10910,118 @@
           ],
           "type": "object"
         },
+        "browser.profile.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserProfileDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserProfileListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.profile.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserProfileListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserProfileListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.profile.rename": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserProfileRenameCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserProfileListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.profile.save": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserProfileSaveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserProfile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.profiles": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserProfilesCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserProfileListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.takeover.finish": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserTakeoverFinishCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserProfile"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.takeover.input": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserTakeoverInputCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadTakeoverInputResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "channel.create": {
           "additionalProperties": false,
           "properties": {
@@ -12609,6 +12945,8 @@
         "thread.approval.respond",
         "thread.takeover.input",
         "thread.takeover.finish",
+        "browser.takeover.input",
+        "browser.takeover.finish",
         "usage.get",
         "stats.get",
         "instance.probe",
@@ -12710,6 +13048,11 @@
         "channel.unmute",
         "notification.raise",
         "browser.open",
+        "browser.profiles",
+        "browser.profile.save",
+        "browser.profile.list",
+        "browser.profile.rename",
+        "browser.profile.delete",
         "notification.list",
         "notification.reply"
       ],
@@ -12721,6 +13064,22 @@
     "subscriptions": {
       "additionalProperties": false,
       "properties": {
+        "browser.takeover.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserTakeoverStartCommand"
+            },
+            "item": {
+              "$ref": "#/$defs/TakeoverFrame"
+            }
+          },
+          "required": [
+            "command",
+            "item"
+          ],
+          "type": "object"
+        },
         "factory.run.subscribe": {
           "additionalProperties": false,
           "properties": {
@@ -12790,7 +13149,8 @@
         "thread.subscribe",
         "factory.run.subscribe",
         "view.subscribe",
-        "thread.takeover.start"
+        "thread.takeover.start",
+        "browser.takeover.start"
       ],
       "type": "object"
     }

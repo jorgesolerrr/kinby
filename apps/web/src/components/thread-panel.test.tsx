@@ -1718,4 +1718,16 @@ describe("a waiting takeover", () => {
 
     expect(sent()).toEqual([{ method: "thread.takeover.finish", params: takeover }])
   })
+
+  it("saves the browser as a profile by the name given, when finishing", async () => {
+    const { sent } = await openParked()
+    const user = userEvent.setup()
+
+    await user.type(screen.getByRole("textbox", { name: "Save as a profile" }), "LinkedIn")
+    await user.click(screen.getByRole("button", { name: "Finish" }))
+
+    expect(sent()).toEqual([
+      { method: "thread.takeover.finish", params: { ...takeover, profile: "LinkedIn" } },
+    ])
+  })
 })

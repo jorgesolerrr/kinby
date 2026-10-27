@@ -183,7 +183,9 @@ class HubContractServer:
         if connection is None:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         try:
-            return await relay_browser(request, connection.address, LAUNCH_OPTIONS)
+            return await relay_browser(
+                request, connection.address, LAUNCH_OPTIONS, connection.session
+            )
         finally:
             connection.close()
 

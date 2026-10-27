@@ -6,12 +6,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.parse import urljoin
+from typing import Protocol
+from urllib.parse import urljoin, urlsplit
 from uuid import UUID
 
 from playwright.async_api import Browser, BrowserContext, Locator, Playwright, async_playwright
@@ -22,8 +23,15 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from kinby.contracts import (
     BROWSER_OPEN,
+    BROWSER_PROFILE_SAVE,
+    BROWSER_PROFILES,
     BrowserOpenCommand,
     BrowserOpenResult,
+    BrowserProfile,
+    BrowserProfileListResult,
+    BrowserProfileName,
+    BrowserProfileSaveCommand,
+    BrowserProfilesCommand,
     TakeoverInput,
     TakeoverKey,
     TakeoverPointer,
@@ -45,9 +53,6 @@ from kinby.plugins.browser import (
 )
 from kinby.plugins.defaults.web import REFUSED_HEADER, RefusedUrl, capped
 from kinby.plugins.hub import call_hub
-
-#: Asks for a browser for one turn: where it connects, and the token it connects with.
-Lease = Callable[[UUID], Awaitable[BrowserOpenResult]]
 
 _NAVIGATION_MS = 30_000
 #: How sharp a takeover's live view is, out of 100.
@@ -85,11 +90,36 @@ _URL_LINE = "- /url: "
 _COVERED = re.compile(r"- (.+) intercepts pointer events$", re.MULTILINE)
 
 
-async def hub_lease(turn: UUID) -> BrowserOpenResult:
-    """Ask the hub for a browser for *turn*, on this instance's hub route."""
-    command = BrowserOpenCommand(turn_id=turn)
-    result = await call_hub(BROWSER_OPEN.name, command.model_dump(mode="json"), "the browser")
-    return BrowserOpenResult.model_validate(result)
+class BrowserRoute(Protocol):
+    """The hub's browser route, as the instance reaches it."""
+
+    async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
+        """Where the turn's browser connects, and the token it connects with."""
+
+    async def profiles(self) -> BrowserProfileListResult: ...
+
+    async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile: ...
+
+
+class HubBrowserRoute:
+    """The browser route on this instance's hub route."""
+
+    async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
+        result = await call_hub(BROWSER_OPEN.name, command.model_dump(mode="json"), "the browser")
+        return BrowserOpenResult.model_validate(result)
+
+    async def profiles(self) -> BrowserProfileListResult:
+        command = BrowserProfilesCommand()
+        result = await call_hub(
+            BROWSER_PROFILES.name, command.model_dump(mode="json"), "the browser profiles"
+        )
+        return BrowserProfileListResult.model_validate(result)
+
+    async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile:
+        result = await call_hub(
+            BROWSER_PROFILE_SAVE.name, command.model_dump(mode="json"), "the browser profile"
+        )
+        return BrowserProfile.model_validate(result)
 
 
 @dataclass
@@ -97,6 +127,7 @@ class _Opened:
     playwright: Playwright
     browser: Browser
     context: BrowserContext
+    profile: BrowserProfileName | None
     #: The downloads begun since the last action returned, which the next action returns.
     downloads: list[PlaywrightDownload] = field(default_factory=list)
     begun: asyncio.Event = field(default_factory=asyncio.Event)
@@ -107,28 +138,47 @@ class _Opened:
 
 
 class PlaywrightBrowser:
-    """A BrowserService whose contexts live in the browser service *lease* connects each turn to."""
+    """A BrowserService whose contexts live in the browser service *route* connects each turn
+    to."""
 
-    def __init__(self, lease: Lease = hub_lease) -> None:
-        self._lease = lease
+    def __init__(self, route: BrowserRoute | None = None) -> None:
+        self._route = route or HubBrowserRoute()
         self._opened: dict[UUID, _Opened] = {}
 
-    async def open(self, turn: UUID) -> None:
-        if turn in self._opened:
+    async def open(self, turn: UUID, profile: BrowserProfileName | None = None) -> None:
+        if (opened := self._opened.get(turn)) is not None:
+            if profile is not None and profile != opened.profile:
+                raise ValueError(
+                    f'The browser is open already, without the profile "{profile}". Open a '
+                    "profile with the turn's first browser call."
+                )
             return
-        lease = await self._lease(turn)
+        lease = await self._route.open(BrowserOpenCommand(turn_id=turn, profile=profile))
         playwright = await async_playwright().start()
         try:
             browser = await playwright.chromium.connect(
                 lease.address, headers={"Authorization": f"Bearer {lease.token}"}
             )
-            opened = _Opened(playwright, browser, await browser.new_context())
+            opened = _Opened(playwright, browser, await browser.new_context(), profile)
             opened.context.on("page", lambda page: page.on("download", opened.collect))
             await opened.context.new_page()
         except BaseException:
             await playwright.stop()
             raise
         self._opened[turn] = opened
+
+    async def profiles(self) -> BrowserProfileListResult:
+        return await self._route.profiles()
+
+    async def save_profile(self, turn: UUID, name: BrowserProfileName) -> BrowserProfile:
+        page = await self._page(turn)
+        site = urlsplit(page.url).hostname or page.url
+        saved = await self._route.save(
+            BrowserProfileSaveCommand(turn_id=turn, name=name, site=site)
+        )
+        # The same _Opened, so its pages' download listener keeps collecting into it.
+        self._opened[turn].profile = name
+        return saved
 
     async def run(self, turn: UUID, action: BrowserAction) -> Page:
         opened, page = self._opened[turn], await self._page(turn)
@@ -215,6 +265,8 @@ class PlaywrightBrowser:
             return
         # The turn has ended, so a browser service that already went away changes nothing.
         with suppress(PlaywrightError):
+            # Closing the context saves its state back to its profile, before the browser goes.
+            await opened.context.close()
             await opened.browser.close()
         await opened.playwright.stop()
 

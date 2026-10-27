@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import Field
 
+from kinby.contracts import BrowserProfileName
 from kinby.instance import Instance
 from kinby.plugins.browser import (
     BrowserAction,
@@ -55,15 +56,20 @@ def browser_tools(instance: Instance) -> tuple[Tool, ...]:
         browser_press,
         browser_upload,
         browser_takeover,
+        browser_profiles,
     )
 
 
 @tool(write=False)
-async def browser_open(url: str, context: ToolContext) -> str:
+async def browser_open(
+    url: str, context: ToolContext, profile: BrowserProfileName | None = None
+) -> str:
     """Open `url` in the browser, which runs the page's JavaScript. Opening a URL that is not in
-    the conversation yet needs the user's approval. Then read the page with browser_snapshot."""
+    the conversation yet needs the user's approval. Then read the page with browser_snapshot.
+    `profile` names one of your browser profiles, to open the site signed in. Name it in the
+    turn's first browser call."""
     await guard_url(url)
-    page, downloaded = await _run(context, Navigate(url))
+    page, downloaded = await _run(context, Navigate(url), profile)
     return untrusted(f"Opened {page.url}\nTitle: {page.title}", page.url) + downloaded
 
 
@@ -168,15 +174,29 @@ async def browser_takeover(reason: str, context: ToolContext) -> str:
     return "The user finished the takeover. Take a new snapshot to see the page as they left it."
 
 
+@tool(write=False)
+async def browser_profiles(context: ToolContext) -> str:
+    """Your browser profiles: signed-in sessions browser_open takes by name, each with the site
+    it signs in to."""
+    if context.browser is None:
+        raise ValueError("The browser opens only in a turn of a browser-on instance.")
+    listed = await context.browser.profiles()
+    if not listed.profiles:
+        return "You have no browser profiles. The user creates them from the instance page."
+    return "\n".join(f"{profile.name}: {profile.site}" for profile in listed.profiles)
+
+
 async def _act(context: ToolContext, action: BrowserAction, done: str) -> str:
     page, downloaded = await _run(context, action)
     return f"{done} on {page.url}.{downloaded}"
 
 
-async def _run(context: ToolContext, action: BrowserAction) -> tuple[Page, str]:
+async def _run(
+    context: ToolContext, action: BrowserAction, profile: BrowserProfileName | None = None
+) -> tuple[Page, str]:
     """Run *action*, and save what the page downloaded since the last action into the
     workspace, with a line that names each file."""
-    browser, turn = await _opened(context)
+    browser, turn = await _opened(context, profile)
     page = await browser.run(turn, action)
     saved = [await _save(context.workspace, download) for download in page.downloads]
     return page, "".join(f"\nDownloaded {name}." for name in saved)
@@ -191,9 +211,11 @@ async def _save(workspace: Path, download: Download) -> str:
     return name
 
 
-async def _opened(context: ToolContext) -> tuple[BrowserService, UUID]:
-    """The turn's browser, opened on its first call."""
+async def _opened(
+    context: ToolContext, profile: BrowserProfileName | None = None
+) -> tuple[BrowserService, UUID]:
+    """The turn's browser, opened on its first call, with *profile* when it names one."""
     if context.browser is None or context.turn_id is None:
         raise ValueError("The browser opens only in a turn of a browser-on instance.")
-    await context.browser.open(context.turn_id)
+    await context.browser.open(context.turn_id, profile)
     return context.browser, context.turn_id

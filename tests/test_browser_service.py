@@ -18,13 +18,19 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 from kinby.contracts import (
+    BrowserOpenCommand,
     BrowserOpenResult,
+    BrowserProfile,
+    BrowserProfileListResult,
+    BrowserProfileSaveCommand,
     BrowserToken,
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
 )
+from kinby.hub.browser_profiles import BrowserProfiles, BrowserSession
 from kinby.hub.browser_service import serve_proxy
+from kinby.hub.relay import relay_browser
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
@@ -105,6 +111,13 @@ async def _set_cookie(request: web.Request) -> web.Response:
     return response
 
 
+async def _refresh_cookie(request: web.Request) -> web.Response:
+    """The site renews the session of a browser that comes back signed in."""
+    response = web.Response(text="<p>Welcome back.</p>", content_type="text/html")
+    response.set_cookie("session", f"{request.cookies['session']}-renewed")
+    return response
+
+
 async def _cookies(request: web.Request) -> web.Response:
     sent = request.cookies.get("session", "none")
     return web.Response(text=f"<p>session: {sent}</p>", content_type="text/html")
@@ -120,6 +133,7 @@ async def site() -> AsyncIterator[int]:
     application.router.add_get("/report.csv", _report)
     application.router.add_get("/export.csv", _export)
     application.router.add_get("/sign-in", _set_cookie)
+    application.router.add_get("/refresh", _refresh_cookie)
     application.router.add_get("/cookies", _cookies)
     runner = web.AppRunner(application)
     await runner.setup()
@@ -224,17 +238,78 @@ def browser_server() -> Iterator[str]:
         server.wait()
 
 
-def _adapter(server: str, proxy_address: str) -> PlaywrightBrowser:
-    """The adapter, given the address the hub's route gives, which sends the browser's every
-    request through the service's proxy."""
-    options = quote(json.dumps({"proxy": {"server": proxy_address}}))
+def _launch_options(proxy_address: str) -> str:
+    """The options that send the browser's every request through the service's proxy."""
+    return json.dumps({"proxy": {"server": proxy_address}})
 
-    async def lease(turn: UUID) -> BrowserOpenResult:
+
+class _DirectRoute:
+    """A browser route that connects each turn to *server* itself, with no hub between."""
+
+    def __init__(self, server: str, proxy_address: str) -> None:
+        self._address = f"{server}?launch-options={quote(_launch_options(proxy_address))}"
+
+    async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
+        return BrowserOpenResult(address=self._address, token=BrowserToken("token"))
+
+    async def profiles(self) -> BrowserProfileListResult:
+        raise NotImplementedError
+
+    async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile:
+        raise NotImplementedError
+
+
+def _adapter(server: str, proxy_address: str) -> PlaywrightBrowser:
+    return PlaywrightBrowser(_DirectRoute(server, proxy_address))
+
+
+class _RelayedRoute:
+    """The hub's browser route for one instance: each turn's browser relayed to the service
+    through a session that keeps the instance's profiles in *profiles*."""
+
+    def __init__(self, relay: str, profiles: BrowserProfiles) -> None:
+        self._relay = relay
+        self._profiles = profiles
+        self._instance_id = uuid4()
+        self.sessions: dict[UUID, BrowserSession] = {}
+
+    async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
+        self.sessions[command.turn_id] = BrowserSession(
+            self._profiles, self._instance_id, command.profile
+        )
         return BrowserOpenResult(
-            address=f"{server}?launch-options={options}", token=BrowserToken("token")
+            address=f"{self._relay}/{command.turn_id}", token=BrowserToken("token")
         )
 
-    return PlaywrightBrowser(lease)
+    async def profiles(self) -> BrowserProfileListResult:
+        return self._profiles.list(self._instance_id)
+
+    async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile:
+        return await self.sessions[command.turn_id].save_as(command.name, command.site)
+
+
+@asynccontextmanager
+async def relayed(
+    server: str, proxy_address: str, profiles: Path
+) -> AsyncIterator[PlaywrightBrowser]:
+    """The adapter on a relay to *server* that applies the profiles kept in *profiles*."""
+    routes: list[_RelayedRoute] = []
+
+    async def relay(request: web.Request) -> web.WebSocketResponse:
+        session = routes[0].sessions[UUID(request.match_info["turn"])]
+        return await relay_browser(request, server, _launch_options(proxy_address), session)
+
+    application = web.Application()
+    application.router.add_get("/{turn}", relay)
+    runner = web.AppRunner(application)
+    await runner.setup()
+    served = web.TCPSite(runner, "127.0.0.1", 0)
+    await served.start()
+    routes.append(_RelayedRoute(f"ws://127.0.0.1:{served.port}", BrowserProfiles(profiles)))
+    try:
+        yield PlaywrightBrowser(routes[0])
+    finally:
+        await runner.cleanup()
 
 
 @pytest.mark.browser
@@ -462,3 +537,61 @@ def test_a_takeover_streams_the_page_and_takes_the_users_mouse_and_keys(browser_
 
     assert frame.startswith(b"\xff\xd8")
     assert said == "Clicked at 200,150 a Enter"
+
+
+@pytest.mark.browser
+def test_a_profile_saved_from_one_turns_browser_opens_the_next_signed_in(
+    browser_server, tmp_path: Path
+) -> None:
+    async def scenario() -> tuple[BrowserProfile, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address, tmp_path) as browser,
+        ):
+            first, second = uuid4(), uuid4()
+            await browser.open(first)
+            try:
+                await browser.run(first, Navigate(f"http://site.test:{port}/sign-in"))
+                saved = await browser.save_profile(first, "Site")
+            finally:
+                await browser.close(first)
+            await browser.open(second, "Site")
+            try:
+                await browser.run(second, Navigate(f"http://site.test:{port}/cookies"))
+                return saved, (await browser.text(second, None)).text
+            finally:
+                await browser.close(second)
+
+    saved, signed_in = asyncio.run(scenario())
+
+    assert saved == BrowserProfile(name="Site", site="site.test")
+    assert signed_in == "session: alice"
+
+
+@pytest.mark.browser
+def test_a_cookie_the_site_renews_during_a_turn_is_in_the_profile_after_it(
+    browser_server, tmp_path: Path
+) -> None:
+    async def turn(browser: PlaywrightBrowser, profile: str | None, url: str) -> str:
+        turn = uuid4()
+        await browser.open(turn, profile)
+        try:
+            await browser.run(turn, Navigate(url))
+            if profile is None:
+                await browser.save_profile(turn, "Site")
+            return (await browser.text(turn, None)).text
+        finally:
+            await browser.close(turn)
+
+    async def scenario() -> str:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address, tmp_path) as browser,
+        ):
+            await turn(browser, None, f"http://site.test:{port}/sign-in")
+            await turn(browser, "Site", f"http://site.test:{port}/refresh")
+            return await turn(browser, "Site", f"http://site.test:{port}/cookies")
+
+    assert asyncio.run(scenario()) == "session: alice-renewed"
