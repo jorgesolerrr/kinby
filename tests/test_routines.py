@@ -57,6 +57,7 @@ from kinby.core.usage import TimeRange, usage_totals
 from kinby.instance import Budgets, Instance, load_instance
 from kinby.memory import GraphStore, RecapWriter
 from kinby.memory.recap import RecapModel
+from kinby.plugins.browser import BrowserService
 from kinby.plugins.routines import SharedCodeStep, SignalAuth, load_routines
 from tests.helpers import turn_config_stub
 
@@ -345,9 +346,13 @@ class RoutineModel:
         )
 
 
-def signal_runtime(instance: Instance, model: ChatModel) -> tuple[ScheduledDispatcher, EventLog]:
+def signal_runtime(
+    instance: Instance, model: ChatModel, *, browser: BrowserService | None = None
+) -> tuple[ScheduledDispatcher, EventLog]:
     log = EventLog(instance.manifest.state_dir)
-    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+    runner = LangGraphRunner(
+        instance, event_log=log, model_factory=lambda _: model, browser=browser
+    )
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         event_log=log,

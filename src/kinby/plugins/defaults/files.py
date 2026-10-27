@@ -9,13 +9,13 @@ from kinby.plugins import ToolContext, tool
 @tool(write=False)
 def read(path: str, context: ToolContext) -> str:
     """Read a UTF-8 text file from the workspace."""
-    return _workspace_path(context.workspace, path).read_text(encoding="utf-8")
+    return workspace_path(context.workspace, path).read_text(encoding="utf-8")
 
 
 @tool(write=True, paths=("path",))
 def write(path: str, content: str, context: ToolContext) -> str:
     """Write a UTF-8 text file in the workspace."""
-    target = _workspace_path(context.workspace, path)
+    target = workspace_path(context.workspace, path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Wrote {_relative_path(context.workspace, target)}."
@@ -24,7 +24,7 @@ def write(path: str, content: str, context: ToolContext) -> str:
 @tool(write=True, paths=("path",))
 def edit(path: str, old: str, new: str, context: ToolContext) -> str:
     """Replace text in a UTF-8 workspace file."""
-    target = _workspace_path(context.workspace, path)
+    target = workspace_path(context.workspace, path)
     content = target.read_text(encoding="utf-8")
     if old not in content:
         relative = _relative_path(context.workspace, target)
@@ -36,7 +36,7 @@ def edit(path: str, old: str, new: str, context: ToolContext) -> str:
 @tool(write=False)
 def grep(pattern: str, path: str, context: ToolContext) -> str:
     """Find text in workspace files."""
-    target = _workspace_path(context.workspace, path)
+    target = workspace_path(context.workspace, path)
     files = (
         [target]
         if target.is_file()
@@ -46,7 +46,7 @@ def grep(pattern: str, path: str, context: ToolContext) -> str:
     matches: list[str] = []
     for file in files:
         try:
-            text = _workspace_path(context.workspace, file).read_text(encoding="utf-8")
+            text = workspace_path(context.workspace, file).read_text(encoding="utf-8")
         except ValueError, UnicodeDecodeError:
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
@@ -60,12 +60,13 @@ def grep(pattern: str, path: str, context: ToolContext) -> str:
 def glob(pattern: str, context: ToolContext) -> str:
     """List workspace paths matching a glob pattern."""
     return "\n".join(
-        _relative_path(context.workspace, _workspace_path(context.workspace, path))
+        _relative_path(context.workspace, workspace_path(context.workspace, path))
         for path in sorted(context.workspace.glob(pattern))
     )
 
 
-def _workspace_path(workspace: Path, path: str | Path) -> Path:
+def workspace_path(workspace: Path, path: str | Path) -> Path:
+    """*path* in *workspace*, refused when it resolves outside, through a link too."""
     root = workspace.resolve()
     target = (root / path).resolve()
     try:

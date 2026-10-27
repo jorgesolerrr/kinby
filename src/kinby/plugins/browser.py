@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -26,15 +27,60 @@ class Wait:
     seconds: float
 
 
-type BrowserAction = Navigate | Scroll | Wait
+@dataclass(frozen=True)
+class Click:
+    ref: str
+
+
+@dataclass(frozen=True)
+class Type:
+    """Type *text* into a field, in place of what it holds."""
+
+    ref: str
+    text: str
+
+
+@dataclass(frozen=True)
+class Select:
+    """Select an option of a list, by its value or its label."""
+
+    ref: str
+    value: str
+
+
+@dataclass(frozen=True)
+class Press:
+    """Press a key on the element that has the focus."""
+
+    key: str
+
+
+@dataclass(frozen=True)
+class Upload:
+    """Attach the file at *path* to a file field."""
+
+    ref: str
+    path: Path
+
+
+type BrowserAction = Navigate | Scroll | Wait | Click | Type | Select | Press | Upload
+
+
+@dataclass(frozen=True)
+class Download:
+    """A file the page downloaded, under the name the page gave it."""
+
+    name: str
+    content: bytes
 
 
 @dataclass(frozen=True)
 class Page:
-    """Where the turn's page is after an action."""
+    """Where the turn's page is after an action, and what the action downloaded."""
 
     url: str
     title: str
+    downloads: tuple[Download, ...] = ()
 
 
 @dataclass(frozen=True)
