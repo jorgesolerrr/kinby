@@ -459,6 +459,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   INVALID_SETUP: true,
   STALE: true,
   ROUTINE_PENDING: true,
+  TAKEOVER_ABANDONED: true,
   CONNECTION_LOST: true,
   INTERNAL: true,
 }

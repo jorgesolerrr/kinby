@@ -20,6 +20,7 @@ from kinby.contracts import (
     NotificationRaiseResult,
     NotificationRefused,
     Scope,
+    TakeoverRequested,
     WaitingApproval,
 )
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, call_hub
@@ -103,6 +104,12 @@ def approval_notification(
         ],
         approval=WaitingApproval(turn_id=turn_id, request=request),
     )
+
+
+def takeover_notification(source: str, request: TakeoverRequested) -> NotificationRaised:
+    """kinby's notification for a takeover a turn parked on: its reason. The user takes over in
+    the web app, which the notification links to."""
+    return NotificationRaised(source=source, title="Takeover waiting", text=request.reason)
 
 
 def _shown(value: str) -> str:

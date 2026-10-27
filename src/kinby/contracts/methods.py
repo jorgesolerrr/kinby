@@ -160,6 +160,7 @@ from kinby.contracts.models import (
     StatsSummaryResult,
     StepResult,
     StepRunCommand,
+    TakeoverFrame,
     ThreadApprovalRespondCommand,
     ThreadArchiveCommand,
     ThreadAskCommand,
@@ -171,6 +172,10 @@ from kinby.contracts.models import (
     ThreadRenameCommand,
     ThreadSubscribeCommand,
     ThreadSummary,
+    ThreadTakeoverFinishCommand,
+    ThreadTakeoverInputCommand,
+    ThreadTakeoverInputResult,
+    ThreadTakeoverStartCommand,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
@@ -270,6 +275,18 @@ THREAD_APPROVAL_RESPOND = Method(
     Scope.THREAD_OPERATE,
     ThreadApprovalRespondCommand,
     AcceptedResult,
+)
+THREAD_TAKEOVER_START = Subscription(
+    "thread.takeover.start", Scope.THREAD_OPERATE, ThreadTakeoverStartCommand, TakeoverFrame
+)
+THREAD_TAKEOVER_INPUT = Method(
+    "thread.takeover.input",
+    Scope.THREAD_OPERATE,
+    ThreadTakeoverInputCommand,
+    ThreadTakeoverInputResult,
+)
+THREAD_TAKEOVER_FINISH = Method(
+    "thread.takeover.finish", Scope.THREAD_OPERATE, ThreadTakeoverFinishCommand, AcceptedResult
 )
 USAGE_GET = Method("usage.get", Scope.INSTANCE_READ, UsageGetCommand, UsageGetResult)
 STATS_GET = Method("stats.get", Scope.INSTANCE_READ, StatsGetCommand, StatsGetResult)
@@ -527,6 +544,8 @@ METHODS = (
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_RATE,
     THREAD_APPROVAL_RESPOND,
+    THREAD_TAKEOVER_INPUT,
+    THREAD_TAKEOVER_FINISH,
     USAGE_GET,
     STATS_GET,
     INSTANCE_PROBE,
@@ -631,7 +650,12 @@ METHODS = (
     NOTIFICATION_LIST,
     NOTIFICATION_REPLY,
 )
-SUBSCRIPTIONS = (THREAD_SUBSCRIBE, FACTORY_RUN_SUBSCRIBE, VIEW_SUBSCRIBE)
+SUBSCRIPTIONS = (
+    THREAD_SUBSCRIBE,
+    FACTORY_RUN_SUBSCRIBE,
+    VIEW_SUBSCRIBE,
+    THREAD_TAKEOVER_START,
+)
 
 #: The methods of an instance the hub relays to the home instance: reads only.
 RELAYED_READS = frozenset(

@@ -6,9 +6,12 @@ import type {
   InstanceClient,
   JsonValue,
   Notification,
+  TakeoverPointer,
+  ThreadTakeoverInputCommand,
 } from "@kinby/contract"
 import {
   type ComponentProps,
+  type MouseEvent,
   type ReactNode,
   type Ref,
   useCallback,
@@ -64,6 +67,7 @@ import { threadStore } from "@/lib/thread-store"
 import type {
   NotificationStep,
   ParkedApproval,
+  ParkedTakeover,
   Recap,
   ToolStep,
   TurnBlock,
@@ -81,6 +85,7 @@ import {
   CircleStopIcon,
   CornerDownLeftIcon,
   FactoryIcon,
+  FlagIcon,
   HouseIcon,
   LayoutDashboardIcon,
   MinusIcon,
@@ -131,6 +136,7 @@ export function ThreadPanel({
   const notifications = useNotifications(hub, clock, threadId, timeline.turns)
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
+  const takeover = latest?.takeover
   const reasonField = useRef<HTMLInputElement>(null)
   const approvalPanel = useRef<HTMLElement>(null)
   // A thread that opens on a parked approval has no composer to take focus, so its reason does.
@@ -176,14 +182,7 @@ export function ThreadPanel({
           />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
             {/* Nothing else is sent while the turn waits on the user. */}
-            {approval === undefined ? (
-              <Composer
-                client={client}
-                threadId={threadId}
-                name={name}
-                running={latest !== undefined && latest.end === undefined}
-              />
-            ) : (
+            {approval !== undefined ? (
               <ApprovalPanel
                 key={approval.approvalId}
                 ref={approvalPanel}
@@ -193,6 +192,21 @@ export function ThreadPanel({
                 approval={approval}
                 routine={latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined}
                 speaker={speaker}
+              />
+            ) : takeover !== undefined ? (
+              <TakeoverPanel
+                key={takeover.takeoverId}
+                client={client}
+                threadId={threadId}
+                takeover={takeover}
+                speaker={speaker}
+              />
+            ) : (
+              <Composer
+                client={client}
+                threadId={threadId}
+                name={name}
+                running={latest !== undefined && latest.end === undefined}
               />
             )}
           </div>
@@ -552,6 +566,199 @@ function ApprovalPanel({
       </Card>
     </section>
   )
+}
+
+/** Keys a browser reports on their own while they are held, which only change another key. */
+const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock"])
+
+/**
+ * The takeover a turn is parked on, in the composer's place: why the agent asks, and its browser's
+ * page live, which takes the user's mouse and keyboard. Finish resumes the turn with the page as
+ * the user left it.
+ */
+function TakeoverPanel({
+  client,
+  threadId,
+  takeover,
+  speaker,
+}: {
+  client: Pick<InstanceClient, "call" | "subscribe">
+  threadId: string
+  takeover: ParkedTakeover
+  speaker: Speaker
+}) {
+  const ids = { thread_id: threadId, takeover_id: takeover.takeoverId }
+  const view = useLiveView(client, threadId, takeover.takeoverId)
+  const page = useRef<HTMLImageElement>(null)
+  // Input goes one call at a time, so a release never overtakes its press.
+  const queue = useRef(Promise.resolve())
+  const queued = useRef(0)
+  const [failure, setFailure] = useState<string>()
+  const [answering, setAnswering] = useState<"finish" | "stop">()
+
+  const send = (input: ThreadTakeoverInputCommand["input"]) => {
+    // A move behind other input is stale by the time it would run.
+    if (input.type === "pointer" && input.action === "move" && queued.current > 0) return
+    queued.current += 1
+    queue.current = queue.current
+      .then(() => client.call("thread.takeover.input", { ...ids, input }))
+      .then(
+        () => setFailure(undefined),
+        (error: unknown) => setFailure(reason(error)),
+      )
+      .finally(() => {
+        queued.current -= 1
+      })
+  }
+  const pointer = (action: TakeoverPointer["action"]) => (event: MouseEvent) => {
+    const shown = page.current
+    if (shown === null || (event.button !== 0 && action !== "move")) return
+    const box = shown.getBoundingClientRect()
+    send({
+      type: "pointer",
+      action,
+      x: Math.round(((event.clientX - box.left) * shown.naturalWidth) / box.width),
+      y: Math.round(((event.clientY - box.top) * shown.naturalHeight) / box.height),
+    })
+  }
+  const answer = async (pressed: "finish" | "stop", work: () => Promise<unknown>) => {
+    setAnswering(pressed)
+    try {
+      await work()
+    } catch (error) {
+      setFailure(reason(error))
+      setAnswering(undefined)
+    }
+  }
+  const busy = answering !== undefined
+
+  return (
+    <section aria-label="Take over the browser" className="flex gap-3">
+      <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
+      <Card className="min-w-0 flex-1">
+        <CardContent>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-lg font-semibold">Can you take over the browser?</h2>
+              <p className="text-sm text-muted-foreground">{takeover.reason}</p>
+            </div>
+            {/* A remote screen, which ARIA marks as an application: it passes the page every key,
+                Tab included, and the mouse. */}
+            {/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
+            <div
+              role="application"
+              aria-label="The browser"
+              tabIndex={0}
+              className="overflow-hidden rounded-lg border outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              onMouseDown={pointer("down")}
+              onMouseUp={pointer("up")}
+              onMouseMove={pointer("move")}
+              onWheel={(event) =>
+                send({ type: "wheel", delta_x: event.deltaX, delta_y: event.deltaY })
+              }
+              onContextMenu={(event) => event.preventDefault()}
+              onKeyDown={(event) => {
+                if (MODIFIERS.has(event.key) || event.nativeEvent.isComposing) return
+                event.preventDefault()
+                const held = [
+                  event.ctrlKey && "Control",
+                  event.altKey && "Alt",
+                  event.metaKey && "Meta",
+                  // A character already reads as shifted.
+                  event.shiftKey && event.key.length > 1 && "Shift",
+                ].filter((key) => key !== false)
+                send({ type: "key", key: [...held, event.key].join("+") })
+              }}
+            >
+              {view.frame === undefined ? (
+                <Skeleton aria-label="Loading the browser" className="aspect-video w-full" />
+              ) : (
+                <img
+                  ref={page}
+                  src={`data:image/jpeg;base64,${view.frame}`}
+                  alt="The browser's page"
+                  draggable={false}
+                  className="w-full select-none"
+                />
+              )}
+            </div>
+            {/* oxlint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
+            {(failure ?? view.failure) !== undefined && (
+              <p role="alert" className="text-sm text-destructive">
+                {failure ?? view.failure}
+              </p>
+            )}
+            <div className="flex w-full flex-wrap items-center gap-2">
+              <Button
+                size="lg"
+                className="max-md:h-11"
+                disabled={busy}
+                onClick={() =>
+                  void answer("finish", () => client.call("thread.takeover.finish", ids))
+                }
+              >
+                {answering === "finish" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <FlagIcon data-icon="inline-start" />
+                )}
+                Finish
+              </Button>
+              <Button
+                variant="link"
+                className="ml-auto max-md:h-11"
+                disabled={busy}
+                onClick={() =>
+                  void answer("stop", () =>
+                    client.call("thread.turn.interrupt", { thread_id: threadId }),
+                  )
+                }
+              >
+                {answering === "stop" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <CircleStopIcon data-icon="inline-start" />
+                )}
+                Stop the turn
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  )
+}
+
+/** The newest frame of the takeover's live view, base64-encoded, or why the view stopped. */
+function useLiveView(
+  client: Pick<InstanceClient, "subscribe">,
+  threadId: string,
+  takeoverId: string,
+): { frame?: string; failure?: string } {
+  const [frame, setFrame] = useState<string>()
+  const [failure, setFailure] = useState<string>()
+  useEffect(() => {
+    const frames = client.subscribe("thread.takeover.start", {
+      thread_id: threadId,
+      takeover_id: takeoverId,
+    })
+    let following = true
+    const read = async () => {
+      try {
+        for await (const { data } of frames) {
+          if (following) setFrame(data)
+        }
+      } catch (error) {
+        if (following) setFailure(reason(error))
+      }
+    }
+    void read()
+    return () => {
+      following = false
+      frames.cancel()
+    }
+  }, [client, threadId, takeoverId])
+  return { frame, failure }
 }
 
 /** Focus `field`, unless the user is typing in another one, like the title in the header. */

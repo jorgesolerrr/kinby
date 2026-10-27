@@ -22,6 +22,7 @@ from kinby.contracts import (
     RoutineName,
     RoutineOrigin,
     SignalReceived,
+    TakeoverRequested,
     ThreadCreateResult,
     ThreadCursor,
     ThreadFilter,
@@ -42,6 +43,7 @@ THREADS_NAME = "threads.jsonl"
 #: The most characters a title taken from a thread's first message has.
 TITLE_LENGTH = 60
 _NOTIFYING = (NotificationRaised, NotificationAccepted, NotificationRefused)
+_PARKED = frozenset({ThreadStatus.AWAITING_APPROVAL, ThreadStatus.AWAITING_TAKEOVER})
 
 
 class ThreadRecord(BaseModel):
@@ -60,6 +62,12 @@ class ThreadRecord(BaseModel):
 class PendingApproval:
     event: Event
     request: ApprovalRequested
+
+
+@dataclass(frozen=True)
+class PendingTakeover:
+    event: Event
+    request: TakeoverRequested
 
 
 class ThreadStore:
@@ -170,8 +178,8 @@ def sort_key(thread: ThreadSummary | ThreadCursor) -> tuple[datetime, UUID]:
 def is_in(summary: ThreadSummary, events: Sequence[Event], thread_filter: ThreadFilter) -> bool:
     match thread_filter:
         case ThreadFilter.SIDEBAR:
-            # Archiving never hides an approval that waits on the user.
-            return summary.status is ThreadStatus.AWAITING_APPROVAL or (
+            # Archiving never hides an approval or a takeover that waits on the user.
+            return summary.status in _PARKED or (
                 not summary.archived
                 and (
                     isinstance(summary.origin, UserOrigin)
@@ -243,8 +251,11 @@ def thread_status(events: Sequence[Event]) -> ThreadStatus:
     )
     if started is None:
         return ThreadStatus.IDLE
-    if pending_approval(events) is not None:
-        return ThreadStatus.AWAITING_APPROVAL
+    match parked_on(events):
+        case PendingApproval():
+            return ThreadStatus.AWAITING_APPROVAL
+        case PendingTakeover():
+            return ThreadStatus.AWAITING_TAKEOVER
     closing = next(
         (
             event.payload
@@ -282,18 +293,31 @@ def offers_options(events: Sequence[Event], turn_id: UUID) -> bool:
     return bool(offered - refused)
 
 
-def pending_approval(events: Sequence[Event]) -> PendingApproval | None:
-    # Answering an approval appends nothing, so the resumed turn's own next event is
-    # what ends the park. Events on any other turn, and the notifications recorded while it
-    # waits, leave it standing.
+def parked_on(events: Sequence[Event]) -> PendingApproval | PendingTakeover | None:
+    """The approval or the takeover the thread's turn is parked on."""
+    # Answering an approval or finishing a takeover appends nothing, so the resumed turn's own
+    # next event is what ends the park. Events on any other turn, and the notifications recorded
+    # while it waits, leave it standing.
     for index, event in reversed(list(enumerate(events))):
         payload = event.payload
-        if not isinstance(payload, ApprovalRequested):
+        if not isinstance(payload, ApprovalRequested | TakeoverRequested):
             continue
         if any(
             later.turn_id == event.turn_id and not isinstance(later.payload, _NOTIFYING)
             for later in events[index + 1 :]
         ):
             return None
+        if isinstance(payload, TakeoverRequested):
+            return PendingTakeover(event, payload)
         return PendingApproval(event, payload)
     return None
+
+
+def pending_approval(events: Sequence[Event]) -> PendingApproval | None:
+    parked = parked_on(events)
+    return parked if isinstance(parked, PendingApproval) else None
+
+
+def pending_takeover(events: Sequence[Event]) -> PendingTakeover | None:
+    parked = parked_on(events)
+    return parked if isinstance(parked, PendingTakeover) else None

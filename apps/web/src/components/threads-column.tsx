@@ -8,6 +8,7 @@ import {
   LoaderCircleIcon,
   type LucideIcon,
   MessageSquarePlusIcon,
+  MousePointerClickIcon,
   SearchIcon,
   Settings2Icon,
   ShieldAlertIcon,
@@ -56,6 +57,11 @@ const STATUS: Record<
     className: "animate-spin text-muted-foreground",
   },
   awaiting_approval: { label: "Needs you", icon: ShieldAlertIcon, className: "text-foreground" },
+  awaiting_takeover: {
+    label: "Needs you",
+    icon: MousePointerClickIcon,
+    className: "text-foreground",
+  },
   awaiting_reply: { label: "Needs your reply", icon: BellDotIcon, className: "text-foreground" },
   failed: { label: "Failed", icon: CircleAlertIcon, className: "text-destructive" },
 }

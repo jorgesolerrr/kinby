@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 from uuid import UUID, uuid4
@@ -17,7 +17,13 @@ from aiohttp import web
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
-from kinby.contracts import BrowserOpenResult, BrowserToken
+from kinby.contracts import (
+    BrowserOpenResult,
+    BrowserToken,
+    TakeoverKey,
+    TakeoverPointer,
+    TakeoverWheel,
+)
 from kinby.hub.browser_service import serve_proxy
 from kinby.plugins.browser import (
     BrowserAction,
@@ -61,6 +67,11 @@ _FORM = """<html><head><title>Apply</title></head><body>
 <input type="file" aria-label="CV" onchange="said.textContent = 'Attached ' + this.files[0].name">
 </body></html>"""
 _REPORT = b"company,status\nAcme,open\n"
+_PAD = """<html><body style="margin: 0; height: 100vh"
+  onclick="said.textContent = 'Clicked at ' + event.clientX + ',' + event.clientY">
+<p id="said">Nothing yet.</p>
+<script>document.onkeydown = (event) => { said.textContent += ' ' + event.key }</script>
+</body></html>"""
 
 
 async def _page(request: web.Request) -> web.Response:
@@ -69,6 +80,10 @@ async def _page(request: web.Request) -> web.Response:
 
 async def _form(request: web.Request) -> web.Response:
     return web.Response(text=_FORM, content_type="text/html")
+
+
+async def _pad(request: web.Request) -> web.Response:
+    return web.Response(text=_PAD, content_type="text/html")
 
 
 async def _report(request: web.Request) -> web.Response:
@@ -101,6 +116,7 @@ async def site() -> AsyncIterator[int]:
     application = web.Application()
     application.router.add_get("/", _page)
     application.router.add_get("/form", _form)
+    application.router.add_get("/pad", _pad)
     application.router.add_get("/report.csv", _report)
     application.router.add_get("/export.csv", _export)
     application.router.add_get("/sign-in", _set_cookie)
@@ -416,3 +432,33 @@ def test_an_upload_attaches_the_file(browser_server, tmp_path: Path) -> None:
     _on_the_form(browser_server, scenario)
 
     assert said == ["Attached cv.pdf"]
+
+
+@pytest.mark.browser
+def test_a_takeover_streams_the_page_and_takes_the_users_mouse_and_keys(browser_server) -> None:
+    async def scenario() -> tuple[bytes, str]:
+        async with site() as port, proxy(port) as address:
+            browser, turn = _adapter(browser_server, address), uuid4()
+            await browser.open(turn)
+            try:
+                await browser.run(turn, Navigate(f"http://site.test:{port}/pad"))
+                async with aclosing(browser.screencast(turn)) as frames, asyncio.timeout(10):
+                    frame = await anext(frames)
+                for user_input in [
+                    TakeoverPointer(action="move", x=200, y=150),
+                    TakeoverPointer(action="down", x=200, y=150),
+                    TakeoverPointer(action="up", x=200, y=150),
+                    TakeoverKey(key="a"),
+                    TakeoverKey(key="Enter"),
+                    TakeoverWheel(delta_x=0, delta_y=100),
+                ]:
+                    await browser.send(turn, user_input)
+                said = await browser.text(turn, None)
+            finally:
+                await browser.close(turn)
+        return frame, said.text
+
+    frame, said = asyncio.run(scenario())
+
+    assert frame.startswith(b"\xff\xd8")
+    assert said == "Clicked at 200,150 a Enter"

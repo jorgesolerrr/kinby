@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Protocol
@@ -29,10 +30,16 @@ from kinby.contracts import (
     PromptVersion,
     RoutineName,
     RoutineOrigin,
+    Stream,
     SystemPrompt,
+    TakeoverFrame,
     ThreadApprovalRespondCommand,
     ThreadAskCommand,
     ThreadModeSetCommand,
+    ThreadTakeoverFinishCommand,
+    ThreadTakeoverInputCommand,
+    ThreadTakeoverInputResult,
+    ThreadTakeoverStartCommand,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
@@ -68,6 +75,7 @@ from kinby.core.errors import (
     PermissionDenied,
     ReadOnlyMarkRefused,
     SnapshotUnavailable,
+    TakeoverNotFound,
     ThreadBusy,
     ThreadNotFound,
     TurnInterruptedError,
@@ -82,19 +90,25 @@ from kinby.core.snapshots import (
     snapshot_ref,
 )
 from kinby.core.threads import (
+    PendingTakeover,
     ThreadStore,
     events_by_thread,
     first_message_title,
+    parked_on,
     pending_approval,
+    pending_takeover,
     pinned_mode,
 )
 from kinby.instance import Budgets, ModelName
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
+from kinby.plugins.browser import BrowserService
 
 logger = logging.getLogger(__name__)
 
 # How long an interrupt lets a cancelled runner finish writing before it snapshots.
 _SETTLE_SECONDS = 5.0
+#: How long a turn waits on a takeover before it ends and closes its browser.
+TAKEOVER_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -153,6 +167,10 @@ class ApprovalAnswer:
 
     decision: ApprovalDecision
     reason: str | None = None
+
+
+#: A finished takeover resumes its turn as an approved call would.
+_TAKEOVER_FINISHED = ApprovalAnswer(ApprovalDecision.APPROVE)
 
 
 def _no_token_usage() -> TokenTotals:
@@ -242,7 +260,9 @@ class Turns:
         permission_ceiling: Callable[[], PermissionMode],
         after_turn: ClosedTurnHook,
         snapshots: SnapshotStore | None = None,
+        browser: BrowserService | None = None,
     ) -> None:
+        """*browser* is the one the runner's turns use, which a takeover hands to the user."""
         self._store = store
         self._log = log
         self._runner = runner
@@ -250,6 +270,9 @@ class Turns:
         self._permission_ceiling = permission_ceiling
         self._after_turn = after_turn
         self._snapshots = snapshots
+        self._browser = browser
+        #: The deadlines of the takeovers turns parked on, kept until each passes.
+        self._deadlines: set[asyncio.Task[None]] = set()
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
         self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim] = {}
@@ -300,7 +323,7 @@ class Turns:
         return {
             thread_id: _turn_origin(events, pending.event.turn_id)
             for thread_id, events in grouped.items()
-            if (pending := pending_approval(events)) is not None
+            if (pending := parked_on(events)) is not None
         }
 
     def require_available(self, origin: Origin) -> None:
@@ -416,7 +439,7 @@ class Turns:
         events = self._log.stored(command.thread_id)
         running = self._running.get(command.thread_id)
         active = running is not None and not running.task.done()
-        if command.thread_id in self._claims or active or pending_approval(events) is not None:
+        if command.thread_id in self._claims or active or parked_on(events) is not None:
             raise _thread_busy(command.thread_id)
         ceiling = self._permission_ceiling()
         if exceeds_ceiling(command.mode, ceiling):
@@ -588,7 +611,7 @@ class Turns:
         self._require_thread(thread_id)
         self.require_available(origin)
         events = self._log.stored(thread_id)
-        pending = pending_approval(events)
+        pending = parked_on(events)
         running = self._running.get(thread_id)
         active = running is not None and not running.task.done()
         if thread_id in self._claims or active or pending is not None:
@@ -675,6 +698,7 @@ class Turns:
         self._require_thread(command.thread_id)
         running = self._running.get(command.thread_id)
         claim: InterruptedTurnClaim
+        pending = None
         if running is not None and not running.task.done() and not running.interrupted:
             claim = InterruptedTurnClaim()
             self._claims[command.thread_id] = claim
@@ -682,7 +706,7 @@ class Turns:
             running.task.cancel()
             turn_id = running.request.turn_id
         else:
-            pending = pending_approval(self._log.stored(command.thread_id))
+            pending = parked_on(self._log.stored(command.thread_id))
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
@@ -720,6 +744,8 @@ class Turns:
             self._release_claim(command.thread_id, claim)
         if running is not None and self._running.get(command.thread_id) is running:
             del self._running[command.thread_id]
+        if isinstance(pending, PendingTakeover) and self._browser is not None:
+            await self._browser.close(turn_id)
         return accepted(interrupted)
 
     async def respond(self, command: ThreadApprovalRespondCommand) -> AcceptedResult:
@@ -754,17 +780,100 @@ class Turns:
             and pending.request.rule != AUTHORED_RULE
         ):
             raise ReadOnlyMarkRefused("Only an authored tool's approval marks it read-only.")
+        return await self._resume_parked(
+            pending.event, origin, ApprovalAnswer(command.decision, command.reason)
+        )
+
+    async def start_takeover(self, command: ThreadTakeoverStartCommand) -> Stream[TakeoverFrame]:
+        """The live view of the takeover: its browser's page, frame by frame."""
+        browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
+        await browser.open(turn_id)
+        return Stream(0, _frames(browser.screencast(turn_id)))
+
+    async def send_takeover_input(
+        self, command: ThreadTakeoverInputCommand
+    ) -> ThreadTakeoverInputResult:
+        browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
+        await browser.send(turn_id, command.input)
+        return ThreadTakeoverInputResult()
+
+    async def finish_takeover(self, command: ThreadTakeoverFinishCommand) -> AcceptedResult:
+        """Resume the turn parked on the takeover, with its browser as the user left it."""
+        if not self._answering:
+            raise InstanceDraining(
+                "The instance has drained. The takeover waits for its next start."
+            )
+        pending = self._takeover(command.thread_id, command.takeover_id)
+        running = self._running.get(command.thread_id)
+        if command.thread_id in self._claims or (running is not None and not running.task.done()):
+            raise _thread_busy(command.thread_id)
+        origin = _turn_origin(self._log.stored(command.thread_id), pending.event.turn_id)
+        return await self._resume_parked(pending.event, origin, _TAKEOVER_FINISHED)
+
+    def _takeover(self, thread_id: UUID, takeover_id: UUID) -> PendingTakeover:
+        """The takeover the thread's turn is parked on, by its id."""
+        self._require_thread(thread_id)
+        pending = pending_takeover(self._log.stored(thread_id))
+        if pending is None or pending.request.takeover_id != takeover_id:
+            raise TakeoverNotFound(f'Takeover "{takeover_id}" was not found.')
+        return pending
+
+    def _takeover_browser(self, thread_id: UUID, takeover_id: UUID) -> tuple[BrowserService, UUID]:
+        """The browser of the takeover, and the turn it belongs to."""
+        pending = self._takeover(thread_id, takeover_id)
+        if self._browser is None:
+            raise TakeoverNotFound(f'Takeover "{takeover_id}" has no browser.')
+        return self._browser, pending.event.turn_id
+
+    def _abandon_later(self, takeover: PendingTakeover) -> None:
+        task = asyncio.create_task(self._abandon(takeover))
+        self._deadlines.add(task)
+        task.add_done_callback(self._deadlines.discard)
+
+    async def _abandon(self, takeover: PendingTakeover) -> None:
+        """End the turn and close its browser, unless the user finished the takeover in time."""
+        await asyncio.sleep(TAKEOVER_SECONDS)
+        thread_id, turn_id = takeover.event.thread_id, takeover.event.turn_id
+        pending = pending_takeover(self._log.stored(thread_id))
+        if pending != takeover or thread_id in self._claims:
+            return
+        claim = InterruptedTurnClaim()
+        self._claims[thread_id] = claim
+        try:
+            await self._log.append(
+                thread_id,
+                turn_id,
+                TurnFailed(
+                    code=ErrorCode.TAKEOVER_ABANDONED,
+                    message=(
+                        f"Nobody finished the takeover within {TAKEOVER_SECONDS / 60:g} "
+                        "minutes, so the turn ended."
+                    ),
+                    snapshot=await self._capture(thread_id, turn_id, SnapshotBoundary.AFTER),
+                    **_recorded_model_usage(self._log.stored(thread_id), turn_id).model_dump(),
+                ),
+            )
+            self._schedule_after_turn(thread_id, turn_id)
+        finally:
+            self._release_claim(thread_id, claim)
+        if self._browser is not None:
+            await self._browser.close(turn_id)
+
+    async def _resume_parked(
+        self, parked: Event, origin: Origin, answer: ApprovalAnswer
+    ) -> AcceptedResult:
+        """Resume the turn parked at *parked* with *answer*."""
         if self._holds_only_its_thread(origin):
             # A parked stage let other work in, so it takes the instance back like a new turn.
             self.require_available(origin)
         # The parked turn itself owns the instance reservation.
         claim = TurnClaim(origin)
-        self._claims[command.thread_id] = claim
+        self._claims[parked.thread_id] = claim
         try:
             preparation = self._prepare_for_turn()
-            turn = await self._runner.restore(pending.event.thread_id, pending.event.turn_id)
-            if self._claims.get(command.thread_id) is not claim:
-                raise _no_active_turn(command.thread_id)
+            turn = await self._runner.restore(parked.thread_id, parked.turn_id)
+            if self._claims.get(parked.thread_id) is not claim:
+                raise _no_active_turn(parked.thread_id)
             if turn is None:
                 raise InvalidParkedTurn("The parked turn cannot resume after a runtime restart.")
             turn = replace(
@@ -774,15 +883,14 @@ class Turns:
                     constrain_mode(turn.permission_mode, preparation.ceiling),
                 ),
             )
-            answer = ApprovalAnswer(command.decision, command.reason)
             self._spawn(turn, self._resume(turn, answer, preparation.budgets))
         finally:
-            self._release_claim(command.thread_id, claim)
-        # respond appends no event, so approval.requested is the resume cursor.
+            self._release_claim(parked.thread_id, claim)
+        # A resume appends no event, so the event it parked at is the resume cursor.
         return AcceptedResult(
             thread_id=turn.thread_id,
             turn_id=turn.turn_id,
-            sequence=pending.event.sequence,
+            sequence=parked.sequence,
         )
 
     def _turn_mode(self, origin: Origin, mode: PermissionMode) -> PermissionMode:
@@ -880,6 +988,8 @@ class Turns:
             message = "The model turn failed unexpectedly."
         else:
             if isinstance(outcome, ParkedTurn):
+                if (takeover := pending_takeover(self._log.stored(turn.thread_id))) is not None:
+                    self._abandon_later(takeover)
                 return
             running = self._owned_running_turn(turn)
             if running is None:
@@ -959,6 +1069,12 @@ class Turns:
                     "task": task,
                 }
             )
+
+
+async def _frames(screencast: AsyncGenerator[bytes]) -> AsyncGenerator[TakeoverFrame]:
+    async with aclosing(screencast):
+        async for image in screencast:
+            yield TakeoverFrame(data=base64.b64encode(image).decode())
 
 
 def _turn_origin(events: Sequence[Event], turn_id: UUID) -> Origin:

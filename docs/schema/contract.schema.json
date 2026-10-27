@@ -1276,6 +1276,7 @@
         "INVALID_SETUP",
         "STALE",
         "ROUTINE_PENDING",
+        "TAKEOVER_ABANDONED",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -1362,6 +1363,7 @@
               "run.delegated": "#/$defs/RunDelegated",
               "run.stopped": "#/$defs/RunStopped",
               "signal.received": "#/$defs/SignalReceived",
+              "takeover.requested": "#/$defs/TakeoverRequested",
               "tool.call": "#/$defs/ToolCall",
               "tool.gated": "#/$defs/ToolGated",
               "tool.result": "#/$defs/ToolResult",
@@ -1403,6 +1405,9 @@
             },
             {
               "$ref": "#/$defs/ApprovalRequested"
+            },
+            {
+              "$ref": "#/$defs/TakeoverRequested"
             },
             {
               "$ref": "#/$defs/TurnCompleted"
@@ -8216,6 +8221,123 @@
       "title": "SubscriptionUse",
       "type": "object"
     },
+    "TakeoverFrame": {
+      "additionalProperties": false,
+      "description": "One frame of the live view: the page as a JPEG image, base64-encoded.",
+      "properties": {
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "TakeoverFrame",
+      "type": "object"
+    },
+    "TakeoverKey": {
+      "additionalProperties": false,
+      "description": "A key the user pressed, as Playwright names it: a character, Enter or Control+A.",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "key",
+          "default": "key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "type"
+      ],
+      "title": "TakeoverKey",
+      "type": "object"
+    },
+    "TakeoverPointer": {
+      "additionalProperties": false,
+      "description": "The user's mouse at a point of the page, in the pixels of the live view's frames.",
+      "properties": {
+        "action": {
+          "enum": [
+            "move",
+            "down",
+            "up"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "pointer",
+          "default": "pointer",
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "action",
+        "x",
+        "y",
+        "type"
+      ],
+      "title": "TakeoverPointer",
+      "type": "object"
+    },
+    "TakeoverRequested": {
+      "additionalProperties": false,
+      "description": "The turn waits while the user drives its browser, until the user finishes (ADR 0113).",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "type": {
+          "const": "takeover.requested",
+          "default": "takeover.requested",
+          "type": "string"
+        }
+      },
+      "required": [
+        "takeover_id",
+        "reason",
+        "type"
+      ],
+      "title": "TakeoverRequested",
+      "type": "object"
+    },
+    "TakeoverWheel": {
+      "additionalProperties": false,
+      "description": "The user's wheel, scrolling the page where the mouse is.",
+      "properties": {
+        "delta_x": {
+          "type": "number"
+        },
+        "delta_y": {
+          "type": "number"
+        },
+        "type": {
+          "const": "wheel",
+          "default": "wheel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta_x",
+        "delta_y",
+        "type"
+      ],
+      "title": "TakeoverWheel",
+      "type": "object"
+    },
     "TargetFile": {
       "description": "The instance file a template's configuration field lands in.",
       "enum": [
@@ -8499,6 +8621,7 @@
         "idle",
         "running",
         "awaiting_approval",
+        "awaiting_takeover",
         "awaiting_reply",
         "failed"
       ],
@@ -8599,6 +8722,94 @@
         "origin"
       ],
       "title": "ThreadSummary",
+      "type": "object"
+    },
+    "ThreadTakeoverFinishCommand": {
+      "additionalProperties": false,
+      "description": "Resume the turn parked on the takeover, with the browser as the user left it.",
+      "properties": {
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "takeover_id"
+      ],
+      "title": "ThreadTakeoverFinishCommand",
+      "type": "object"
+    },
+    "ThreadTakeoverInputCommand": {
+      "additionalProperties": false,
+      "description": "Pass the user's mouse or keyboard to the browser of the takeover.",
+      "properties": {
+        "input": {
+          "discriminator": {
+            "mapping": {
+              "key": "#/$defs/TakeoverKey",
+              "pointer": "#/$defs/TakeoverPointer",
+              "wheel": "#/$defs/TakeoverWheel"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TakeoverPointer"
+            },
+            {
+              "$ref": "#/$defs/TakeoverWheel"
+            },
+            {
+              "$ref": "#/$defs/TakeoverKey"
+            }
+          ]
+        },
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "takeover_id",
+        "input"
+      ],
+      "title": "ThreadTakeoverInputCommand",
+      "type": "object"
+    },
+    "ThreadTakeoverInputResult": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "ThreadTakeoverInputResult",
+      "type": "object"
+    },
+    "ThreadTakeoverStartCommand": {
+      "additionalProperties": false,
+      "description": "Watch the browser of the takeover the thread's turn is parked on, frame by frame.",
+      "properties": {
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "takeover_id"
+      ],
+      "title": "ThreadTakeoverStartCommand",
       "type": "object"
     },
     "ThreadTurnDiffCommand": {
@@ -12107,6 +12318,38 @@
           ],
           "type": "object"
         },
+        "thread.takeover.finish": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTakeoverFinishCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "thread.takeover.input": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTakeoverInputCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadTakeoverInputResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.turn.diff": {
           "additionalProperties": false,
           "properties": {
@@ -12364,6 +12607,8 @@
         "thread.turn.interrupt",
         "thread.turn.rate",
         "thread.approval.respond",
+        "thread.takeover.input",
+        "thread.takeover.finish",
         "usage.get",
         "stats.get",
         "instance.probe",
@@ -12508,6 +12753,22 @@
           ],
           "type": "object"
         },
+        "thread.takeover.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTakeoverStartCommand"
+            },
+            "item": {
+              "$ref": "#/$defs/TakeoverFrame"
+            }
+          },
+          "required": [
+            "command",
+            "item"
+          ],
+          "type": "object"
+        },
         "view.subscribe": {
           "additionalProperties": false,
           "properties": {
@@ -12528,7 +12789,8 @@
       "required": [
         "thread.subscribe",
         "factory.run.subscribe",
-        "view.subscribe"
+        "view.subscribe",
+        "thread.takeover.start"
       ],
       "type": "object"
     }

@@ -1596,3 +1596,98 @@ describe("a thread's panel", () => {
     expect(screen.getByRole("alert").textContent).toContain("No thread t1.")
   })
 })
+
+describe("a waiting takeover", () => {
+  const reason = "Sign in to LinkedIn: it asks for a code from your phone."
+  const parked = thread(
+    ["turn-1", started("Check LinkedIn")],
+    [
+      "turn-1",
+      { type: "tool.call", call_id: "c1", name: "browser_takeover", arguments: { reason } },
+    ],
+    ["turn-1", { type: "takeover.requested", takeover_id: "k1", reason }],
+  )
+  const takeover = { thread_id: "t1", takeover_id: "k1" }
+
+  /** Open the thread with its replay parked on takeover k1, and the live view's subscription. */
+  async function openParked() {
+    const opened = openThread({
+      "thread.takeover.input": () => ({}),
+      "thread.takeover.finish": () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" }),
+    })
+    const events = opened.subscription()
+    await act(async () => {
+      events.subscribed(parked.length)
+      for (const event of parked) events.deliver(event)
+    })
+    const view = opened.client.subscriptions.find(
+      (subscription) => subscription.method === "thread.takeover.start",
+    )
+    if (view === undefined) throw new Error("The panel did not start the live view.")
+    return { ...opened, view }
+  }
+
+  it("takes the composer's place with the reason, and starts the live view of the takeover", async () => {
+    const { view } = await openParked()
+    const panel = screen.getByRole("region", { name: "Take over the browser" })
+
+    expect(screen.queryByRole("textbox", { name: "Message Ada" })).toBeNull()
+    expect(panel.textContent).toContain(reason)
+    expect(view.params).toEqual(takeover)
+  })
+
+  it("shows each frame of the screencast", async () => {
+    const { view } = await openParked()
+
+    await act(async () => {
+      view.subscribed(0)
+      view.deliver({ data: "/9j/first" })
+      view.deliver({ data: "/9j/second" })
+    })
+
+    expect(screen.getByRole<HTMLImageElement>("img", { name: "The browser's page" }).src).toBe(
+      "data:image/jpeg;base64,/9j/second",
+    )
+  })
+
+  it("sends a click at the page's own pixels, and the keys pressed on the live view", async () => {
+    const { view, sent } = await openParked()
+    await act(async () => {
+      view.subscribed(0)
+      view.deliver({ data: "/9j/frame" })
+    })
+    const page = screen.getByRole<HTMLImageElement>("img", { name: "The browser's page" })
+    // The live view shows a 1280 by 720 page at half its size.
+    Object.defineProperties(page, {
+      naturalWidth: { value: 1280 },
+      naturalHeight: { value: 720 },
+    })
+    vi.spyOn(page, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 640, 360))
+    const browser = screen.getByRole("application", { name: "The browser" })
+
+    await act(async () => {
+      fireEvent.mouseDown(page, { clientX: 110, clientY: 70 })
+      fireEvent.mouseUp(page, { clientX: 110, clientY: 70 })
+      fireEvent.keyDown(browser, { key: "a" })
+      fireEvent.keyDown(browser, { key: "Shift" })
+      fireEvent.keyDown(browser, { key: "Tab", shiftKey: true })
+    })
+
+    await waitFor(() =>
+      expect(sent().map((call) => call.params)).toEqual([
+        { ...takeover, input: { type: "pointer", action: "down", x: 200, y: 100 } },
+        { ...takeover, input: { type: "pointer", action: "up", x: 200, y: 100 } },
+        { ...takeover, input: { type: "key", key: "a" } },
+        { ...takeover, input: { type: "key", key: "Shift+Tab" } },
+      ]),
+    )
+  })
+
+  it("finishes the takeover, which resumes the turn", async () => {
+    const { sent } = await openParked()
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Finish" }))
+
+    expect(sent()).toEqual([{ method: "thread.takeover.finish", params: takeover }])
+  })
+})
