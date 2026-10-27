@@ -7,7 +7,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urljoin
@@ -44,6 +44,8 @@ _NAVIGATION_MS = 30_000
 _ELEMENT_MS = 5_000
 #: How long a click or a key press waits for a download it may have started.
 _DOWNLOAD_SECONDS = 1
+#: The keys a password field takes from browser_press: they move on or submit, and type nothing.
+_PASSWORD_KEYS = frozenset({"Enter", "Tab", "Shift+Tab", "Escape"})
 #: The roles of the elements an interactive snapshot keeps.
 _INTERACTIVE = frozenset(
     {
@@ -79,11 +81,18 @@ async def hub_lease(turn: UUID) -> BrowserOpenResult:
     return BrowserOpenResult.model_validate(result)
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Opened:
     playwright: Playwright
     browser: Browser
     context: BrowserContext
+    #: The downloads begun since the last action returned, which the next action returns.
+    downloads: list[PlaywrightDownload] = field(default_factory=list)
+    begun: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def collect(self, download: PlaywrightDownload) -> None:
+        self.downloads.append(download)
+        self.begun.set()
 
 
 class PlaywrightBrowser:
@@ -102,31 +111,24 @@ class PlaywrightBrowser:
             browser = await playwright.chromium.connect(
                 lease.address, headers={"Authorization": f"Bearer {lease.token}"}
             )
-            context = await browser.new_context()
-            await context.new_page()
+            opened = _Opened(playwright, browser, await browser.new_context())
+            opened.context.on("page", lambda page: page.on("download", opened.collect))
+            await opened.context.new_page()
         except BaseException:
             await playwright.stop()
             raise
-        self._opened[turn] = _Opened(playwright, browser, context)
+        self._opened[turn] = opened
 
     async def run(self, turn: UUID, action: BrowserAction) -> Page:
-        page = await self._page(turn)
-        downloads: list[PlaywrightDownload] = []
-        begun = asyncio.Event()
-
-        def collect(download: PlaywrightDownload) -> None:
-            downloads.append(download)
-            begun.set()
-
-        page.on("download", collect)
-        try:
-            await _run(page, action)
-            # A download begins when its server answers, which can be after the action returns.
-            if isinstance(action, Click | Press):
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(begun.wait(), _DOWNLOAD_SECONDS)
-        finally:
-            page.remove_listener("download", collect)
+        opened, page = self._opened[turn], await self._page(turn)
+        await _run(page, action)
+        # A download begins when its server answers, which can be after the action returns.
+        if isinstance(action, Click | Press):
+            with suppress(TimeoutError):
+                await asyncio.wait_for(opened.begun.wait(), _DOWNLOAD_SECONDS)
+        downloads = [*opened.downloads]
+        opened.downloads.clear()
+        opened.begun.clear()
         return Page(
             url=page.url,
             title=await page.title(),
@@ -184,15 +186,22 @@ async def _run(page: PlaywrightPage, action: BrowserAction) -> None:
         case Click(ref=ref):
             await _click(await _element(page, ref), ref)
         case Type(ref=ref, text=text):
-            field = await _element(page, ref)
-            if await field.evaluate("field => field.type === 'password'"):
+            textbox = await _element(page, ref)
+            if await textbox.evaluate("field => field.type === 'password'"):
                 raise PermissionError(
                     f"The field with ref {ref} is a password field, which only the vault fills."
                 )
-            await field.fill(text, timeout=_ELEMENT_MS)
+            await textbox.fill(text, timeout=_ELEMENT_MS)
         case Select(ref=ref, value=value):
             await (await _element(page, ref)).select_option(value, timeout=_ELEMENT_MS)
         case Press(key=key):
+            if key not in _PASSWORD_KEYS and await page.evaluate(
+                "() => document.activeElement?.type === 'password'"
+            ):
+                raise PermissionError(
+                    f"The focus is on a password field, which takes no {key} key. Only the vault "
+                    "fills a password."
+                )
             await page.keyboard.press(key)
         case Upload(ref=ref, path=path):
             await (await _element(page, ref)).set_input_files(path, timeout=_ELEMENT_MS)

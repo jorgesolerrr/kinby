@@ -26,6 +26,7 @@ from kinby.plugins.browser import (
     Navigate,
     Page,
     Press,
+    Scroll,
     Select,
     Type,
     Upload,
@@ -45,7 +46,8 @@ _FORM = """<html><head><title>Apply</title></head><body>
 <p id="said">Nothing yet.</p>
 <input aria-label="Name" oninput="said.textContent = 'Name: ' + this.value"
   onkeydown="if (event.key === 'Enter') said.textContent = 'Sent ' + this.value">
-<input type="password" aria-label="Password">
+<input type="password" aria-label="Password"
+  onkeydown="said.textContent = 'Key: ' + event.key">
 <select aria-label="Role" onchange="said.textContent = 'Role: ' + this.value">
   <option value="dev">Developer</option><option value="pm">Manager</option>
 </select>
@@ -55,6 +57,7 @@ _FORM = """<html><head><title>Apply</title></head><body>
   <div style="position: absolute; inset: 0; background: white">Cookies</div>
 </div>
 <a href="/report.csv" download>Report</a>
+<a href="/export.csv" download>Export</a>
 <input type="file" aria-label="CV" onchange="said.textContent = 'Attached ' + this.files[0].name">
 </body></html>"""
 _REPORT = b"company,status\nAcme,open\n"
@@ -72,6 +75,12 @@ async def _report(request: web.Request) -> web.Response:
     """The report, slow to answer, as a loaded server is, so its download begins after the click
     that asked for it returns."""
     await asyncio.sleep(0.2)
+    return web.Response(body=_REPORT, content_type="text/csv")
+
+
+async def _export(request: web.Request) -> web.Response:
+    """An export, slower to answer than a click waits for its download."""
+    await asyncio.sleep(1.5)
     return web.Response(body=_REPORT, content_type="text/csv")
 
 
@@ -93,6 +102,7 @@ async def site() -> AsyncIterator[int]:
     application.router.add_get("/", _page)
     application.router.add_get("/form", _form)
     application.router.add_get("/report.csv", _report)
+    application.router.add_get("/export.csv", _export)
     application.router.add_get("/sign-in", _set_cookie)
     application.router.add_get("/cookies", _cookies)
     runner = web.AppRunner(application)
@@ -349,6 +359,37 @@ def test_typing_into_a_password_field_is_refused(browser_server) -> None:
 
     with pytest.raises(PermissionError, match="password field"):
         _on_the_form(browser_server, scenario)
+
+
+@pytest.mark.browser
+def test_a_key_press_types_no_character_into_a_password_field(browser_server) -> None:
+    said: list[str] = []
+
+    async def scenario(act: Act) -> None:
+        await act('textbox "Password"', Click)
+        said.append((await act('textbox "Password"', lambda _: Press("Enter")))[0])
+        with pytest.raises(PermissionError, match="password field"):
+            await act('textbox "Password"', lambda _: Press("a"))
+
+    _on_the_form(browser_server, scenario)
+
+    assert said == ["Key: Enter"]
+
+
+@pytest.mark.browser
+def test_a_download_that_begins_after_its_click_returns_with_the_next_action(
+    browser_server,
+) -> None:
+    pages: list[Page] = []
+
+    async def scenario(act: Act) -> None:
+        pages.append((await act('link "Export"', Click))[1])
+        await asyncio.sleep(2)
+        pages.append((await act('link "Export"', lambda ref: Scroll("down", ref)))[1])
+
+    _on_the_form(browser_server, scenario)
+
+    assert [page.downloads for page in pages] == [(), (Download("export.csv", _REPORT),)]
 
 
 @pytest.mark.browser

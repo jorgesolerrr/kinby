@@ -18,6 +18,7 @@ from kinby.plugins.browser import (
     Click,
     Download,
     Navigate,
+    Page,
     Press,
     Scroll,
     Select,
@@ -61,9 +62,8 @@ async def browser_open(url: str, context: ToolContext) -> str:
     """Open `url` in the browser, which runs the page's JavaScript. Opening a URL that is not in
     the conversation yet needs the user's approval. Then read the page with browser_snapshot."""
     await guard_url(url)
-    browser, turn = await _opened(context)
-    page = await browser.run(turn, Navigate(url))
-    return untrusted(f"Opened {page.url}\nTitle: {page.title}", page.url)
+    page, downloaded = await _run(context, Navigate(url))
+    return untrusted(f"Opened {page.url}\nTitle: {page.title}", page.url) + downloaded
 
 
 @tool(write=False)
@@ -108,9 +108,8 @@ async def browser_scroll(
     ref: str | None = None,
 ) -> str:
     """Scroll the open page a screen up or down, or bring the element with `ref` into view."""
-    browser, turn = await _opened(context)
-    page = await browser.run(turn, Scroll(direction, ref))
-    return f"Scrolled {page.url}."
+    page, downloaded = await _run(context, Scroll(direction, ref))
+    return f"Scrolled {page.url}.{downloaded}"
 
 
 @tool(write=False)
@@ -121,15 +120,15 @@ async def browser_wait(
 ) -> str:
     """Wait up to `seconds` for `text` to appear on the open page, or without it for the page
     to finish loading."""
-    browser, turn = await _opened(context)
-    page = await browser.run(turn, Wait(text, seconds))
-    return f"{page.url} shows the text." if text else f"{page.url} finished loading."
+    page, downloaded = await _run(context, Wait(text, seconds))
+    done = f"{page.url} shows the text." if text else f"{page.url} finished loading."
+    return done + downloaded
 
 
 @tool(write=True)
 async def browser_click(ref: str, context: ToolContext) -> str:
     """Click the element with `ref` from the last snapshot. A file the click downloads lands in
-    the workspace's downloads/."""
+    the workspace's downloads/, with the next browser action when it is slow to begin."""
     return await _act(context, Click(ref), f"Clicked {ref}")
 
 
@@ -160,11 +159,17 @@ async def browser_upload(ref: str, path: str, context: ToolContext) -> str:
 
 
 async def _act(context: ToolContext, action: BrowserAction, done: str) -> str:
-    """Run *action*, and save what it downloaded into the workspace."""
+    page, downloaded = await _run(context, action)
+    return f"{done} on {page.url}.{downloaded}"
+
+
+async def _run(context: ToolContext, action: BrowserAction) -> tuple[Page, str]:
+    """Run *action*, and save what the page downloaded since the last action into the
+    workspace, with a line that names each file."""
     browser, turn = await _opened(context)
     page = await browser.run(turn, action)
     saved = [await _save(context.workspace, download) for download in page.downloads]
-    return "\n".join([f"{done} on {page.url}.", *(f"Downloaded {name}." for name in saved)])
+    return page, "".join(f"\nDownloaded {name}." for name in saved)
 
 
 async def _save(workspace: Path, download: Download) -> str:

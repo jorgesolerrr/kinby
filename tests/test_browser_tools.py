@@ -61,7 +61,8 @@ def _fake_dns(monkeypatch) -> None:
 
 
 class FakeBrowser:
-    """A browser service with one page, which records each turn's context."""
+    """A browser service with one page, which records each turn's context and gives its
+    downloads to the first action."""
 
     def __init__(
         self,
@@ -96,8 +97,8 @@ class FakeBrowser:
                 pass
             case _:
                 self.acted.append(action)
-                return Page(url=self._url, title="Applications", downloads=self._downloads)
-        return Page(url=self._url, title="Applications")
+        downloads, self._downloads = self._downloads, ()
+        return Page(url=self._url, title="Applications", downloads=downloads)
 
     async def snapshot(self, turn: UUID, *, interactive: bool, max_chars: int) -> PageRead:
         assert turn in self.opened
@@ -408,6 +409,18 @@ def test_a_download_lands_in_the_workspace_where_the_file_tools_read_it(tmp_path
     results = _results(payloads)
     assert "downloads/report.csv" in results["browser_click"].output
     assert results["read"].output == "company,status\nAcme,open\n"
+
+
+def test_a_download_that_begins_late_lands_with_the_next_browser_wait(tmp_path) -> None:
+    report = Download("report.csv", b"company,status\nAcme,open\n")
+    browser = FakeBrowser(downloads=(report,))
+    instance = _instance(tmp_path)
+
+    _, payloads = _turn(instance, _calls(("browser_wait", {})), "Wait for it.", browser)
+
+    assert "Downloaded downloads/report.csv." in _results(payloads)["browser_wait"].output
+    downloads = instance.manifest.workspace.path / "downloads"
+    assert (downloads / "report.csv").read_bytes() == report.content
 
 
 def test_a_download_keeps_inside_downloads_whatever_the_page_names_it(tmp_path) -> None:
