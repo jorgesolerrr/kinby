@@ -1683,6 +1683,34 @@ describe("a waiting takeover", () => {
     )
   })
 
+  it("finishes only once the input sent before Finish reached the browser", async () => {
+    let delivered = () => {}
+    const answers = stubCaller({
+      "thread.takeover.finish": () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" }),
+    })
+    const client = {
+      ...instanceClient(),
+      calls: answers.calls,
+      call: ((method, params) =>
+        method === "thread.takeover.input"
+          ? new Promise((resolve) => (delivered = () => resolve({})))
+          : answers.call(method, params)) as typeof answers.call,
+    }
+    const { subscription } = openThread({}, client)
+    await act(async () => {
+      subscription().subscribed(parked.length)
+      for (const event of parked) subscription().deliver(event)
+    })
+    const finished = () => answers.calls.some((call) => call.method === "thread.takeover.finish")
+
+    fireEvent.keyDown(screen.getByRole("application", { name: "The browser" }), { key: "7" })
+    await userEvent.setup().click(screen.getByRole("button", { name: "Finish" }))
+    expect(finished()).toBe(false)
+
+    await act(async () => delivered())
+    await waitFor(() => expect(finished()).toBe(true))
+  })
+
   it("finishes the takeover, which resumes the turn", async () => {
     const { sent } = await openParked()
 

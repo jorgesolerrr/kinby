@@ -676,6 +676,28 @@ def test_stopping_a_turn_parked_on_a_takeover_closes_its_browser(tmp_path) -> No
     assert browser.closed == [parked.turn_id]
 
 
+def test_stopping_a_takeover_while_its_notification_is_out_closes_its_browser(
+    tmp_path, monkeypatch
+) -> None:
+    async def never_answered(raised: NotificationRaised, report: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("kinby.core.turn_runner.raises_notifications", lambda: True)
+    monkeypatch.setattr("kinby.core.turn_runner.raise_notification", never_answered)
+    browser = FakeBrowser()
+    dispatcher = _takeover_runtime(tmp_path, browser)
+
+    async def scenario() -> tuple[Event, list[Event]]:
+        parked = await _parked_on_takeover(dispatcher)
+        await call(dispatcher, "thread.turn.interrupt", thread_id=parked.thread_id)
+        return parked, await turn_events(dispatcher, parked.thread_id)
+
+    parked, events = asyncio.run(scenario())
+
+    assert isinstance(events[-1].payload, TurnInterrupted)
+    assert browser.closed == [parked.turn_id]
+
+
 def test_through_the_hub_input_reaches_the_browser_and_finishing_resumes_the_turn(
     tmp_path,
 ) -> None:

@@ -597,6 +597,8 @@ function TakeoverPanel({
   const [answering, setAnswering] = useState<"finish" | "stop">()
 
   const send = (input: ThreadTakeoverInputCommand["input"]) => {
+    // Input after Finish or Stop would reach a turn that already moved on.
+    if (answering !== undefined) return
     // A move behind other input is stale by the time it would run.
     if (input.type === "pointer" && input.action === "move" && queued.current > 0) return
     queued.current += 1
@@ -694,7 +696,11 @@ function TakeoverPanel({
                 className="max-md:h-11"
                 disabled={busy}
                 onClick={() =>
-                  void answer("finish", () => client.call("thread.takeover.finish", ids))
+                  void answer("finish", async () => {
+                    // What the user typed last reaches the page before the turn resumes.
+                    await queue.current
+                    return client.call("thread.takeover.finish", ids)
+                  })
                 }
               >
                 {answering === "finish" ? (

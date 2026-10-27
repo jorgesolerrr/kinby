@@ -635,10 +635,15 @@ class LangGraphRunner:
             if not isinstance(parked, TakeoverRequested):
                 await self._browser.close(turn.turn_id)
         if isinstance(parked, TakeoverRequested):
-            await emit(parked)
-            if raises_notifications():
-                source = self._notification_source(turn) or UNTITLED
-                await raise_notification(takeover_notification(source, parked), emit)
+            try:
+                await emit(parked)
+                if raises_notifications():
+                    source = self._notification_source(turn) or UNTITLED
+                    await raise_notification(takeover_notification(source, parked), emit)
+            except BaseException:
+                # A turn stopped before it parks never gets the deadline that closes its browser.
+                await self._browser.close(turn.turn_id)
+                raise
             return ParkedTurn()
         if interrupts:
             approval = interrupts[0].value
