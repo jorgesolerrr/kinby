@@ -69,6 +69,9 @@ async def _form(request: web.Request) -> web.Response:
 
 
 async def _report(request: web.Request) -> web.Response:
+    """The report, slow to answer, as a loaded server is, so its download begins after the click
+    that asked for it returns."""
+    await asyncio.sleep(0.2)
     return web.Response(body=_REPORT, content_type="text/csv")
 
 

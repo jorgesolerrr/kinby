@@ -42,6 +42,8 @@ Lease = Callable[[UUID], Awaitable[BrowserOpenResult]]
 
 _NAVIGATION_MS = 30_000
 _ELEMENT_MS = 5_000
+#: How long a click or a key press waits for a download it may have started.
+_DOWNLOAD_SECONDS = 1
 #: The roles of the elements an interactive snapshot keeps.
 _INTERACTIVE = frozenset(
     {
@@ -110,13 +112,19 @@ class PlaywrightBrowser:
     async def run(self, turn: UUID, action: BrowserAction) -> Page:
         page = await self._page(turn)
         downloads: list[PlaywrightDownload] = []
+        begun = asyncio.Event()
 
         def collect(download: PlaywrightDownload) -> None:
             downloads.append(download)
+            begun.set()
 
         page.on("download", collect)
         try:
             await _run(page, action)
+            # A download begins when its server answers, which can be after the action returns.
+            if isinstance(action, Click | Press):
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(begun.wait(), _DOWNLOAD_SECONDS)
         finally:
             page.remove_listener("download", collect)
         return Page(
