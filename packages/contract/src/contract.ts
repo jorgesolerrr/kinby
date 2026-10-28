@@ -96,6 +96,11 @@ export type CommandListName = string;
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
 export type LoginState = "pending" | "signed_in" | "failed";
+export type ToolName = string;
+/**
+ * The one service an instance sends its web searches to.
+ */
+export type SearchBackend = "brave" | "tavily" | "exa" | "searxng";
 export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
 export type EnvVariable = string;
@@ -142,7 +147,6 @@ export type PermissionMode = "read-only" | "ask" | "auto" | "full-access";
  */
 export type GateAction = "allow" | "ask" | "deny";
 export type PromptName = "behavior" | "recap";
-export type ToolName = string;
 export type RoutineRunOutcome = "running" | "parked" | "work" | "no-work" | "failed" | "interrupted";
 export type RoutineNoticeKind = "first-failure" | "disabled";
 export type SignalAuth = "token" | "hmac-sha256";
@@ -467,6 +471,10 @@ export interface Contract {
     "instance.stop": {
       command: InstanceStopCommand;
       result: LifecycleOperationResult;
+    };
+    "instance.toolset.get": {
+      command: InstanceToolsetGetCommand;
+      result: InstanceToolsetResult;
     };
     "instance.update": {
       command: InstanceUpdateCommand;
@@ -1734,6 +1742,33 @@ export interface SecretSetup {
 export interface InstanceStopCommand {
   force?: boolean;
   instance_id: string;
+}
+export interface InstanceToolsetGetCommand {
+  instance_id: string;
+}
+/**
+ * What an instance can do outside its workspace, as its files have it.
+ */
+export interface InstanceToolsetResult {
+  authored_tools: AuthoredTool[];
+  browser: boolean;
+  default_tools: DefaultTool[];
+  mcp_servers: McpServerPick[];
+  packages: string[];
+  search: SearchSetup;
+}
+export interface AuthoredTool {
+  name: ToolName;
+  read_only: boolean;
+}
+export interface DefaultTool {
+  name: ToolName;
+  on: boolean;
+}
+export interface SearchSetup {
+  backend: SearchBackend;
+  is_set: boolean;
+  variable: string;
 }
 /**
  * Move one instance to the image a revision prepares.

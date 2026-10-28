@@ -28,7 +28,12 @@ class _ToolTable(TypedDict, total=False):
     kinby: _KinbyTable
 
 
+class _ProjectTable(TypedDict, total=False):
+    dependencies: list[str]
+
+
 class _Project(TypedDict, total=False):
+    project: _ProjectTable
     tool: _ToolTable
 
 
@@ -45,6 +50,12 @@ def exposed_tools(instance_path: Path) -> tuple[str, ...]:
     """The authored tools the instance code lists under `tools` in its `[tool.kinby]` table.
     Empty while it has no project."""
     return tuple(_kinby_table(instance_path).get("tools", []))
+
+
+def packages(instance_path: Path) -> tuple[str, ...]:
+    """The packages the instance code depends on, as its `[project]` table lists them. Empty
+    while it has no project."""
+    return tuple(_project(instance_path).get("project", {}).get("dependencies", []))
 
 
 def authored_tool_module(name: str) -> str:
@@ -69,16 +80,19 @@ def script_environment(instance_path: Path) -> dict[str, str]:
 
 
 def _kinby_table(instance_path: Path) -> _KinbyTable:
+    return _project(instance_path).get("tool", {}).get("kinby", {})
+
+
+def _project(instance_path: Path) -> _Project:
     path = instance_path / CODE_DIR / CODE_PROJECT_NAME
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
     try:
-        project = _PROJECT.validate_python(tomllib.loads(text))
+        return _PROJECT.validate_python(tomllib.loads(text))
     except (tomllib.TOMLDecodeError, ValidationError) as exc:
         raise ValueError(
-            f"{CODE_DIR}/{CODE_PROJECT_NAME} must be TOML whose [tool.kinby] secrets and tools "
-            f"are lists of names: {exc}"
+            f"{CODE_DIR}/{CODE_PROJECT_NAME} must be TOML whose [project] dependencies and "
+            f"[tool.kinby] secrets and tools are lists of names: {exc}"
         ) from exc
-    return project.get("tool", {}).get("kinby", {})

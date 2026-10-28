@@ -3,6 +3,7 @@ import type {
   Client,
   InstanceSetup,
   InstanceStatusResult,
+  InstanceToolsetResult,
   InstanceSummary,
   OperationGetResult,
   ViewSummary,
@@ -69,6 +70,15 @@ const stopped = instanceSummary({
   setup_pending: true,
 })
 
+const toolset: InstanceToolsetResult = {
+  default_tools: [{ name: "bash", on: false }],
+  search: { backend: "brave", variable: "BRAVE_API_KEY", is_set: true },
+  mcp_servers: [],
+  packages: [],
+  authored_tools: [],
+  browser: false,
+}
+
 function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResult {
   return {
     instance_id: "instance-1",
@@ -107,7 +117,11 @@ const waitingForCode = operation({
 
 async function openPage(answers: Answers, instance = stopped) {
   const caller = {
-    ...stubCaller({ "instance.status": () => status(), ...answers }),
+    ...stubCaller({
+      "instance.status": () => status(),
+      "instance.toolset.get": () => toolset,
+      ...answers,
+    }),
     ...stubSubscriber(),
   }
   const clock = fakeClock()
@@ -607,7 +621,10 @@ describe("the views of a running instance", () => {
 
   function openWithViews(views: ViewSummary[]) {
     const caller = {
-      ...stubCaller({ "instance.status": () => status({ process: "running" }) }),
+      ...stubCaller({
+        "instance.status": () => status({ process: "running" }),
+        "instance.toolset.get": () => toolset,
+      }),
       ...stubSubscriber(),
     }
     const client = stubCaller({ "view.list": () => ({ views }) })
@@ -1097,6 +1114,7 @@ describe("the browser profiles and the vault of an instance", () => {
     const caller = {
       ...stubCaller({
         "instance.status": () => status({ process: instance.process, browser }),
+        "instance.toolset.get": () => toolset,
         "browser.profile.list": () => ({
           profiles: [{ name: "LinkedIn", site: "www.linkedin.com" }],
         }),
@@ -1148,5 +1166,41 @@ describe("the browser profiles and the vault of an instance", () => {
 
     expect(screen.queryByRole("heading", { name: "Browser profiles" })).toBeNull()
     expect(screen.queryByRole("heading", { name: "Vault" })).toBeNull()
+  })
+})
+
+describe("the toolset of an instance", () => {
+  const running = { ...stopped, intended_state: "running", process: "running" } as const
+
+  async function openWithToolset(instance: InstanceSummary) {
+    const caller = {
+      ...stubCaller({
+        "instance.status": () => status({ process: instance.process }),
+        "instance.toolset.get": () => toolset,
+      }),
+      ...stubSubscriber(),
+    }
+    render(
+      <InstancePage
+        caller={caller}
+        client={stubCaller({})}
+        clock={fakeClock()}
+        instance={instance}
+        onChanged={vi.fn()}
+      />,
+    )
+    return screen.findByRole("list", { name: "Toolset" })
+  }
+
+  it("shows it on a running instance", async () => {
+    const toolset = await openWithToolset(running)
+
+    expect(within(toolset).getByText("Off: bash")).toBeDefined()
+  })
+
+  it("shows it on a stopped instance too, since the hub reads it from the instance's files", async () => {
+    const toolset = await openWithToolset({ ...stopped, setup_pending: false })
+
+    expect(within(toolset).getByText("Off: bash")).toBeDefined()
   })
 })
