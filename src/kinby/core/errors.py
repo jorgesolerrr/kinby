@@ -362,6 +362,26 @@ class TakeoverNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class BrowserProfileNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class BrowserProfileNameTaken(CoreError):
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class BrowserProfileNotSaved(CoreError):
+    """The browser the user signed in on stays open, so saving it again can succeed."""
+
+    retryable = True
+
+
+class BrowserNotOpen(CoreError):
+    """The turn has no browser on the hub's browser route, or no page in it."""
+
+    code = ErrorCode.NOT_FOUND
+
+
 class GrantOutsideRoutine(CoreError):
     """Only an approval raised in a routine's turn allows its tool in the routine (ADR 0112)."""
 

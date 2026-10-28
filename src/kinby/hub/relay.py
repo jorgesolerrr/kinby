@@ -23,6 +23,7 @@ from kinby.contracts import (
 from kinby.core.contract_server import HEARTBEAT_SECONDS
 from kinby.core.errors import InstanceAnswerLost, InstanceRefused, InstanceUnavailable
 from kinby.hub.approvals import HomeApprovals
+from kinby.hub.browser_profiles import BrowserSession
 from kinby.hub.models import InstanceEndpoint, InstanceUnreachable
 
 #: Headers that describe the connection ending at the hub, plus the ones the next hop rewrites.
@@ -83,10 +84,10 @@ async def relay_socket(
 
 
 async def relay_browser(
-    request: web.Request, address: str, launch_options: str
+    request: web.Request, address: str, launch_options: str, browser: BrowserSession
 ) -> web.WebSocketResponse:
-    """Carry a Playwright client to the browser service at *address*, which launches its browser
-    with *launch_options* whatever the client asked for."""
+    """Carry a Playwright client to the browser service at *address* through *browser*. The
+    service launches its browser with *launch_options*, whatever the client asked for."""
     headers = {
         name: value
         for name, value in request.headers.items()
@@ -106,7 +107,7 @@ async def relay_browser(
     downstream = web.WebSocketResponse(max_msg_size=0, heartbeat=HEARTBEAT_SECONDS)
     await downstream.prepare(request)
     try:
-        await _carry(downstream, upstream, None)
+        await browser.carry(downstream, upstream)
     finally:
         await upstream.close()
         await session.close()

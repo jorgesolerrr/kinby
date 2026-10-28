@@ -50,8 +50,8 @@ class Scope(StrEnum):
     #: Raise a notification for the hub to send through its channels. Every instance holds it, on
     #: its hub route.
     NOTIFICATION_RAISE = "notification:raise"
-    #: Ask the hub's browser service for a browser for one turn. Only a browser-on instance holds
-    #: it, on its hub route (ADR 0113).
+    #: Ask the hub's browser service for a browser for one turn, and list and save the instance's
+    #: browser profiles. Only a browser-on instance holds it, on its hub route (ADR 0113).
     BROWSER_OPEN = "browser:open"
 
 
@@ -831,6 +831,31 @@ class ThreadTakeoverFinishCommand(ContractModel):
 
     thread_id: UUID
     takeover_id: UUID
+    #: Save the browser's signed-in state as the instance's profile by this name first.
+    profile: BrowserProfileName | None = None
+
+
+class BrowserTakeoverStartCommand(ContractModel):
+    """Open a browser at *url* with no turn, for the user to sign in and save as a profile, and
+    watch it frame by frame. The browser closes when the watching stops."""
+
+    #: Chosen by the caller, which names the takeover with it while it watches.
+    takeover_id: UUID
+    url: str
+
+
+class BrowserTakeoverInputCommand(ContractModel):
+    """Pass the user's mouse or keyboard to the browser of a takeover with no turn."""
+
+    takeover_id: UUID
+    input: TakeoverInput
+
+
+class BrowserTakeoverFinishCommand(ContractModel):
+    """Save the browser of a takeover with no turn as a profile, and close it."""
+
+    takeover_id: UUID
+    profile: BrowserProfileName
 
 
 class AcceptedResult(ContractModel):
@@ -1449,6 +1474,9 @@ class InstanceStatusResult(ContractModel):
     recreate_reasons: list[RecreateReason]
     #: The lists of repository commands it holds, when its factory role's steps name any.
     repository_commands: list[RepositoryCommandList]
+    #: Whether the hub opens browsers for it: it runs a browser service, and the instance's
+    #: manifest turns the browser on.
+    browser: bool = False
 
 
 class InstanceLogsResult(ContractModel):
@@ -2947,7 +2975,10 @@ class NotificationRaiseResult(ContractModel):
 class BrowserOpenCommand(ContractModel):
     """Ask for a browser for one turn of the instance that calls."""
 
+    #: The turn, or the takeover the user started with no turn.
     turn_id: UUID
+    #: The instance's profile the browser opens with, signed in.
+    profile: BrowserProfileName | None = None
 
 
 class BrowserOpenResult(ContractModel):
@@ -2955,6 +2986,53 @@ class BrowserOpenResult(ContractModel):
 
     address: str
     token: BrowserToken
+
+
+type BrowserProfileName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+
+
+class BrowserProfile(ContractModel):
+    """A named signed-in state of one instance's browser. Its cookies never leave the hub."""
+
+    name: BrowserProfileName
+    #: The host of the page it was saved on, such as www.linkedin.com.
+    site: str
+
+
+class BrowserProfileListResult(ContractModel):
+    #: By name.
+    profiles: tuple[BrowserProfile, ...]
+
+
+class BrowserProfilesCommand(ContractModel):
+    """List the profiles of the instance that calls."""
+
+
+class BrowserProfileSaveCommand(ContractModel):
+    """Save the state of a turn's browser as a profile of the instance that calls, replacing one
+    by that name. The turn's state is saved back to it when the turn ends."""
+
+    #: The turn, or the takeover the user started with no turn.
+    turn_id: UUID
+    name: BrowserProfileName
+    site: str
+
+
+class BrowserProfileListCommand(ContractModel):
+    instance_id: UUID
+
+
+class BrowserProfileRenameCommand(ContractModel):
+    instance_id: UUID
+    name: BrowserProfileName
+    new_name: BrowserProfileName
+
+
+class BrowserProfileDeleteCommand(ContractModel):
+    instance_id: UUID
+    name: BrowserProfileName
 
 
 class DeliveryStatus(StrEnum):

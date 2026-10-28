@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Sequence
-from contextlib import aclosing, asynccontextmanager, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Protocol
@@ -89,6 +88,7 @@ from kinby.core.snapshots import (
     SnapshotStore,
     snapshot_ref,
 )
+from kinby.core.takeovers import save_profile, takeover_frames
 from kinby.core.threads import (
     PendingTakeover,
     ThreadStore,
@@ -788,7 +788,7 @@ class Turns:
         """The live view of the takeover: its browser's page, frame by frame."""
         browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
         await browser.open(turn_id)
-        return Stream(0, _frames(browser.screencast(turn_id)))
+        return Stream(0, takeover_frames(browser.screencast(turn_id)))
 
     async def send_takeover_input(
         self, command: ThreadTakeoverInputCommand
@@ -798,7 +798,8 @@ class Turns:
         return ThreadTakeoverInputResult()
 
     async def finish_takeover(self, command: ThreadTakeoverFinishCommand) -> AcceptedResult:
-        """Resume the turn parked on the takeover, with its browser as the user left it."""
+        """Resume the turn parked on the takeover, with its browser as the user left it, saved
+        first as the profile the command names."""
         if not self._answering:
             raise InstanceDraining(
                 "The instance has drained. The takeover waits for its next start."
@@ -807,6 +808,9 @@ class Turns:
         running = self._running.get(command.thread_id)
         if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
+        if command.profile is not None:
+            browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
+            await save_profile(browser, turn_id, command.profile)
         origin = _turn_origin(self._log.stored(command.thread_id), pending.event.turn_id)
         return await self._resume_parked(pending.event, origin, _TAKEOVER_FINISHED)
 
@@ -1069,12 +1073,6 @@ class Turns:
                     "task": task,
                 }
             )
-
-
-async def _frames(screencast: AsyncGenerator[bytes]) -> AsyncGenerator[TakeoverFrame]:
-    async with aclosing(screencast):
-        async for image in screencast:
-            yield TakeoverFrame(data=base64.b64encode(image).decode())
 
 
 def _turn_origin(events: Sequence[Event], turn_id: UUID) -> Origin:

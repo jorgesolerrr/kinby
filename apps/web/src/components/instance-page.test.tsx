@@ -13,6 +13,7 @@ import {
   instanceSummary,
   type StubCaller,
   stubCaller,
+  stubSubscriber,
 } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -601,7 +602,7 @@ describe("the views of a running instance", () => {
 
   function openWithViews(views: ViewSummary[]) {
     const caller = stubCaller({ "instance.status": () => status({ process: "running" }) })
-    const client = stubCaller({ "view.list": () => ({ views }) })
+    const client = { ...stubCaller({ "view.list": () => ({ views }) }), ...stubSubscriber() }
     render(
       <InstancePage
         caller={caller}
@@ -1080,3 +1081,42 @@ async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
 
 const stops = (caller: StubCaller) =>
   caller.calls.filter((call) => call.method === "instance.stop").map((call) => call.params)
+
+describe("the browser profiles of a running instance", () => {
+  const running = { ...stopped, intended_state: "running", process: "running" } as const
+
+  function openWithBrowser(browser: boolean) {
+    const caller = stubCaller({
+      "instance.status": () => status({ process: "running", browser }),
+      "browser.profile.list": () => ({
+        profiles: [{ name: "LinkedIn", site: "www.linkedin.com" }],
+      }),
+    })
+    const client = { ...stubCaller({}), ...stubSubscriber() }
+    render(
+      <InstancePage
+        caller={caller}
+        client={client}
+        clock={fakeClock()}
+        instance={running}
+        onChanged={vi.fn()}
+      />,
+    )
+  }
+
+  it("lists them on an instance the hub opens browsers for", async () => {
+    openWithBrowser(true)
+
+    const profiles = await screen.findByRole("list", { name: "Browser profiles" })
+
+    expect(within(profiles).getByRole("listitem", { name: "LinkedIn" })).toBeDefined()
+  })
+
+  it("leaves them out on an instance with the browser off", async () => {
+    openWithBrowser(false)
+
+    await screen.findByRole("button", { name: "Stop" })
+
+    expect(screen.queryByRole("heading", { name: "Browser profiles" })).toBeNull()
+  })
+})

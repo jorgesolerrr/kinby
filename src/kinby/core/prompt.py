@@ -27,10 +27,18 @@ from kinby.instance.layout import MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
 from kinby.plugins.skills import Skill
 
 KINBY_PREAMBLE = "You are a personal AI teammate running on kinby."
+#: What a browser-on instance is told about signed-in sites (ADR 0113).
+BROWSER_GUIDANCE = (
+    "# Browser\n"
+    "Open a signed-in site with one of your browser profiles: browser_profiles lists them, and "
+    "browser_open takes one by name. When a page shows you a sign-in, the session has expired. "
+    "Report the login page and tell the user with notify, instead of signing in."
+)
 
 
 class PromptSectionName(StrEnum):
     PREAMBLE = "preamble"
+    BROWSER = "browser"
     BEHAVIOR = "behavior prompt"
     CONVENTIONS = "workspace conventions"
     SKILLS = "skills catalogue"
@@ -100,6 +108,14 @@ def assemble_system_prompt(
             text=KINBY_PREAMBLE,
         )
     ]
+    if instance.manifest.browser:
+        sections.append(
+            PromptSection(
+                name=PromptSectionName.BROWSER,
+                source=PromptSectionSource.KINBY,
+                text=BROWSER_GUIDANCE,
+            )
+        )
     behavior = _file_section(PromptSectionName.BEHAVIOR, instance.path / SYSTEM_NAME)
     if behavior is not None:
         sections.append(behavior)
