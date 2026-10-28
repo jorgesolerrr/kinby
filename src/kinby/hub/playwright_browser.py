@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import mimetypes
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -16,7 +17,14 @@ from typing import cast
 from urllib.parse import urljoin, urlsplit
 from uuid import UUID
 
-from playwright.async_api import Browser, BrowserContext, Locator, Playwright, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    CDPSession,
+    Locator,
+    Playwright,
+    async_playwright,
+)
 from playwright.async_api import Download as PlaywrightDownload
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page as PlaywrightPage
@@ -106,9 +114,11 @@ _STATE = TypeAdapter(StorageState)
 
 @dataclass
 class _Screencast:
-    """A takeover's live view: the page's newest frame, and whether it changed since the last
+    """A takeover's live view of *page*: its newest frame, and whether it changed since the last
     one the view got."""
 
+    page: PlaywrightPage
+    session: CDPSession
     latest: str | None = None
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -158,10 +168,17 @@ class PlaywrightBrowser:
         self._profiles = profiles
         self._idle_seconds = limits.turn_idle_seconds
         self._opened: dict[_Turn, _Opened] = {}
+        #: Each turn's open and close take turns, so a close that comes while the open is still
+        #: connecting closes what it opens.
+        self._turns: dict[_Turn, asyncio.Lock] = {}
         self._closing: set[asyncio.Task[None]] = set()
 
     async def open(self, instance_id: UUID, command: BrowserOpenCommand) -> BrowserOpenResult:
-        turn, profile = (instance_id, command.turn_id), command.profile
+        turn = (instance_id, command.turn_id)
+        async with self._turns.setdefault(turn, asyncio.Lock()):
+            return await self._open(turn, command.profile)
+
+    async def _open(self, turn: _Turn, profile: BrowserProfileName | None) -> BrowserOpenResult:
         if (opened := self._opened.get(turn)) is not None:
             if profile is not None and profile != opened.profile:
                 raise BrowserActionFailed(
@@ -170,7 +187,7 @@ class PlaywrightBrowser:
                 )
             self._touch(turn, opened)
             return BrowserOpenResult()
-        state = self._profiles.state(instance_id, profile) if profile is not None else None
+        state = self._profiles.state(turn[0], profile) if profile is not None else None
         address = await self._browsers.lend()
         try:
             opened = await _connected(address, state, profile)
@@ -193,19 +210,8 @@ class PlaywrightBrowser:
             downloads = [*opened.downloads]
             opened.downloads.clear()
             opened.begun.clear()
-            files = [await _downloaded(download) for download in downloads]
-            if (size := sum(len(content) for _, content in files)) > BROWSER_FILE_BYTES:
-                raise BrowserActionFailed(
-                    f"The page downloaded {', '.join(name for name, _ in files)}, {size:,} "
-                    f"bytes, over the browser's cap of {BROWSER_FILE_BYTES:,}. Nothing was saved."
-                )
             return BrowserPage(
-                url=page.url,
-                title=await page.title(),
-                downloads=tuple(
-                    BrowserFile(name=name, content=base64.b64encode(content).decode())
-                    for name, content in files
-                ),
+                url=page.url, title=await page.title(), downloads=await _downloaded(downloads)
             )
 
     async def snapshot(self, instance_id: UUID, command: BrowserSnapshotCommand) -> BrowserPageRead:
@@ -237,9 +243,14 @@ class PlaywrightBrowser:
 
     async def frame(self, instance_id: UUID, command: BrowserFrameCommand) -> TakeoverFrame:
         opened = self._turn(instance_id, command.turn_id)
-        if opened.screencast is None:
-            with _on_the_page():
-                opened.screencast = await _screencast(await opened.page())
+        with _on_the_page():
+            page = await opened.page()
+            # A tab the page opened since the last takeover is the one the user's input reaches.
+            if opened.screencast is None or opened.screencast.page is not page:
+                if opened.screencast is not None:
+                    with suppress(PlaywrightError):
+                        await opened.screencast.session.detach()
+                opened.screencast = await _screencast(page)
         return TakeoverFrame(data=await opened.screencast.next())
 
     async def send_input(
@@ -306,6 +317,11 @@ class PlaywrightBrowser:
         closing.add_done_callback(self._closing.discard)
 
     async def _close(self, turn: _Turn) -> None:
+        async with self._turns.setdefault(turn, asyncio.Lock()):
+            await self._closed(turn)
+            self._turns.pop(turn, None)
+
+    async def _closed(self, turn: _Turn) -> None:
         opened = self._opened.pop(turn, None)
         if opened is None:
             return
@@ -400,7 +416,7 @@ async def _run(page: PlaywrightPage, action: BrowserPageAction) -> None:
             await (await _element(page, ref)).set_input_files(
                 {
                     "name": file.name,
-                    "mimeType": "application/octet-stream",
+                    "mimeType": mimetypes.guess_type(file.name)[0] or "application/octet-stream",
                     "buffer": base64.b64decode(file.content),
                 },
                 timeout=_ELEMENT_MS,
@@ -419,20 +435,35 @@ async def _click(element: Locator, ref: str) -> None:
         ) from None
 
 
-async def _downloaded(download: PlaywrightDownload) -> tuple[str, bytes]:
-    """The name and content of the file *download* gave, which a browser in another process can
-    only save, not lend."""
+async def _downloaded(downloads: list[PlaywrightDownload]) -> tuple[BrowserFile, ...]:
+    """The files *downloads* gave, which a browser in another process can only save, not lend.
+    Over the cap together, they are refused before the hub reads one."""
     with TemporaryDirectory() as directory:
-        path = Path(directory) / "download"
-        await download.save_as(path)
-        content = await asyncio.to_thread(path.read_bytes)
-    return download.suggested_filename, content
+        saved = []
+        for index, download in enumerate(downloads):
+            path = Path(directory) / str(index)
+            await download.save_as(path)
+            saved.append((download.suggested_filename, path))
+        if (size := sum(path.stat().st_size for _, path in saved)) > BROWSER_FILE_BYTES:
+            raise BrowserActionFailed(
+                f"The page downloaded {', '.join(name for name, _ in saved)}, {size:,} bytes, "
+                f"over the browser's cap of {BROWSER_FILE_BYTES:,}. Nothing was saved."
+            )
+        return tuple(
+            [
+                BrowserFile(
+                    name=name,
+                    content=base64.b64encode(await asyncio.to_thread(path.read_bytes)).decode(),
+                )
+                for name, path in saved
+            ]
+        )
 
 
 async def _screencast(page: PlaywrightPage) -> _Screencast:
     """Start the page's live view, which shows a new frame each time the page changes."""
-    screencast = _Screencast()
     session = await page.context.new_cdp_session(page)
+    screencast = _Screencast(page, session)
 
     async def framed(frame: dict[str, object]) -> None:
         screencast.show(str(frame["data"]))

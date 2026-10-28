@@ -68,12 +68,13 @@ class HubBrowser:
     """A BrowserService whose contexts the hub keeps, one for each of this instance's turns."""
 
     def __init__(self) -> None:
-        #: Every turn ends by closing its browser, which most turns never opened.
+        #: Every turn ends by closing its browser, which most turns never opened. A turn counts
+        #: from the open's call, since the hub finishes an open whose caller went away.
         self._opened: set[UUID] = set()
 
     async def open(self, turn: UUID, profile: BrowserProfileName | None = None) -> None:
-        await _call(BROWSER_OPEN, BrowserOpenCommand(turn_id=turn, profile=profile))
         self._opened.add(turn)
+        await _call(BROWSER_OPEN, BrowserOpenCommand(turn_id=turn, profile=profile))
 
     async def run(self, turn: UUID, action: BrowserAction) -> Page:
         page = await _call(BROWSER_RUN, BrowserRunCommand(turn_id=turn, action=await _sent(action)))

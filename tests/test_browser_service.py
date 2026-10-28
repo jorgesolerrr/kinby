@@ -7,12 +7,13 @@ import json
 import re
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import aclosing, asynccontextmanager, contextmanager
+from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
+import aiohttp
 import httpx
 import pytest
 from aiohttp import web
@@ -37,6 +38,7 @@ from kinby.contracts import (
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.hub.browser import BrowserLimits
 from kinby.hub.browser_service import serve_proxy
+from kinby.plugins import hub_browser
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
@@ -55,6 +57,7 @@ from kinby.plugins.hub import HUB_URL_VARIABLE
 from kinby.plugins.hub_browser import HubBrowser
 from tests.test_hub import finished_operation, hub_client
 from tests.test_hub_browser import BrowserHub, browser_hub, browser_on, error, result
+from tests.test_hub_server import frame
 
 _PAGE = """<html><head><title>Applications</title></head><body>
 <h1>Applications</h1>
@@ -81,7 +84,8 @@ _FORM = """<html><head><title>Apply</title></head><body>
 <a href="/report.csv" download>Report</a>
 <a href="/export.csv" download>Export</a>
 <a href="/big.bin" download>Archive</a>
-<input type="file" aria-label="CV" onchange="said.textContent = 'Attached ' + this.files[0].name">
+<input type="file" aria-label="CV"
+  onchange="said.textContent = 'Attached ' + this.files[0].name + ' as ' + this.files[0].type">
 </body></html>"""
 _REPORT = b"company,status\nAcme,open\n"
 #: The session cookie the site signs a browser in with.
@@ -99,6 +103,20 @@ async def _page(request: web.Request) -> web.Response:
 
 async def _form(request: web.Request) -> web.Response:
     return web.Response(text=_FORM, content_type="text/html")
+
+
+#: A page in one colour, with a link that opens a page in another in a new tab.
+_OPENER = """<html><body style="margin: 0; height: 100vh; background: #c00">
+<a href="/blue" target="_blank">Blue</a></body></html>"""
+_BLUE = """<html><body style="margin: 0; height: 100vh; background: #00c"></body></html>"""
+
+
+async def _opener(request: web.Request) -> web.Response:
+    return web.Response(text=_OPENER, content_type="text/html")
+
+
+async def _blue(request: web.Request) -> web.Response:
+    return web.Response(text=_BLUE, content_type="text/html")
 
 
 async def _pad(request: web.Request) -> web.Response:
@@ -147,6 +165,8 @@ async def site() -> AsyncIterator[int]:
     application.router.add_get("/", _page)
     application.router.add_get("/form", _form)
     application.router.add_get("/pad", _pad)
+    application.router.add_get("/opener", _opener)
+    application.router.add_get("/blue", _blue)
     application.router.add_get("/report.csv", _report)
     application.router.add_get("/export.csv", _export)
     application.router.add_get("/big.bin", _big)
@@ -495,7 +515,7 @@ def test_an_upload_attaches_the_file(browser_server, tmp_path: Path) -> None:
 
     _on_the_form(browser_server, scenario)
 
-    assert said == ["Attached cv.pdf"]
+    assert said == ["Attached cv.pdf as application/pdf"]
 
 
 @pytest.mark.browser
@@ -853,3 +873,94 @@ def test_an_upload_over_the_cap_never_reaches_the_hub(tmp_path: Path) -> None:
 
 def test_a_turn_that_opened_no_browser_closes_without_calling_the_hub() -> None:
     asyncio.run(HubBrowser().close(uuid4()))
+
+
+@pytest.mark.browser
+def test_a_takeover_after_a_new_tab_opens_watches_the_new_tab(browser_server) -> None:
+    async def first_frame(browser: HubBrowser, turn: UUID) -> bytes:
+        async with aclosing(browser.screencast(turn)) as frames, asyncio.timeout(10):
+            return await anext(frames)
+
+    async def scenario() -> tuple[bytes, bytes]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            on_the_hub(browser_server, address) as browser,
+        ):
+            alone, opener = uuid4(), uuid4()
+            await browser.open(alone)
+            await browser.run(alone, Navigate(f"http://site.test:{port}/blue"))
+            blue = await first_frame(browser, alone)
+            await browser.close(alone)
+            await browser.open(opener)
+            await browser.run(opener, Navigate(f"http://site.test:{port}/opener"))
+            await first_frame(browser, opener)
+            tree = await browser.snapshot(opener, interactive=True, max_chars=2_000)
+            ref = re.search(r'link "Blue" \[ref=(e\d+)\]', tree.text)
+            assert ref is not None, tree.text
+            await browser.run(opener, Click(ref.group(1)))
+            await browser.run(opener, Wait(None, 5))
+            watched = await first_frame(browser, opener)
+            await browser.close(opener)
+            return blue, watched
+
+    blue, watched = asyncio.run(scenario())
+
+    assert watched == blue
+
+
+@pytest.mark.browser
+def test_a_close_sent_while_the_open_is_pending_closes_the_browser(browser_server) -> None:
+    async def scenario() -> tuple[list[str], dict[str, object]]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address) as hub,
+            aiohttp.ClientSession(
+                headers={"Authorization": f"Bearer {hub.token(hub.alice)}"}
+            ) as session,
+            session.ws_connect(hub.route(hub.alice)) as socket,
+        ):
+            turn = {"turn_id": str(uuid4())}
+            for frame_id, method in [("open", "browser.open"), ("close", "browser.close")]:
+                await socket.send_json(
+                    {"type": "call", "id": frame_id, "method": method, "params": turn}
+                )
+            answered = [(await frame(socket))["id"] for _ in range(2)]
+            return sorted(str(frame_id) for frame_id in answered), await hub.call(
+                hub.alice, "browser.text", turn
+            )
+
+    answered, read = asyncio.run(scenario())
+
+    assert answered == ["close", "open"]
+    assert error(read)["code"] == ErrorCode.NOT_FOUND.value
+
+
+def test_a_turn_whose_open_was_cancelled_still_closes_its_browser_on_the_hub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: list[str] = []
+    reached = asyncio.Event()
+
+    async def call_hub(method: str, params: dict[str, object], named: str) -> dict[str, object]:
+        called.append(method)
+        if method == "browser.open":
+            reached.set()
+            await asyncio.Event().wait()
+        return {}
+
+    monkeypatch.setattr(hub_browser, "call_hub", call_hub)
+
+    async def scenario() -> None:
+        browser, turn = HubBrowser(), uuid4()
+        opening = asyncio.create_task(browser.open(turn))
+        await reached.wait()
+        opening.cancel()
+        with suppress(asyncio.CancelledError):
+            await opening
+        await browser.close(turn)
+
+    asyncio.run(scenario())
+
+    assert called == ["browser.open", "browser.close"]
