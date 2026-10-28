@@ -3016,6 +3016,12 @@
             }
           ]
         },
+        "mcp_servers": {
+          "items": {
+            "$ref": "#/$defs/McpServerPick"
+          },
+          "type": "array"
+        },
         "picks": {
           "items": {
             "$ref": "#/$defs/SkillPick"
@@ -3025,6 +3031,7 @@
       },
       "required": [
         "picks",
+        "mcp_servers",
         "hash"
       ],
       "title": "InstancePicksResult",
@@ -3047,6 +3054,12 @@
           "format": "uuid",
           "type": "string"
         },
+        "mcp_servers": {
+          "items": {
+            "$ref": "#/$defs/McpServerChoice"
+          },
+          "type": "array"
+        },
         "skills": {
           "items": {
             "type": "string"
@@ -3057,6 +3070,7 @@
       "required": [
         "instance_id",
         "skills",
+        "mcp_servers",
         "hash"
       ],
       "title": "InstancePicksSetCommand",
@@ -3388,6 +3402,7 @@
             "discriminator": {
               "mapping": {
                 "hub_route_missing": "#/$defs/HubRouteMissing",
+                "mcp_server_failed": "#/$defs/McpServerFailed",
                 "revision_behind": "#/$defs/RevisionBehind",
                 "template_behind": "#/$defs/TemplateBehind"
               },
@@ -3402,6 +3417,9 @@
               },
               {
                 "$ref": "#/$defs/HubRouteMissing"
+              },
+              {
+                "$ref": "#/$defs/McpServerFailed"
               }
             ]
           },
@@ -4270,9 +4288,72 @@
       "title": "McpServer",
       "type": "object"
     },
+    "McpServerChoice": {
+      "additionalProperties": false,
+      "description": "An MCP server an instance should hold, and whether the user trusts its read-only hints.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/McpServerName"
+        },
+        "trust_hints": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "McpServerChoice",
+      "type": "object"
+    },
+    "McpServerFailed": {
+      "additionalProperties": false,
+      "description": "An MCP server the instance picked failed to start or list its tools at its last turn, which\nran without them.",
+      "properties": {
+        "code": {
+          "const": "mcp_server_failed",
+          "default": "mcp_server_failed",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerName"
+        }
+      },
+      "required": [
+        "message",
+        "server",
+        "code"
+      ],
+      "title": "McpServerFailed",
+      "type": "object"
+    },
     "McpServerName": {
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "type": "string"
+    },
+    "McpServerPick": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/McpServerName"
+        },
+        "state": {
+          "$ref": "#/$defs/PickState"
+        },
+        "trust_hints": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "trust_hints",
+        "state"
+      ],
+      "title": "McpServerPick",
+      "type": "object"
     },
     "McpServerResult": {
       "additionalProperties": false,

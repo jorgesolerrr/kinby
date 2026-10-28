@@ -19,6 +19,7 @@ from kinby.contracts import (
     InstancePicksResult,
     InstancePicksSetCommand,
     LibrarySource,
+    McpServerChoice,
     PickState,
     SkillPick,
 )
@@ -59,9 +60,18 @@ def _picks(client: ContractClient, directory: Path) -> InstancePicksResult:
 
 
 def _set(
-    client: ContractClient, directory: Path, skills: list[str], read: FileHash | None
+    client: ContractClient,
+    directory: Path,
+    skills: list[str],
+    read: FileHash | None,
+    mcp_servers: list[McpServerChoice] | None = None,
 ) -> object:
-    command = InstancePicksSetCommand(instance_id=_instance_id(directory), skills=skills, hash=read)
+    command = InstancePicksSetCommand(
+        instance_id=_instance_id(directory),
+        skills=skills,
+        mcp_servers=mcp_servers or [],
+        hash=read,
+    )
     return asyncio.run(client.call(INSTANCE_PICKS_SET, command))
 
 

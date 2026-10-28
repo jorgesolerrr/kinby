@@ -501,7 +501,7 @@ def test_kinby_sets_another_instances_picks_and_prompt_once_the_user_approves(
             calling(
                 "picks-1",
                 "instance_picks_set",
-                {"instance_id": str(alice), "skills": ["tdd"], "hash": None},
+                {"instance_id": str(alice), "skills": ["tdd"], "mcp_servers": [], "hash": None},
             ),
             calling("prompt-1", "instance_prompt_set", {"instance_id": str(alice), **prompt}),
             AIMessageChunk(content="Alice is set up."),
@@ -534,7 +534,7 @@ def test_the_hub_refuses_picks_and_a_prompt_without_an_approval(tmp_path, monkey
                 written(
                     uuid4(),
                     "instance_picks_set",
-                    {"instance_id": alice, "skills": ["tdd"], "hash": None},
+                    {"instance_id": alice, "skills": ["tdd"], "mcp_servers": [], "hash": None},
                 ),
                 written(
                     uuid4(),
@@ -736,6 +736,53 @@ def test_kinby_adds_an_mcp_server_to_the_library_only_once_the_user_approves_in_
         ]
         assert isinstance(read["result"], dict), read
         assert McpServer.model_validate(read["result"]["server"]) == McpServer.model_validate(fetch)
+
+    asyncio.run(scenario())
+
+
+def test_kinby_picks_an_mcp_server_for_another_instance_only_once_the_user_approves_in_full_access(
+    tmp_path, monkeypatch
+):
+    fetch = McpServer.model_validate(
+        {"transport": {"type": "uvx", "package": "mcp-server-fetch"}, "include": ["fetch"]}
+    )
+
+    def script(alice: UUID) -> list[AIMessageChunk]:
+        picks = {
+            "instance_id": str(alice),
+            "skills": [],
+            "mcp_servers": [{"name": "fetch"}],
+            "hash": None,
+        }
+        return [
+            calling("picks-1", "instance_picks_set", picks),
+            AIMessageChunk(content="Alice can fetch."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            (tmp_path / "hub" / "mcp-servers").mkdir()
+            (tmp_path / "hub" / "mcp-servers" / "fetch.json").write_text(
+                fetch.model_dump_json(), encoding="utf-8"
+            )
+            (tmp_path / "instance" / "permissions.toml").write_text(
+                'mode = "full-access"\n', encoding="utf-8"
+            )
+            payloads = await relayed_turn(kinby)
+            [picks] = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("instance.picks.get", {"instance_id": str(kinby.alice)}),
+            )
+
+        tool_results(payloads)
+        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+            "instance_picks_set"
+        ]
+        assert isinstance(picks["result"], dict), picks
+        assert picks["result"]["mcp_servers"] == [
+            {"name": "fetch", "trust_hints": False, "state": "up-to-date"}
+        ]
 
     asyncio.run(scenario())
 

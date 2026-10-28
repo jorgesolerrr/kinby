@@ -37,6 +37,7 @@ from kinby.contracts import (
     LibrarySkillMoveCommand,
     LibrarySkillWriteCommand,
     McpServer,
+    McpServerChoice,
     McpServerName,
     PromptName,
     PromptSetCommand,
@@ -159,14 +160,22 @@ async def instance_lifecycle(
 
 @tool(write=True, hub=True)
 async def instance_picks_set(
-    instance_id: UUID, skills: list[SkillName], hash: FileHash | None, context: ToolContext
+    instance_id: UUID,
+    skills: list[SkillName],
+    mcp_servers: list[McpServerChoice],
+    hash: FileHash | None,
+    context: ToolContext,
 ) -> str:
-    """Set the library skills an instance picks, and return its picks as JSON.
+    """Set the library skills and MCP servers an instance picks, and return its picks as JSON.
 
-    skills names every pick the instance should hold: one left out is dropped. hash is the one
+    skills and mcp_servers name every pick the instance should hold: one left out is dropped.
+    Each MCP server's trust_hints says whether its tools that declare themselves read-only run
+    without asking; leave it false unless the user asked to trust them. hash is the one
     instance.picks.get returned.
     """
-    command = InstancePicksSetCommand(instance_id=instance_id, skills=skills, hash=hash)
+    command = InstancePicksSetCommand(
+        instance_id=instance_id, skills=skills, mcp_servers=mcp_servers, hash=hash
+    )
     return await _write(instance_picks_set, command.model_dump(mode="json"), context)
 
 

@@ -405,7 +405,7 @@ def report_needs_human(
     if branch is not None and base is not None:
         try:
             if _git(workspace, "rev-list", "--count", f"origin/{base}..{branch}").strip() != "0":
-                _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
+                _push(workspace, branch)
         except CommandFailed as failed:
             body.append(f"Pushing `{branch}` failed: {failed}")
     if blocked := _blocked_behind(workspace, issue):
@@ -475,7 +475,7 @@ def _open_pull_request(
     existing = next((pull for pull in pulls if pull.branch == branch), None)
     under = next((pull for pull in pulls if pull.branch == base), None)
     maintainer = _repository(workspace).maintainer
-    _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
+    _push(workspace, branch)
     words = ("--title", title or found.title, "--body", _body(issue, body, reviewed=reviewed))
     if existing is None:
         reviewer = () if maintainer is None else ("--reviewer", maintainer)
@@ -543,7 +543,7 @@ def _push_fix_round(
     """Push the fix round's commits and apply the title and body the coding client rewrote, then
     reply on each thread it answered and resolve each it fixed. A fix's reply names the commit
     that holds it."""
-    _git(workspace, "push", "--force-with-lease", "-u", "origin", branch)
+    _push(workspace, branch)
     edits = [
         *(("--title", title) if title else ()),
         *(("--body", _body(issue, body, reviewed=reviewed)) if body else ()),
@@ -962,6 +962,23 @@ def _pages(workspace: Path, endpoint: str, *fields: str, key: str | None = None)
         arguments += ["-f", field]
     pages = json.loads(_gh(workspace, *arguments))
     return [item for page in pages for item in (page if key is None else page[key])]
+
+
+def _push(workspace: Path, branch: str) -> None:
+    """Push the branch over what this workspace last fetched of it, never over a push it missed.
+
+    A branch deleted from origin since the fetch, as GitHub deletes a merged pull request's,
+    leaves a remote-tracking ref the lease refuses as stale. That ref goes, and the push runs again.
+    """
+    push = ("push", "--force-with-lease", "-u", "origin", branch)
+    try:
+        _git(workspace, *push)
+    except CommandFailed as failed:
+        gone = not _git(workspace, "ls-remote", "--heads", "origin", f"refs/heads/{branch}").strip()
+        if "stale info" not in str(failed) or not gone:
+            raise
+        _git(workspace, "update-ref", "-d", f"refs/remotes/origin/{branch}")
+        _git(workspace, *push)
 
 
 def _gh(workspace: Path, *arguments: str) -> str:

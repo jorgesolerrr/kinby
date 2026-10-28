@@ -28,3 +28,5 @@ CODE_VENV_DIR = ".venv"
 #: The authored tools exposed from instance code, one module each, named by its tool.
 CODE_TOOLS_DIR = "tools"
 READ_ONLY_TOOLS_NAME = "read-only-tools.json"
+#: Why each MCP server the last turn picked did not start or list its tools, in the state dir.
+MCP_FAILURES_NAME = "mcp-failures.json"

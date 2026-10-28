@@ -7,7 +7,8 @@ FROM python:3.14-slim AS instance
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /usr/local/bin/uv
+# uvx starts the local MCP servers an instance picks.
+COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /uvx /usr/local/bin/
 # uv uses the image's Python instead of downloading one.
 ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
 
