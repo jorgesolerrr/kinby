@@ -8,7 +8,7 @@ import asyncio
 import base64
 import mimetypes
 import re
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,8 +38,6 @@ from kinby.contracts import (
     BrowserCloseCommand,
     BrowserCloseResult,
     BrowserFile,
-    BrowserFrameCommand,
-    BrowserInputCommand,
     BrowserNavigate,
     BrowserOpenCommand,
     BrowserOpenResult,
@@ -61,10 +59,10 @@ from kinby.contracts import (
     BrowserUpload,
     BrowserWait,
     TakeoverFrame,
+    TakeoverInput,
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
-    ThreadTakeoverInputResult,
 )
 from kinby.core.errors import BrowserActionFailed, BrowserNotOpen
 from kinby.hub.browser import BrowserLimits, BrowserRuntime, HubBrowsers
@@ -241,8 +239,10 @@ class PlaywrightBrowser:
             image = await (await opened.page()).screenshot(type="png")
         return BrowserScreenshot(image=base64.b64encode(image).decode())
 
-    async def frame(self, instance_id: UUID, command: BrowserFrameCommand) -> TakeoverFrame:
-        opened = self._turn(instance_id, command.turn_id)
+    async def screencast(self, instance_id: UUID, turn_id: UUID) -> AsyncGenerator[TakeoverFrame]:
+        """The live view of the turn's page: a frame each time the page changes, until the
+        caller stops reading or the turn's context closes."""
+        opened = self._turn(instance_id, turn_id)
         with _on_the_page():
             page = await opened.page()
             # A tab the page opened since the last takeover is the one the user's input reaches.
@@ -251,15 +251,14 @@ class PlaywrightBrowser:
                     with suppress(PlaywrightError):
                         await opened.screencast.session.detach()
                 opened.screencast = await _screencast(page)
-        return TakeoverFrame(data=await opened.screencast.next())
+        return self._frames(instance_id, turn_id, opened.screencast)
 
-    async def send_input(
-        self, instance_id: UUID, command: BrowserInputCommand
-    ) -> ThreadTakeoverInputResult:
-        opened = self._turn(instance_id, command.turn_id)
+    async def send_input(self, instance_id: UUID, turn_id: UUID, user_input: TakeoverInput) -> None:
+        """Pass the user's mouse or keyboard to the turn's page."""
+        opened = self._turn(instance_id, turn_id)
         with _on_the_page():
             page = await opened.page()
-            match command.input:
+            match user_input:
                 case TakeoverPointer(action=action, x=x, y=y):
                     await page.mouse.move(x, y)
                     if action == "down":
@@ -270,7 +269,6 @@ class PlaywrightBrowser:
                     await page.mouse.wheel(delta_x, delta_y)
                 case TakeoverKey(key=key):
                     await page.keyboard.press(key)
-        return ThreadTakeoverInputResult()
 
     async def save_profile(
         self, instance_id: UUID, command: BrowserProfileSaveCommand
@@ -294,6 +292,14 @@ class PlaywrightBrowser:
         """Close the contexts of the instance's turns, which a stopped instance cannot close."""
         for turn in [turn for turn in self._opened if turn[0] == instance_id]:
             await self._close(turn)
+
+    async def _frames(
+        self, instance_id: UUID, turn_id: UUID, screencast: _Screencast
+    ) -> AsyncGenerator[TakeoverFrame]:
+        while True:
+            # A watched context is not idle, and one that closed ends the view.
+            self._turn(instance_id, turn_id)
+            yield TakeoverFrame(data=await screencast.next())
 
     def _turn(self, instance_id: UUID, turn_id: UUID) -> _Opened:
         """The context of the instance's turn. Another instance's turn of that id is not open."""

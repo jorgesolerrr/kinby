@@ -1,4 +1,4 @@
-import type { BrowserProfile, Client, Clock, InstanceClient } from "@kinby/contract"
+import type { BrowserProfile, Client, Clock } from "@kinby/contract"
 import { type FormEvent, useCallback, useId, useState } from "react"
 
 import { LiveBrowser } from "@/components/live-browser"
@@ -42,22 +42,20 @@ import { reason } from "@/lib/operation"
 import { CircleXIcon, PlusIcon, TextCursorInputIcon, Trash2Icon } from "lucide-react"
 
 type Caller = Pick<Client, "call">
-type InstanceCaller = Pick<InstanceClient, "call" | "subscribe">
+type Driver = Pick<Client, "call" | "subscribe">
 
 /**
  * The instance's browser profiles, by name and site, each renamed or deleted here. New profile
  * opens a sign-in page in the instance's browser with no turn, where the user signs in live and
- * saves the page as a profile. `caller` reaches the hub, which keeps the profiles, and `client`
- * the instance, whose browser it is.
+ * saves the page as a profile. `caller` reaches the hub, which keeps the profiles and the
+ * browser, so this works while the instance is stopped.
  */
 export function BrowserProfiles({
   caller,
-  client,
   clock,
   instanceId,
 }: {
-  caller: Caller
-  client: InstanceCaller
+  caller: Driver
   clock: Clock
   instanceId: string
 }) {
@@ -90,7 +88,8 @@ export function BrowserProfiles({
       {failure !== undefined && <Refusal title="Could not read the profiles" error={failure} />}
       {creating && (
         <NewProfile
-          client={client}
+          caller={caller}
+          instanceId={instanceId}
           onSaved={() => {
             setCreating(false)
             readAgain()
@@ -239,11 +238,13 @@ function RenameDialog({
 
 /** Asks for the sign-in page, then opens it live for the user to sign in on. */
 function NewProfile({
-  client,
+  caller,
+  instanceId,
   onSaved,
   onCancel,
 }: {
-  client: InstanceCaller
+  caller: Driver
+  instanceId: string
   onSaved: () => void
   onCancel: () => void
 }) {
@@ -252,7 +253,15 @@ function NewProfile({
   const [opened, setOpened] = useState<{ takeoverId: string; url: string }>()
 
   if (opened !== undefined) {
-    return <SignIn client={client} takeover={opened} onSaved={onSaved} onCancel={onCancel} />
+    return (
+      <SignIn
+        caller={caller}
+        instanceId={instanceId}
+        takeover={opened}
+        onSaved={onSaved}
+        onCancel={onCancel}
+      />
+    )
   }
   const open = (event: FormEvent) => {
     event.preventDefault()
@@ -294,21 +303,29 @@ function NewProfile({
  * closes once saved, or when the user cancels or leaves the page.
  */
 function SignIn({
-  client,
+  caller,
+  instanceId,
   takeover,
   onSaved,
   onCancel,
 }: {
-  client: InstanceCaller
+  caller: Driver
+  instanceId: string
   takeover: { takeoverId: string; url: string }
   onSaved: () => void
   onCancel: () => void
 }) {
   const id = useId()
   const { takeoverId, url } = takeover
+  const ids = { instance_id: instanceId, takeover_id: takeoverId }
   const watch = useCallback(
-    () => client.subscribe("browser.takeover.start", { takeover_id: takeoverId, url }),
-    [client, takeoverId, url],
+    () =>
+      caller.subscribe("browser.takeover.start", {
+        instance_id: instanceId,
+        takeover_id: takeoverId,
+        url,
+      }),
+    [caller, instanceId, takeoverId, url],
   )
   const [name, setName] = useState("")
   const [saving, setSaving] = useState(false)
@@ -318,10 +335,7 @@ function SignIn({
     setSaving(true)
     setFailure(undefined)
     try {
-      await client.call("browser.takeover.finish", {
-        takeover_id: takeoverId,
-        profile: name.trim(),
-      })
+      await caller.call("browser.takeover.finish", { ...ids, profile: name.trim() })
       onSaved()
     } catch (error) {
       setFailure(error)
@@ -338,9 +352,7 @@ function SignIn({
           </p>
           <LiveBrowser
             watch={watch}
-            send={(input) =>
-              client.call("browser.takeover.input", { takeover_id: takeoverId, input })
-            }
+            send={(input) => caller.call("browser.takeover.input", { ...ids, input })}
           />
           {failure !== undefined && <Refusal title="The profile was not saved" error={failure} />}
           <Field>

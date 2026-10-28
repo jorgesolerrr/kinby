@@ -207,14 +207,6 @@ export interface Contract {
       command: BrowserCloseCommand;
       result: BrowserCloseResult;
     };
-    "browser.frame": {
-      command: BrowserFrameCommand;
-      result: TakeoverFrame;
-    };
-    "browser.input": {
-      command: BrowserInputCommand;
-      result: ThreadTakeoverInputResult;
-    };
     "browser.open": {
       command: BrowserOpenCommand;
       result: BrowserOpenResult;
@@ -679,6 +671,10 @@ export interface Contract {
       command: ThreadTakeoverInputCommand;
       result: ThreadTakeoverInputResult;
     };
+    "thread.takeover.resume": {
+      command: ThreadTakeoverResumeCommand;
+      result: AcceptedResult;
+    };
     "thread.turn.diff": {
       command: ThreadTurnDiffCommand;
       result: ThreadTurnDiffResult;
@@ -791,51 +787,6 @@ export interface BrowserCloseCommand {
   turn_id: string;
 }
 export interface BrowserCloseResult {}
-/**
- * The page's viewport for a takeover's live view, once it changes, or as it is when it
- * does not change for a while.
- */
-export interface BrowserFrameCommand {
-  turn_id: string;
-}
-/**
- * One frame of the live view: the page as a JPEG image, base64-encoded.
- */
-export interface TakeoverFrame {
-  data: string;
-}
-/**
- * Pass the user's mouse or keyboard to the page of a turn, during a takeover.
- */
-export interface BrowserInputCommand {
-  input: TakeoverPointer | TakeoverWheel | TakeoverKey;
-  turn_id: string;
-}
-/**
- * The user's mouse at a point of the page, in the pixels of the live view's frames.
- */
-export interface TakeoverPointer {
-  action: "move" | "down" | "up";
-  type: "pointer";
-  x: number;
-  y: number;
-}
-/**
- * The user's wheel, scrolling the page where the mouse is.
- */
-export interface TakeoverWheel {
-  delta_x: number;
-  delta_y: number;
-  type: "wheel";
-}
-/**
- * A key the user pressed, as Playwright names it: a character, Enter or Control+A.
- */
-export interface TakeoverKey {
-  key: string;
-  type: "key";
-}
-export interface ThreadTakeoverInputResult {}
 /**
  * Open the hub's browser for one turn of the instance that calls, unless it is open. A
  * browser opened without the profile refuses it.
@@ -985,6 +936,7 @@ export interface BrowserPageRead {
  * Save the browser of a takeover with no turn as a profile, and close it.
  */
 export interface BrowserTakeoverFinishCommand {
+  instance_id: string;
   profile: BrowserProfileName;
   takeover_id: string;
 }
@@ -993,8 +945,34 @@ export interface BrowserTakeoverFinishCommand {
  */
 export interface BrowserTakeoverInputCommand {
   input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  instance_id: string;
   takeover_id: string;
 }
+/**
+ * The user's mouse at a point of the page, in the pixels of the live view's frames.
+ */
+export interface TakeoverPointer {
+  action: "move" | "down" | "up";
+  type: "pointer";
+  x: number;
+  y: number;
+}
+/**
+ * The user's wheel, scrolling the page where the mouse is.
+ */
+export interface TakeoverWheel {
+  delta_x: number;
+  delta_y: number;
+  type: "wheel";
+}
+/**
+ * A key the user pressed, as Playwright names it: a character, Enter or Control+A.
+ */
+export interface TakeoverKey {
+  key: string;
+  type: "key";
+}
+export interface ThreadTakeoverInputResult {}
 /**
  * The text of the element with *ref*, or of the whole page.
  */
@@ -2750,18 +2728,28 @@ export interface ThreadRenameCommand {
   title: string;
 }
 /**
- * Resume the turn parked on the takeover, with the browser as the user left it.
+ * Resume the turn parked on the takeover, with its page as the user left it.
  */
 export interface ThreadTakeoverFinishCommand {
+  instance_id: string;
   profile?: BrowserProfileName | null;
   takeover_id: string;
   thread_id: string;
+  turn_id: string;
 }
 /**
- * Pass the user's mouse or keyboard to the browser of the takeover.
+ * Pass the user's mouse or keyboard to the page of the instance's turn parked on a
+ * takeover.
  */
 export interface ThreadTakeoverInputCommand {
   input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  instance_id: string;
+  turn_id: string;
+}
+/**
+ * Resume the turn parked on the takeover, which the user finished on the hub.
+ */
+export interface ThreadTakeoverResumeCommand {
   takeover_id: string;
   thread_id: string;
 }
@@ -3074,12 +3062,19 @@ export interface EndFrame {
   type: "end";
 }
 /**
- * Open a browser at *url* with no turn, for the user to sign in and save as a profile, and
- * watch it frame by frame. The browser closes when the watching stops.
+ * Open a browser for the instance at *url* with no turn, for the user to sign in and save as
+ * a profile, and watch it frame by frame. The browser closes when the watching stops.
  */
 export interface BrowserTakeoverStartCommand {
+  instance_id: string;
   takeover_id: string;
   url: string;
+}
+/**
+ * One frame of the live view: the page as a JPEG image, base64-encoded.
+ */
+export interface TakeoverFrame {
+  data: string;
 }
 /**
  * Follow every factory run of the hub as its state changes. Nothing is replayed.
@@ -3339,11 +3334,12 @@ export interface ViewChanged {
   view: ViewId;
 }
 /**
- * Watch the browser of the takeover the thread's turn is parked on, frame by frame.
+ * Watch the page of the instance's turn parked on a takeover, frame by frame. The hub keeps
+ * the page (ADR 0114).
  */
 export interface ThreadTakeoverStartCommand {
-  takeover_id: string;
-  thread_id: string;
+  instance_id: string;
+  turn_id: string;
 }
 /**
  * Follow one view: the view as it is, then the whole view again after each write, until it

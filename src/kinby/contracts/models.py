@@ -800,10 +800,11 @@ TakeoverInput = Annotated[
 
 
 class ThreadTakeoverStartCommand(ContractModel):
-    """Watch the browser of the takeover the thread's turn is parked on, frame by frame."""
+    """Watch the page of the instance's turn parked on a takeover, frame by frame. The hub keeps
+    the page (ADR 0114)."""
 
-    thread_id: UUID
-    takeover_id: UUID
+    instance_id: UUID
+    turn_id: UUID
 
 
 class TakeoverFrame(ContractModel):
@@ -813,10 +814,11 @@ class TakeoverFrame(ContractModel):
 
 
 class ThreadTakeoverInputCommand(ContractModel):
-    """Pass the user's mouse or keyboard to the browser of the takeover."""
+    """Pass the user's mouse or keyboard to the page of the instance's turn parked on a
+    takeover."""
 
-    thread_id: UUID
-    takeover_id: UUID
+    instance_id: UUID
+    turn_id: UUID
     input: TakeoverInput
 
 
@@ -825,18 +827,28 @@ class ThreadTakeoverInputResult(ContractModel):
 
 
 class ThreadTakeoverFinishCommand(ContractModel):
-    """Resume the turn parked on the takeover, with the browser as the user left it."""
+    """Resume the turn parked on the takeover, with its page as the user left it."""
 
+    instance_id: UUID
     thread_id: UUID
+    turn_id: UUID
     takeover_id: UUID
-    #: Save the browser's signed-in state as the instance's profile by this name first.
+    #: Save the page's signed-in state as the instance's profile by this name first.
     profile: BrowserProfileName | None = None
 
 
-class BrowserTakeoverStartCommand(ContractModel):
-    """Open a browser at *url* with no turn, for the user to sign in and save as a profile, and
-    watch it frame by frame. The browser closes when the watching stops."""
+class ThreadTakeoverResumeCommand(ContractModel):
+    """Resume the turn parked on the takeover, which the user finished on the hub."""
 
+    thread_id: UUID
+    takeover_id: UUID
+
+
+class BrowserTakeoverStartCommand(ContractModel):
+    """Open a browser for the instance at *url* with no turn, for the user to sign in and save as
+    a profile, and watch it frame by frame. The browser closes when the watching stops."""
+
+    instance_id: UUID
     #: Chosen by the caller, which names the takeover with it while it watches.
     takeover_id: UUID
     url: str
@@ -845,6 +857,7 @@ class BrowserTakeoverStartCommand(ContractModel):
 class BrowserTakeoverInputCommand(ContractModel):
     """Pass the user's mouse or keyboard to the browser of a takeover with no turn."""
 
+    instance_id: UUID
     takeover_id: UUID
     input: TakeoverInput
 
@@ -852,6 +865,7 @@ class BrowserTakeoverInputCommand(ContractModel):
 class BrowserTakeoverFinishCommand(ContractModel):
     """Save the browser of a takeover with no turn as a profile, and close it."""
 
+    instance_id: UUID
     takeover_id: UUID
     profile: BrowserProfileName
 
@@ -3141,20 +3155,6 @@ class BrowserScreenshotCommand(ContractModel):
 class BrowserScreenshot(ContractModel):
     #: The page's viewport as a PNG, base64-encoded.
     image: str
-
-
-class BrowserFrameCommand(ContractModel):
-    """The page's viewport for a takeover's live view, once it changes, or as it is when it
-    does not change for a while."""
-
-    turn_id: UUID
-
-
-class BrowserInputCommand(ContractModel):
-    """Pass the user's mouse or keyboard to the page of a turn, during a takeover."""
-
-    turn_id: UUID
-    input: TakeoverInput
 
 
 class BrowserCloseCommand(ContractModel):

@@ -117,7 +117,7 @@ export function ThreadPanel({
   avatar,
 }: {
   client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
-  hub: Pick<Client, "call">
+  hub: Pick<Client, "call" | "subscribe">
   clock: Clock
   /** The hub's ID for the instance, which its pages' links name. */
   instanceId: string
@@ -191,11 +191,14 @@ export function ThreadPanel({
                 routine={latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined}
                 speaker={speaker}
               />
-            ) : takeover !== undefined ? (
+            ) : latest !== undefined && takeover !== undefined ? (
               <TakeoverPanel
                 key={takeover.takeoverId}
                 client={client}
+                hub={hub}
+                instanceId={instanceId}
                 threadId={threadId}
+                turnId={latest.turnId}
                 takeover={takeover}
                 speaker={speaker}
               />
@@ -568,28 +571,32 @@ function ApprovalPanel({
 
 /**
  * The takeover a turn is parked on, in the composer's place: why the agent asks, and its browser's
- * page live, which takes the user's mouse and keyboard. Finish resumes the turn with the page as
- * the user left it, saved first as a profile when the user names one.
+ * page live, which takes the user's mouse and keyboard. The hub keeps the page, so the user drives
+ * it there. Finish resumes the turn with the page as the user left it, saved first as a profile
+ * when the user names one.
  */
 function TakeoverPanel({
   client,
+  hub,
+  instanceId,
   threadId,
+  turnId,
   takeover,
   speaker,
 }: {
-  client: Pick<InstanceClient, "call" | "subscribe">
+  client: Pick<InstanceClient, "call">
+  hub: Pick<Client, "call" | "subscribe">
+  instanceId: string
   threadId: string
+  turnId: string
   takeover: ParkedTakeover
   speaker: Speaker
 }) {
-  const ids = { thread_id: threadId, takeover_id: takeover.takeoverId }
+  const page = { instance_id: instanceId, turn_id: turnId }
+  const ids = { ...page, thread_id: threadId, takeover_id: takeover.takeoverId }
   const watch = useCallback(
-    () =>
-      client.subscribe("thread.takeover.start", {
-        thread_id: threadId,
-        takeover_id: takeover.takeoverId,
-      }),
-    [client, threadId, takeover.takeoverId],
+    () => hub.subscribe("thread.takeover.start", { instance_id: instanceId, turn_id: turnId }),
+    [hub, instanceId, turnId],
   )
   const profileId = useId()
   const [profile, setProfile] = useState("")
@@ -622,7 +629,7 @@ function TakeoverPanel({
             <LiveBrowser
               ref={live}
               watch={watch}
-              send={(input) => client.call("thread.takeover.input", { ...ids, input })}
+              send={(input) => hub.call("thread.takeover.input", { ...page, input })}
               // Input after Finish or Stop would reach a turn that already moved on.
               disabled={busy}
             />
@@ -653,7 +660,7 @@ function TakeoverPanel({
                   void answer("finish", async () => {
                     // What the user typed last reaches the page before the turn resumes.
                     await live.current?.drained()
-                    return client.call(
+                    return hub.call(
                       "thread.takeover.finish",
                       name === "" ? ids : { ...ids, profile: name },
                     )

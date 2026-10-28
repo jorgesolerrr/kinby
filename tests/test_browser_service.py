@@ -3,11 +3,12 @@ and acts on a page in Playwright's browser server through the hub's browser meth
 control token (ADR 0114)."""
 
 import asyncio
+import base64
 import json
 import re
 import subprocess
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlencode
@@ -23,19 +24,39 @@ from playwright.sync_api import sync_playwright
 from kinby.contracts import (
     BROWSER_FILE_BYTES,
     BROWSER_PROFILE_LIST,
+    BROWSER_TAKEOVER_FINISH,
+    BROWSER_TAKEOVER_INPUT,
+    BROWSER_TAKEOVER_START,
+    HUB_SCOPES,
     INSTANCE_STOP,
+    THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_INPUT,
+    THREAD_TAKEOVER_RESUME,
+    THREAD_TAKEOVER_START,
+    AcceptedResult,
     BrowserProfile,
     BrowserProfileListCommand,
     BrowserProfileListResult,
+    BrowserTakeoverFinishCommand,
+    BrowserTakeoverInputCommand,
+    ContractModel,
     ErrorCode,
+    ErrorEnvelope,
     InstanceStopCommand,
     LifecycleOperationResult,
     OperationState,
+    Stream,
+    TakeoverFrame,
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
+    ThreadTakeoverFinishCommand,
+    ThreadTakeoverInputCommand,
+    ThreadTakeoverInputResult,
+    ThreadTakeoverResumeCommand,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
+from kinby.core.dispatcher import Dispatcher
 from kinby.hub.browser import BrowserLimits
 from kinby.hub.browser_service import serve_proxy
 from kinby.plugins import hub_browser
@@ -57,6 +78,7 @@ from kinby.plugins.hub import HUB_URL_VARIABLE
 from kinby.plugins.hub_browser import HubBrowser
 from tests.test_hub import finished_operation, hub_client
 from tests.test_hub_browser import BrowserHub, browser_hub, browser_on, error, result
+from tests.test_hub_routing import instance_served
 from tests.test_hub_server import frame
 
 _PAGE = """<html><head><title>Applications</title></head><body>
@@ -159,9 +181,19 @@ async def _cookies(request: web.Request) -> web.Response:
 
 
 @asynccontextmanager
-async def site() -> AsyncIterator[int]:
-    """The test pages, on a local port. The proxy lets the browser reach this port alone."""
+async def site(stalled: asyncio.Event | None = None) -> AsyncIterator[int]:
+    """The test pages, on a local port. The proxy lets the browser reach this port alone. A page
+    asked for at /stall sets *stalled*, and never loads."""
+    released = asyncio.Event()
+
+    async def stall(request: web.Request) -> web.Response:
+        assert stalled is not None
+        stalled.set()
+        await released.wait()
+        return web.Response(text="<p>Too late.</p>", content_type="text/html")
+
     application = web.Application()
+    application.router.add_get("/stall", stall)
     application.router.add_get("/", _page)
     application.router.add_get("/form", _form)
     application.router.add_get("/pad", _pad)
@@ -180,6 +212,7 @@ async def site() -> AsyncIterator[int]:
     try:
         yield served.port
     finally:
+        released.set()
         await runner.cleanup()
 
 
@@ -518,38 +551,253 @@ def test_an_upload_attaches_the_file(browser_server, tmp_path: Path) -> None:
     assert said == ["Attached cv.pdf as application/pdf"]
 
 
+async def _watched(
+    hub: BrowserHub, subscription: str, takeover: Mapping[str, object]
+) -> Stream[ContractModel]:
+    """The user's live view of a takeover, on the hub."""
+    stream = await hub.hub.dispatcher.subscribe(subscription, takeover, HUB_SCOPES)
+    assert not isinstance(stream, ErrorEnvelope), stream
+    return stream
+
+
+async def _first_frame(stream: Stream[ContractModel]) -> bytes:
+    async with asyncio.timeout(10):
+        frame = await anext(stream.items)
+    assert isinstance(frame, TakeoverFrame)
+    return base64.b64decode(frame.data)
+
+
 @pytest.mark.browser
-def test_a_takeover_streams_the_page_and_takes_the_users_mouse_and_keys(browser_server) -> None:
-    async def scenario() -> tuple[bytes, str]:
+def test_the_user_watches_a_turns_takeover_on_the_hub_and_drives_its_page(browser_server) -> None:
+    async def scenario() -> tuple[bytes, list[ThreadTakeoverInputResult | ErrorEnvelope], str]:
         async with (
             site() as port,
             proxy(port) as address,
-            on_the_hub(browser_server, address) as browser,
+            browsers(browser_server, address) as hub,
         ):
-            turn = uuid4()
-            await browser.open(turn)
-            try:
-                await browser.run(turn, Navigate(f"http://site.test:{port}/pad"))
-                async with aclosing(browser.screencast(turn)) as frames, asyncio.timeout(10):
-                    frame = await anext(frames)
-                for user_input in [
-                    TakeoverPointer(action="move", x=200, y=150),
-                    TakeoverPointer(action="down", x=200, y=150),
-                    TakeoverPointer(action="up", x=200, y=150),
-                    TakeoverKey(key="a"),
-                    TakeoverKey(key="Enter"),
-                    TakeoverWheel(delta_x=0, delta_y=100),
-                ]:
-                    await browser.send(turn, user_input)
-                said = await browser.text(turn, None)
-            finally:
-                await browser.close(turn)
-        return frame, said.text
+            with as_instance(hub, hub.alice) as browser:
+                turn = uuid4()
+                await browser.open(turn)
+                try:
+                    await browser.run(turn, Navigate(f"http://site.test:{port}/pad"))
+                    takeover = {"instance_id": hub.alice, "turn_id": turn}
+                    watched = await _watched(hub, THREAD_TAKEOVER_START.name, takeover)
+                    frame = await _first_frame(watched)
+                    client = hub_client(hub.hub)
+                    driven = [
+                        await client.call(
+                            THREAD_TAKEOVER_INPUT,
+                            ThreadTakeoverInputCommand(**takeover, input=user_input),
+                        )
+                        for user_input in [
+                            TakeoverPointer(action="move", x=200, y=150),
+                            TakeoverPointer(action="down", x=200, y=150),
+                            TakeoverPointer(action="up", x=200, y=150),
+                            TakeoverKey(key="a"),
+                            TakeoverKey(key="Enter"),
+                            TakeoverWheel(delta_x=0, delta_y=100),
+                        ]
+                    ]
+                    await watched.aclose()
+                    said = await browser.text(turn, None)
+                finally:
+                    await browser.close(turn)
+        return frame, driven, said.text
 
-    frame, said = asyncio.run(scenario())
+    frame, driven, said = asyncio.run(scenario())
 
     assert frame.startswith(b"\xff\xd8")
+    assert driven == [ThreadTakeoverInputResult()] * 6
     assert said == "Clicked at 200,150 a Enter"
+
+
+@pytest.mark.browser
+def test_finishing_a_turns_takeover_as_a_profile_saves_it_and_resumes_the_turn_with_it(
+    browser_server,
+) -> None:
+    thread, turn, takeover = uuid4(), uuid4(), uuid4()
+    resumed: list[ThreadTakeoverResumeCommand] = []
+
+    async def resume(command: ThreadTakeoverResumeCommand) -> AcceptedResult:
+        resumed.append(command)
+        return AcceptedResult(thread_id=command.thread_id, turn_id=turn, sequence=7)
+
+    instance = Dispatcher()
+    instance.register(THREAD_TAKEOVER_RESUME, resume)
+
+    async def scenario() -> tuple[object, BrowserProfileListResult, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address) as hub,
+            instance_served(instance, hub.token(hub.alice)) as private,
+        ):
+            hub.instances.addresses[str(hub.alice)] = f"http://{private.host}:{private.port}"
+            with as_instance(hub, hub.alice) as browser:
+                await browser.open(turn)
+                try:
+                    await browser.run(turn, Navigate(f"http://site.test:{port}/sign-in"))
+                    finished = await hub_client(hub.hub).call(
+                        THREAD_TAKEOVER_FINISH,
+                        ThreadTakeoverFinishCommand(
+                            instance_id=hub.alice,
+                            thread_id=thread,
+                            turn_id=turn,
+                            takeover_id=takeover,
+                            profile="Site",
+                        ),
+                    )
+                    # The resumed turn goes on in the page the user left, signed in.
+                    await browser.run(turn, Navigate(f"http://site.test:{port}/refresh"))
+                finally:
+                    await browser.close(turn)
+                profiles = await browser.profiles()
+                after = uuid4()
+                await browser.open(after, "Site")
+                try:
+                    await browser.run(after, Navigate(f"http://site.test:{port}/cookies"))
+                    signed_in = (await browser.text(after, None)).text
+                finally:
+                    await browser.close(after)
+        return finished, profiles, signed_in
+
+    finished, profiles, signed_in = asyncio.run(scenario())
+
+    assert finished == AcceptedResult(thread_id=thread, turn_id=turn, sequence=7)
+    assert resumed == [ThreadTakeoverResumeCommand(thread_id=thread, takeover_id=takeover)]
+    assert profiles == BrowserProfileListResult(
+        profiles=(BrowserProfile(name="Site", site="site.test"),)
+    )
+    assert signed_in == f"session: {_SESSION}-renewed"
+
+
+async def _stopped(hub: BrowserHub, instance_id: UUID) -> None:
+    client = hub_client(hub.hub)
+    # The instance has no drain to answer, so its container goes down at once.
+    stopping = await client.call(
+        INSTANCE_STOP, InstanceStopCommand(instance_id=instance_id, force=True)
+    )
+    assert isinstance(stopping, LifecycleOperationResult)
+    assert (await finished_operation(client, stopping)).state is OperationState.SUCCEEDED
+
+
+async def _read_by_bob(hub: BrowserHub, port: int) -> str:
+    """The site's page, as bob reads it in a browser of his own, which a takeover that kept its
+    browser keeps from him under a cap of one."""
+    browser_on(hub.hub, hub.bob)
+    with as_instance(hub, hub.bob) as bobs:
+        turn = await _open(bobs, port)
+        try:
+            return (await bobs.text(turn, None)).text
+        finally:
+            await bobs.close(turn)
+
+
+_ONE_BROWSER = BrowserLimits(cap=1, wait_seconds=0.5, idle_seconds=300)
+
+
+@pytest.mark.browser
+def test_a_takeover_with_no_turn_saves_a_profile_while_the_instance_is_stopped(
+    browser_server,
+) -> None:
+    async def scenario() -> tuple[bytes, object, object, object, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, _ONE_BROWSER) as hub,
+        ):
+            await _stopped(hub, hub.alice)
+            takeover = {"instance_id": hub.alice, "takeover_id": uuid4()}
+            watched = await _watched(
+                hub,
+                BROWSER_TAKEOVER_START.name,
+                {**takeover, "url": f"http://site.test:{port}/sign-in"},
+            )
+            frame = await _first_frame(watched)
+            client = hub_client(hub.hub)
+            driven = await client.call(
+                BROWSER_TAKEOVER_INPUT,
+                BrowserTakeoverInputCommand(**takeover, input=TakeoverKey(key="Tab")),
+            )
+            saved = await client.call(
+                BROWSER_TAKEOVER_FINISH, BrowserTakeoverFinishCommand(**takeover, profile="Site")
+            )
+            listed = await client.call(
+                BROWSER_PROFILE_LIST, BrowserProfileListCommand(instance_id=hub.alice)
+            )
+            read_by_bob = await _read_by_bob(hub, port)
+            await watched.aclose()
+        return frame, driven, saved, listed, read_by_bob
+
+    frame, driven, saved, listed, read_by_bob = asyncio.run(scenario())
+
+    assert frame.startswith(b"\xff\xd8")
+    assert driven == ThreadTakeoverInputResult()
+    profile = BrowserProfile(name="Site", site="site.test")
+    assert saved == profile
+    assert listed == BrowserProfileListResult(profiles=(profile,))
+    assert "You have 3 open applications." in read_by_bob
+
+
+@pytest.mark.browser
+def test_a_takeover_with_no_turn_closes_its_browser_when_nobody_watches_it(
+    browser_server,
+) -> None:
+    async def scenario() -> tuple[object, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, _ONE_BROWSER) as hub,
+        ):
+            takeover = {"instance_id": hub.alice, "takeover_id": uuid4()}
+            watched = await _watched(
+                hub, BROWSER_TAKEOVER_START.name, {**takeover, "url": f"http://site.test:{port}/"}
+            )
+            await _first_frame(watched)
+            await watched.aclose()
+            late_finish = await hub_client(hub.hub).call(
+                BROWSER_TAKEOVER_FINISH, BrowserTakeoverFinishCommand(**takeover, profile="Site")
+            )
+            return late_finish, await _read_by_bob(hub, port)
+
+    late_finish, read_by_bob = asyncio.run(scenario())
+
+    assert isinstance(late_finish, ErrorEnvelope)
+    assert late_finish.code is ErrorCode.NOT_FOUND
+    assert "You have 3 open applications." in read_by_bob
+
+
+@pytest.mark.browser
+def test_a_takeover_with_no_turn_left_while_its_page_loads_closes_its_browser(
+    browser_server,
+) -> None:
+    stalled = asyncio.Event()
+
+    async def scenario() -> str:
+        async with (
+            site(stalled) as port,
+            proxy(port) as address,
+            browsers(browser_server, address, _ONE_BROWSER) as hub,
+        ):
+            watching = asyncio.create_task(
+                _watched(
+                    hub,
+                    BROWSER_TAKEOVER_START.name,
+                    {
+                        "instance_id": hub.alice,
+                        "takeover_id": uuid4(),
+                        "url": f"http://site.test:{port}/stall",
+                    },
+                )
+            )
+            async with asyncio.timeout(10):
+                await stalled.wait()
+            watching.cancel()
+            with suppress(asyncio.CancelledError):
+                await watching
+            return await _read_by_bob(hub, port)
+
+    assert "You have 3 open applications." in asyncio.run(scenario())
 
 
 @pytest.mark.browser
@@ -877,32 +1125,38 @@ def test_a_turn_that_opened_no_browser_closes_without_calling_the_hub() -> None:
 
 @pytest.mark.browser
 def test_a_takeover_after_a_new_tab_opens_watches_the_new_tab(browser_server) -> None:
-    async def first_frame(browser: HubBrowser, turn: UUID) -> bytes:
-        async with aclosing(browser.screencast(turn)) as frames, asyncio.timeout(10):
-            return await anext(frames)
-
     async def scenario() -> tuple[bytes, bytes]:
         async with (
             site() as port,
             proxy(port) as address,
-            on_the_hub(browser_server, address) as browser,
+            browsers(browser_server, address) as hub,
         ):
-            alone, opener = uuid4(), uuid4()
-            await browser.open(alone)
-            await browser.run(alone, Navigate(f"http://site.test:{port}/blue"))
-            blue = await first_frame(browser, alone)
-            await browser.close(alone)
-            await browser.open(opener)
-            await browser.run(opener, Navigate(f"http://site.test:{port}/opener"))
-            await first_frame(browser, opener)
-            tree = await browser.snapshot(opener, interactive=True, max_chars=2_000)
-            ref = re.search(r'link "Blue" \[ref=(e\d+)\]', tree.text)
-            assert ref is not None, tree.text
-            await browser.run(opener, Click(ref.group(1)))
-            await browser.run(opener, Wait(None, 5))
-            watched = await first_frame(browser, opener)
-            await browser.close(opener)
-            return blue, watched
+
+            async def first_frame(turn: UUID) -> bytes:
+                takeover = {"instance_id": hub.alice, "turn_id": turn}
+                watched = await _watched(hub, THREAD_TAKEOVER_START.name, takeover)
+                try:
+                    return await _first_frame(watched)
+                finally:
+                    await watched.aclose()
+
+            with as_instance(hub, hub.alice) as browser:
+                alone, opener = uuid4(), uuid4()
+                await browser.open(alone)
+                await browser.run(alone, Navigate(f"http://site.test:{port}/blue"))
+                blue = await first_frame(alone)
+                await browser.close(alone)
+                await browser.open(opener)
+                await browser.run(opener, Navigate(f"http://site.test:{port}/opener"))
+                await first_frame(opener)
+                tree = await browser.snapshot(opener, interactive=True, max_chars=2_000)
+                ref = re.search(r'link "Blue" \[ref=(e\d+)\]', tree.text)
+                assert ref is not None, tree.text
+                await browser.run(opener, Click(ref.group(1)))
+                await browser.run(opener, Wait(None, 5))
+                watched = await first_frame(opener)
+                await browser.close(opener)
+                return blue, watched
 
     blue, watched = asyncio.run(scenario())
 

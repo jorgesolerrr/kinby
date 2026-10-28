@@ -5,14 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections.abc import AsyncGenerator
 from uuid import UUID
 
 from kinby.contracts import (
     BROWSER_CLOSE,
     BROWSER_FILE_BYTES,
-    BROWSER_FRAME,
-    BROWSER_INPUT,
     BROWSER_OPEN,
     BROWSER_PROFILE_SAVE,
     BROWSER_PROFILES,
@@ -23,8 +20,6 @@ from kinby.contracts import (
     BrowserClick,
     BrowserCloseCommand,
     BrowserFile,
-    BrowserFrameCommand,
-    BrowserInputCommand,
     BrowserNavigate,
     BrowserOpenCommand,
     BrowserPageAction,
@@ -45,7 +40,6 @@ from kinby.contracts import (
     BrowserWait,
     ContractModel,
     Method,
-    TakeoverInput,
 )
 from kinby.plugins.browser import (
     BrowserAction,
@@ -98,14 +92,6 @@ class HubBrowser:
     async def screenshot(self, turn: UUID) -> bytes:
         shot = await _call(BROWSER_SCREENSHOT, BrowserScreenshotCommand(turn_id=turn))
         return base64.b64decode(shot.image)
-
-    async def screencast(self, turn: UUID) -> AsyncGenerator[bytes]:
-        while True:
-            frame = await _call(BROWSER_FRAME, BrowserFrameCommand(turn_id=turn))
-            yield base64.b64decode(frame.data)
-
-    async def send(self, turn: UUID, user_input: TakeoverInput) -> None:
-        await _call(BROWSER_INPUT, BrowserInputCommand(turn_id=turn, input=user_input))
 
     async def profiles(self) -> BrowserProfileListResult:
         return await _call(BROWSER_PROFILES, BrowserProfilesCommand())

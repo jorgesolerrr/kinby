@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
@@ -12,7 +11,6 @@ from kinby.contracts import (
     BrowserProfile,
     BrowserProfileListResult,
     BrowserProfileName,
-    TakeoverInput,
 )
 
 
@@ -120,13 +118,6 @@ class BrowserService(Protocol):
 
     async def screenshot(self, turn: UUID) -> bytes:
         """The page's viewport as a PNG."""
-
-    def screencast(self, turn: UUID) -> AsyncGenerator[bytes]:
-        """The page's viewport as JPEG frames, a new one each time it changes, for as long as the
-        caller reads them."""
-
-    async def send(self, turn: UUID, user_input: TakeoverInput) -> None:
-        """Pass the user's mouse or keyboard to the turn's page, during a takeover."""
 
     async def profiles(self) -> BrowserProfileListResult:
         """The instance's profiles, by name and site."""

@@ -9,8 +9,6 @@ from kinby.contracts.models import (
     AcceptedResult,
     BrowserCloseCommand,
     BrowserCloseResult,
-    BrowserFrameCommand,
-    BrowserInputCommand,
     BrowserOpenCommand,
     BrowserOpenResult,
     BrowserPage,
@@ -196,6 +194,7 @@ from kinby.contracts.models import (
     ThreadTakeoverFinishCommand,
     ThreadTakeoverInputCommand,
     ThreadTakeoverInputResult,
+    ThreadTakeoverResumeCommand,
     ThreadTakeoverStartCommand,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
@@ -308,6 +307,9 @@ THREAD_TAKEOVER_INPUT = Method(
 )
 THREAD_TAKEOVER_FINISH = Method(
     "thread.takeover.finish", Scope.THREAD_OPERATE, ThreadTakeoverFinishCommand, AcceptedResult
+)
+THREAD_TAKEOVER_RESUME = Method(
+    "thread.takeover.resume", Scope.THREAD_OPERATE, ThreadTakeoverResumeCommand, AcceptedResult
 )
 BROWSER_TAKEOVER_START = Subscription(
     "browser.takeover.start", Scope.INSTANCE_ADMIN, BrowserTakeoverStartCommand, TakeoverFrame
@@ -562,10 +564,6 @@ BROWSER_TEXT = Method("browser.text", Scope.BROWSER_OPEN, BrowserTextCommand, Br
 BROWSER_SCREENSHOT = Method(
     "browser.screenshot", Scope.BROWSER_OPEN, BrowserScreenshotCommand, BrowserScreenshot
 )
-BROWSER_FRAME = Method("browser.frame", Scope.BROWSER_OPEN, BrowserFrameCommand, TakeoverFrame)
-BROWSER_INPUT = Method(
-    "browser.input", Scope.BROWSER_OPEN, BrowserInputCommand, ThreadTakeoverInputResult
-)
 BROWSER_CLOSE = Method("browser.close", Scope.BROWSER_OPEN, BrowserCloseCommand, BrowserCloseResult)
 BROWSER_PROFILES = Method(
     "browser.profiles", Scope.BROWSER_OPEN, BrowserProfilesCommand, BrowserProfileListResult
@@ -615,6 +613,7 @@ METHODS = (
     THREAD_APPROVAL_RESPOND,
     THREAD_TAKEOVER_INPUT,
     THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_RESUME,
     BROWSER_TAKEOVER_INPUT,
     BROWSER_TAKEOVER_FINISH,
     USAGE_GET,
@@ -722,8 +721,6 @@ METHODS = (
     BROWSER_SNAPSHOT,
     BROWSER_TEXT,
     BROWSER_SCREENSHOT,
-    BROWSER_FRAME,
-    BROWSER_INPUT,
     BROWSER_CLOSE,
     BROWSER_PROFILES,
     BROWSER_PROFILE_SAVE,

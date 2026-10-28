@@ -2,44 +2,36 @@
 reads it, acts on it under the gate, and gets a context of its own (ADR 0113)."""
 
 import asyncio
-import base64
 import socket
 import subprocess
 import sys
-from collections.abc import AsyncGenerator
-from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-import aiohttp
 import pytest
 from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
+    THREAD_TAKEOVER_FINISH,
+    AcceptedResult,
     ApprovalRequested,
     BrowserProfile,
     BrowserProfileListResult,
-    ContractModel,
     ErrorCode,
     ErrorEnvelope,
     Event,
-    FrameType,
     GateOutcome,
     NotificationRaised,
     Payload,
     RoutineGrant,
     RoutineName,
     Scope,
-    Stream,
     SystemPrompt,
-    TakeoverFrame,
-    TakeoverInput,
-    TakeoverKey,
-    TakeoverPointer,
     TakeoverRequested,
     ThreadStatus,
+    ThreadTakeoverFinishCommand,
     ToolGated,
     ToolResult,
     TurnCompleted,
@@ -51,6 +43,7 @@ from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.turns import PreparedTurnRequest, TurnContext
+from kinby.hub.browser import BrowserLimits
 from kinby.instance import Instance, load_instance
 from kinby.instance.routine_grants import RoutineGrants
 from kinby.plugins.browser import (
@@ -70,10 +63,9 @@ from kinby.plugins.browser import (
 )
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from tests.helpers import thread_events
-from tests.test_hub import FakeRuntime
-from tests.test_hub_routing import control_token, instance_served, running_instance
-from tests.test_hub_server import call as call_socket
-from tests.test_hub_server import frame, hub_at, served, url
+from tests.test_hub import hub_client
+from tests.test_hub_browser import browser_hub
+from tests.test_hub_routing import instance_served
 from tests.test_plugins import ScriptedModel
 from tests.test_routine_grants import gates, run_routine, turn_events
 from tests.test_routines import routine_file, signal_runtime
@@ -112,7 +104,6 @@ class FakeBrowser:
         self.visited: list[str] = []
         self.snapshots: list[tuple[bool, int]] = []
         self.acted: list[BrowserAction] = []
-        self.sent: list[TakeoverInput] = []
         #: The profile each turn's context opened with.
         self.signed_in: dict[UUID, str | None] = {}
         self.saved: list[tuple[UUID, str]] = []
@@ -168,15 +159,6 @@ class FakeBrowser:
 
     async def screenshot(self, turn: UUID) -> bytes:
         return b"\x89PNG"
-
-    async def screencast(self, turn: UUID) -> AsyncGenerator[bytes]:
-        assert turn in self.opened
-        yield _FRAME
-        await asyncio.Event().wait()
-
-    async def send(self, turn: UUID, user_input: TakeoverInput) -> None:
-        assert turn in self.opened
-        self.sent.append(user_input)
 
     async def close(self, turn: UUID) -> None:
         self.closed.append(turn)
@@ -595,61 +577,41 @@ async def _parked_on_takeover(dispatcher: Dispatcher) -> Event:
     raise AssertionError("The thread stopped streaming.")
 
 
-async def _finish(dispatcher: Dispatcher, parked: Event, profile: str | None = None) -> object:
+async def _resume(dispatcher: Dispatcher, parked: Event) -> object:
     assert isinstance(parked.payload, TakeoverRequested)
     return await call(
         dispatcher,
-        "thread.takeover.finish",
+        "thread.takeover.resume",
         thread_id=parked.thread_id,
         takeover_id=parked.payload.takeover_id,
-        profile=profile,
     )
 
 
-def test_a_takeover_parks_the_turn_needing_the_user_and_finishing_resumes_it(tmp_path) -> None:
+def test_a_takeover_parks_the_turn_needing_the_user_and_resuming_it_finishes_it(tmp_path) -> None:
     browser = FakeBrowser()
     dispatcher = _takeover_runtime(tmp_path, browser)
 
-    async def scenario() -> tuple[Event, list[ThreadStatus], list[UUID], list[Event]]:
+    async def scenario() -> tuple[Event, list[ThreadStatus], list[UUID], list[UUID], list[Event]]:
         parked = await _parked_on_takeover(dispatcher)
         listed = await call(dispatcher, "thread.list")
-        closed_while_parked = list(browser.closed)
-        await _finish(dispatcher, parked)
+        opened_while_parked, closed_while_parked = list(browser.opened), list(browser.closed)
+        await _resume(dispatcher, parked)
         events = await turn_events(dispatcher, parked.thread_id)
-        return parked, [thread.status for thread in listed.threads], closed_while_parked, events
+        statuses = [thread.status for thread in listed.threads]
+        return parked, statuses, opened_while_parked, closed_while_parked, events
 
-    parked, statuses, closed_while_parked, events = asyncio.run(scenario())
+    parked, statuses, opened_while_parked, closed_while_parked, events = asyncio.run(scenario())
 
     assert isinstance(parked.payload, TakeoverRequested)
     assert parked.payload.reason == _REASON
     assert statuses == [ThreadStatus.AWAITING_TAKEOVER]
+    # The user drives the turn's page on the hub, so it is open for them before any browser call.
+    assert opened_while_parked == [parked.turn_id]
     assert closed_while_parked == []
     [result] = [e.payload for e in events if isinstance(e.payload, ToolResult)]
     assert (result.name, result.error) == ("browser_takeover", False)
     assert isinstance(events[-1].payload, TurnCompleted)
     assert browser.closed == [parked.turn_id]
-
-
-def test_a_takeover_finished_as_a_profile_is_in_the_agents_list_by_name_and_site(
-    tmp_path,
-) -> None:
-    browser = FakeBrowser()
-    dispatcher = _takeover_runtime(tmp_path, browser, ("browser_profiles", {}))
-
-    async def scenario() -> tuple[Event, list[Event]]:
-        parked = await _parked_on_takeover(dispatcher)
-        # The user's live view opened the browser, and they signed in.
-        await browser.open(parked.turn_id)
-        await browser.run(parked.turn_id, Navigate("https://www.linkedin.com/feed/"))
-        await _finish(dispatcher, parked, "LinkedIn")
-        return parked, await turn_events(dispatcher, parked.thread_id)
-
-    parked, events = asyncio.run(scenario())
-
-    assert browser.saved == [(parked.turn_id, "LinkedIn")]
-    results = {e.payload.name: e.payload for e in events if isinstance(e.payload, ToolResult)}
-    assert results["browser_profiles"].output == "LinkedIn: www.linkedin.com"
-    assert isinstance(events[-1].payload, TurnCompleted)
 
 
 def test_a_takeover_raises_a_notification_with_its_reason(tmp_path, monkeypatch) -> None:
@@ -687,47 +649,13 @@ def test_in_read_only_the_takeover_is_denied(tmp_path) -> None:
     assert (gate.action, gate.rule) == (GateOutcome.DENY, "mode.read-only.write")
 
 
-def test_the_live_view_streams_the_page_and_passes_the_users_input(tmp_path) -> None:
-    browser = FakeBrowser()
-    dispatcher = _takeover_runtime(tmp_path, browser)
-    sent: list[TakeoverInput] = [
-        TakeoverPointer(action="down", x=120, y=48),
-        TakeoverPointer(action="up", x=120, y=48),
-        TakeoverKey(key="Enter"),
-    ]
-
-    async def scenario() -> ContractModel:
-        parked = await _parked_on_takeover(dispatcher)
-        assert isinstance(parked.payload, TakeoverRequested)
-        takeover = {"thread_id": parked.thread_id, "takeover_id": parked.payload.takeover_id}
-        stream = await dispatcher.subscribe("thread.takeover.start", takeover, set(Scope))
-        assert not isinstance(stream, ErrorEnvelope), stream
-        async with asyncio.timeout(5):
-            frame = await anext(stream.items)
-        await stream.aclose()
-        for user_input in sent:
-            await call(
-                dispatcher,
-                "thread.takeover.input",
-                **takeover,
-                input=user_input.model_dump(mode="json"),
-            )
-        return frame
-
-    frame = asyncio.run(scenario())
-
-    assert isinstance(frame, TakeoverFrame)
-    assert base64.b64decode(frame.data) == _FRAME
-    assert browser.sent == sent
-
-
 def test_a_takeover_another_turn_parked_on_is_not_found(tmp_path) -> None:
     dispatcher = _takeover_runtime(tmp_path, FakeBrowser())
 
     async def scenario() -> object:
         parked = await _parked_on_takeover(dispatcher)
         return await call(
-            dispatcher, "thread.takeover.finish", thread_id=parked.thread_id, takeover_id=uuid4()
+            dispatcher, "thread.takeover.resume", thread_id=parked.thread_id, takeover_id=uuid4()
         )
 
     refused = asyncio.run(scenario())
@@ -744,15 +672,15 @@ def test_an_abandoned_takeover_ends_the_turn_and_closes_its_browser(tmp_path, mo
     async def scenario() -> tuple[Event, list[Event], object]:
         parked = await _parked_on_takeover(dispatcher)
         events = await turn_events(dispatcher, parked.thread_id)
-        return parked, events, await _finish(dispatcher, parked)
+        return parked, events, await _resume(dispatcher, parked)
 
-    parked, events, late_finish = asyncio.run(scenario())
+    parked, events, late_resume = asyncio.run(scenario())
 
     closing = events[-1].payload
     assert isinstance(closing, TurnFailed)
     assert "takeover" in closing.message
     assert browser.closed == [parked.turn_id]
-    assert isinstance(late_finish, ErrorEnvelope)
+    assert isinstance(late_resume, ErrorEnvelope)
 
 
 def test_stopping_a_turn_parked_on_a_takeover_closes_its_browser(tmp_path) -> None:
@@ -792,147 +720,34 @@ def test_stopping_a_takeover_while_its_notification_is_out_closes_its_browser(
     assert browser.closed == [parked.turn_id]
 
 
-def test_through_the_hub_input_reaches_the_browser_and_finishing_resumes_the_turn(
-    tmp_path,
-) -> None:
+def test_finishing_a_takeover_on_the_hub_resumes_the_instances_turn(tmp_path) -> None:
     browser = FakeBrowser()
     dispatcher = _takeover_runtime(tmp_path, browser)
 
-    async def scenario() -> tuple[list[dict[str, object]], list[Event]]:
-        runtime = FakeRuntime()
-        hub = hub_at(tmp_path / "hub", runtime)
-        token = hub.access.issue()
-        assert token is not None
-        headers = {"Authorization": f"Bearer {token}"}
-        async with served(hub) as address, aiohttp.ClientSession(headers=headers) as session:
-            instance_id = await running_instance(hub, session, address)
-            async with instance_served(dispatcher, control_token(hub, instance_id)) as private:
-                runtime.addresses[instance_id] = f"http://{private.host}:{private.port}"
-                parked = await _parked_on_takeover(dispatcher)
-                assert isinstance(parked.payload, TakeoverRequested)
-                takeover = {
-                    "thread_id": str(parked.thread_id),
-                    "takeover_id": str(parked.payload.takeover_id),
-                }
-                async with session.ws_connect(
-                    url(address, f"/instances/{instance_id}/ws")
-                ) as relayed:
-                    await relayed.send_json(
-                        {
-                            "type": "subscribe",
-                            "id": "view",
-                            "method": "thread.takeover.start",
-                            "params": takeover,
-                        }
-                    )
-                    received = [await frame(relayed), await frame(relayed)]
-                    await call_socket(
-                        relayed,
-                        "thread.takeover.input",
-                        **takeover,
-                        input={"type": "key", "key": "Enter"},
-                    )
-                    received.append(await frame(relayed))
-                    await call_socket(relayed, "thread.takeover.finish", **takeover)
-                    received.append(await frame(relayed))
-                events = await turn_events(dispatcher, parked.thread_id)
-        return received, events
+    async def scenario() -> tuple[Event, object, list[Event]]:
+        async with (
+            browser_hub(tmp_path / "hub", BrowserLimits()) as hub,
+            instance_served(dispatcher, hub.token(hub.alice)) as private,
+        ):
+            hub.instances.addresses[str(hub.alice)] = f"http://{private.host}:{private.port}"
+            parked = await _parked_on_takeover(dispatcher)
+            assert isinstance(parked.payload, TakeoverRequested)
+            finished = await hub_client(hub.hub).call(
+                THREAD_TAKEOVER_FINISH,
+                ThreadTakeoverFinishCommand(
+                    instance_id=hub.alice,
+                    thread_id=parked.thread_id,
+                    turn_id=parked.turn_id,
+                    takeover_id=parked.payload.takeover_id,
+                ),
+            )
+            return parked, finished, await turn_events(dispatcher, parked.thread_id)
 
-    received, events = asyncio.run(scenario())
+    parked, finished, events = asyncio.run(scenario())
 
-    subscribed, item, input_result, finish_result = received
-    assert subscribed["type"] == FrameType.SUBSCRIBED.value
-    assert isinstance(item["item"], dict)
-    assert base64.b64decode(str(item["item"]["data"])) == _FRAME
-    assert input_result["type"] == FrameType.RESULT.value, input_result
-    assert finish_result["type"] == FrameType.RESULT.value, finish_result
-    assert browser.sent == [TakeoverKey(key="Enter")]
+    assert isinstance(finished, AcceptedResult)
+    assert (finished.thread_id, finished.turn_id) == (parked.thread_id, parked.turn_id)
     assert isinstance(events[-1].payload, TurnCompleted)
-
-
-_SIGN_IN = "https://www.linkedin.com/login"
-
-
-async def _watch_takeover(dispatcher: Dispatcher, takeover_id: UUID) -> Stream[ContractModel]:
-    """Start a takeover with no turn, at the sign-in page, and watch it."""
-    stream = await dispatcher.subscribe(
-        "browser.takeover.start", {"takeover_id": takeover_id, "url": _SIGN_IN}, set(Scope)
-    )
-    assert not isinstance(stream, ErrorEnvelope), stream
-    return stream
-
-
-def test_a_takeover_with_no_turn_opens_the_page_takes_input_and_saves_a_profile(tmp_path) -> None:
-    browser = FakeBrowser()
-    dispatcher = _takeover_runtime(tmp_path, browser)
-    takeover_id = uuid4()
-
-    async def scenario() -> tuple[ContractModel, object, list[UUID]]:
-        stream = await _watch_takeover(dispatcher, takeover_id)
-        async with asyncio.timeout(5):
-            frame = await anext(stream.items)
-        await call(
-            dispatcher,
-            "browser.takeover.input",
-            takeover_id=takeover_id,
-            input={"type": "key", "key": "Enter"},
-        )
-        saved = await call(
-            dispatcher, "browser.takeover.finish", takeover_id=takeover_id, profile="LinkedIn"
-        )
-        closed_on_finish = list(browser.closed)
-        await stream.aclose()
-        return frame, saved, closed_on_finish
-
-    frame, saved, closed_on_finish = asyncio.run(scenario())
-
-    assert isinstance(frame, TakeoverFrame)
-    assert base64.b64decode(frame.data) == _FRAME
-    assert browser.visited == [_SIGN_IN]
-    assert browser.sent == [TakeoverKey(key="Enter")]
-    assert saved == BrowserProfile(name="LinkedIn", site="www.linkedin.com")
-    assert browser.saved == [(takeover_id, "LinkedIn")]
-    assert closed_on_finish == [takeover_id]
-
-
-def test_a_takeover_with_no_turn_closes_its_browser_when_nobody_watches_it(tmp_path) -> None:
-    browser = FakeBrowser()
-    dispatcher = _takeover_runtime(tmp_path, browser)
-    takeover_id = uuid4()
-
-    async def scenario() -> object:
-        stream = await _watch_takeover(dispatcher, takeover_id)
-        async with asyncio.timeout(5):
-            await anext(stream.items)
-        await stream.aclose()
-        return await call(
-            dispatcher, "browser.takeover.finish", takeover_id=takeover_id, profile="LinkedIn"
-        )
-
-    late_finish = asyncio.run(scenario())
-
-    assert browser.closed == [takeover_id]
-    assert isinstance(late_finish, ErrorEnvelope)
-    assert late_finish.code is ErrorCode.NOT_FOUND
-    assert browser.saved == []
-
-
-def test_a_takeover_with_no_turn_left_while_its_page_loads_closes_its_browser(tmp_path) -> None:
-    browser = FakeBrowser(stall_navigation=True)
-    dispatcher = _takeover_runtime(tmp_path, browser)
-    takeover_id = uuid4()
-
-    async def scenario() -> None:
-        watching = asyncio.create_task(_watch_takeover(dispatcher, takeover_id))
-        async with asyncio.timeout(5):
-            await browser.navigating.wait()
-        watching.cancel()
-        with suppress(asyncio.CancelledError):
-            await watching
-
-    asyncio.run(scenario())
-
-    assert browser.closed == [takeover_id]
 
 
 def test_an_instance_runs_without_playwright() -> None:

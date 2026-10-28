@@ -651,6 +651,8 @@ class LangGraphRunner:
                 await self._browser.close(turn.turn_id)
         if isinstance(parked, TakeoverRequested):
             try:
+                # The user drives the page on the hub, which needs it open before they arrive.
+                await self._browser.open(turn.turn_id)
                 await emit(parked)
                 if raises_notifications():
                     source = self._notification_source(turn) or UNTITLED

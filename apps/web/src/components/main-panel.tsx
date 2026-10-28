@@ -46,7 +46,7 @@ export function MainPanel({
   instanceClient,
   onChanged,
 }: {
-  caller: Pick<Client, "call" | "instance">
+  caller: Pick<Client, "call" | "subscribe" | "instance">
   clock?: Clock
   instances: InstanceSummary[] | undefined
   selected: InstanceSummary | undefined

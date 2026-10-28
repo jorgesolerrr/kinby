@@ -21,8 +21,6 @@ from pydantic import JsonValue
 
 from kinby.contracts import (
     BROWSER_CLOSE,
-    BROWSER_FRAME,
-    BROWSER_INPUT,
     BROWSER_OPEN,
     BROWSER_PROFILE_DELETE,
     BROWSER_PROFILE_LIST,
@@ -33,6 +31,9 @@ from kinby.contracts import (
     BROWSER_SCOPES,
     BROWSER_SCREENSHOT,
     BROWSER_SNAPSHOT,
+    BROWSER_TAKEOVER_FINISH,
+    BROWSER_TAKEOVER_INPUT,
+    BROWSER_TAKEOVER_START,
     BROWSER_TEXT,
     CHANNEL_CREATE,
     CHANNEL_DELETE,
@@ -104,7 +105,12 @@ from kinby.contracts import (
     STATS_SUMMARY,
     THREAD_APPROVAL_RESPOND,
     THREAD_ASK,
+    THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_INPUT,
+    THREAD_TAKEOVER_RESUME,
+    THREAD_TAKEOVER_START,
     THREAD_TURN_START,
+    AcceptedResult,
     ApprovalDecision,
     Avatar,
     BrowserProfileDeleteCommand,
@@ -203,6 +209,7 @@ from kinby.contracts import (
     TemplateBehind,
     ThreadApprovalRespondCommand,
     ThreadAskCommand,
+    ThreadTakeoverResumeCommand,
     ThreadTurnStartCommand,
     WaitingApproval,
 )
@@ -286,6 +293,7 @@ from kinby.hub.setup import (
     secret_field,
     setup_errors,
 )
+from kinby.hub.takeovers import Takeovers
 from kinby.hub.template_sync import sync_template
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.instance import (
@@ -606,6 +614,11 @@ class Hub:
                 if browser is not None
                 else None
             )
+            self._takeovers = (
+                Takeovers(self._browsers, self._instance_browser_on, self._resume_takeover)
+                if self._browsers is not None
+                else None
+            )
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
@@ -674,6 +687,13 @@ class Hub:
         dispatcher.register(BROWSER_PROFILE_LIST, self.list_browser_profiles)
         dispatcher.register(BROWSER_PROFILE_RENAME, self.rename_browser_profile)
         dispatcher.register(BROWSER_PROFILE_DELETE, self.delete_browser_profile)
+        if self._takeovers is not None:
+            dispatcher.register_subscription(THREAD_TAKEOVER_START, self._takeovers.watch_turn)
+            dispatcher.register(THREAD_TAKEOVER_INPUT, self._takeovers.drive_turn)
+            dispatcher.register(THREAD_TAKEOVER_FINISH, self._takeovers.finish_turn)
+            dispatcher.register_subscription(BROWSER_TAKEOVER_START, self._takeovers.start)
+            dispatcher.register(BROWSER_TAKEOVER_INPUT, self._takeovers.send_input)
+            dispatcher.register(BROWSER_TAKEOVER_FINISH, self._takeovers.finish)
         dispatcher.register(STATS_SUMMARY, self.stats_summary)
         dispatcher.register(STATS_RUNS, self.stats_runs)
         dispatcher.register(CHANNEL_KINDS, self.channels.kinds)
@@ -708,6 +728,17 @@ class Hub:
         except ManifestError:
             return False
 
+    def _instance_browser_on(self, instance_id: UUID) -> bool:
+        return self._browser_on(self._active_instance(instance_id))
+
+    async def _resume_takeover(
+        self, instance_id: UUID, command: ThreadTakeoverResumeCommand
+    ) -> AcceptedResult:
+        resumed = await self._relayed(
+            instance_id, THREAD_TAKEOVER_RESUME.name, command.model_dump(mode="json")
+        )
+        return AcceptedResult.model_validate(resumed)
+
     def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
         """What one of the hub's instances may call on the hub, built from its scopes."""
         scopes = self.instance_scopes(instance_id)
@@ -726,8 +757,6 @@ class Hub:
             dispatcher.register(BROWSER_SNAPSHOT, partial(browsers.snapshot, instance_id))
             dispatcher.register(BROWSER_TEXT, partial(browsers.text, instance_id))
             dispatcher.register(BROWSER_SCREENSHOT, partial(browsers.screenshot, instance_id))
-            dispatcher.register(BROWSER_FRAME, partial(browsers.frame, instance_id))
-            dispatcher.register(BROWSER_INPUT, partial(browsers.send_input, instance_id))
             dispatcher.register(BROWSER_PROFILE_SAVE, partial(browsers.save_profile, instance_id))
             dispatcher.register(BROWSER_CLOSE, partial(browsers.close, instance_id))
             dispatcher.register(BROWSER_PROFILES, partial(self.own_browser_profiles, instance_id))

@@ -14,7 +14,11 @@ import aiohttp
 from kinby.contracts import (
     BROWSER_PROFILE_DELETE,
     BROWSER_PROFILE_RENAME,
+    BROWSER_TAKEOVER_START,
+    HUB_SCOPES,
     INSTANCE_STATUS,
+    THREAD_TAKEOVER_INPUT,
+    THREAD_TAKEOVER_START,
     BrowserProfile,
     BrowserProfileDeleteCommand,
     BrowserProfileListResult,
@@ -25,6 +29,8 @@ from kinby.contracts import (
     FrameType,
     InstanceStatusCommand,
     InstanceStatusResult,
+    TakeoverKey,
+    ThreadTakeoverInputCommand,
 )
 from kinby.hub import Hub
 from kinby.hub.browser import BrowserLimits
@@ -68,6 +74,8 @@ class FakeBrowserRuntime:
 class BrowserHub:
     hub: Hub
     runtime: FakeBrowserRuntime
+    #: Where the hub reaches its instances.
+    instances: FakeRuntime
     address: Serve
     alice: UUID
     bob: UUID
@@ -109,9 +117,10 @@ async def browser_hub(
     """A served hub whose browser service answers at *address*, and whose alice has the browser
     on, beside bob who does not."""
     runtime = FakeBrowserRuntime(address)
+    instances = FakeRuntime()
     hub = hub_at(
         directory,
-        runtime=FakeRuntime(),
+        runtime=instances,
         private_url=_PRIVATE_URL,
         browser=runtime,
         browser_limits=limits,
@@ -121,7 +130,7 @@ async def browser_hub(
     bob = (await started_instance(client, hub, name="bob")).instance_id
     browser_on(hub, alice)
     async with served(hub) as served_at:
-        yield BrowserHub(hub, runtime, served_at, alice, bob)
+        yield BrowserHub(hub, runtime, instances, served_at, alice, bob)
     hub.close()
 
 
@@ -201,6 +210,44 @@ def test_a_turn_with_no_browser_open_has_nothing_to_act_on_or_save(tmp_path):
     refused = asyncio.run(scenario())
 
     assert [answer["code"] for answer in refused] == [ErrorCode.NOT_FOUND.value] * 3
+
+
+def test_a_turn_with_no_browser_open_has_no_takeover_to_watch_or_drive(tmp_path):
+    async def scenario() -> tuple[object, object]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            turn = {"instance_id": hub.alice, "turn_id": uuid4()}
+            watched = await hub.hub.dispatcher.subscribe(
+                THREAD_TAKEOVER_START.name, turn, HUB_SCOPES
+            )
+            driven = await hub_client(hub.hub).call(
+                THREAD_TAKEOVER_INPUT,
+                ThreadTakeoverInputCommand(**turn, input=TakeoverKey(key="a")),
+            )
+            return watched, driven
+
+    watched, driven = asyncio.run(scenario())
+
+    assert isinstance(watched, ErrorEnvelope)
+    assert watched.code is ErrorCode.NOT_FOUND
+    assert isinstance(driven, ErrorEnvelope)
+    assert driven.code is ErrorCode.NOT_FOUND
+
+
+def test_a_browser_off_instance_has_no_takeover_to_save_a_profile_from(tmp_path):
+    async def scenario() -> tuple[object, int]:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            started = await hub.hub.dispatcher.subscribe(
+                BROWSER_TAKEOVER_START.name,
+                {"instance_id": hub.bob, "takeover_id": uuid4(), "url": "https://example.com/"},
+                HUB_SCOPES,
+            )
+            return started, hub.runtime.starts
+
+    started, starts = asyncio.run(scenario())
+
+    assert isinstance(started, ErrorEnvelope)
+    assert started.code is ErrorCode.NOT_FOUND
+    assert starts == 0
 
 
 def test_the_user_renames_and_deletes_an_instances_profiles_and_no_other_instances(tmp_path):
