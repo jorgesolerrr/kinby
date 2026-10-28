@@ -1,6 +1,6 @@
 # The browser is a hub service, and sign-ins never enter the instance
 
-Amends [ADR 0077](0077-an-instance-reaches-the-hub-only-on-its-own-intake-route.md).
+Amends [ADR 0077](0077-an-instance-reaches-the-hub-only-on-its-own-intake-route.md). Amended by [ADR 0114](0114-the-hub-drives-the-browser-and-an-instance-calls-typed-browser-methods.md): the hub runs the Playwright client, an instance calls typed browser methods, and a takeover's live view runs between the web app and the hub.
 
 Ticket [#161](https://github.com/jorgesolerrr/kinby/issues/161): kinby should do autonomous jobs on websites, including signed-in ones. The research in [#920](https://github.com/jorgesolerrr/kinby/issues/920) measured headless Chromium at about 820 MB of image and up to about 700 MB of memory per page, and found that browser-use and Stagehand run their own model loop, which hides each action from the gate. The research in [#922](https://github.com/jorgesolerrr/kinby/issues/922) found that Vercel's agent-browser uses the same snapshot-and-refs model as Playwright, with no Python library, and takes over through a screencast rather than noVNC. Anything stored under `/instance` is readable through bash, so a cookie or password kept there is one the agent can read.
 

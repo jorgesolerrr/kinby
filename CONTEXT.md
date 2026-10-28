@@ -693,7 +693,7 @@ _Avoid_: standing approval, always-allow
 
 ### Browser service
 
-The one browser the **hub** runs for every **instance** that has the browser turned on. An instance asks the hub for a browser for one **turn**, and every turn gets a fresh one that shares nothing with another turn or instance. The browser reaches the internet only, never the hub, another instance or the user's own network.
+The one browser the **hub** runs for every **instance** that has the browser turned on. The hub drives it, and an instance acts on it only through the hub's typed browser methods. An instance asks the hub for a browser for one **turn**, and every turn gets a fresh one that shares nothing with another turn or instance. The browser reaches the internet only, never the hub, another instance or the user's own network.
 
 ### Browser profile
 
