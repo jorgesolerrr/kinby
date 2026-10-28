@@ -3,6 +3,7 @@ turn, to sign in and save the browser as a profile (ADR 0113)."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
@@ -61,6 +62,10 @@ class ProfileTakeovers:
         except Exception as exc:
             await self._close(takeover_id)
             raise BrowserNotOpen(f"The browser did not open: {exception_message(exc)}") from exc
+        except asyncio.CancelledError:
+            # The user left before the page loaded, so nothing watches the browser to close it.
+            await self._close(takeover_id)
+            raise
         return Stream(0, self._watched(takeover_id))
 
     async def send_input(self, command: BrowserTakeoverInputCommand) -> ThreadTakeoverInputResult:

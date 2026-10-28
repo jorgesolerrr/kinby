@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote
+from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
 import httpx
@@ -42,6 +42,7 @@ from kinby.plugins.browser import (
     Select,
     Type,
     Upload,
+    Wait,
 )
 from kinby.plugins.defaults.web import REFUSED_HEADER, RefusedUrl, public_address
 from kinby.plugins.playwright_browser import PlaywrightBrowser
@@ -243,26 +244,6 @@ def _launch_options(proxy_address: str) -> str:
     return json.dumps({"proxy": {"server": proxy_address}})
 
 
-class _DirectRoute:
-    """A browser route that connects each turn to *server* itself, with no hub between."""
-
-    def __init__(self, server: str, proxy_address: str) -> None:
-        self._address = f"{server}?launch-options={quote(_launch_options(proxy_address))}"
-
-    async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
-        return BrowserOpenResult(address=self._address, token=BrowserToken("token"))
-
-    async def profiles(self) -> BrowserProfileListResult:
-        raise NotImplementedError
-
-    async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile:
-        raise NotImplementedError
-
-
-def _adapter(server: str, proxy_address: str) -> PlaywrightBrowser:
-    return PlaywrightBrowser(_DirectRoute(server, proxy_address))
-
-
 class _RelayedRoute:
     """The hub's browser route for one instance: each turn's browser relayed to the service
     through a session that keeps the instance's profiles in *profiles*."""
@@ -289,10 +270,9 @@ class _RelayedRoute:
 
 
 @asynccontextmanager
-async def relayed(
-    server: str, proxy_address: str, profiles: Path
-) -> AsyncIterator[PlaywrightBrowser]:
-    """The adapter on a relay to *server* that applies the profiles kept in *profiles*."""
+async def relayed(server: str, proxy_address: str) -> AsyncIterator[PlaywrightBrowser]:
+    """The adapter on the hub's relay to *server*, which applies the instance's profiles and
+    lets through only the calls the browser tools make."""
     routes: list[_RelayedRoute] = []
 
     async def relay(request: web.Request) -> web.WebSocketResponse:
@@ -305,9 +285,12 @@ async def relayed(
     await runner.setup()
     served = web.TCPSite(runner, "127.0.0.1", 0)
     await served.start()
-    routes.append(_RelayedRoute(f"ws://127.0.0.1:{served.port}", BrowserProfiles(profiles)))
     try:
-        yield PlaywrightBrowser(routes[0])
+        with TemporaryDirectory() as profiles:
+            routes.append(
+                _RelayedRoute(f"ws://127.0.0.1:{served.port}", BrowserProfiles(Path(profiles)))
+            )
+            yield PlaywrightBrowser(routes[0])
     finally:
         await runner.cleanup()
 
@@ -317,8 +300,12 @@ def test_an_interactive_snapshot_holds_refs_to_what_can_be_acted_on_and_respects
     browser_server,
 ) -> None:
     async def scenario() -> tuple[int, str, str, str, str]:
-        async with site() as port, proxy(port) as address:
-            browser, turn = _adapter(browser_server, address), uuid4()
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address) as browser,
+        ):
+            turn = uuid4()
             await browser.open(turn)
             try:
                 page = await browser.run(turn, Navigate(f"http://site.test:{port}/"))
@@ -348,8 +335,12 @@ def test_an_interactive_snapshot_holds_refs_to_what_can_be_acted_on_and_respects
 @pytest.mark.browser
 def test_the_service_refuses_an_address_that_is_not_public(browser_server) -> None:
     async def scenario() -> None:
-        async with site() as port, proxy(port) as address:
-            browser, turn = _adapter(browser_server, address), uuid4()
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address) as browser,
+        ):
+            turn = uuid4()
             await browser.open(turn)
             try:
                 await browser.run(turn, Navigate("http://10.255.255.1/"))
@@ -363,8 +354,12 @@ def test_the_service_refuses_an_address_that_is_not_public(browser_server) -> No
 @pytest.mark.browser
 def test_two_turns_get_contexts_that_share_no_cookie(browser_server) -> None:
     async def scenario() -> tuple[str, str]:
-        async with site() as port, proxy(port) as address:
-            browser, first, second = _adapter(browser_server, address), uuid4(), uuid4()
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address) as browser,
+        ):
+            first, second = uuid4(), uuid4()
             await browser.open(first)
             await browser.open(second)
             try:
@@ -393,8 +388,8 @@ def _on_the_form(server: str, scenario: Callable[[Act], Awaitable[None]]) -> Non
     page says after."""
 
     async def run() -> None:
-        async with site() as port, proxy(port) as address:
-            browser, turn = _adapter(server, address), uuid4()
+        async with site() as port, proxy(port) as address, relayed(server, address) as browser:
+            turn = uuid4()
             await browser.open(turn)
             try:
                 await browser.run(turn, Navigate(f"http://site.test:{port}/form"))
@@ -512,8 +507,12 @@ def test_an_upload_attaches_the_file(browser_server, tmp_path: Path) -> None:
 @pytest.mark.browser
 def test_a_takeover_streams_the_page_and_takes_the_users_mouse_and_keys(browser_server) -> None:
     async def scenario() -> tuple[bytes, str]:
-        async with site() as port, proxy(port) as address:
-            browser, turn = _adapter(browser_server, address), uuid4()
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address) as browser,
+        ):
+            turn = uuid4()
             await browser.open(turn)
             try:
                 await browser.run(turn, Navigate(f"http://site.test:{port}/pad"))
@@ -540,14 +539,12 @@ def test_a_takeover_streams_the_page_and_takes_the_users_mouse_and_keys(browser_
 
 
 @pytest.mark.browser
-def test_a_profile_saved_from_one_turns_browser_opens_the_next_signed_in(
-    browser_server, tmp_path: Path
-) -> None:
+def test_a_profile_saved_from_one_turns_browser_opens_the_next_signed_in(browser_server) -> None:
     async def scenario() -> tuple[BrowserProfile, str]:
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address, tmp_path) as browser,
+            relayed(browser_server, address) as browser,
         ):
             first, second = uuid4(), uuid4()
             await browser.open(first)
@@ -571,7 +568,7 @@ def test_a_profile_saved_from_one_turns_browser_opens_the_next_signed_in(
 
 @pytest.mark.browser
 def test_a_cookie_the_site_renews_during_a_turn_is_in_the_profile_after_it(
-    browser_server, tmp_path: Path
+    browser_server,
 ) -> None:
     async def turn(browser: PlaywrightBrowser, profile: str | None, url: str) -> str:
         turn = uuid4()
@@ -588,10 +585,41 @@ def test_a_cookie_the_site_renews_during_a_turn_is_in_the_profile_after_it(
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address, tmp_path) as browser,
+            relayed(browser_server, address) as browser,
         ):
             await turn(browser, None, f"http://site.test:{port}/sign-in")
             await turn(browser, "Site", f"http://site.test:{port}/refresh")
             return await turn(browser, "Site", f"http://site.test:{port}/cookies")
 
     assert asyncio.run(scenario()) == "session: alice-renewed"
+
+
+@pytest.mark.browser
+def test_the_route_lets_through_each_read_the_browser_tools_make(browser_server) -> None:
+    async def scenario() -> tuple[list[str], bytes]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address) as browser,
+        ):
+            turn = uuid4()
+            await browser.open(turn)
+            try:
+                await browser.run(turn, Navigate(f"http://site.test:{port}/"))
+                tree = await browser.snapshot(turn, interactive=True, max_chars=20_000)
+                ref = re.search(r'link "Company 150" \[ref=(e\d+)\]', tree.text)
+                assert ref is not None, tree.text
+                pages = [
+                    await browser.run(turn, Scroll("down")),
+                    await browser.run(turn, Scroll("down", ref.group(1))),
+                    await browser.run(turn, Wait("Company 150", 5)),
+                    await browser.run(turn, Wait(None, 5)),
+                ]
+                return [page.title for page in pages], await browser.screenshot(turn)
+            finally:
+                await browser.close(turn)
+
+    titles, screenshot = asyncio.run(scenario())
+
+    assert titles == ["Applications"] * 4
+    assert screenshot.startswith(b"\x89PNG")

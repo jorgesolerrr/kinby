@@ -295,7 +295,8 @@ async def _run(page: PlaywrightPage, action: BrowserAction) -> None:
             await _click(await _element(page, ref), ref)
         case Type(ref=ref, text=text):
             textbox = await _element(page, ref)
-            if await textbox.evaluate("field => field.type === 'password'"):
+            kind = await textbox.get_attribute("type", timeout=_ELEMENT_MS)
+            if (kind or "").lower() == "password":
                 raise PermissionError(
                     f"The field with ref {ref} is a password field, which only the vault fills."
                 )
@@ -303,9 +304,9 @@ async def _run(page: PlaywrightPage, action: BrowserAction) -> None:
         case Select(ref=ref, value=value):
             await (await _element(page, ref)).select_option(value, timeout=_ELEMENT_MS)
         case Press(key=key):
-            if key not in _PASSWORD_KEYS and await page.evaluate(
-                "() => document.activeElement?.type === 'password'"
-            ):
+            # A selector count, not script, which the browser route refuses.
+            focused_password = page.locator("input[type=password i]:focus")
+            if key not in _PASSWORD_KEYS and await focused_password.count():
                 raise PermissionError(
                     f"The focus is on a password field, which takes no {key} key. Only the vault "
                     "fills a password."

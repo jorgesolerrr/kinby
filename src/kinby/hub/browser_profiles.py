@@ -21,10 +21,49 @@ from kinby.hub.secrets import replace_protected
 #: Playwright's storage state: a context's cookies, and each origin's local storage.
 type StorageState = dict[str, JsonValue]
 
-#: The calls that would hand a context's cookies to the turn.
-_COOKIE_READS = frozenset({"storageState", "cookies"})
-_COOKIES_KEPT = "The hub keeps a browser's cookies to itself."
-#: The hub numbers its own calls above any a Playwright client reaches.
+#: The protocol methods the browser tools and a takeover call. The route refuses every other,
+#: such as running script, reading cookies, watching the network or recording it, so no client
+#: holding a turn's token reaches a profile's state.
+_CALLS = frozenset(
+    {
+        "initialize",
+        "__waitInfo__",
+        "newContext",
+        "newPage",
+        "newCDPSession",
+        "close",
+        "dispose",
+        "detach",
+        "goto",
+        "title",
+        "ariaSnapshot",
+        "innerText",
+        "getAttribute",
+        "queryCount",
+        "waitForSelector",
+        "scrollIntoViewIfNeeded",
+        "screenshot",
+        "click",
+        "fill",
+        "selectOption",
+        "setInputFiles",
+        "createTempFiles",
+        "keyboardPress",
+        "mouseMove",
+        "mouseDown",
+        "mouseUp",
+        "mouseWheel",
+        "saveAsStream",
+        "read",
+        "write",
+        "send",
+    }
+)
+#: The CDP commands of a takeover's live view, the one use of a CDP session.
+_CDP_COMMANDS = frozenset({"Page.startScreencast", "Page.screencastFrameAck"})
+#: What a context opens with, whatever the client asked for, such as a proxy of its own.
+_CONTEXT_OPTIONS: dict[str, JsonValue] = {"selectorEngines": []}
+#: The hub numbers its own calls apart from any a Playwright client makes.
 _FIRST_CALL_ID = 1 << 40
 _STATE_SECONDS = 30
 
@@ -144,28 +183,32 @@ class BrowserSession:
         self, client: web.WebSocketResponse, service: aiohttp.ClientWebSocketResponse
     ) -> None:
         async for message in client:
+            # The service reads a binary frame as a call too.
             if message.type is WSMsgType.BINARY:
-                await service.send_bytes(message.data)
+                call = _parsed(message.data.decode("utf-8", "replace"))
+            elif message.type is WSMsgType.TEXT:
+                call = _parsed(message.data)
+            else:
                 continue
-            if message.type is not WSMsgType.TEXT:
-                continue
-            call = _parsed(message.data)
+            # Only the calls the route lets through reach the service, as the hub writes them.
             if call is None:
-                await service.send_str(message.data)
                 continue
             method = call.get("method")
-            if method in _COOKIE_READS:
-                await client.send_json(_refusal(call.get("id"), _COOKIES_KEPT))
+            if (refusal := self._refusal(call)) is not None:
+                await client.send_json(_refusal(call.get("id"), refusal))
                 continue
             if method == "newContext":
                 self._opening = call.get("id")
+                options = dict(_CONTEXT_OPTIONS)
                 if self._profile is not None:
                     try:
-                        state = self._profiles.state(self._instance_id, self._profile)
+                        options["storageState"] = self._profiles.state(
+                            self._instance_id, self._profile
+                        )
                     except BrowserProfileNotFound as missing:
                         await client.send_json(_refusal(call.get("id"), str(missing)))
                         continue
-                    call["params"] = {**_object(call.get("params")), "storageState": state}
+                call["params"] = options
             if (
                 method == "close"
                 and self._context is not None
@@ -174,6 +217,23 @@ class BrowserSession:
                 await self._save_back()
             await service.send_str(json.dumps(call))
         await service.close()
+
+    def _refusal(self, call: dict[str, JsonValue]) -> str | None:
+        """Why the route refuses *call*, or None when it lets the call through."""
+        method = call.get("method")
+        params = _object(call.get("params"))
+        if method not in _CALLS:
+            return f'The hub\'s browser route refuses "{method}".'
+        if method == "send" and (command := params.get("method")) not in _CDP_COMMANDS:
+            return f'The hub\'s browser route refuses the CDP command "{command}".'
+        url = params.get("url")
+        if method == "goto" and not (
+            isinstance(url, str) and url.lower().startswith(("http://", "https://"))
+        ):
+            return "The browser opens only http and https URLs."
+        if method == "newContext" and (self._opening is not None or self._context is not None):
+            return "The turn's browser has its context already."
+        return None
 
     async def _from_service(
         self, service: aiohttp.ClientWebSocketResponse, client: web.WebSocketResponse

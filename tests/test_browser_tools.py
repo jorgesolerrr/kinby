@@ -5,6 +5,7 @@ import asyncio
 import base64
 import socket
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -102,6 +103,7 @@ class FakeBrowser:
         refusal: str | None = None,
         snapshot: str = _SNAPSHOT,
         downloads: tuple[Download, ...] = (),
+        stall_navigation: bool = False,
     ) -> None:
         self.opened: list[UUID] = []
         self.closed: list[UUID] = []
@@ -116,6 +118,8 @@ class FakeBrowser:
         self._refusal = refusal
         self._snapshot = snapshot
         self._downloads = downloads
+        self._stall_navigation = stall_navigation
+        self.navigating = asyncio.Event()
         self._url = "about:blank"
 
     async def open(self, turn: UUID, profile: str | None = None) -> None:
@@ -140,6 +144,9 @@ class FakeBrowser:
         match action:
             case Navigate(url=url):
                 self.visited.append(url)
+                self.navigating.set()
+                if self._stall_navigation:
+                    await asyncio.Event().wait()
                 self._url = url
             case Scroll() | Wait():
                 pass
@@ -906,3 +913,21 @@ def test_a_takeover_with_no_turn_closes_its_browser_when_nobody_watches_it(tmp_p
     assert isinstance(late_finish, ErrorEnvelope)
     assert late_finish.code is ErrorCode.NOT_FOUND
     assert browser.saved == []
+
+
+def test_a_takeover_with_no_turn_left_while_its_page_loads_closes_its_browser(tmp_path) -> None:
+    browser = FakeBrowser(stall_navigation=True)
+    dispatcher = _takeover_runtime(tmp_path, browser)
+    takeover_id = uuid4()
+
+    async def scenario() -> None:
+        watching = asyncio.create_task(_watch_takeover(dispatcher, takeover_id))
+        async with asyncio.timeout(5):
+            await browser.navigating.wait()
+        watching.cancel()
+        with suppress(asyncio.CancelledError):
+            await watching
+
+    asyncio.run(scenario())
+
+    assert browser.closed == [takeover_id]
