@@ -1,16 +1,32 @@
-"""The browser tools: open a page on the hub's browser service and read it (ADR 0113)."""
+"""The browser tools: open a page on the hub's browser service, read it and act on it
+(ADR 0113)."""
 
 from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import Field
 
 from kinby.instance import Instance
-from kinby.plugins.browser import BrowserService, Navigate, Scroll, Wait
+from kinby.plugins.browser import (
+    BrowserAction,
+    BrowserService,
+    Click,
+    Download,
+    Navigate,
+    Page,
+    Press,
+    Scroll,
+    Select,
+    Type,
+    Upload,
+    Wait,
+)
+from kinby.plugins.defaults.files import workspace_path
 from kinby.plugins.defaults.web import PAGE_CHARACTERS, capped, guard_url, untrusted
 from kinby.plugins.tools import Tool, ToolContext, tool
 
@@ -18,6 +34,8 @@ from kinby.plugins.tools import Tool, ToolContext, tool
 SNAPSHOT_CHARACTERS = 20_000
 #: Where browser_screenshot saves its images, under the workspace.
 SCREENSHOTS_DIR = "screenshots"
+#: Where the page's downloads land, under the workspace.
+DOWNLOADS_DIR = "downloads"
 
 
 def browser_tools(instance: Instance) -> tuple[Tool, ...]:
@@ -31,6 +49,11 @@ def browser_tools(instance: Instance) -> tuple[Tool, ...]:
         browser_screenshot,
         browser_scroll,
         browser_wait,
+        browser_click,
+        browser_type,
+        browser_select,
+        browser_press,
+        browser_upload,
     )
 
 
@@ -39,9 +62,8 @@ async def browser_open(url: str, context: ToolContext) -> str:
     """Open `url` in the browser, which runs the page's JavaScript. Opening a URL that is not in
     the conversation yet needs the user's approval. Then read the page with browser_snapshot."""
     await guard_url(url)
-    browser, turn = await _opened(context)
-    page = await browser.run(turn, Navigate(url))
-    return untrusted(f"Opened {page.url}\nTitle: {page.title}", page.url)
+    page, downloaded = await _run(context, Navigate(url))
+    return untrusted(f"Opened {page.url}\nTitle: {page.title}", page.url) + downloaded
 
 
 @tool(write=False)
@@ -86,9 +108,8 @@ async def browser_scroll(
     ref: str | None = None,
 ) -> str:
     """Scroll the open page a screen up or down, or bring the element with `ref` into view."""
-    browser, turn = await _opened(context)
-    page = await browser.run(turn, Scroll(direction, ref))
-    return f"Scrolled {page.url}."
+    page, downloaded = await _run(context, Scroll(direction, ref))
+    return f"Scrolled {page.url}.{downloaded}"
 
 
 @tool(write=False)
@@ -99,9 +120,65 @@ async def browser_wait(
 ) -> str:
     """Wait up to `seconds` for `text` to appear on the open page, or without it for the page
     to finish loading."""
+    page, downloaded = await _run(context, Wait(text, seconds))
+    done = f"{page.url} shows the text." if text else f"{page.url} finished loading."
+    return done + downloaded
+
+
+@tool(write=True)
+async def browser_click(ref: str, context: ToolContext) -> str:
+    """Click the element with `ref` from the last snapshot. A file the click downloads lands in
+    the workspace's downloads/, with the next browser action when it is slow to begin."""
+    return await _act(context, Click(ref), f"Clicked {ref}")
+
+
+@tool(write=True)
+async def browser_type(ref: str, text: str, context: ToolContext) -> str:
+    """Type `text` into the field with `ref`, in place of what it holds. A password field
+    refuses it."""
+    return await _act(context, Type(ref, text), f"Typed into {ref}")
+
+
+@tool(write=True)
+async def browser_select(ref: str, value: str, context: ToolContext) -> str:
+    """Select the option with `value` as its value or its label, in the list with `ref`."""
+    return await _act(context, Select(ref, value), f"Selected {value} in {ref}")
+
+
+@tool(write=True)
+async def browser_press(key: str, context: ToolContext) -> str:
+    """Press `key`, such as Enter, Tab or Control+A, on the element that has the focus."""
+    return await _act(context, Press(key), f"Pressed {key}")
+
+
+@tool(write=True)
+async def browser_upload(ref: str, path: str, context: ToolContext) -> str:
+    """Attach the workspace file at `path` to the file field with `ref`."""
+    file = workspace_path(context.workspace, path)
+    return await _act(context, Upload(ref, file), f"Attached {path} to {ref}")
+
+
+async def _act(context: ToolContext, action: BrowserAction, done: str) -> str:
+    page, downloaded = await _run(context, action)
+    return f"{done} on {page.url}.{downloaded}"
+
+
+async def _run(context: ToolContext, action: BrowserAction) -> tuple[Page, str]:
+    """Run *action*, and save what the page downloaded since the last action into the
+    workspace, with a line that names each file."""
     browser, turn = await _opened(context)
-    page = await browser.run(turn, Wait(text, seconds))
-    return f"{page.url} shows the text." if text else f"{page.url} finished loading."
+    page = await browser.run(turn, action)
+    saved = [await _save(context.workspace, download) for download in page.downloads]
+    return page, "".join(f"\nDownloaded {name}." for name in saved)
+
+
+async def _save(workspace: Path, download: Download) -> str:
+    """Save *download* into the workspace's downloads/, under the last part of its name."""
+    name = f"{DOWNLOADS_DIR}/{Path(download.name).name}"
+    path = workspace_path(workspace, name)
+    await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(path.write_bytes, download.content)
+    return name
 
 
 async def _opened(context: ToolContext) -> tuple[BrowserService, UUID]:

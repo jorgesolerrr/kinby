@@ -1,5 +1,5 @@
 """The browser tools against a fake browser service: a turn opens a page under the seen-URL rule,
-reads it, and gets a context of its own (ADR 0113)."""
+reads it, acts on it under the gate, and gets a context of its own (ADR 0113)."""
 
 import asyncio
 import socket
@@ -15,23 +15,35 @@ from kinby.contracts import (
     Event,
     GateOutcome,
     Payload,
+    RoutineGrant,
+    RoutineName,
     SystemPrompt,
     ToolGated,
     ToolResult,
+    is_turn_closing,
 )
 from kinby.core import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext
 from kinby.instance import Instance, load_instance
+from kinby.instance.routine_grants import RoutineGrants
 from kinby.plugins.browser import (
     BrowserAction,
     BrowserService,
+    Click,
+    Download,
     Navigate,
     Page,
     PageRead,
+    Press,
     Scroll,
+    Select,
+    Type,
+    Upload,
     Wait,
 )
 from tests.test_plugins import ScriptedModel
+from tests.test_routine_grants import gates, run_routine
+from tests.test_routines import routine_file, signal_runtime
 
 _JOBS = "https://jobs.example.com/applications"
 _SNAPSHOT = '- paragraph [ref=e3]: You have 3 open applications.\n- link "Next" [ref=e5]'
@@ -49,15 +61,24 @@ def _fake_dns(monkeypatch) -> None:
 
 
 class FakeBrowser:
-    """A browser service with one page, which records each turn's context."""
+    """A browser service with one page, which records each turn's context and gives its
+    downloads to the first action."""
 
-    def __init__(self, *, refusal: str | None = None, snapshot: str = _SNAPSHOT) -> None:
+    def __init__(
+        self,
+        *,
+        refusal: str | None = None,
+        snapshot: str = _SNAPSHOT,
+        downloads: tuple[Download, ...] = (),
+    ) -> None:
         self.opened: list[UUID] = []
         self.closed: list[UUID] = []
         self.visited: list[str] = []
         self.snapshots: list[tuple[bool, int]] = []
+        self.acted: list[BrowserAction] = []
         self._refusal = refusal
         self._snapshot = snapshot
+        self._downloads = downloads
         self._url = "about:blank"
 
     async def open(self, turn: UUID) -> None:
@@ -74,7 +95,10 @@ class FakeBrowser:
                 self._url = url
             case Scroll() | Wait():
                 pass
-        return Page(url=self._url, title="Applications")
+            case _:
+                self.acted.append(action)
+        downloads, self._downloads = self._downloads, ()
+        return Page(url=self._url, title="Applications", downloads=downloads)
 
     async def snapshot(self, turn: UUID, *, interactive: bool, max_chars: int) -> PageRead:
         assert turn in self.opened
@@ -244,7 +268,7 @@ def test_a_browser_off_instance_has_no_browser_tools(tmp_path) -> None:
     assert browser.opened == []
 
 
-def test_a_browser_on_instance_has_the_read_tools(tmp_path) -> None:
+def test_a_browser_on_instance_has_the_browser_tools(tmp_path) -> None:
     model = ScriptedModel([AIMessageChunk(content="Done.")])
 
     _turn(_instance(tmp_path), model, "Hello", FakeBrowser())
@@ -257,6 +281,11 @@ def test_a_browser_on_instance_has_the_read_tools(tmp_path) -> None:
         "browser_screenshot",
         "browser_scroll",
         "browser_wait",
+        "browser_click",
+        "browser_type",
+        "browser_select",
+        "browser_press",
+        "browser_upload",
     } <= names
 
 
@@ -301,3 +330,122 @@ def test_a_browser_the_service_cannot_give_reaches_the_model_as_a_tool_error(tmp
     result = _results(payloads)["browser_snapshot"]
     assert result.error
     assert result.output == f"ConnectionError: {refusal}"
+
+
+#: Each action tool, its arguments, and the action it runs, given the workspace.
+_ACTIONS = [
+    ("browser_click", {"ref": "e5"}, lambda _: Click("e5")),
+    ("browser_type", {"ref": "e7", "text": "Ada"}, lambda _: Type("e7", "Ada")),
+    ("browser_select", {"ref": "e8", "value": "pm"}, lambda _: Select("e8", "pm")),
+    ("browser_press", {"key": "Enter"}, lambda _: Press("Enter")),
+    (
+        "browser_upload",
+        {"ref": "e9", "path": "cv.pdf"},
+        lambda workspace: Upload("e9", (workspace / "cv.pdf").resolve()),
+    ),
+]
+
+
+@pytest.mark.parametrize(("name", "args", "action"), _ACTIONS)
+def test_an_action_asks_in_ask_mode(tmp_path, name, args, action) -> None:
+    browser = FakeBrowser()
+
+    _, payloads = _turn(_instance(tmp_path), _calls((name, args)), "Apply.", browser)
+
+    approval = next(p for p in payloads if isinstance(p, ApprovalRequested))
+    assert (approval.name, approval.rule) == (name, "mode.ask.write")
+    assert browser.acted == []
+
+
+@pytest.mark.parametrize(("name", "args", "action"), _ACTIONS)
+def test_an_action_is_denied_in_read_only(tmp_path, name, args, action) -> None:
+    browser = FakeBrowser()
+    instance = _instance(tmp_path, mode="read-only")
+
+    _, payloads = _turn(instance, _calls((name, args)), "Apply.", browser)
+
+    [gate] = [p for p in payloads if isinstance(p, ToolGated)]
+    assert (gate.action, gate.rule) == (GateOutcome.DENY, "mode.read-only.write")
+    assert browser.acted == []
+
+
+@pytest.mark.parametrize(("name", "args", "action"), _ACTIONS)
+def test_an_action_runs_on_a_routine_turn_with_a_grant(tmp_path, name, args, action) -> None:
+    browser = FakeBrowser()
+    instance = _instance(tmp_path)
+    (instance.manifest.workspace.path / "cv.pdf").write_bytes(b"%PDF")
+    routine_file(instance, "description: Apply", "Apply to the open jobs.")
+    instance.manifest.state_dir.mkdir(exist_ok=True)
+    RoutineGrants(instance.manifest.state_dir).grant(
+        RoutineGrant(
+            routine=RoutineName("news"),
+            tool=name,
+            granted_at=datetime.now(UTC),
+            approval_id=uuid4(),
+        )
+    )
+    dispatcher, _ = signal_runtime(instance, _calls((name, args)), browser=browser)
+
+    async def scenario() -> list[ToolGated]:
+        stop = await run_routine(dispatcher)
+        assert is_turn_closing(stop.payload)
+        return await gates(dispatcher, stop.thread_id)
+
+    decided = asyncio.run(scenario())
+
+    assert [(gate.name, gate.action, gate.rule) for gate in decided] == [
+        (name, GateOutcome.ALLOW, "routine.grant")
+    ]
+    assert browser.acted == [action(instance.manifest.workspace.path)]
+
+
+def test_a_download_lands_in_the_workspace_where_the_file_tools_read_it(tmp_path) -> None:
+    report = Download("report.csv", b"company,status\nAcme,open\n")
+    browser = FakeBrowser(downloads=(report,))
+    model = _calls(("browser_click", {"ref": "e5"}), ("read", {"path": "downloads/report.csv"}))
+
+    _, payloads = _turn(_instance(tmp_path, mode="full-access"), model, "Get it.", browser)
+
+    results = _results(payloads)
+    assert "downloads/report.csv" in results["browser_click"].output
+    assert results["read"].output == "company,status\nAcme,open\n"
+
+
+def test_a_download_that_begins_late_lands_with_the_next_browser_wait(tmp_path) -> None:
+    report = Download("report.csv", b"company,status\nAcme,open\n")
+    browser = FakeBrowser(downloads=(report,))
+    instance = _instance(tmp_path)
+
+    _, payloads = _turn(instance, _calls(("browser_wait", {})), "Wait for it.", browser)
+
+    assert "Downloaded downloads/report.csv." in _results(payloads)["browser_wait"].output
+    downloads = instance.manifest.workspace.path / "downloads"
+    assert (downloads / "report.csv").read_bytes() == report.content
+
+
+def test_a_download_keeps_inside_downloads_whatever_the_page_names_it(tmp_path) -> None:
+    browser = FakeBrowser(downloads=(Download("../../kinby.toml", b"id = 'evil'"),))
+    instance = _instance(tmp_path, mode="full-access")
+    kinby_toml = (instance.path / "kinby.toml").read_text(encoding="utf-8")
+
+    _turn(instance, _calls(("browser_click", {"ref": "e5"})), "Get it.", browser)
+
+    assert (instance.path / "kinby.toml").read_text(encoding="utf-8") == kinby_toml
+    downloads = instance.manifest.workspace.path / "downloads"
+    assert (downloads / "kinby.toml").read_bytes() == b"id = 'evil'"
+
+
+@pytest.mark.parametrize("path", ["../kinby.toml", "/etc/passwd", "env"])
+def test_an_upload_from_outside_the_workspace_is_refused(tmp_path, path: str) -> None:
+    browser = FakeBrowser()
+    instance = _instance(tmp_path, mode="full-access")
+    (instance.path / ".env").write_text("OPENAI_API_KEY=secret\n", encoding="utf-8")
+    (instance.manifest.workspace.path / "env").symlink_to(instance.path / ".env")
+    model = _calls(("browser_upload", {"ref": "e9", "path": path}))
+
+    _, payloads = _turn(instance, model, "Attach it.", browser)
+
+    result = _results(payloads)["browser_upload"]
+    assert result.error
+    assert "outside the workspace" in result.output
+    assert browser.acted == []
