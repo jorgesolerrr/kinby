@@ -20,13 +20,21 @@ from dotenv import dotenv_values
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    BROWSER_CLOSE,
     BROWSER_OPEN,
     BROWSER_PROFILE_DELETE,
     BROWSER_PROFILE_LIST,
     BROWSER_PROFILE_RENAME,
     BROWSER_PROFILE_SAVE,
     BROWSER_PROFILES,
+    BROWSER_RUN,
     BROWSER_SCOPES,
+    BROWSER_SCREENSHOT,
+    BROWSER_SNAPSHOT,
+    BROWSER_TAKEOVER_FINISH,
+    BROWSER_TAKEOVER_INPUT,
+    BROWSER_TAKEOVER_START,
+    BROWSER_TEXT,
     BROWSER_VAULT,
     BROWSER_VAULT_ADD,
     BROWSER_VAULT_DELETE,
@@ -102,17 +110,18 @@ from kinby.contracts import (
     STATS_SUMMARY,
     THREAD_APPROVAL_RESPOND,
     THREAD_ASK,
+    THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_INPUT,
+    THREAD_TAKEOVER_RESUME,
+    THREAD_TAKEOVER_START,
     THREAD_TURN_START,
+    AcceptedResult,
     ApprovalDecision,
     Avatar,
-    BrowserOpenCommand,
-    BrowserOpenResult,
-    BrowserProfile,
     BrowserProfileDeleteCommand,
     BrowserProfileListCommand,
     BrowserProfileListResult,
     BrowserProfileRenameCommand,
-    BrowserProfileSaveCommand,
     BrowserProfilesCommand,
     BrowserVaultCommand,
     Capability,
@@ -206,6 +215,7 @@ from kinby.contracts import (
     TemplateBehind,
     ThreadApprovalRespondCommand,
     ThreadAskCommand,
+    ThreadTakeoverResumeCommand,
     ThreadTurnStartCommand,
     VaultEntryAddCommand,
     VaultEntryDeleteCommand,
@@ -219,7 +229,6 @@ from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
-    BrowserNotOpen,
     FactoryCheckFailed,
     FactoryNotFound,
     HomeInstanceKept,
@@ -240,7 +249,7 @@ from kinby.factories.file import InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
-from kinby.hub.browser import BrowserConnection, BrowserLimits, BrowserRuntime, HubBrowsers
+from kinby.hub.browser import BrowserLimits, BrowserRuntime
 from kinby.hub.browser_profiles import BrowserProfiles
 from kinby.hub.channels import ChannelKind, Channels, installed_kinds
 from kinby.hub.control import (
@@ -278,6 +287,7 @@ from kinby.hub.models import (
     secrets_digest,
 )
 from kinby.hub.outbox import Outbox, Sleep
+from kinby.hub.playwright_browser import PlaywrightBrowser
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
 from kinby.hub.relay import relayed_call
@@ -294,6 +304,7 @@ from kinby.hub.setup import (
     secret_field,
     setup_errors,
 )
+from kinby.hub.takeovers import Takeovers
 from kinby.hub.template_sync import sync_template
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.hub.vault import Vault
@@ -612,8 +623,13 @@ class Hub:
             )
             self._control = control if control is not None else HttpInstanceControl()
             self._browsers = (
-                HubBrowsers(browser, browser_limits, self.browser_profiles, self.vault)
+                PlaywrightBrowser(browser, browser_limits, self.browser_profiles, self.vault)
                 if browser is not None
+                else None
+            )
+            self._takeovers = (
+                Takeovers(self._browsers, self._instance_browser_on, self._resume_takeover)
+                if self._browsers is not None
                 else None
             )
             self._locks: dict[UUID, asyncio.Lock] = {}
@@ -688,6 +704,13 @@ class Hub:
         dispatcher.register(BROWSER_VAULT_ADD, self.add_vault_entry)
         dispatcher.register(BROWSER_VAULT_EDIT, self.edit_vault_entry)
         dispatcher.register(BROWSER_VAULT_DELETE, self.delete_vault_entry)
+        if self._takeovers is not None:
+            dispatcher.register_subscription(THREAD_TAKEOVER_START, self._takeovers.watch_turn)
+            dispatcher.register(THREAD_TAKEOVER_INPUT, self._takeovers.drive_turn)
+            dispatcher.register(THREAD_TAKEOVER_FINISH, self._takeovers.finish_turn)
+            dispatcher.register_subscription(BROWSER_TAKEOVER_START, self._takeovers.start)
+            dispatcher.register(BROWSER_TAKEOVER_INPUT, self._takeovers.send_input)
+            dispatcher.register(BROWSER_TAKEOVER_FINISH, self._takeovers.finish)
         dispatcher.register(STATS_SUMMARY, self.stats_summary)
         dispatcher.register(STATS_RUNS, self.stats_runs)
         dispatcher.register(CHANNEL_KINDS, self.channels.kinds)
@@ -722,6 +745,17 @@ class Hub:
         except ManifestError:
             return False
 
+    def _instance_browser_on(self, instance_id: UUID) -> bool:
+        return self._browser_on(self._active_instance(instance_id))
+
+    async def _resume_takeover(
+        self, instance_id: UUID, command: ThreadTakeoverResumeCommand
+    ) -> AcceptedResult:
+        resumed = await self._relayed(
+            instance_id, THREAD_TAKEOVER_RESUME.name, command.model_dump(mode="json")
+        )
+        return AcceptedResult.model_validate(resumed)
+
     def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
         """What one of the hub's instances may call on the hub, built from its scopes."""
         scopes = self.instance_scopes(instance_id)
@@ -733,11 +767,16 @@ class Hub:
         if Scope.FACTORY_INTAKE in scopes:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
         if Scope.BROWSER_OPEN in scopes:
-            dispatcher.register(BROWSER_OPEN, partial(self.open_browser, instance_id))
+            browsers = self._browsers
+            assert browsers is not None
+            dispatcher.register(BROWSER_OPEN, partial(browsers.open, instance_id))
+            dispatcher.register(BROWSER_RUN, partial(browsers.run, instance_id))
+            dispatcher.register(BROWSER_SNAPSHOT, partial(browsers.snapshot, instance_id))
+            dispatcher.register(BROWSER_TEXT, partial(browsers.text, instance_id))
+            dispatcher.register(BROWSER_SCREENSHOT, partial(browsers.screenshot, instance_id))
+            dispatcher.register(BROWSER_PROFILE_SAVE, partial(browsers.save_profile, instance_id))
+            dispatcher.register(BROWSER_CLOSE, partial(browsers.close, instance_id))
             dispatcher.register(BROWSER_PROFILES, partial(self.own_browser_profiles, instance_id))
-            dispatcher.register(
-                BROWSER_PROFILE_SAVE, partial(self.save_browser_profile, instance_id)
-            )
             dispatcher.register(BROWSER_VAULT, partial(self.own_vault_entries, instance_id))
         if Scope.HUB_HOME in scopes:
             self._serve_hub(dispatcher)
@@ -750,34 +789,10 @@ class Hub:
         record = self.registry.instance(instance_id)
         return self.approvals if record is not None and record.home else None
 
-    async def open_browser(
-        self, instance_id: UUID, command: BrowserOpenCommand
-    ) -> BrowserOpenResult:
-        """Lend the instance a browser for the turn *command* names, on its browser route."""
-        assert self._browsers is not None
-        token = await self._browsers.lend(instance_id, command.turn_id, command.profile)
-        return BrowserOpenResult(
-            address=f"{self._private_url}/instances/{instance_id}/browser".replace("http", "ws", 1),
-            token=token,
-        )
-
-    def connect_browser(self, instance_id: UUID, token: str) -> BrowserConnection | None:
-        return self._browsers.connect(instance_id, token) if self._browsers else None
-
     async def own_browser_profiles(
         self, instance_id: UUID, command: BrowserProfilesCommand
     ) -> BrowserProfileListResult:
         return self.browser_profiles.list(instance_id)
-
-    async def save_browser_profile(
-        self, instance_id: UUID, command: BrowserProfileSaveCommand
-    ) -> BrowserProfile:
-        """Save the browser of the instance's turn as a profile, which the user's takeover
-        signed in."""
-        session = self._browsers.session(instance_id, command.turn_id) if self._browsers else None
-        if session is None:
-            raise BrowserNotOpen(f'Turn "{command.turn_id}" has no browser open.')
-        return await session.save_as(command.name, command.site)
 
     async def list_browser_profiles(
         self, command: BrowserProfileListCommand
@@ -2020,6 +2035,7 @@ class Hub:
         if (await self._runtime.status(record.runtime_id)).state == "absent":
             return
         await self._stop_running(record, pending)
+        await self._close_browsers(record.instance_id)
         self._record(pending.operation_id, "remove", "Removing the container, keeping its storage.")
         await self._runtime.remove(record.runtime_id)
 
@@ -2478,6 +2494,7 @@ class Hub:
                     except Exception as exc:
                         self._fail(operation_id, record, str(exc) or type(exc).__name__)
                         return
+                    await self._close_browsers(instance_id)
                     self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, detail)
             except asyncio.CancelledError:
                 self._fail_if_unfinished(operation_id)
@@ -2527,6 +2544,11 @@ class Hub:
             )
         await self._take_down(record, pending)
         return "Instance stopped."
+
+    async def _close_browsers(self, instance_id: UUID) -> None:
+        """A stopped instance cannot close its turns' browsers, so the hub closes them."""
+        if self._browsers is not None:
+            await self._browsers.close_instance(instance_id)
 
     async def _take_down(self, record: ManagedInstance, pending: PendingStop) -> None:
         """Wait for the instance's own drain, then take its container down and watch it go."""

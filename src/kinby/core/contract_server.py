@@ -17,7 +17,7 @@ from kinby.contracts import (
     CONTROL_SCOPES,
     INSTANCE_SCOPES,
     THREAD_APPROVAL_RESPOND,
-    THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_RESUME,
     THREAD_TURN_INTERRUPT,
     CallFrame,
     CancelFrame,
@@ -48,7 +48,7 @@ CALL_LIMIT = 8
 #: How often a contract server pings, on its own socket and on one a hub relays.
 HEARTBEAT_SECONDS = 30
 _UNBLOCKING = frozenset(
-    {THREAD_TURN_INTERRUPT.name, THREAD_APPROVAL_RESPOND.name, THREAD_TAKEOVER_FINISH.name}
+    {THREAD_TURN_INTERRUPT.name, THREAD_APPROVAL_RESPOND.name, THREAD_TAKEOVER_RESUME.name}
 )
 
 _logger = logging.getLogger(__name__)
@@ -79,9 +79,12 @@ async def serve_contract(
     request: web.Request,
     dispatcher: Dispatcher,
     scopes: frozenset[Scope],
+    *,
+    max_frame_bytes: int = 4 * 1024 * 1024,
 ) -> web.WebSocketResponse:
-    """Upgrade an authenticated request and carry the contract over it until it closes."""
-    socket = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS)
+    """Upgrade an authenticated request and carry the contract over it until it closes, taking
+    frames of up to *max_frame_bytes*."""
+    socket = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS, max_msg_size=max_frame_bytes)
     await socket.prepare(request)
     await _Connection(socket, dispatcher, scopes).serve()
     return socket

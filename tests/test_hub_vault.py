@@ -1,9 +1,12 @@
 """The vault: each instance's sign-ins on the hub, stored encrypted, listed by name and site, and
-written by the user alone (ADR 0113)."""
+written by the user alone. The hub fills them into its browser's pages (ADR 0114), which
+tests/test_browser_service.py drives."""
 
 import asyncio
 from pathlib import Path
 from uuid import UUID, uuid4
+
+import pytest
 
 from kinby.contracts import (
     BROWSER_VAULT_ADD,
@@ -20,10 +23,10 @@ from kinby.contracts import (
     VaultEntryListResult,
     VaultField,
 )
-from kinby.hub.vault import totp
-from kinby.plugins.browser import FillCredential
+from kinby.core.errors import VaultEntryNotFound, VaultFillRefused
+from kinby.hub.vault import Vault, totp
 from tests.test_hub import hub_client
-from tests.test_hub_browser import _LIMITS, BrowserHub, Turn, _result, browser_hub, turn_browser
+from tests.test_hub_browser import _LIMITS, browser_hub, result
 from tests.test_hub_home_reads import answers, error_code, home_hub
 
 _USERNAME = "alice@example.com"
@@ -54,7 +57,7 @@ def test_an_added_entry_is_stored_encrypted_and_listed_by_name_and_site_only(tmp
             listed = await client.call(
                 BROWSER_VAULT_LIST, VaultEntryListCommand(instance_id=hub.alice)
             )
-            own = _result(await hub.call(hub.alice, "browser.vault", {}))
+            own = result(await hub.call(hub.alice, "browser.vault", {}))
             record = hub.hub.registry.instance(hub.alice)
             assert record is not None
             return added, listed, own, hub.hub.directory, record.path, hub.alice
@@ -171,126 +174,56 @@ def test_the_totp_code_is_rfc_6238s_for_the_seed_at_the_time() -> None:
     assert totp("gezd gnbv gy3t qojq gezd gnbv gy3t qojq", 1111111109) == "081804"
 
 
-_FRAME = "frame@1"
 _SIGN_IN = "https://www.linkedin.com/login"
 
 
-async def _fill(
-    browser: Turn, field: VaultField, *, name: str = "LinkedIn", ref: str = "e3"
-) -> dict[str, object]:
-    """Fill the field *ref* with the *field* of the entry *name*, as the adapter does."""
-    placeholder = FillCredential(ref, name, field).placeholder
-    return await browser.call(
-        _FRAME, "fill", {"selector": f"aria-ref={ref}", "strict": True, "value": placeholder}
+def test_a_value_is_given_for_a_page_on_the_entrys_site_with_an_edit_and_the_kept_ones(
+    tmp_path,
+):
+    vault = Vault(tmp_path, clock=lambda: 59)
+    alice = uuid4()
+    vault.add(_linkedin(alice))
+    vault.edit(
+        VaultEntryEditCommand.model_validate(
+            {"instance_id": alice, "name": "LinkedIn", "password": "a new one"}
+        )
     )
 
-
-def _filled(hub: BrowserHub) -> list[object]:
-    """The values the service was asked to fill."""
-    fills = [call["params"] for call in hub.service.calls if call["method"] == "fill"]
-    return [params["value"] for params in fills if isinstance(params, dict)]
-
-
-def test_a_fill_on_the_entrys_site_puts_the_value_in_the_page_and_never_in_the_turn(tmp_path):
-    async def scenario() -> tuple[dict[str, object], dict[str, object], list[str], list[object]]:
-        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            await hub_client(hub.hub).call(BROWSER_VAULT_ADD, _linkedin(hub.alice))
-            async with turn_browser(hub, uuid4()) as browser:
-                await browser.call(_FRAME, "goto", {"url": _SIGN_IN})
-                filled = await _fill(browser, VaultField.PASSWORD)
-                read = await browser.call(_FRAME, "inputValue", {"selector": "aria-ref=e3"})
-                await _fill(browser, VaultField.USERNAME, ref="e2")
-                return filled, read, browser.received, _filled(hub)
-
-    filled, read, received, asked = asyncio.run(scenario())
-
-    assert filled["result"] == {}
-    assert asked == [_PASSWORD, _USERNAME]
-    # The route lets no read of a field's value through.
-    assert read["error"] == {
-        "error": {
-            "name": "Error",
-            "message": 'The hub\'s browser route refuses "inputValue".',
-            "stack": "",
-        }
-    }
-    assert not [frame for frame in received if _PASSWORD in frame or _USERNAME in frame]
+    assert [vault.value(alice, "LinkedIn", field, _SIGN_IN) for field in VaultField] == [
+        _USERNAME,
+        "a new one",
+        "287082",
+    ]
 
 
-def test_a_fill_on_another_site_is_refused_and_reaches_no_page(tmp_path):
-    async def scenario() -> tuple[dict[str, object], list[object]]:
-        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            await hub_client(hub.hub).call(BROWSER_VAULT_ADD, _linkedin(hub.alice))
-            async with turn_browser(hub, uuid4()) as browser:
-                await browser.call(_FRAME, "goto", {"url": "https://linkedin.example.com/login"})
-                return await _fill(browser, VaultField.PASSWORD), _filled(hub)
+@pytest.mark.parametrize(
+    ("name", "url", "refusal", "message"),
+    [
+        (
+            "LinkedIn",
+            "https://linkedin.example.com/login",
+            VaultFillRefused,
+            "fills pages on https://www.linkedin.com only, not on https://linkedin.example.com",
+        ),
+        ("LinkedIn", "http://www.linkedin.com/login", VaultFillRefused, "not on http://"),
+        ("Indeed", _SIGN_IN, VaultEntryNotFound, 'no entry named "Indeed"'),
+    ],
+)
+def test_a_value_for_a_page_off_the_entrys_site_or_of_an_entry_the_vault_lacks_is_refused(
+    tmp_path, name: str, url: str, refusal: type[Exception], message: str
+):
+    vault = Vault(tmp_path)
+    alice = uuid4()
+    vault.add(_linkedin(alice))
 
-    refused, asked = asyncio.run(scenario())
-
-    assert refused["error"] == {
-        "error": {
-            "name": "Error",
-            "message": 'The vault entry "LinkedIn" fills pages on https://www.linkedin.com '
-            "only, not on https://linkedin.example.com.",
-            "stack": "",
-        }
-    }
-    assert asked == []
-
-
-def test_a_fill_by_a_ref_into_another_frame_or_of_an_entry_the_vault_lacks_is_refused(tmp_path):
-    async def scenario() -> list[dict[str, object]]:
-        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            await hub_client(hub.hub).call(BROWSER_VAULT_ADD, _linkedin(hub.alice))
-            async with turn_browser(hub, uuid4()) as browser:
-                await browser.call(_FRAME, "goto", {"url": _SIGN_IN})
-                return [
-                    await _fill(browser, VaultField.PASSWORD, ref="f1e3"),
-                    await _fill(browser, VaultField.PASSWORD, name="Indeed"),
-                ]
-
-    into_a_frame, unknown = asyncio.run(scenario())
-
-    assert "error" in into_a_frame
-    assert unknown["error"] == {
-        "error": {"name": "Error", "message": 'The vault has no entry named "Indeed".', "stack": ""}
-    }
+    with pytest.raises(refusal, match=message):
+        vault.value(alice, name, VaultField.PASSWORD, url)
 
 
-def test_a_fill_that_fails_hides_the_value_playwrights_call_log_names(tmp_path):
-    async def scenario() -> dict[str, object]:
-        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            hub.service.fill_fails = True
-            await hub_client(hub.hub).call(BROWSER_VAULT_ADD, _linkedin(hub.alice))
-            async with turn_browser(hub, uuid4()) as browser:
-                await browser.call(_FRAME, "goto", {"url": _SIGN_IN})
-                return await _fill(browser, VaultField.PASSWORD)
+def test_an_entry_with_no_seed_gives_no_code(tmp_path):
+    vault = Vault(tmp_path)
+    alice = uuid4()
+    vault.add(_linkedin(alice, totp_seed=None))
 
-    failed = asyncio.run(scenario())
-
-    assert failed["error"] == {
-        "error": {
-            "name": "TimeoutError",
-            "message": 'Timeout 5000ms exceeded.\nCall log:\n  - fill("[a vault value]")',
-        }
-    }
-
-
-def test_a_fill_after_an_edit_puts_in_the_new_value_and_the_kept_ones(tmp_path):
-    async def scenario() -> list[object]:
-        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            client = hub_client(hub.hub)
-            await client.call(BROWSER_VAULT_ADD, _linkedin(hub.alice))
-            await client.call(
-                BROWSER_VAULT_EDIT,
-                VaultEntryEditCommand.model_validate(
-                    {"instance_id": hub.alice, "name": "LinkedIn", "password": "a new one"}
-                ),
-            )
-            async with turn_browser(hub, uuid4()) as browser:
-                await browser.call(_FRAME, "goto", {"url": _SIGN_IN})
-                await _fill(browser, VaultField.USERNAME)
-                await _fill(browser, VaultField.PASSWORD)
-            return _filled(hub)
-
-    assert asyncio.run(scenario()) == [_USERNAME, "a new one"]
+    with pytest.raises(VaultFillRefused, match="no TOTP seed"):
+        vault.value(alice, "LinkedIn", VaultField.TOTP, _SIGN_IN)

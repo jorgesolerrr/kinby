@@ -75,7 +75,7 @@ import {
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
  * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
  * its memory, its stats, and through `client`, its own connection, its views, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
- * all are. One the hub opens browsers for lists its browser profiles and its vault. Outside the setup card, an instance whose factory role needs repository commands shows
+ * all are. One the hub opens browsers for lists its browser profiles and its vault, running or stopped. Outside the setup card, an instance whose factory role needs repository commands shows
  * them.
  * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home. The home
  * instance is never removed, so it has no ⋯ menu.
@@ -90,8 +90,8 @@ export function InstancePage({
   instance,
   onChanged,
 }: {
-  caller: Pick<Client, "call">
-  client?: Pick<InstanceClient, "call" | "subscribe">
+  caller: Pick<Client, "call" | "subscribe">
+  client?: Pick<InstanceClient, "call">
   clock: Clock
   instance: InstanceSummary
   onChanged: () => void
@@ -132,6 +132,12 @@ export function InstancePage({
   const commands = status !== undefined && hasCommands(status) && (
     <RepositoryCommands name={name} status={status} />
   )
+  const profiles = status?.browser === true && (
+    <>
+      <BrowserProfiles caller={caller} clock={clock} instanceId={instance.instance_id} />
+      <Vault caller={caller} clock={clock} instanceId={instance.instance_id} />
+    </>
+  )
   if (intended === "stopped") {
     return (
       <>
@@ -144,6 +150,7 @@ export function InstancePage({
         >
           {removeMenu}
         </Stopped>
+        {profiles}
         {commands}
       </>
     )
@@ -205,17 +212,7 @@ export function InstancePage({
             />
           </section>
         )}
-        {status?.browser === true && client !== undefined && (
-          <>
-            <BrowserProfiles
-              caller={caller}
-              client={client}
-              clock={clock}
-              instanceId={instance.instance_id}
-            />
-            <Vault caller={caller} clock={clock} instanceId={instance.instance_id} />
-          </>
-        )}
+        {profiles}
         {commands}
         {logins.length === 0 && !commands && observedState(instance) === "running" && (
           <ReadyForWork name={name} />

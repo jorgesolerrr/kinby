@@ -180,7 +180,7 @@ class RawManifest(_Section):
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
-    #: Whether the instance gets the browser tools and the hub's browser route (ADR 0113).
+    #: Whether the instance gets the browser tools and the hub's browser methods (ADR 0114).
     browser: bool = False
     routines: RawRoutines = RawRoutines()
     serve: RawServe | None = None

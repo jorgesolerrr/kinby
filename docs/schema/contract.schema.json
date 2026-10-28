@@ -276,9 +276,115 @@
       "title": "Binding",
       "type": "object"
     },
+    "BrowserClick": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "const": "click",
+          "default": "click",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "type"
+      ],
+      "title": "BrowserClick",
+      "type": "object"
+    },
+    "BrowserCloseCommand": {
+      "additionalProperties": false,
+      "description": "Close the turn's browser, if it is open, saving its state back to its profile.",
+      "properties": {
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id"
+      ],
+      "title": "BrowserCloseCommand",
+      "type": "object"
+    },
+    "BrowserCloseResult": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "BrowserCloseResult",
+      "type": "object"
+    },
+    "BrowserFile": {
+      "additionalProperties": false,
+      "description": "A file on its way to a page, or from one.",
+      "properties": {
+        "content": {
+          "maxLength": 13981017,
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ],
+      "title": "BrowserFile",
+      "type": "object"
+    },
+    "BrowserFillCredential": {
+      "additionalProperties": false,
+      "description": "Fill a field with the *field* of the vault entry *name*. The hub fills it on the entry's\nsite only, a password into a password field only, and the turn never reads the value.",
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/VaultField"
+        },
+        "name": {
+          "$ref": "#/$defs/VaultEntryName"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "const": "fill_credential",
+          "default": "fill_credential",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "name",
+        "field",
+        "type"
+      ],
+      "title": "BrowserFillCredential",
+      "type": "object"
+    },
+    "BrowserNavigate": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "navigate",
+          "default": "navigate",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "type"
+      ],
+      "title": "BrowserNavigate",
+      "type": "object"
+    },
     "BrowserOpenCommand": {
       "additionalProperties": false,
-      "description": "Ask for a browser for one turn of the instance that calls.",
+      "description": "Open the hub's browser for one turn of the instance that calls, unless it is open. A\nbrowser opened without the profile refuses it.",
       "properties": {
         "profile": {
           "anyOf": [
@@ -304,20 +410,71 @@
     },
     "BrowserOpenResult": {
       "additionalProperties": false,
-      "description": "Where the turn's browser connects, and the token it connects with.",
+      "properties": {},
+      "title": "BrowserOpenResult",
+      "type": "object"
+    },
+    "BrowserPage": {
+      "additionalProperties": false,
+      "description": "Where the turn's page is after an action, and the files it downloaded since the last.",
       "properties": {
-        "address": {
+        "downloads": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BrowserFile"
+          },
+          "type": "array"
+        },
+        "title": {
           "type": "string"
         },
-        "token": {
+        "url": {
           "type": "string"
         }
       },
       "required": [
-        "address",
-        "token"
+        "url",
+        "title"
       ],
-      "title": "BrowserOpenResult",
+      "title": "BrowserPage",
+      "type": "object"
+    },
+    "BrowserPageRead": {
+      "additionalProperties": false,
+      "description": "What the browser read from the page at *url*.",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "text"
+      ],
+      "title": "BrowserPageRead",
+      "type": "object"
+    },
+    "BrowserPress": {
+      "additionalProperties": false,
+      "description": "Press a key on the element that has the focus.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "type": {
+          "const": "press",
+          "default": "press",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "type"
+      ],
+      "title": "BrowserPress",
       "type": "object"
     },
     "BrowserProfile": {
@@ -415,13 +572,10 @@
     },
     "BrowserProfileSaveCommand": {
       "additionalProperties": false,
-      "description": "Save the state of a turn's browser as a profile of the instance that calls, replacing one\nby that name. The turn's state is saved back to it when the turn ends.",
+      "description": "Save the state of a turn's browser as a profile of the instance that calls, replacing one\nby that name, for the site of its page. The turn's state is saved back to it when the turn\nends.",
       "properties": {
         "name": {
           "$ref": "#/$defs/BrowserProfileName"
-        },
-        "site": {
-          "type": "string"
         },
         "turn_id": {
           "format": "uuid",
@@ -430,8 +584,7 @@
       },
       "required": [
         "turn_id",
-        "name",
-        "site"
+        "name"
       ],
       "title": "BrowserProfileSaveCommand",
       "type": "object"
@@ -443,10 +596,184 @@
       "title": "BrowserProfilesCommand",
       "type": "object"
     },
+    "BrowserRunCommand": {
+      "additionalProperties": false,
+      "description": "Run one action on the page of a turn of the instance that calls.",
+      "properties": {
+        "action": {
+          "discriminator": {
+            "mapping": {
+              "click": "#/$defs/BrowserClick",
+              "fill_credential": "#/$defs/BrowserFillCredential",
+              "navigate": "#/$defs/BrowserNavigate",
+              "press": "#/$defs/BrowserPress",
+              "scroll": "#/$defs/BrowserScroll",
+              "select": "#/$defs/BrowserSelect",
+              "type": "#/$defs/BrowserType",
+              "upload": "#/$defs/BrowserUpload",
+              "wait": "#/$defs/BrowserWait"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/BrowserNavigate"
+            },
+            {
+              "$ref": "#/$defs/BrowserScroll"
+            },
+            {
+              "$ref": "#/$defs/BrowserWait"
+            },
+            {
+              "$ref": "#/$defs/BrowserClick"
+            },
+            {
+              "$ref": "#/$defs/BrowserType"
+            },
+            {
+              "$ref": "#/$defs/BrowserSelect"
+            },
+            {
+              "$ref": "#/$defs/BrowserPress"
+            },
+            {
+              "$ref": "#/$defs/BrowserUpload"
+            },
+            {
+              "$ref": "#/$defs/BrowserFillCredential"
+            }
+          ]
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "action"
+      ],
+      "title": "BrowserRunCommand",
+      "type": "object"
+    },
+    "BrowserScreenshot": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "title": "BrowserScreenshot",
+      "type": "object"
+    },
+    "BrowserScreenshotCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id"
+      ],
+      "title": "BrowserScreenshotCommand",
+      "type": "object"
+    },
+    "BrowserScroll": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "up",
+            "down"
+          ],
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "scroll",
+          "default": "scroll",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction",
+        "type"
+      ],
+      "title": "BrowserScroll",
+      "type": "object"
+    },
+    "BrowserSelect": {
+      "additionalProperties": false,
+      "description": "Select an option of a list, by its value or its label.",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "const": "select",
+          "default": "select",
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "value",
+        "type"
+      ],
+      "title": "BrowserSelect",
+      "type": "object"
+    },
+    "BrowserSnapshotCommand": {
+      "additionalProperties": false,
+      "description": "The page's accessibility tree with a ref on each element, cut at *max_chars*.\n*interactive* keeps only the elements the page lets you act on.",
+      "properties": {
+        "interactive": {
+          "type": "boolean"
+        },
+        "max_chars": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "interactive",
+        "max_chars"
+      ],
+      "title": "BrowserSnapshotCommand",
+      "type": "object"
+    },
     "BrowserTakeoverFinishCommand": {
       "additionalProperties": false,
       "description": "Save the browser of a takeover with no turn as a profile, and close it.",
       "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
         "profile": {
           "$ref": "#/$defs/BrowserProfileName"
         },
@@ -456,6 +783,7 @@
         }
       },
       "required": [
+        "instance_id",
         "takeover_id",
         "profile"
       ],
@@ -487,12 +815,17 @@
             }
           ]
         },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
         "takeover_id": {
           "format": "uuid",
           "type": "string"
         }
       },
       "required": [
+        "instance_id",
         "takeover_id",
         "input"
       ],
@@ -501,8 +834,12 @@
     },
     "BrowserTakeoverStartCommand": {
       "additionalProperties": false,
-      "description": "Open a browser at *url* with no turn, for the user to sign in and save as a profile, and\nwatch it frame by frame. The browser closes when the watching stops.",
+      "description": "Open a browser for the instance at *url* with no turn, for the user to sign in and save as\na profile, and watch it frame by frame. The browser closes when the watching stops.",
       "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
         "takeover_id": {
           "format": "uuid",
           "type": "string"
@@ -512,10 +849,85 @@
         }
       },
       "required": [
+        "instance_id",
         "takeover_id",
         "url"
       ],
       "title": "BrowserTakeoverStartCommand",
+      "type": "object"
+    },
+    "BrowserTextCommand": {
+      "additionalProperties": false,
+      "description": "The text of the element with *ref*, or of the whole page.",
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id"
+      ],
+      "title": "BrowserTextCommand",
+      "type": "object"
+    },
+    "BrowserType": {
+      "additionalProperties": false,
+      "description": "Type *text* into a field, in place of what it holds.",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "type",
+          "default": "type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "text",
+        "type"
+      ],
+      "title": "BrowserType",
+      "type": "object"
+    },
+    "BrowserUpload": {
+      "additionalProperties": false,
+      "description": "Attach *file* to a file field.",
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/BrowserFile"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "const": "upload",
+          "default": "upload",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "file",
+        "type"
+      ],
+      "title": "BrowserUpload",
       "type": "object"
     },
     "BrowserVaultCommand": {
@@ -523,6 +935,38 @@
       "description": "List the vault entries of the instance that calls.",
       "properties": {},
       "title": "BrowserVaultCommand",
+      "type": "object"
+    },
+    "BrowserWait": {
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "type": "number"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "wait",
+          "default": "wait",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seconds",
+        "type"
+      ],
+      "title": "BrowserWait",
       "type": "object"
     },
     "CallFrame": {
@@ -9027,8 +9471,12 @@
     },
     "ThreadTakeoverFinishCommand": {
       "additionalProperties": false,
-      "description": "Resume the turn parked on the takeover, with the browser as the user left it.",
+      "description": "Resume the turn parked on the takeover, with its page as the user left it.",
       "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
         "profile": {
           "anyOf": [
             {
@@ -9047,10 +9495,16 @@
         "thread_id": {
           "format": "uuid",
           "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
         }
       },
       "required": [
+        "instance_id",
         "thread_id",
+        "turn_id",
         "takeover_id"
       ],
       "title": "ThreadTakeoverFinishCommand",
@@ -9058,7 +9512,7 @@
     },
     "ThreadTakeoverInputCommand": {
       "additionalProperties": false,
-      "description": "Pass the user's mouse or keyboard to the browser of the takeover.",
+      "description": "Pass the user's mouse or keyboard to the page of the instance's turn parked on a\ntakeover.",
       "properties": {
         "input": {
           "discriminator": {
@@ -9081,18 +9535,18 @@
             }
           ]
         },
-        "takeover_id": {
+        "instance_id": {
           "format": "uuid",
           "type": "string"
         },
-        "thread_id": {
+        "turn_id": {
           "format": "uuid",
           "type": "string"
         }
       },
       "required": [
-        "thread_id",
-        "takeover_id",
+        "instance_id",
+        "turn_id",
         "input"
       ],
       "title": "ThreadTakeoverInputCommand",
@@ -9104,9 +9558,9 @@
       "title": "ThreadTakeoverInputResult",
       "type": "object"
     },
-    "ThreadTakeoverStartCommand": {
+    "ThreadTakeoverResumeCommand": {
       "additionalProperties": false,
-      "description": "Watch the browser of the takeover the thread's turn is parked on, frame by frame.",
+      "description": "Resume the turn parked on the takeover, which the user finished on the hub.",
       "properties": {
         "takeover_id": {
           "format": "uuid",
@@ -9120,6 +9574,26 @@
       "required": [
         "thread_id",
         "takeover_id"
+      ],
+      "title": "ThreadTakeoverResumeCommand",
+      "type": "object"
+    },
+    "ThreadTakeoverStartCommand": {
+      "additionalProperties": false,
+      "description": "Watch the page of the instance's turn parked on a takeover, frame by frame. The hub keeps\nthe page (ADR 0114).",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "turn_id"
       ],
       "title": "ThreadTakeoverStartCommand",
       "type": "object"
@@ -10481,6 +10955,16 @@
       "minLength": 1,
       "type": "string"
     },
+    "VaultField": {
+      "description": "What of a vault entry the hub fills into a page.",
+      "enum": [
+        "username",
+        "password",
+        "totp"
+      ],
+      "title": "VaultField",
+      "type": "string"
+    },
     "View": {
       "additionalProperties": false,
       "description": "A page of UI an instance keeps: its layout from the view catalogue, and the data the\nlayout's bindings read.",
@@ -11176,6 +11660,22 @@
     "methods": {
       "additionalProperties": false,
       "properties": {
+        "browser.close": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserCloseCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserCloseResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "browser.open": {
           "additionalProperties": false,
           "properties": {
@@ -11272,6 +11772,54 @@
           ],
           "type": "object"
         },
+        "browser.run": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserRunCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserPage"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.screenshot": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserScreenshotCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserScreenshot"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.snapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserSnapshotCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserPageRead"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "browser.takeover.finish": {
           "additionalProperties": false,
           "properties": {
@@ -11296,6 +11844,22 @@
             },
             "result": {
               "$ref": "#/$defs/ThreadTakeoverInputResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.text": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserTextCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/BrowserPageRead"
             }
           },
           "required": [
@@ -13048,6 +13612,22 @@
           ],
           "type": "object"
         },
+        "thread.takeover.resume": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadTakeoverResumeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.turn.diff": {
           "additionalProperties": false,
           "properties": {
@@ -13307,6 +13887,7 @@
         "thread.approval.respond",
         "thread.takeover.input",
         "thread.takeover.finish",
+        "thread.takeover.resume",
         "browser.takeover.input",
         "browser.takeover.finish",
         "usage.get",
@@ -13410,6 +13991,11 @@
         "channel.unmute",
         "notification.raise",
         "browser.open",
+        "browser.run",
+        "browser.snapshot",
+        "browser.text",
+        "browser.screenshot",
+        "browser.close",
         "browser.profiles",
         "browser.profile.save",
         "browser.profile.list",

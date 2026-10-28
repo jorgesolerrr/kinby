@@ -8,6 +8,10 @@
 export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
 export type BrowserProfileName = string;
+/**
+ * What of a vault entry the hub fills into a page.
+ */
+export type VaultField = "username" | "password" | "totp";
 export type VaultEntryName = string;
 export type ChannelKindName = string;
 export type SetupValue = boolean | number | string;
@@ -204,6 +208,10 @@ export type ViewChange = "created" | "changed" | "deleted";
 export interface Contract {
   client_frame: ClientFrame;
   methods: {
+    "browser.close": {
+      command: BrowserCloseCommand;
+      result: BrowserCloseResult;
+    };
     "browser.open": {
       command: BrowserOpenCommand;
       result: BrowserOpenResult;
@@ -228,6 +236,18 @@ export interface Contract {
       command: BrowserProfilesCommand;
       result: BrowserProfileListResult;
     };
+    "browser.run": {
+      command: BrowserRunCommand;
+      result: BrowserPage;
+    };
+    "browser.screenshot": {
+      command: BrowserScreenshotCommand;
+      result: BrowserScreenshot;
+    };
+    "browser.snapshot": {
+      command: BrowserSnapshotCommand;
+      result: BrowserPageRead;
+    };
     "browser.takeover.finish": {
       command: BrowserTakeoverFinishCommand;
       result: BrowserProfile;
@@ -235,6 +255,10 @@ export interface Contract {
     "browser.takeover.input": {
       command: BrowserTakeoverInputCommand;
       result: ThreadTakeoverInputResult;
+    };
+    "browser.text": {
+      command: BrowserTextCommand;
+      result: BrowserPageRead;
     };
     "browser.vault": {
       command: BrowserVaultCommand;
@@ -672,6 +696,10 @@ export interface Contract {
       command: ThreadTakeoverInputCommand;
       result: ThreadTakeoverInputResult;
     };
+    "thread.takeover.resume": {
+      command: ThreadTakeoverResumeCommand;
+      result: AcceptedResult;
+    };
     "thread.turn.diff": {
       command: ThreadTurnDiffCommand;
       result: ThreadTurnDiffResult;
@@ -778,19 +806,21 @@ export interface CancelFrame {
   type: "cancel";
 }
 /**
- * Ask for a browser for one turn of the instance that calls.
+ * Close the turn's browser, if it is open, saving its state back to its profile.
+ */
+export interface BrowserCloseCommand {
+  turn_id: string;
+}
+export interface BrowserCloseResult {}
+/**
+ * Open the hub's browser for one turn of the instance that calls, unless it is open. A
+ * browser opened without the profile refuses it.
  */
 export interface BrowserOpenCommand {
   profile?: BrowserProfileName | null;
   turn_id: string;
 }
-/**
- * Where the turn's browser connects, and the token it connects with.
- */
-export interface BrowserOpenResult {
-  address: string;
-  token: string;
-}
+export interface BrowserOpenResult {}
 export interface BrowserProfileDeleteCommand {
   instance_id: string;
   name: BrowserProfileName;
@@ -815,11 +845,11 @@ export interface BrowserProfileRenameCommand {
 }
 /**
  * Save the state of a turn's browser as a profile of the instance that calls, replacing one
- * by that name. The turn's state is saved back to it when the turn ends.
+ * by that name, for the site of its page. The turn's state is saved back to it when the turn
+ * ends.
  */
 export interface BrowserProfileSaveCommand {
   name: BrowserProfileName;
-  site: string;
   turn_id: string;
 }
 /**
@@ -827,9 +857,122 @@ export interface BrowserProfileSaveCommand {
  */
 export interface BrowserProfilesCommand {}
 /**
+ * Run one action on the page of a turn of the instance that calls.
+ */
+export interface BrowserRunCommand {
+  action:
+    | BrowserNavigate
+    | BrowserScroll
+    | BrowserWait
+    | BrowserClick
+    | BrowserType
+    | BrowserSelect
+    | BrowserPress
+    | BrowserUpload
+    | BrowserFillCredential;
+  turn_id: string;
+}
+export interface BrowserNavigate {
+  type: "navigate";
+  url: string;
+}
+export interface BrowserScroll {
+  direction: "up" | "down";
+  ref?: string | null;
+  type: "scroll";
+}
+export interface BrowserWait {
+  seconds: number;
+  text?: string | null;
+  type: "wait";
+}
+export interface BrowserClick {
+  ref: string;
+  type: "click";
+}
+/**
+ * Type *text* into a field, in place of what it holds.
+ */
+export interface BrowserType {
+  ref: string;
+  text: string;
+  type: "type";
+}
+/**
+ * Select an option of a list, by its value or its label.
+ */
+export interface BrowserSelect {
+  ref: string;
+  type: "select";
+  value: string;
+}
+/**
+ * Press a key on the element that has the focus.
+ */
+export interface BrowserPress {
+  key: string;
+  type: "press";
+}
+/**
+ * Attach *file* to a file field.
+ */
+export interface BrowserUpload {
+  file: BrowserFile;
+  ref: string;
+  type: "upload";
+}
+/**
+ * A file on its way to a page, or from one.
+ */
+export interface BrowserFile {
+  content: string;
+  name: string;
+}
+/**
+ * Fill a field with the *field* of the vault entry *name*. The hub fills it on the entry's
+ * site only, a password into a password field only, and the turn never reads the value.
+ */
+export interface BrowserFillCredential {
+  field: VaultField;
+  name: VaultEntryName;
+  ref: string;
+  type: "fill_credential";
+}
+/**
+ * Where the turn's page is after an action, and the files it downloaded since the last.
+ */
+export interface BrowserPage {
+  downloads?: BrowserFile[];
+  title: string;
+  url: string;
+}
+export interface BrowserScreenshotCommand {
+  turn_id: string;
+}
+export interface BrowserScreenshot {
+  image: string;
+}
+/**
+ * The page's accessibility tree with a ref on each element, cut at *max_chars*.
+ * *interactive* keeps only the elements the page lets you act on.
+ */
+export interface BrowserSnapshotCommand {
+  interactive: boolean;
+  max_chars: number;
+  turn_id: string;
+}
+/**
+ * What the browser read from the page at *url*.
+ */
+export interface BrowserPageRead {
+  text: string;
+  url: string;
+}
+/**
  * Save the browser of a takeover with no turn as a profile, and close it.
  */
 export interface BrowserTakeoverFinishCommand {
+  instance_id: string;
   profile: BrowserProfileName;
   takeover_id: string;
 }
@@ -838,6 +981,7 @@ export interface BrowserTakeoverFinishCommand {
  */
 export interface BrowserTakeoverInputCommand {
   input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  instance_id: string;
   takeover_id: string;
 }
 /**
@@ -865,6 +1009,13 @@ export interface TakeoverKey {
   type: "key";
 }
 export interface ThreadTakeoverInputResult {}
+/**
+ * The text of the element with *ref*, or of the whole page.
+ */
+export interface BrowserTextCommand {
+  ref?: string | null;
+  turn_id: string;
+}
 /**
  * List the vault entries of the instance that calls.
  */
@@ -2658,18 +2809,28 @@ export interface ThreadRenameCommand {
   title: string;
 }
 /**
- * Resume the turn parked on the takeover, with the browser as the user left it.
+ * Resume the turn parked on the takeover, with its page as the user left it.
  */
 export interface ThreadTakeoverFinishCommand {
+  instance_id: string;
   profile?: BrowserProfileName | null;
   takeover_id: string;
   thread_id: string;
+  turn_id: string;
 }
 /**
- * Pass the user's mouse or keyboard to the browser of the takeover.
+ * Pass the user's mouse or keyboard to the page of the instance's turn parked on a
+ * takeover.
  */
 export interface ThreadTakeoverInputCommand {
   input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  instance_id: string;
+  turn_id: string;
+}
+/**
+ * Resume the turn parked on the takeover, which the user finished on the hub.
+ */
+export interface ThreadTakeoverResumeCommand {
   takeover_id: string;
   thread_id: string;
 }
@@ -2982,10 +3143,11 @@ export interface EndFrame {
   type: "end";
 }
 /**
- * Open a browser at *url* with no turn, for the user to sign in and save as a profile, and
- * watch it frame by frame. The browser closes when the watching stops.
+ * Open a browser for the instance at *url* with no turn, for the user to sign in and save as
+ * a profile, and watch it frame by frame. The browser closes when the watching stops.
  */
 export interface BrowserTakeoverStartCommand {
+  instance_id: string;
   takeover_id: string;
   url: string;
 }
@@ -3253,11 +3415,12 @@ export interface ViewChanged {
   view: ViewId;
 }
 /**
- * Watch the browser of the takeover the thread's turn is parked on, frame by frame.
+ * Watch the page of the instance's turn parked on a takeover, frame by frame. The hub keeps
+ * the page (ADR 0114).
  */
 export interface ThreadTakeoverStartCommand {
-  takeover_id: string;
-  thread_id: string;
+  instance_id: string;
+  turn_id: string;
 }
 /**
  * Follow one view: the view as it is, then the whole view again after each write, until it

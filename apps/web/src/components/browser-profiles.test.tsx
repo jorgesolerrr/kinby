@@ -8,25 +8,28 @@ import { BrowserProfiles } from "@/components/browser-profiles"
 
 const linkedIn: BrowserProfile = { name: "LinkedIn", site: "www.linkedin.com" }
 
-/** Ada's profiles on a hub that keeps `profiles`, and Ada's own client answering `answers`. */
+/** Ada's profiles on a hub that keeps `profiles`, and answers `answers` too. */
 function renderProfiles(profiles: BrowserProfile[], answers: Answers = {}) {
   let kept = profiles
-  const caller = stubCaller({
-    "browser.profile.list": () => ({ profiles: kept }),
-    "browser.profile.rename": ({ name, new_name }) => {
-      kept = kept.map((profile) =>
-        profile.name === name ? { ...profile, name: new_name } : profile,
-      )
-      return { profiles: kept }
-    },
-    "browser.profile.delete": ({ name }) => {
-      kept = kept.filter((profile) => profile.name !== name)
-      return { profiles: kept }
-    },
-  })
-  const client = { ...stubCaller(answers), ...stubSubscriber() }
-  render(<BrowserProfiles caller={caller} client={client} clock={fakeClock()} instanceId="ada" />)
-  return { caller, client }
+  const caller = {
+    ...stubCaller({
+      "browser.profile.list": () => ({ profiles: kept }),
+      "browser.profile.rename": ({ name, new_name }) => {
+        kept = kept.map((profile) =>
+          profile.name === name ? { ...profile, name: new_name } : profile,
+        )
+        return { profiles: kept }
+      },
+      "browser.profile.delete": ({ name }) => {
+        kept = kept.filter((profile) => profile.name !== name)
+        return { profiles: kept }
+      },
+      ...answers,
+    }),
+    ...stubSubscriber(),
+  }
+  render(<BrowserProfiles caller={caller} clock={fakeClock()} instanceId="ada" />)
+  return caller
 }
 
 async function listed(): Promise<HTMLElement> {
@@ -46,7 +49,7 @@ describe("the instance's browser profiles", () => {
   })
 
   it("renames a profile", async () => {
-    const { caller } = renderProfiles([linkedIn])
+    const caller = renderProfiles([linkedIn])
     const user = userEvent.setup()
 
     await user.click(within(await listed()).getByRole("button", { name: "Rename LinkedIn" }))
@@ -61,7 +64,7 @@ describe("the instance's browser profiles", () => {
   })
 
   it("deletes a profile once confirmed", async () => {
-    const { caller } = renderProfiles([linkedIn])
+    const caller = renderProfiles([linkedIn])
     const user = userEvent.setup()
 
     await user.click(within(await listed()).getByRole("button", { name: "Delete LinkedIn" }))
@@ -75,7 +78,7 @@ describe("the instance's browser profiles", () => {
   })
 
   it("opens a site with no turn for the user to sign in, and saves it as a profile", async () => {
-    const { caller, client } = renderProfiles([], {
+    const caller = renderProfiles([], {
       "browser.takeover.input": () => ({}),
       "browser.takeover.finish": ({ profile }) => ({ name: profile, site: "www.linkedin.com" }),
     })
@@ -84,7 +87,7 @@ describe("the instance's browser profiles", () => {
     await user.click(await screen.findByRole("button", { name: "New profile" }))
     await user.type(screen.getByRole("textbox", { name: "Sign-in page" }), "https://linkedin.com")
     await user.click(screen.getByRole("button", { name: "Open" }))
-    const [view] = client.subscriptions
+    const [view] = caller.subscriptions
     if (view === undefined) throw new Error("The page did not start the live view.")
     await act(async () => {
       view.subscribed(0)
@@ -94,14 +97,19 @@ describe("the instance's browser profiles", () => {
     await user.type(screen.getByRole("textbox", { name: "Profile name" }), "LinkedIn")
     await user.click(screen.getByRole("button", { name: "Save profile" }))
 
-    const { takeover_id: takeoverId, url } = view.params as BrowserTakeoverStartCommand
+    const {
+      instance_id: instanceId,
+      takeover_id: takeoverId,
+      url,
+    } = view.params as BrowserTakeoverStartCommand
     expect(view.method).toBe("browser.takeover.start")
+    expect(instanceId).toBe("ada")
     expect(url).toBe("https://linkedin.com")
     expect(page.src).toBe("data:image/jpeg;base64,/9j/frame")
-    expect(client.calls).toEqual([
+    expect(caller.calls.filter((call) => call.method.startsWith("browser.takeover"))).toEqual([
       {
         method: "browser.takeover.finish",
-        params: { takeover_id: takeoverId, profile: "LinkedIn" },
+        params: { instance_id: "ada", takeover_id: takeoverId, profile: "LinkedIn" },
       },
     ])
     await waitFor(() => expect(view.cancelled).toBe(true))
@@ -109,7 +117,7 @@ describe("the instance's browser profiles", () => {
   })
 
   it("closes the browser when the user cancels the sign-in", async () => {
-    const { client } = renderProfiles([])
+    const caller = renderProfiles([])
     const user = userEvent.setup()
 
     await user.click(await screen.findByRole("button", { name: "New profile" }))
@@ -117,7 +125,7 @@ describe("the instance's browser profiles", () => {
     await user.click(screen.getByRole("button", { name: "Open" }))
     await user.click(screen.getByRole("button", { name: "Cancel" }))
 
-    expect(client.subscriptions[0]?.cancelled).toBe(true)
+    expect(caller.subscriptions[0]?.cancelled).toBe(true)
     expect(screen.queryByRole("application", { name: "The browser" })).toBeNull()
   })
 })

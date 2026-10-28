@@ -19,11 +19,10 @@ from urllib.parse import urlsplit
 
 from kinby.plugins.defaults.web import REFUSED_HEADER, RefusedUrl, public_address
 
-#: Where Playwright's browser server listens for the hub's browser route.
+#: Where Playwright's browser server listens for the hub's Playwright client.
 PORT = 3000
 _PROXY_PORT = 3128
-#: The launch options the hub's browser route sends every connection with, whatever the
-#: instance asked for.
+#: The launch options of every browser the hub connects to.
 LAUNCH_OPTIONS = json.dumps({"proxy": {"server": f"http://127.0.0.1:{_PROXY_PORT}"}})
 _HOP_HEADERS = (b"connection:", b"proxy-connection:", b"keep-alive:", b"proxy-authorization:")
 

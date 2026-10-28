@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
@@ -12,15 +11,10 @@ from kinby.contracts import (
     BrowserProfile,
     BrowserProfileListResult,
     BrowserProfileName,
-    TakeoverInput,
     VaultEntryListResult,
     VaultEntryName,
     VaultField,
 )
-
-#: What a vault fill types, which the hub's browser route replaces with the value. Its NUL bytes
-#: keep it apart from any text a page or the model types.
-VAULT_PLACEHOLDER = "\0kinby-vault\0"
 
 
 @dataclass(frozen=True)
@@ -80,16 +74,12 @@ class Upload:
 
 @dataclass(frozen=True)
 class FillCredential:
-    """Fill a field with the *field* of the vault entry *name*. The hub's browser route puts the
-    value in place of the placeholder, on the entry's site only, so the turn never holds it."""
+    """Fill a field with the *field* of the vault entry *name*. The hub reads the value and
+    fills it, on the entry's site only, so the turn never holds it."""
 
     ref: str
     name: VaultEntryName
     field: VaultField
-
-    @property
-    def placeholder(self) -> str:
-        return f"{VAULT_PLACEHOLDER}{self.field.value}\0{self.name}"
 
 
 type BrowserAction = (
@@ -143,13 +133,6 @@ class BrowserService(Protocol):
 
     async def screenshot(self, turn: UUID) -> bytes:
         """The page's viewport as a PNG."""
-
-    def screencast(self, turn: UUID) -> AsyncGenerator[bytes]:
-        """The page's viewport as JPEG frames, a new one each time it changes, for as long as the
-        caller reads them."""
-
-    async def send(self, turn: UUID, user_input: TakeoverInput) -> None:
-        """Pass the user's mouse or keyboard to the turn's page, during a takeover."""
 
     async def profiles(self) -> BrowserProfileListResult:
         """The instance's profiles, by name and site."""

@@ -7,8 +7,12 @@ from dataclasses import dataclass
 
 from kinby.contracts.models import (
     AcceptedResult,
+    BrowserCloseCommand,
+    BrowserCloseResult,
     BrowserOpenCommand,
     BrowserOpenResult,
+    BrowserPage,
+    BrowserPageRead,
     BrowserProfile,
     BrowserProfileDeleteCommand,
     BrowserProfileListCommand,
@@ -16,9 +20,14 @@ from kinby.contracts.models import (
     BrowserProfileRenameCommand,
     BrowserProfileSaveCommand,
     BrowserProfilesCommand,
+    BrowserRunCommand,
+    BrowserScreenshot,
+    BrowserScreenshotCommand,
+    BrowserSnapshotCommand,
     BrowserTakeoverFinishCommand,
     BrowserTakeoverInputCommand,
     BrowserTakeoverStartCommand,
+    BrowserTextCommand,
     BrowserVaultCommand,
     Channel,
     ChannelCreateCommand,
@@ -186,6 +195,7 @@ from kinby.contracts.models import (
     ThreadTakeoverFinishCommand,
     ThreadTakeoverInputCommand,
     ThreadTakeoverInputResult,
+    ThreadTakeoverResumeCommand,
     ThreadTakeoverStartCommand,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
@@ -303,6 +313,9 @@ THREAD_TAKEOVER_INPUT = Method(
 )
 THREAD_TAKEOVER_FINISH = Method(
     "thread.takeover.finish", Scope.THREAD_OPERATE, ThreadTakeoverFinishCommand, AcceptedResult
+)
+THREAD_TAKEOVER_RESUME = Method(
+    "thread.takeover.resume", Scope.THREAD_OPERATE, ThreadTakeoverResumeCommand, AcceptedResult
 )
 BROWSER_TAKEOVER_START = Subscription(
     "browser.takeover.start", Scope.INSTANCE_ADMIN, BrowserTakeoverStartCommand, TakeoverFrame
@@ -549,6 +562,15 @@ NOTIFICATION_RAISE = Method(
     NotificationRaiseResult,
 )
 BROWSER_OPEN = Method("browser.open", Scope.BROWSER_OPEN, BrowserOpenCommand, BrowserOpenResult)
+BROWSER_RUN = Method("browser.run", Scope.BROWSER_OPEN, BrowserRunCommand, BrowserPage)
+BROWSER_SNAPSHOT = Method(
+    "browser.snapshot", Scope.BROWSER_OPEN, BrowserSnapshotCommand, BrowserPageRead
+)
+BROWSER_TEXT = Method("browser.text", Scope.BROWSER_OPEN, BrowserTextCommand, BrowserPageRead)
+BROWSER_SCREENSHOT = Method(
+    "browser.screenshot", Scope.BROWSER_OPEN, BrowserScreenshotCommand, BrowserScreenshot
+)
+BROWSER_CLOSE = Method("browser.close", Scope.BROWSER_OPEN, BrowserCloseCommand, BrowserCloseResult)
 BROWSER_PROFILES = Method(
     "browser.profiles", Scope.BROWSER_OPEN, BrowserProfilesCommand, BrowserProfileListResult
 )
@@ -615,6 +637,7 @@ METHODS = (
     THREAD_APPROVAL_RESPOND,
     THREAD_TAKEOVER_INPUT,
     THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_RESUME,
     BROWSER_TAKEOVER_INPUT,
     BROWSER_TAKEOVER_FINISH,
     USAGE_GET,
@@ -718,6 +741,11 @@ METHODS = (
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
     BROWSER_OPEN,
+    BROWSER_RUN,
+    BROWSER_SNAPSHOT,
+    BROWSER_TEXT,
+    BROWSER_SCREENSHOT,
+    BROWSER_CLOSE,
     BROWSER_PROFILES,
     BROWSER_PROFILE_SAVE,
     BROWSER_PROFILE_LIST,

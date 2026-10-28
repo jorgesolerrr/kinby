@@ -13,9 +13,6 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from kinby.contracts import (
-    BROWSER_TAKEOVER_FINISH,
-    BROWSER_TAKEOVER_INPUT,
-    BROWSER_TAKEOVER_START,
     CONFIG_HISTORY,
     CONTRACT_VERSION,
     INSTANCE_DRAIN,
@@ -58,9 +55,7 @@ from kinby.contracts import (
     THREAD_MODE_SET,
     THREAD_RENAME,
     THREAD_SUBSCRIBE,
-    THREAD_TAKEOVER_FINISH,
-    THREAD_TAKEOVER_INPUT,
-    THREAD_TAKEOVER_START,
+    THREAD_TAKEOVER_RESUME,
     THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_LIST,
@@ -133,7 +128,6 @@ from kinby.core.stats import (
     stats_summary,
 )
 from kinby.core.steps import run_step
-from kinby.core.takeovers import ProfileTakeovers
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -144,7 +138,7 @@ from kinby.instance import Instance, ModelPrice
 from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
 from kinby.plugins.browser import BrowserService
-from kinby.plugins.playwright_browser import PlaywrightBrowser
+from kinby.plugins.hub_browser import HubBrowser
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], Awaitable[Stream[ContractModel]]]
@@ -183,7 +177,7 @@ class TurnConfig:
     runner: TurnRunner
     recap: RecapWriter | None = None
     snapshots: SnapshotStore | None = None
-    #: The browser the runner's turns use, which a takeover hands to the user.
+    #: The browser the runner's turns use, which a turn ended on its takeover closes.
     browser: BrowserService | None = None
 
 
@@ -575,14 +569,7 @@ def build_dispatcher(
         dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
-        dispatcher.register_subscription(THREAD_TAKEOVER_START, turn_service.start_takeover)
-        dispatcher.register(THREAD_TAKEOVER_INPUT, turn_service.send_takeover_input)
-        dispatcher.register(THREAD_TAKEOVER_FINISH, turn_service.finish_takeover)
-    if turn_settings is not None and turn_settings.browser is not None:
-        takeovers = ProfileTakeovers(turn_settings.browser)
-        dispatcher.register_subscription(BROWSER_TAKEOVER_START, takeovers.start)
-        dispatcher.register(BROWSER_TAKEOVER_INPUT, takeovers.send_input)
-        dispatcher.register(BROWSER_TAKEOVER_FINISH, takeovers.finish)
+        dispatcher.register(THREAD_TAKEOVER_RESUME, turn_service.resume_takeover)
     return dispatcher
 
 
@@ -593,7 +580,7 @@ async def turn_config(
     model_override: str | None = None,
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
-    browser = PlaywrightBrowser()
+    browser = HubBrowser()
     runner = LangGraphRunner(
         instance,
         event_log=event_log,

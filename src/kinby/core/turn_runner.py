@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
@@ -123,6 +123,7 @@ from kinby.plugins.browser import BrowserService
 from kinby.plugins.browser_tools import browser_takeover
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
+from kinby.plugins.hub_browser import HubBrowser
 from kinby.plugins.instance_tools import routine_config_file
 from kinby.plugins.mcp import mcp_tools
 from kinby.plugins.notify import (
@@ -132,7 +133,6 @@ from kinby.plugins.notify import (
     raises_notifications,
     takeover_notification,
 )
-from kinby.plugins.playwright_browser import PlaywrightBrowser
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
     CONSOLIDATION_STEP,
@@ -328,7 +328,7 @@ class LangGraphRunner:
         self._gate_policy = gate_policy if gate_policy is not None else SHIPPED_POLICY
         self._today = today
         self._tokenizer = tokenizer
-        self._browser = browser if browser is not None else PlaywrightBrowser()
+        self._browser = browser if browser is not None else HubBrowser()
         #: The profile versions turns were prepared with and no count holds yet, by their text.
         self._uncounted_profiles: dict[ProfileVersion, str] = {}
         self._counting_profiles = asyncio.Lock()
@@ -651,6 +651,10 @@ class LangGraphRunner:
                 await self._browser.close(turn.turn_id)
         if isinstance(parked, TakeoverRequested):
             try:
+                # The user drives the page on the hub. With no browser free, the turn parks all the
+                # same, and the user's live view opens the page once one comes free.
+                with suppress(Exception):
+                    await self._browser.open(turn.turn_id)
                 await emit(parked)
                 if raises_notifications():
                     source = self._notification_source(turn) or UNTITLED

@@ -106,7 +106,10 @@ const waitingForCode = operation({
 })
 
 async function openPage(answers: Answers, instance = stopped) {
-  const caller = stubCaller({ "instance.status": () => status(), ...answers })
+  const caller = {
+    ...stubCaller({ "instance.status": () => status(), ...answers }),
+    ...stubSubscriber(),
+  }
   const clock = fakeClock()
   const onChanged = vi.fn()
   const page = (shown: InstanceSummary) => (
@@ -573,8 +576,9 @@ describe("a running instance", () => {
   })
 
   it("says there is nothing here when the status cannot be read", async () => {
-    const caller: Pick<Client, "call"> = {
+    const caller: Pick<Client, "call" | "subscribe"> = {
       call: () => Promise.reject(new Error("gone")),
+      ...stubSubscriber(),
     }
     const clock = fakeClock()
     render(<InstancePage caller={caller} clock={clock} instance={running} onChanged={vi.fn()} />)
@@ -585,8 +589,9 @@ describe("a running instance", () => {
   })
 
   it("does not say there is nothing here before the status is read", () => {
-    const caller: Pick<Client, "call"> = {
+    const caller: Pick<Client, "call" | "subscribe"> = {
       call: () => new Promise<never>(() => {}),
+      ...stubSubscriber(),
     }
     render(
       <InstancePage caller={caller} clock={fakeClock()} instance={running} onChanged={vi.fn()} />,
@@ -601,8 +606,11 @@ describe("the views of a running instance", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
   function openWithViews(views: ViewSummary[]) {
-    const caller = stubCaller({ "instance.status": () => status({ process: "running" }) })
-    const client = { ...stubCaller({ "view.list": () => ({ views }) }), ...stubSubscriber() }
+    const caller = {
+      ...stubCaller({ "instance.status": () => status({ process: "running" }) }),
+      ...stubSubscriber(),
+    }
+    const client = stubCaller({ "view.list": () => ({ views }) })
     render(
       <InstancePage
         caller={caller}
@@ -1082,26 +1090,28 @@ async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
 const stops = (caller: StubCaller) =>
   caller.calls.filter((call) => call.method === "instance.stop").map((call) => call.params)
 
-describe("the browser profiles and the vault of a running instance", () => {
+describe("the browser profiles and the vault of an instance", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
-  function openWithBrowser(browser: boolean) {
-    const caller = stubCaller({
-      "instance.status": () => status({ process: "running", browser }),
-      "browser.profile.list": () => ({
-        profiles: [{ name: "LinkedIn", site: "www.linkedin.com" }],
+  function openWithBrowser(browser: boolean, instance: InstanceSummary = running) {
+    const caller = {
+      ...stubCaller({
+        "instance.status": () => status({ process: instance.process, browser }),
+        "browser.profile.list": () => ({
+          profiles: [{ name: "LinkedIn", site: "www.linkedin.com" }],
+        }),
+        "browser.vault.list": () => ({
+          entries: [{ name: "Indeed", site: "https://secure.indeed.com" }],
+        }),
       }),
-      "browser.vault.list": () => ({
-        entries: [{ name: "Indeed", site: "https://secure.indeed.com" }],
-      }),
-    })
-    const client = { ...stubCaller({}), ...stubSubscriber() }
+      ...stubSubscriber(),
+    }
     render(
       <InstancePage
         caller={caller}
-        client={client}
+        client={stubCaller({})}
         clock={fakeClock()}
-        instance={running}
+        instance={instance}
         onChanged={vi.fn()}
       />,
     )
@@ -1121,6 +1131,14 @@ describe("the browser profiles and the vault of a running instance", () => {
     const vault = await screen.findByRole("list", { name: "Vault" })
 
     expect(within(vault).getByRole("listitem", { name: "Indeed" })).toBeDefined()
+  })
+
+  it("lists them on a stopped instance too, since the hub keeps its browser", async () => {
+    openWithBrowser(true, { ...stopped, setup_pending: false })
+
+    const profiles = await screen.findByRole("list", { name: "Browser profiles" })
+
+    expect(within(profiles).getByRole("listitem", { name: "LinkedIn" })).toBeDefined()
   })
 
   it("leaves them out on an instance with the browser off", async () => {

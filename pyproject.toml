@@ -16,13 +16,16 @@ dependencies = [
     "langgraph>=1.0",
     "langgraph-checkpoint-sqlite>=3.1.1",
     "mcp>=2.3",
-    "playwright>=1.64",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
     "pyyaml>=6",
     "tomlkit>=0.13",
     "trafilatura>=2.0",
 ]
+
+[project.optional-dependencies]
+# Only the hub runs Playwright, so the instance image goes without it (ADR 0114).
+hub = ["playwright>=1.64"]
 
 [project.scripts]
 kinby = "kinby.cli:main"
@@ -42,6 +45,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "jsonschema>=4",
+    "kinby[hub]",
     "pytest>=8",
     "pytest-xdist>=3",
     "ruff>=0.8",

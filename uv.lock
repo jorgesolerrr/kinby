@@ -1067,7 +1067,6 @@ dependencies = [
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "mcp" },
-    { name = "playwright" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1075,9 +1074,15 @@ dependencies = [
     { name = "trafilatura" },
 ]
 
+[package.optional-dependencies]
+hub = [
+    { name = "playwright" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "jsonschema" },
+    { name = "kinby", extra = ["hub"] },
     { name = "pytest" },
     { name = "pytest-xdist" },
     { name = "ruff" },
@@ -1099,17 +1104,19 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },
     { name = "mcp", specifier = ">=2.3" },
-    { name = "playwright", specifier = ">=1.64" },
+    { name = "playwright", marker = "extra == 'hub'", specifier = ">=1.64" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "tomlkit", specifier = ">=0.13" },
     { name = "trafilatura", specifier = ">=2.0" },
 ]
+provides-extras = ["hub"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "jsonschema", specifier = ">=4" },
+    { name = "kinby", extras = ["hub"] },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-xdist", specifier = ">=3" },
     { name = "ruff", specifier = ">=0.8" },
