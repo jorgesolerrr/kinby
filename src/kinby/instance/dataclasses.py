@@ -145,6 +145,7 @@ class Manifest:
     prices: Mapping[str, ModelPrice]
     routines: Routines = field(default_factory=Routines)
     serve: Serve | None = None
+    browser: bool = False
 
 
 @dataclass(frozen=True)

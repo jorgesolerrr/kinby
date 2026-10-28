@@ -35,8 +35,10 @@ COPY apps apps
 COPY packages packages
 RUN bun run --filter @kinby/web build
 
-# `kinby hub` serves the app from this path unless --web-app names another.
+# `kinby hub` serves the app from this path unless --web-app names another. The hub runs its
+# browser service from this image too, so only the hub image carries Playwright's headless shell.
 FROM instance AS hub
+RUN playwright install --with-deps --only-shell chromium
 COPY --from=web /web/apps/web/dist /usr/local/share/kinby/web
 
 # The default target is the instance image, so a plain build never runs the web stage.

@@ -30,6 +30,8 @@ _REDIRECTS = 5
 #: Below this much text, a page that runs scripts is taken to build itself with JavaScript.
 _SCRIPTED_PAGE_CHARACTERS = 200
 _CLOSING_MARKER = "</untrusted-content>"
+#: The header on the answer the browser service's proxy refuses an address with.
+REFUSED_HEADER = "X-Kinby-Refused"
 
 
 class RefusedUrl(ValueError):
@@ -76,9 +78,7 @@ async def web_fetch(url: str) -> str:
         text = response.text
     else:
         raise ValueError(f"{url} is {media_type or 'of no stated type'}, not a text page.")
-    if len(text) > PAGE_CHARACTERS:
-        text = f"{text[:PAGE_CHARACTERS]}\n\n[The page was cut at {PAGE_CHARACTERS:,} characters.]"
-    return untrusted(text, url)
+    return untrusted(capped(text, PAGE_CHARACTERS), url)
 
 
 async def guard_url(url: str) -> None:
@@ -89,15 +89,24 @@ async def guard_url(url: str) -> None:
         raise RefusedUrl(f"{url} is not an http or https URL.")
     if parsed.userinfo:
         raise RefusedUrl("A URL that carries credentials is refused.")
-    resolved = await asyncio.get_running_loop().getaddrinfo(
-        parsed.host,
-        parsed.port or (443 if parsed.scheme == "https" else 80),
-        type=socket.SOCK_STREAM,
-    )
+    await public_address(parsed.host, parsed.port or (443 if parsed.scheme == "https" else 80))
+
+
+async def public_address(host: str, port: int) -> str:
+    """An address *host* resolves to, once every address it resolves to is public."""
+    resolved = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
     for *_, (address, *_) in resolved:
         ip = ipaddress.ip_address(address)
         if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified:
-            raise RefusedUrl(f"{parsed.host} resolves to {ip}, which is not a public address.")
+            raise RefusedUrl(f"{host} resolves to {ip}, which is not a public address.")
+    return str(resolved[0][4][0])
+
+
+def capped(text: str, characters: int) -> str:
+    """*text*, cut at *characters* with a note that says so."""
+    if len(text) <= characters:
+        return text
+    return f"{text[:characters]}\n\n[The page was cut at {characters:,} characters.]"
 
 
 def untrusted(text: str, source: str) -> str:

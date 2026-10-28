@@ -50,6 +50,9 @@ class Scope(StrEnum):
     #: Raise a notification for the hub to send through its channels. Every instance holds it, on
     #: its hub route.
     NOTIFICATION_RAISE = "notification:raise"
+    #: Ask the hub's browser service for a browser for one turn. Only a browser-on instance holds
+    #: it, on its hub route (ADR 0113).
+    BROWSER_OPEN = "browser:open"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -72,8 +75,12 @@ INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
 HOME_SCOPES = frozenset({Scope.HUB_READ, Scope.HUB_HOME})
 #: What every instance holds on its hub route (ADR 0103).
 NOTIFICATION_SCOPES = frozenset({Scope.NOTIFICATION_RAISE})
+#: What an instance whose manifest turns the browser on holds on its hub route (ADR 0113).
+BROWSER_SCOPES = frozenset({Scope.BROWSER_OPEN})
 #: What a client authenticated against the hub holds: a hub has one user.
-HUB_SCOPES = frozenset(Scope) - INTAKE_SCOPES - NOTIFICATION_SCOPES - {Scope.HUB_HOME}
+HUB_SCOPES = (
+    frozenset(Scope) - INTAKE_SCOPES - NOTIFICATION_SCOPES - BROWSER_SCOPES - {Scope.HUB_HOME}
+)
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
@@ -85,6 +92,9 @@ AccessToken = NewType("AccessToken", str)
 
 #: The secret CI presents to the hub's contract server. It holds the update scopes only.
 UpdateToken = NewType("UpdateToken", str)
+
+#: The secret that connects one turn of one instance to the hub's browser service, once.
+BrowserToken = NewType("BrowserToken", str)
 
 
 class ErrorCode(StrEnum):
@@ -2857,6 +2867,19 @@ class NotificationRaiseCommand(NotificationContent):
 
 class NotificationRaiseResult(ContractModel):
     notification_id: UUID
+
+
+class BrowserOpenCommand(ContractModel):
+    """Ask for a browser for one turn of the instance that calls."""
+
+    turn_id: UUID
+
+
+class BrowserOpenResult(ContractModel):
+    """Where the turn's browser connects, and the token it connects with."""
+
+    address: str
+    token: BrowserToken
 
 
 class DeliveryStatus(StrEnum):

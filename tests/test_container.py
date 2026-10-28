@@ -354,7 +354,7 @@ def _variable(value: str) -> str:
     return value.removeprefix("${").split("}", 1)[0].split(":", 1)[0]
 
 
-def test_the_hub_recipe_keeps_instances_private_and_maps_the_docker_host_path() -> None:
+def test_the_hub_recipe_keeps_instances_and_the_browser_service_private() -> None:
     recipe = _compose("compose.hub.yaml")
     services = _mapping(recipe["services"])
     hub = _mapping(services["hub"])
@@ -366,15 +366,24 @@ def test_the_hub_recipe_keeps_instances_private_and_maps_the_docker_host_path() 
         str(_mapping(volume)["target"]): str(_mapping(volume)["source"])
         for volume in _sequence(hub["volumes"])
     }
-    private = _mapping(_mapping(recipe["networks"])[flags["--network"]])
+    networks = _mapping(recipe["networks"])
+    private = _mapping(networks[flags["--network"]])
+    browser = _mapping(networks[flags["--browser-network"]])
     caddyfile = (PROJECT_ROOT / "docker" / "Caddyfile.hub").read_text(encoding="utf-8")
 
     assert _variable(binds["/hub"]) == "KINBY_HUB_DIR"
     assert _variable(flags["--docker-host-directory"]) == "KINBY_HUB_DIR"
     assert binds["/var/run/docker.sock"] == "/var/run/docker.sock"
     assert private == {"name": flags["--network"]}
-    assert set(_strings(hub["networks"])) == {"kinby_public", flags["--network"]}
+    assert browser == {"name": flags["--browser-network"]}
+    assert flags["--browser-image"] == hub["image"]
+    assert set(_strings(hub["networks"])) == {
+        "kinby_public",
+        flags["--network"],
+        flags["--browser-network"],
+    }
     assert flags["--network"] not in _strings(caddy["networks"])
+    assert flags["--browser-network"] not in _strings(caddy["networks"])
     assert f"reverse_proxy hub:{flags['--listen'].rsplit(':', 1)[1]}" in caddyfile
 
 

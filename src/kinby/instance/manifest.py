@@ -180,6 +180,8 @@ class RawManifest(_Section):
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
     tools: RawTools = RawTools()
+    #: Whether the instance gets the browser tools and the hub's browser route (ADR 0113).
+    browser: bool = False
     routines: RawRoutines = RawRoutines()
     serve: RawServe | None = None
     budgets: RawBudgets = Field(default_factory=RawBudgets, title="Budgets")
@@ -336,6 +338,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         ),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
         serve=raw.serve.listen if raw.serve is not None else None,
+        browser=raw.browser,
         budgets=Budgets(
             steps=raw.budgets.steps,
             tokens=raw.budgets.tokens,

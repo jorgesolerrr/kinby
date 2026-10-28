@@ -18,6 +18,8 @@ WORKDIR /kinby
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project
+# The tests marked browser drive Playwright's headless shell.
+RUN /opt/venv/bin/playwright install --with-deps --only-shell chromium
 
 COPY package.json bun.lock ./
 COPY apps/web/package.json apps/web/

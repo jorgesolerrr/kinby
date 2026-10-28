@@ -20,6 +20,8 @@ from dotenv import dotenv_values
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    BROWSER_OPEN,
+    BROWSER_SCOPES,
     CHANNEL_CREATE,
     CHANNEL_DELETE,
     CHANNEL_KINDS,
@@ -93,6 +95,8 @@ from kinby.contracts import (
     THREAD_TURN_START,
     ApprovalDecision,
     Avatar,
+    BrowserOpenCommand,
+    BrowserOpenResult,
     Capability,
     ChannelKindName,
     ContainerOwner,
@@ -211,6 +215,7 @@ from kinby.factories.file import InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
+from kinby.hub.browser import BrowserConnection, BrowserLimits, BrowserRuntime, HubBrowsers
 from kinby.hub.channels import ChannelKind, Channels, installed_kinds
 from kinby.hub.control import (
     ControlConnectionLost,
@@ -490,6 +495,9 @@ class ObservedProcess:
     detail: str
 
 
+_BROWSER_LIMITS = BrowserLimits()
+
+
 class Hub:
     """Own instance management without booting instance runtimes in this process."""
 
@@ -508,10 +516,13 @@ class Hub:
         channel_kinds: Mapping[ChannelKindName, type[ChannelKind]] | None = None,
         clock: Callable[[], datetime] = utc_now,
         sleep: Sleep = asyncio.sleep,
+        browser: BrowserRuntime | None = None,
+        browser_limits: BrowserLimits = _BROWSER_LIMITS,
     ) -> None:
         """*private_url* is where the hub's instances reach it on their private network, and
         *public_url* where the user reaches its web app. *channel_kinds* stand in for the kinds
-        installed packages expose."""
+        installed packages expose. Browser-on instances get browsers on the service *browser*
+        runs, and without it none."""
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._directory_lock = _acquire_directory(self.directory)
@@ -563,6 +574,7 @@ class Hub:
                 sleep,
             )
             self._control = control if control is not None else HttpInstanceControl()
+            self._browsers = HubBrowsers(browser, browser_limits) if browser is not None else None
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
@@ -650,7 +662,17 @@ class Hub:
             NOTIFICATION_SCOPES
             | (INTAKE_SCOPES if record.factory is not None else frozenset())
             | (HOME_SCOPES if record.home else frozenset())
+            | (BROWSER_SCOPES if self._browser_on(record) else frozenset())
         )
+
+    def _browser_on(self, record: ManagedInstance) -> bool:
+        """Whether the hub lends browsers and the instance's manifest turns the browser on."""
+        if self._browsers is None:
+            return False
+        try:
+            return inspect_instance(record.path).manifest.browser
+        except ManifestError:
+            return False
 
     def hub_route(self, instance_id: UUID) -> tuple[frozenset[Scope], Dispatcher]:
         """What one of the hub's instances may call on the hub, built from its scopes."""
@@ -662,6 +684,8 @@ class Hub:
             )
         if Scope.FACTORY_INTAKE in scopes:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
+        if Scope.BROWSER_OPEN in scopes:
+            dispatcher.register(BROWSER_OPEN, partial(self.open_browser, instance_id))
         if Scope.HUB_HOME in scopes:
             self._serve_hub(dispatcher)
             dispatcher.register(INSTANCE_RELAY_READ, self.relay_read)
@@ -672,6 +696,20 @@ class Hub:
         """What the hub witnesses on the instance's relay: the home instance's approvals only."""
         record = self.registry.instance(instance_id)
         return self.approvals if record is not None and record.home else None
+
+    async def open_browser(
+        self, instance_id: UUID, command: BrowserOpenCommand
+    ) -> BrowserOpenResult:
+        """Lend the instance a browser for the turn *command* names, on its browser route."""
+        assert self._browsers is not None
+        token = await self._browsers.lend(instance_id)
+        return BrowserOpenResult(
+            address=f"{self._private_url}/instances/{instance_id}/browser".replace("http", "ws", 1),
+            token=token,
+        )
+
+    def connect_browser(self, instance_id: UUID, token: str) -> BrowserConnection | None:
+        return self._browsers.connect(instance_id, token) if self._browsers else None
 
     async def write_for_home(self, home: UUID, command: HubWriteCommand) -> HubWriteResult:
         """Run a hub tool's write once, for the approval the hub saw the user give that call."""

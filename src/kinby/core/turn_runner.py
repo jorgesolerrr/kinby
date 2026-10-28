@@ -118,6 +118,7 @@ from kinby.memory import GraphStore
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
+from kinby.plugins.browser import BrowserService
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.instance_tools import routine_config_file
@@ -127,6 +128,7 @@ from kinby.plugins.notify import (
     raise_notification,
     raises_notifications,
 )
+from kinby.plugins.playwright_browser import PlaywrightBrowser
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
 from kinby.plugins.routines import (
     CONSOLIDATION_STEP,
@@ -157,7 +159,7 @@ _BUDGET_SECONDS = "kinby_budget_seconds"
 _BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
 _URL = re.compile(r"https?://[^\s<>\"'`()\[\]{}]+")
 #: The tools whose results bring URLs in from the web.
-_URL_SOURCES = frozenset({"web_search", *URL_READS})
+_URL_SOURCES = frozenset({"web_search", "browser_snapshot", "browser_text", *URL_READS})
 _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
     allowed_msgpack_modules=(
         ApprovalAnswer,
@@ -307,8 +309,10 @@ class LangGraphRunner:
         gate_policy: GatePolicy | None = None,
         today: Callable[[], date] = utc_today,
         tokenizer: Tokenizer | None = None,
+        browser: BrowserService | None = None,
     ) -> None:
-        """Count each profile version with *tokenizer*. Without one, the profile goes uncounted."""
+        """Count each profile version with *tokenizer*. Without one, the profile goes uncounted.
+        The browser tools reach *browser*, or else the hub's browser service."""
         self._instance = instance
         self._event_log = (
             event_log if event_log is not None else EventLog(instance.manifest.state_dir)
@@ -319,6 +323,7 @@ class LangGraphRunner:
         self._gate_policy = gate_policy if gate_policy is not None else SHIPPED_POLICY
         self._today = today
         self._tokenizer = tokenizer
+        self._browser = browser if browser is not None else PlaywrightBrowser()
         #: The profile versions turns were prepared with and no count holds yet, by their text.
         self._uncounted_profiles: dict[ProfileVersion, str] = {}
         self._counting_profiles = asyncio.Lock()
@@ -599,6 +604,7 @@ class LangGraphRunner:
                                 recall_reporter=_recall_reporter(emit),
                                 notification_reporter=emit,
                                 view_reporter=emit,
+                                browser=self._browser,
                             ),
                             user_message=HumanMessage(
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)
@@ -616,6 +622,10 @@ class LangGraphRunner:
             if budgets.steps is None:
                 raise
             raise BudgetExceeded("steps", budgets.steps) from exc
+        finally:
+            # A parked turn may wait for hours, so it gives its browser back and a resumed one
+            # opens a fresh one.
+            await self._browser.close(turn.turn_id)
         interrupts = _INTERRUPTS.validate_python(graph_result.get("__interrupt__", ()))
         if interrupts:
             approval = interrupts[0].value

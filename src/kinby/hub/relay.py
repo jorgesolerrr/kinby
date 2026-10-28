@@ -42,6 +42,8 @@ _NOT_FORWARDED = frozenset(
         "upgrade",
     }
 )
+_PLAYWRIGHT_HEADERS = "x-playwright-"
+_LAUNCH_OPTIONS_HEADER = "x-playwright-launch-options"
 #: A webhook sender waits on its own clock, so a hung instance must fail rather than hold it.
 _SIGNAL_TIMEOUT_SECONDS = 30
 #: A turn waits on a relayed read, so a hung instance must fail rather than hold the turn open.
@@ -74,6 +76,37 @@ async def relay_socket(
     await downstream.prepare(request)
     try:
         await _carry(downstream, upstream, approvals)
+    finally:
+        await upstream.close()
+        await session.close()
+    return downstream
+
+
+async def relay_browser(
+    request: web.Request, address: str, launch_options: str
+) -> web.WebSocketResponse:
+    """Carry a Playwright client to the browser service at *address*, which launches its browser
+    with *launch_options* whatever the client asked for."""
+    headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower().startswith(_PLAYWRIGHT_HEADERS)
+    }
+    headers[_LAUNCH_OPTIONS_HEADER] = launch_options
+    session = aiohttp.ClientSession()
+    try:
+        # A screenshot or a page's tree can outgrow the default size cap on a frame.
+        upstream = await session.ws_connect(
+            address, headers=headers, max_msg_size=0, heartbeat=HEARTBEAT_SECONDS
+        )
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        await session.close()
+        raise web.HTTPServiceUnavailable(reason="the browser service is not running") from exc
+    # A peer that went away without closing would otherwise hold its browser for good.
+    downstream = web.WebSocketResponse(max_msg_size=0, heartbeat=HEARTBEAT_SECONDS)
+    await downstream.prepare(request)
+    try:
+        await _carry(downstream, upstream, None)
     finally:
         await upstream.close()
         await session.close()
