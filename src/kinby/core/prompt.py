@@ -216,6 +216,13 @@ _CLIENT_MEMORY = (
     "returns the matching episodes instead. `kinby memory open <node>` prints one node's body "
     "as JSON."
 )
+_CLIENT_COMMANDS = (
+    "# Commands\n"
+    "Each command you run holds the step until its output closes, for as long as the step may "
+    "take. A process a command leaves running, such as a server or a browser, holds a pipe open "
+    "after the command ends, so a pipeline into `head`, `tail` or `grep` never ends. Send the "
+    "output of a command that may start one to a file, then read the file."
+)
 
 
 def render_client_message(
@@ -224,13 +231,16 @@ def render_client_message(
     results: Mapping[ValueName, StepValue],
     skills: Sequence[Skill],
 ) -> str:
-    """A client step's message, how to search memory, then the skills catalogue with the path of
-    each skill's file.
+    """A client step's message, how to search memory, how to keep a command from holding the step,
+    then the skills catalogue with the path of each skill's file.
 
     A coding client has no kinby tools, so it searches memory from its shell and reads a skill
     from its path.
     """
-    message = f"{render_step_message(prompt, work_item, results)}\n\n{_CLIENT_MEMORY}"
+    message = (
+        f"{render_step_message(prompt, work_item, results)}\n\n{_CLIENT_MEMORY}\n\n"
+        f"{_CLIENT_COMMANDS}"
+    )
     if not skills:
         return message
     catalogue = "\n".join(

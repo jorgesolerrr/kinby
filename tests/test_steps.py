@@ -1357,6 +1357,43 @@ def test_a_client_that_runs_past_its_timeout_is_killed_and_ends_the_attempt_as_a
     asyncio.run(scenario())
 
 
+def test_a_client_step_kills_what_the_client_left_running_outside_its_process_group(
+    tmp_path, monkeypatch
+):
+    runtime, workspace = step_instance(tmp_path)
+    left = (
+        "import subprocess\n"
+        "subprocess.Popen([sys.executable, '-c',"
+        ' \'import time; time.sleep(1); open("late", "w").close()\'],'
+        " start_new_session=True)\n"
+    )
+    stub_client(tmp_path, monkeypatch, "claude", left + streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        result = await run_client_step(runtime.dispatcher, "claude", timeout_seconds=30)
+        await asyncio.sleep(1.5)
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.CLEAN
+        assert not (workspace / "late").exists()
+
+    asyncio.run(scenario())
+
+
+def test_a_client_steps_prompt_says_to_keep_a_lingering_process_off_a_pipe(tmp_path, monkeypatch):
+    runtime, _ = step_instance(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(runtime.dispatcher, "claude")
+
+        [called] = recorded_calls(calls)
+        assert "# Commands" in called.stdin
+        assert "to a file" in called.stdin
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("client", "stream", "session", "arguments"),
     [
