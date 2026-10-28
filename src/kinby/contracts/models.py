@@ -2215,6 +2215,23 @@ class ManifestRoutines(ContractModel):
     timezone: str
 
 
+class SearchBackend(StrEnum):
+    """The one service an instance sends its web searches to."""
+
+    BRAVE = "brave"
+    TAVILY = "tavily"
+    EXA = "exa"
+    SEARXNG = "searxng"
+
+    @property
+    def key_variable(self) -> str:
+        """Where the instance holds the backend's key. SearXNG runs on the user's own server,
+        so its variable holds that server's URL instead."""
+        if self is SearchBackend.SEARXNG:
+            return "SEARXNG_URL"
+        return f"{self.upper()}_API_KEY"
+
+
 class ManifestTools(ContractModel):
     #: Whether kinby's default tools, such as bash and the file tools, are on.
     defaults: bool
@@ -2836,6 +2853,44 @@ class InstancePicksResult(ContractModel):
     mcp_servers: list[McpServerPick]
     #: The hash of the instance's ``skills-lock.json``. Null when it has none.
     hash: FileHash | None
+
+
+class InstanceToolsetGetCommand(ContractModel):
+    instance_id: UUID
+
+
+class DefaultTool(ContractModel):
+    name: ToolName
+    #: Whether the manifest leaves it on.
+    on: bool
+
+
+class SearchSetup(ContractModel):
+    backend: SearchBackend
+    #: Where the instance holds the backend's key, or the URL of the user's SearXNG server.
+    variable: str
+    is_set: bool
+
+
+class AuthoredTool(ContractModel):
+    name: ToolName
+    #: Whether the user marked it read-only, so the gate lets it run as a read.
+    read_only: bool
+
+
+class InstanceToolsetResult(ContractModel):
+    """What an instance can do outside its workspace, as its files have it."""
+
+    default_tools: list[DefaultTool]
+    search: SearchSetup
+    #: By name.
+    mcp_servers: list[McpServerPick]
+    #: The instance code's dependencies, as its pyproject.toml lists them.
+    packages: list[str]
+    #: As the instance code lists them.
+    authored_tools: list[AuthoredTool]
+    #: Whether the hub opens browsers for the instance.
+    browser: bool
 
 
 class HubSecretListCommand(ContractModel):

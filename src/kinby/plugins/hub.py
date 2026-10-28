@@ -98,12 +98,13 @@ async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
     """Read the hub or one of its instances, and return the answer as JSON.
 
     Hub reads include instance.list, instance.status, instance.logs, instance.picks.get,
-    stats.summary, stats.runs, factory.list, factory.get, factory.check, factory.run.list,
-    library.list, library.skill.read, library.skill.check, library.git.preview,
-    library.mcp_server.read, hub.secret.list and channel.list. An instance's own reads are
-    memory.list, memory.open, thread.list, thread.turn.list, routine.list, routine.read,
-    usage.get, stats.get, prompt.get, manifest.get, permissions.get and config.history: name
-    the instance in params as instance_id, beside the read's own params.
+    instance.toolset.get, browser.profile.list, browser.vault.list, stats.summary, stats.runs,
+    factory.list, factory.get, factory.check, factory.run.list, library.list,
+    library.skill.read, library.skill.check, library.git.preview, library.mcp_server.read,
+    hub.secret.list and channel.list. An instance's own reads are memory.list, memory.open,
+    thread.list, thread.turn.list, routine.list, routine.read, usage.get, stats.get,
+    prompt.get, manifest.get, permissions.get and config.history: name the instance in params
+    as instance_id, beside the read's own params.
     """
     if method not in RELAYED_READS:
         return json.dumps(await call_hub(method, params, "the read"), ensure_ascii=False)

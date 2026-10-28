@@ -104,6 +104,8 @@ from kinby.contracts.models import (
     InstanceStatusCommand,
     InstanceStatusResult,
     InstanceStopCommand,
+    InstanceToolsetGetCommand,
+    InstanceToolsetResult,
     InstanceUpdateCommand,
     LibraryGitAddCommand,
     LibraryGitAddResult,
@@ -537,6 +539,9 @@ INSTANCE_PICKS_GET = Method(
 INSTANCE_PICKS_SET = Method(
     "instance.picks.set", Scope.HUB_ADMIN, InstancePicksSetCommand, InstancePicksResult
 )
+INSTANCE_TOOLSET_GET = Method(
+    "instance.toolset.get", Scope.HUB_READ, InstanceToolsetGetCommand, InstanceToolsetResult
+)
 HUB_SECRET_LIST = Method(
     "hub.secret.list", Scope.HUB_READ, HubSecretListCommand, HubSecretListResult
 )
@@ -726,6 +731,7 @@ METHODS = (
     LIBRARY_MCP_SERVER_DELETE,
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
+    INSTANCE_TOOLSET_GET,
     HUB_SECRET_LIST,
     HUB_SECRET_SET,
     HUB_SECRET_DELETE,

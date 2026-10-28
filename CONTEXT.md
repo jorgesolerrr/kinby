@@ -708,6 +708,10 @@ An **instance**'s sign-in credentials, each bound to one site, which the **brows
 The user driving an **instance**'s browser live from the web app, to sign in or get past a check the agent cannot. The agent asks for one and its **turn** waits, needing the user, until the user finishes; the user can also start one to create a **browser profile**.
 _Avoid_: handoff, which the factory uses for work handed to it
 
+### Toolset
+
+What an **instance** can do beyond its workspace: its **default tools** on or off, its **search backend** and whether it holds the key, the **MCP servers** it picks, its **instance code**'s packages and **authored tools**, and whether the **browser service** is on for it. The instance page shows it, and the **home instance** reads it.
+
 ### View
 
 A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.

@@ -87,6 +87,7 @@ from kinby.contracts import (
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
+    INSTANCE_TOOLSET_GET,
     INSTANCE_UPDATE,
     INTAKE_SCOPES,
     LIBRARY_GIT_ADD,
@@ -117,6 +118,7 @@ from kinby.contracts import (
     THREAD_TURN_START,
     AcceptedResult,
     ApprovalDecision,
+    AuthoredTool,
     Avatar,
     BrowserProfileDeleteCommand,
     BrowserProfileListCommand,
@@ -129,6 +131,7 @@ from kinby.contracts import (
     ContainerOwner,
     ControlToken,
     DeclaredSetup,
+    DefaultTool,
     DrainState,
     ErrorCode,
     FactoryEditCommand,
@@ -178,6 +181,8 @@ from kinby.contracts import (
     InstanceStatusResult,
     InstanceStopCommand,
     InstanceSummary,
+    InstanceToolsetGetCommand,
+    InstanceToolsetResult,
     InstanceUpdateCommand,
     IntendedState,
     LibraryGitAddCommand,
@@ -199,6 +204,7 @@ from kinby.contracts import (
     RevisionBehind,
     RunStop,
     Scope,
+    SearchSetup,
     SetupValue,
     SkillName,
     StatsGetCommand,
@@ -318,11 +324,13 @@ from kinby.instance import (
     init_instance,
     inspect_instance,
 )
-from kinby.instance.code import declared_secrets
+from kinby.instance.code import declared_secrets, exposed_tools, packages
 from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SYSTEM_NAME
+from kinby.instance.read_only_tools import read_only_tools
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
+from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
@@ -694,6 +702,7 @@ class Hub:
         dispatcher.register(LIBRARY_MCP_SERVER_DELETE, self.library.delete_mcp_server)
         dispatcher.register(INSTANCE_PICKS_GET, self.picks)
         dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
+        dispatcher.register(INSTANCE_TOOLSET_GET, self.toolset)
         dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
         dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
         dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
@@ -1769,6 +1778,35 @@ class Hub:
         record = self._active_instance(command.instance_id)
         return self.library.pick(
             inspect_instance(record.path), command.skills, command.hash, command.mcp_servers
+        )
+
+    async def toolset(self, command: InstanceToolsetGetCommand) -> InstanceToolsetResult:
+        """What the instance can do outside its workspace, read from its files, so a stopped
+        instance answers too."""
+        record = self._active_instance(command.instance_id)
+        tools = inspect_instance(record.path).manifest.tools
+        variable = tools.search.key_variable
+        try:
+            authored, held = exposed_tools(record.path), packages(record.path)
+        except ValueError:
+            # code_run reports a malformed project to the agent; the toolset reads it as empty.
+            authored, held = (), ()
+        read_only = read_only_tools(record.path)
+        return InstanceToolsetResult(
+            default_tools=[
+                DefaultTool(name=each.name, on=tools.offers(each.name)) for each in DEFAULT_TOOLS
+            ],
+            search=SearchSetup(
+                backend=tools.search,
+                variable=variable,
+                is_set=bool(self._environment(record.path).get(variable, "").strip()),
+            ),
+            mcp_servers=self.library.picks(record.path).mcp_servers,
+            packages=list(held),
+            authored_tools=[
+                AuthoredTool(name=name, read_only=name in read_only) for name in authored
+            ],
+            browser=self._browser_on(record),
         )
 
     async def stop(

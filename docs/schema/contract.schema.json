@@ -199,6 +199,23 @@
       "title": "ApprovalRequested",
       "type": "object"
     },
+    "AuthoredTool": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "read_only"
+      ],
+      "title": "AuthoredTool",
+      "type": "object"
+    },
     "Avatar": {
       "additionalProperties": false,
       "description": "How a client draws an instance. The hub keeps it, not the instance directory.",
@@ -1713,6 +1730,23 @@
         "setup_fields"
       ],
       "title": "DeclaredSetup",
+      "type": "object"
+    },
+    "DefaultTool": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "on": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "on"
+      ],
+      "title": "DefaultTool",
       "type": "object"
     },
     "DelegatedRun": {
@@ -3915,6 +3949,66 @@
         "home"
       ],
       "title": "InstanceSummary",
+      "type": "object"
+    },
+    "InstanceToolsetGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "InstanceToolsetGetCommand",
+      "type": "object"
+    },
+    "InstanceToolsetResult": {
+      "additionalProperties": false,
+      "description": "What an instance can do outside its workspace, as its files have it.",
+      "properties": {
+        "authored_tools": {
+          "items": {
+            "$ref": "#/$defs/AuthoredTool"
+          },
+          "type": "array"
+        },
+        "browser": {
+          "type": "boolean"
+        },
+        "default_tools": {
+          "items": {
+            "$ref": "#/$defs/DefaultTool"
+          },
+          "type": "array"
+        },
+        "mcp_servers": {
+          "items": {
+            "$ref": "#/$defs/McpServerPick"
+          },
+          "type": "array"
+        },
+        "packages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "search": {
+          "$ref": "#/$defs/SearchSetup"
+        }
+      },
+      "required": [
+        "default_tools",
+        "search",
+        "mcp_servers",
+        "packages",
+        "authored_tools",
+        "browser"
+      ],
+      "title": "InstanceToolsetResult",
       "type": "object"
     },
     "InstanceUpdateCommand": {
@@ -7503,6 +7597,38 @@
         "duration_seconds"
       ],
       "title": "RunWeek",
+      "type": "object"
+    },
+    "SearchBackend": {
+      "description": "The one service an instance sends its web searches to.",
+      "enum": [
+        "brave",
+        "tavily",
+        "exa",
+        "searxng"
+      ],
+      "title": "SearchBackend",
+      "type": "string"
+    },
+    "SearchSetup": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/SearchBackend"
+        },
+        "is_set": {
+          "type": "boolean"
+        },
+        "variable": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend",
+        "variable",
+        "is_set"
+      ],
+      "title": "SearchSetup",
       "type": "object"
     },
     "SecretSetup": {
@@ -12700,6 +12826,22 @@
           ],
           "type": "object"
         },
+        "instance.toolset.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceToolsetGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceToolsetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "instance.update": {
           "additionalProperties": false,
           "properties": {
@@ -13976,6 +14118,7 @@
         "library.mcp_server.delete",
         "instance.picks.get",
         "instance.picks.set",
+        "instance.toolset.get",
         "hub.secret.list",
         "hub.secret.set",
         "hub.secret.delete",

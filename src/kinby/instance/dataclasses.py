@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from kinby.contracts import FeedbackPolicy, RecapPolicy
+from kinby.contracts import FeedbackPolicy, RecapPolicy, SearchBackend
 
 MatchingRule = Literal[
     "explicit directory",
@@ -69,23 +68,6 @@ class Feedback:
     """Turn-rating prompt behavior selected for one instance."""
 
     ask: FeedbackPolicy
-
-
-class SearchBackend(StrEnum):
-    """The one service an instance sends its web searches to."""
-
-    BRAVE = "brave"
-    TAVILY = "tavily"
-    EXA = "exa"
-    SEARXNG = "searxng"
-
-    @property
-    def key_variable(self) -> str:
-        """Where the instance holds the backend's key. SearXNG runs on the user's own server,
-        so its variable holds that server's URL instead."""
-        if self is SearchBackend.SEARXNG:
-            return "SEARXNG_URL"
-        return f"{self.upper()}_API_KEY"
 
 
 @dataclass(frozen=True)

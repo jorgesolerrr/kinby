@@ -33,7 +33,7 @@ from kinby.core.errors import InstanceUnavailable
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
-from kinby.hub import relay
+from kinby.hub import Hub, relay
 from kinby.hub.models import InstanceEndpoint
 from kinby.instance import Serve
 from tests.test_factory_runs import started
@@ -50,6 +50,7 @@ from tests.test_scheduler import runtime as instance_runtime
 class HomeHub:
     """A served hub, its home instance, and a running instance the home instance reads."""
 
+    hub: Hub
     address: Serve
     home: UUID
     home_token: ControlToken
@@ -76,7 +77,7 @@ async def home_hub(directory: Path) -> AsyncIterator[HomeHub]:
     dispatcher = instance_runtime(instance, FakeClock(datetime(2026, 10, 15, tzinfo=UTC)))
     async with served(hub) as address, instance_served(dispatcher, alice_token) as private:
         runtime.addresses[str(alice)] = f"http://{private.host}:{private.port}"
-        yield HomeHub(address, home, control_token(hub, str(home)), alice, alice_token)
+        yield HomeHub(hub, address, home, control_token(hub, str(home)), alice, alice_token)
     hub.close()
 
 
