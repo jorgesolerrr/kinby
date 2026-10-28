@@ -2280,6 +2280,61 @@ def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
     asyncio.run(scenario())
 
 
+def test_publish_pushes_a_branch_deleted_from_origin_after_the_workspace_fetched_it(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    remote = tmp_path / "origin.git"
+    git(workspace, "push", "origin", f"origin/main:refs/heads/{BRANCH['branch']}")
+    git(workspace, "fetch", "origin")
+    git(remote, "branch", "-D", BRANCH["branch"])
+    implemented(workspace, BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await opened(dispatcher, 7, BRANCH | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert git(remote, "rev-parse", BRANCH["branch"]) == git(workspace, "rev-parse", "HEAD")
+
+    asyncio.run(scenario())
+
+
+def test_publish_never_pushes_over_a_branch_someone_else_moved_on_origin(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    remote = tmp_path / "origin.git"
+    git(workspace, "push", "origin", f"origin/main:refs/heads/{BRANCH['branch']}")
+    git(workspace, "fetch", "origin")
+    other = tmp_path / "other"
+    subprocess.run(("git", "clone", str(remote), str(other)), check=True, capture_output=True)
+    git(other, "switch", BRANCH["branch"])
+    commit(other, "other.py", "OTHER = True\n")
+    git(other, "push", "origin", BRANCH["branch"])
+    theirs = git(other, "rev-parse", "HEAD")
+    implemented(workspace, BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repo", "view", output=REPOSITORY)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await opened(dispatcher, 7, BRANCH | BODY)
+
+        assert result.ending is StepEnding.FAILED
+        assert "stale info" in result.summary
+        assert git(remote, "rev-parse", BRANCH["branch"]) == theirs
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("stack", "registered"),
     [
