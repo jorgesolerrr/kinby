@@ -377,9 +377,16 @@ class BrowserProfileNotSaved(CoreError):
 
 
 class BrowserNotOpen(CoreError):
-    """The turn has no browser on the hub's browser route, or no page in it."""
+    """The instance's turn has no browser open on the hub."""
 
     code = ErrorCode.NOT_FOUND
+
+
+class BrowserActionFailed(CoreError):
+    """The turn's page refused what the turn asked of it, such as a click on a covered element,
+    or the browser failed at it."""
+
+    code = ErrorCode.INVALID_ARGUMENT
 
 
 class GrantOutsideRoutine(CoreError):

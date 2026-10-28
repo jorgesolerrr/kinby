@@ -7,8 +7,14 @@ from dataclasses import dataclass
 
 from kinby.contracts.models import (
     AcceptedResult,
+    BrowserCloseCommand,
+    BrowserCloseResult,
+    BrowserFrameCommand,
+    BrowserInputCommand,
     BrowserOpenCommand,
     BrowserOpenResult,
+    BrowserPage,
+    BrowserPageRead,
     BrowserProfile,
     BrowserProfileDeleteCommand,
     BrowserProfileListCommand,
@@ -16,9 +22,14 @@ from kinby.contracts.models import (
     BrowserProfileRenameCommand,
     BrowserProfileSaveCommand,
     BrowserProfilesCommand,
+    BrowserRunCommand,
+    BrowserScreenshot,
+    BrowserScreenshotCommand,
+    BrowserSnapshotCommand,
     BrowserTakeoverFinishCommand,
     BrowserTakeoverInputCommand,
     BrowserTakeoverStartCommand,
+    BrowserTextCommand,
     Channel,
     ChannelCreateCommand,
     ChannelDeleteCommand,
@@ -543,6 +554,19 @@ NOTIFICATION_RAISE = Method(
     NotificationRaiseResult,
 )
 BROWSER_OPEN = Method("browser.open", Scope.BROWSER_OPEN, BrowserOpenCommand, BrowserOpenResult)
+BROWSER_RUN = Method("browser.run", Scope.BROWSER_OPEN, BrowserRunCommand, BrowserPage)
+BROWSER_SNAPSHOT = Method(
+    "browser.snapshot", Scope.BROWSER_OPEN, BrowserSnapshotCommand, BrowserPageRead
+)
+BROWSER_TEXT = Method("browser.text", Scope.BROWSER_OPEN, BrowserTextCommand, BrowserPageRead)
+BROWSER_SCREENSHOT = Method(
+    "browser.screenshot", Scope.BROWSER_OPEN, BrowserScreenshotCommand, BrowserScreenshot
+)
+BROWSER_FRAME = Method("browser.frame", Scope.BROWSER_OPEN, BrowserFrameCommand, TakeoverFrame)
+BROWSER_INPUT = Method(
+    "browser.input", Scope.BROWSER_OPEN, BrowserInputCommand, ThreadTakeoverInputResult
+)
+BROWSER_CLOSE = Method("browser.close", Scope.BROWSER_OPEN, BrowserCloseCommand, BrowserCloseResult)
 BROWSER_PROFILES = Method(
     "browser.profiles", Scope.BROWSER_OPEN, BrowserProfilesCommand, BrowserProfileListResult
 )
@@ -694,6 +718,13 @@ METHODS = (
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
     BROWSER_OPEN,
+    BROWSER_RUN,
+    BROWSER_SNAPSHOT,
+    BROWSER_TEXT,
+    BROWSER_SCREENSHOT,
+    BROWSER_FRAME,
+    BROWSER_INPUT,
+    BROWSER_CLOSE,
     BROWSER_PROFILES,
     BROWSER_PROFILE_SAVE,
     BROWSER_PROFILE_LIST,

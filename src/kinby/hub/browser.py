@@ -1,20 +1,14 @@
-"""The hub's browser route: one browser for one turn of a browser-on instance, opened with one of
-its profiles, a cap on browsers at once, and a browser service that runs only while it is needed
-(ADR 0113)."""
+"""The hub's browsers: a cap on browsers at once, and a browser service that runs only while one
+is open (ADR 0114)."""
 
 from __future__ import annotations
 
 import asyncio
-import hmac
-import secrets
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
-from uuid import UUID
 
-from kinby.contracts import BrowserProfileName, BrowserToken, ErrorCode
+from kinby.contracts import ErrorCode
 from kinby.core.errors import CoreError
-from kinby.hub.browser_profiles import BrowserProfiles, BrowserSession
 
 
 @dataclass(frozen=True)
@@ -25,15 +19,17 @@ class BrowserLimits:
     wait_seconds: float = 60
     #: How long the service runs with no browser open before the hub stops it.
     idle_seconds: float = 300
-    #: How long a token waits to be connected with before its browser goes back.
-    connect_seconds: float = 60
+    #: How long a turn's browser goes unused before the hub closes it. A turn parked on a
+    #: takeover waits 15 minutes for the user, and keeps its browser for them.
+    turn_idle_seconds: float = 20 * 60
 
 
 class BrowserRuntime(Protocol):
     """Where the browser service runs."""
 
     async def start(self) -> str:
-        """Start the browser service, and return the address its browser server listens at."""
+        """Start the browser service, and return the address the hub connects each browser at,
+        with the options the service launches it with."""
 
     async def running(self) -> bool:
         """Whether the service started last still runs, or died since."""
@@ -46,50 +42,21 @@ class BrowserCapReached(CoreError):
     retryable = True
 
 
-@dataclass(frozen=True)
-class BrowserConnection:
-    """A token connected with: the service it relays to, the session it relays through, and how
-    its browser goes back."""
-
-    address: str
-    session: BrowserSession
-    close: Callable[[], None]
-
-
-@dataclass(frozen=True)
-class _Lent:
-    instance_id: UUID
-    turn_id: UUID
-    profile: BrowserProfileName | None
-
-
 class HubBrowsers:
-    """Lend browsers on the service *runtime* runs, at most *limits.cap* at once, each opened
-    with one of *profiles*."""
+    """Lend browsers on the service *runtime* runs, at most *limits.cap* at once."""
 
-    def __init__(
-        self, runtime: BrowserRuntime, limits: BrowserLimits, profiles: BrowserProfiles
-    ) -> None:
+    def __init__(self, runtime: BrowserRuntime, limits: BrowserLimits) -> None:
         self._runtime = runtime
         self._limits = limits
-        self._profiles = profiles
         self._free = asyncio.Semaphore(limits.cap)
         self._lent = 0
-        #: What each token not connected with yet was lent for.
-        self._tokens: dict[BrowserToken, _Lent] = {}
-        #: The connected browser of each instance's turn.
-        self._sessions: dict[tuple[UUID, UUID], BrowserSession] = {}
         self._address: str | None = None
         self._starting = asyncio.Lock()
         self._idle: asyncio.Task[None] | None = None
 
-    async def lend(
-        self, instance_id: UUID, turn_id: UUID, profile: BrowserProfileName | None
-    ) -> BrowserToken:
-        """A token that connects *instance_id*'s turn to a browser once, when one comes free in
-        time. The browser opens with the instance's *profile*."""
-        if profile is not None:
-            self._profiles.state(instance_id, profile)
+    async def lend(self) -> str:
+        """The address to connect one browser at, once one comes free in time. The browser goes
+        back with give_back."""
         try:
             async with asyncio.timeout(self._limits.wait_seconds):
                 await self._free.acquire()
@@ -104,43 +71,15 @@ class HubBrowsers:
             self._idle = None
         try:
             async with self._starting:
-                if self._address is None or not await self._runtime.running():
-                    self._address = await self._runtime.start()
+                address = self._address
+                if address is None or not await self._runtime.running():
+                    address = self._address = await self._runtime.start()
         except BaseException:
-            self._give_back()
+            self.give_back()
             raise
-        token = BrowserToken(secrets.token_urlsafe(32))
-        self._tokens[token] = _Lent(instance_id, turn_id, profile)
-        asyncio.get_running_loop().call_later(self._limits.connect_seconds, self._expire, token)
-        return token
+        return address
 
-    def connect(self, instance_id: UUID, token: str) -> BrowserConnection | None:
-        """Spend *token*, when it was lent to *instance_id*. A token lent to another instance
-        stays unspent."""
-        spent = next((t for t in self._tokens if hmac.compare_digest(t, token)), None)
-        if spent is None or self._tokens[spent].instance_id != instance_id or self._address is None:
-            return None
-        lent = self._tokens.pop(spent)
-        turn = (instance_id, lent.turn_id)
-        session = BrowserSession(self._profiles, instance_id, lent.profile)
-        self._sessions[turn] = session
-
-        def close() -> None:
-            if self._sessions.get(turn) is session:
-                del self._sessions[turn]
-            self._give_back()
-
-        return BrowserConnection(self._address, session, close)
-
-    def session(self, instance_id: UUID, turn_id: UUID) -> BrowserSession | None:
-        """The browser *instance_id*'s turn is connected to, if it is."""
-        return self._sessions.get((instance_id, turn_id))
-
-    def _expire(self, token: BrowserToken) -> None:
-        if self._tokens.pop(token, None) is not None:
-            self._give_back()
-
-    def _give_back(self) -> None:
+    def give_back(self) -> None:
         self._lent -= 1
         self._free.release()
         if self._lent == 0:
