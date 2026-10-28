@@ -281,6 +281,7 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "view_patch",
             "view_read",
             "view_write",
+            "web_fetch",
             "write",
         ]
 
@@ -306,6 +307,7 @@ def test_default_entry_point_declares_tool_gate_metadata() -> None:
         ("glob", False, ()),
         ("bash", True, ()),
         ("web_search", False, ()),
+        ("web_fetch", False, ()),
     ]
 
 
@@ -671,6 +673,7 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "view_patch",
             "view_read",
             "view_write",
+            "web_fetch",
             "write",
         ]
 

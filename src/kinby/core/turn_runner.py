@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -76,7 +77,7 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.gate import AUTHORED_RULE, evaluate
+from kinby.core.gate import AUTHORED_RULE, URL_READS, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import price_map
@@ -154,6 +155,9 @@ _BUDGET_STEPS = "kinby_budget_steps"
 _BUDGET_TOKENS = "kinby_budget_tokens"
 _BUDGET_SECONDS = "kinby_budget_seconds"
 _BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
+_URL = re.compile(r"https?://[^\s<>\"'`()\[\]{}]+")
+#: The tools whose results bring URLs in from the web.
+_URL_SOURCES = frozenset({"web_search", *URL_READS})
 _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
     allowed_msgpack_modules=(
         ApprovalAnswer,
@@ -987,6 +991,7 @@ class LangGraphRunner:
         calls: list[ToolCallResolution] = []
         granted = list(state.granted)
         read_only = list(state.read_only)
+        seen_urls = _seen_urls(state.messages)
         message_index = len(state.messages) - 1
         for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
@@ -1010,6 +1015,7 @@ class LangGraphRunner:
                 runtime.context.tool_context.workspace,
                 granted=name in granted,
                 marked_read_only=name in read_only,
+                seen_urls=seen_urls,
             )
             approval_id = None
             if gate_decision.action is GateAction.ASK:
@@ -1165,6 +1171,24 @@ class LangGraphRunner:
             error=False,
             duration_ms=_elapsed_ms(started_at),
         )
+
+
+def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:
+    """The URLs the thread's user messages, routine prompts and web reads brought in (ADR 0110).
+
+    Another tool's result can echo the arguments the model gave it, so it brings in none.
+    """
+    return frozenset(
+        url.rstrip(".,;:!?")
+        for message in messages
+        if isinstance(message, HumanMessage)
+        or (
+            isinstance(message, ToolMessage)
+            and message.name in _URL_SOURCES
+            and message.status == "success"
+        )
+        for url in _URL.findall(message.text)
+    )
 
 
 def _elapsed_ms(started_at: float) -> int:
