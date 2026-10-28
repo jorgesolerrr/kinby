@@ -15,6 +15,7 @@ import { BrowserProfiles } from "@/components/browser-profiles"
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
+import { Vault } from "@/components/vault"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -74,7 +75,7 @@ import {
  * What one instance shows. A stopped instance with setup pending opens on its setup card, and
  * keeps it until it runs. Any other stopped one offers Start. A running one opens its config panel,
  * its memory, its stats, and through `client`, its own connection, its views, offers Stop, and lists its logins, asking to sign in to those that are not signed in, or to sign in again once
- * all are. One the hub opens browsers for lists its browser profiles. Outside the setup card, an instance whose factory role needs repository commands shows
+ * all are. One the hub opens browsers for lists its browser profiles and its vault. Outside the setup card, an instance whose factory role needs repository commands shows
  * them.
  * Running or stopped, its ⋯ menu offers Remove, and a removal that succeeds goes home. The home
  * instance is never removed, so it has no ⋯ menu.
@@ -205,12 +206,15 @@ export function InstancePage({
           </section>
         )}
         {status?.browser === true && client !== undefined && (
-          <BrowserProfiles
-            caller={caller}
-            client={client}
-            clock={clock}
-            instanceId={instance.instance_id}
-          />
+          <>
+            <BrowserProfiles
+              caller={caller}
+              client={client}
+              clock={clock}
+              instanceId={instance.instance_id}
+            />
+            <Vault caller={caller} clock={clock} instanceId={instance.instance_id} />
+          </>
         )}
         {commands}
         {logins.length === 0 && !commands && observedState(instance) === "running" && (

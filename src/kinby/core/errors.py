@@ -382,6 +382,20 @@ class BrowserNotOpen(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class VaultEntryNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class VaultEntryInvalid(CoreError):
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class VaultFillRefused(CoreError):
+    """A page off the entry's site, or a field the entry has no value for."""
+
+    code = ErrorCode.PERMISSION_DENIED
+
+
 class GrantOutsideRoutine(CoreError):
     """Only an approval raised in a routine's turn allows its tool in the routine (ADR 0112)."""
 

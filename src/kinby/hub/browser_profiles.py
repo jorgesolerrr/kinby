@@ -1,11 +1,13 @@
 """Browser profiles: each instance's named signed-in states. The hub keeps them and applies them
-on its browser route, so not one cookie of a profile enters the instance (ADR 0113)."""
+on its browser route, so not one cookie of a profile enters the instance. The route fills the
+instance's vault entries in the same way (ADR 0113)."""
 
 from __future__ import annotations
 
 import asyncio
 import itertools
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -14,9 +16,17 @@ import aiohttp
 from aiohttp import WSMsgType, web
 from pydantic import JsonValue, TypeAdapter
 
-from kinby.contracts import BrowserProfile, BrowserProfileListResult, BrowserProfileName
-from kinby.core.errors import BrowserNotOpen, BrowserProfileNameTaken, BrowserProfileNotFound
+from kinby.contracts import BrowserProfile, BrowserProfileListResult, BrowserProfileName, VaultField
+from kinby.core.errors import (
+    BrowserNotOpen,
+    BrowserProfileNameTaken,
+    BrowserProfileNotFound,
+    VaultEntryNotFound,
+    VaultFillRefused,
+)
 from kinby.hub.secrets import replace_protected
+from kinby.hub.vault import Vault
+from kinby.plugins.browser import VAULT_PLACEHOLDER
 
 #: Playwright's storage state: a context's cookies, and each origin's local storage.
 type StorageState = dict[str, JsonValue]
@@ -66,6 +76,13 @@ _CONTEXT_OPTIONS: dict[str, JsonValue] = {"selectorEngines": []}
 #: The hub numbers its own calls apart from any a Playwright client makes.
 _FIRST_CALL_ID = 1 << 40
 _STATE_SECONDS = 30
+#: A ref from a snapshot of the frame the fill is for. A ref like f1e3 would reach into a child
+#: frame, which can be on another site.
+_FRAME_REF = re.compile(r"aria-ref=e\d+")
+#: What the turn reads in place of a vault value the page holds.
+_HIDDEN = "[a vault value]"
+#: The keys whose values name protocol objects, never the page's content.
+_PROTOCOL_KEYS = frozenset({"guid", "method"})
 
 
 @dataclass(frozen=True)
@@ -144,14 +161,24 @@ class BrowserProfiles:
 
 class BrowserSession:
     """One turn's browser on the route. Its context opens with the turn's profile, and its state
-    is saved back to the profile when the context closes. The turn never reads the state."""
+    is saved back to the profile when the context closes. A fill from the instance's vault puts
+    the value into the page. The turn never reads the state, or a value."""
 
     def __init__(
-        self, profiles: BrowserProfiles, instance_id: UUID, profile: BrowserProfileName | None
+        self,
+        profiles: BrowserProfiles,
+        vault: Vault,
+        instance_id: UUID,
+        profile: BrowserProfileName | None,
     ) -> None:
         self._profiles = profiles
+        self._vault = vault
         self._instance_id = instance_id
         self._profile = profile
+        #: The URL each frame is at, by its guid.
+        self._frames: dict[str, str] = {}
+        #: The vault values the page was given.
+        self._filled: set[str] = set()
         self._service: aiohttp.ClientWebSocketResponse | None = None
         #: The id of the client's call that opens the context, until the service answers it.
         self._opening: JsonValue = None
@@ -197,6 +224,13 @@ class BrowserSession:
             if (refusal := self._refusal(call)) is not None:
                 await client.send_json(_refusal(call.get("id"), refusal))
                 continue
+            if method == "fill" and (asked := _vault_fill(call)) is not None:
+                try:
+                    value = self._vault_value(call, asked)
+                except (VaultEntryNotFound, VaultFillRefused) as refused:
+                    await client.send_json(_refusal(call.get("id"), str(refused)))
+                    continue
+                call["params"] = {**_object(call.get("params")), "value": value}
             if method == "newContext":
                 self._opening = call.get("id")
                 options = dict(_CONTEXT_OPTIONS)
@@ -245,11 +279,11 @@ class BrowserSession:
                     continue
                 if message.type is not WSMsgType.TEXT:
                     continue
-                if self._answers or self._opening is not None:
+                if self._answers or self._opening is not None or "navigated" in message.data:
                     answer = _parsed(message.data)
                     if answer is not None and self._answered(answer):
                         continue
-                await client.send_str(message.data)
+                await client.send_str(self._without_values(message.data))
             await client.close()
         finally:
             for waiting in self._answers.values():
@@ -258,6 +292,10 @@ class BrowserSession:
 
     def _answered(self, answer: dict[str, JsonValue]) -> bool:
         """Note what *answer* says, and whether it answers a call of the hub's own."""
+        if answer.get("method") == "navigated":
+            url = _object(answer.get("params")).get("url")
+            self._frames[str(answer.get("guid"))] = url if isinstance(url, str) else ""
+            return False
         call_id = answer.get("id")
         if isinstance(call_id, int) and (waiting := self._answers.get(call_id)) is not None:
             waiting.set_result(answer)
@@ -267,6 +305,43 @@ class BrowserSession:
             context = _object(_object(answer.get("result")).get("context")).get("guid")
             self._context = context if isinstance(context, str) else None
         return False
+
+    def _vault_value(self, call: dict[str, JsonValue], asked: str) -> str:
+        """The value the fill *call* asks for with *asked*, which the turn reads hidden from
+        now on."""
+        field, _, name = asked.partition("\0")
+        if field not in VaultField:
+            raise VaultFillRefused(f'A vault entry has no field "{field}".')
+        if not _FRAME_REF.fullmatch(str(_object(call.get("params")).get("selector"))):
+            raise VaultFillRefused("A vault entry fills a field by its ref in a snapshot only.")
+        url = self._frames.get(str(call.get("guid")), "about:blank")
+        value = self._vault.value(self._instance_id, name, VaultField(field), url)
+        # A TOTP code is used once, and its digits could be part of any frame's protocol.
+        if field != VaultField.TOTP:
+            self._filled.add(value)
+        return value
+
+    def _without_values(self, message: str) -> str:
+        """*message* with every vault value the page was given hidden from the turn."""
+        # A value reads escaped inside a frame's JSON, as Playwright's JSON.stringify escapes it.
+        if not any(
+            json.dumps(value, ensure_ascii=False)[1:-1] in message for value in self._filled
+        ):
+            return message
+        parsed = _parsed(message)
+        return message if parsed is None else json.dumps(self._hide(parsed))
+
+    def _hide(self, value: JsonValue, key: str = "") -> JsonValue:
+        match value:
+            case str() if key not in _PROTOCOL_KEYS:
+                for filled in self._filled:
+                    value = value.replace(filled, _HIDDEN)
+                return value
+            case dict():
+                return {name: self._hide(item, name) for name, item in value.items()}
+            case list():
+                return [self._hide(item) for item in value]
+        return value
 
     async def _save_back(self) -> None:
         if self._profile is not None:
@@ -306,10 +381,22 @@ def _parsed(message: str) -> dict[str, JsonValue] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _vault_fill(call: dict[str, JsonValue]) -> str | None:
+    """What of the vault a fill *call* asks for, when it does: a field and an entry's name."""
+    value = _object(call.get("params")).get("value")
+    if not isinstance(value, str) or not value.startswith(VAULT_PLACEHOLDER):
+        return None
+    return value.removeprefix(VAULT_PLACEHOLDER)
+
+
 def _object(value: JsonValue) -> dict[str, JsonValue]:
     return value if isinstance(value, dict) else {}
 
 
 def _refusal(call_id: JsonValue, message: str) -> dict[str, JsonValue]:
-    """An answer that fails the client's call *call_id* with *message*."""
-    return {"id": call_id, "error": {"error": {"name": "Error", "message": message}}}
+    """An answer that fails the client's call *call_id* with *message*. Playwright's Python
+    client reads an error's stack, and never answers its call without one."""
+    return {
+        "id": call_id,
+        "error": {"error": {"name": "Error", "message": message, "stack": ""}},
+    }

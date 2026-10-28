@@ -80,22 +80,29 @@ class FakeService:
     connected: list[dict[str, str]] = field(default_factory=list)
     calls: list[dict[str, object]] = field(default_factory=list)
     state: dict[str, object] = field(default_factory=lambda: {"cookies": [], "origins": []})
+    #: Whether a fill fails, with Playwright's call log, which names the value.
+    fill_fails: bool = False
 
 
 def _answer(call: dict[str, object], service: FakeService) -> dict[str, object]:
+    params = call["params"]
+    assert isinstance(params, dict)
     match call["method"]:
         case "newContext":
             return {"id": call["id"], "result": {"context": {"guid": _CONTEXT}}}
         case "storageState":
             return {"id": call["id"], "result": service.state}
+        case "fill" if service.fill_fails:
+            log = f'Timeout 5000ms exceeded.\nCall log:\n  - fill("{params["value"]}")'
+            return {"id": call["id"], "error": {"error": {"name": "TimeoutError", "message": log}}}
         case _:
             return {"id": call["id"], "result": {}}
 
 
 @asynccontextmanager
 async def playwright_server(service: FakeService) -> AsyncIterator[str]:
-    """A stand-in for Playwright's browser server. It answers each protocol call, and records
-    the calls and the headers of each connection."""
+    """A stand-in for Playwright's browser server. It answers each protocol call, says a frame
+    navigated when it goes to a URL, and records the calls and the headers of each connection."""
 
     async def socket(request: web.Request) -> web.WebSocketResponse:
         service.connected.append(dict(request.headers))
@@ -104,6 +111,11 @@ async def playwright_server(service: FakeService) -> AsyncIterator[str]:
         async for message in response:
             call = json.loads(message.data)
             service.calls.append(call)
+            if call["method"] == "goto":
+                navigated = {"url": call["params"]["url"], "name": "", "newDocument": {}}
+                await response.send_json(
+                    {"guid": call["guid"], "method": "navigated", "params": navigated}
+                )
             await response.send_str(json.dumps(_answer(call, service)))
         return response
 
@@ -333,6 +345,8 @@ class Turn:
     def __init__(self, socket: aiohttp.ClientWebSocketResponse) -> None:
         self._socket = socket
         self._ids = iter(range(1, 1_000))
+        #: Every frame that came back, in order.
+        self.received: list[str] = []
 
     async def call(
         self, guid: str, method: str, params: dict[str, object] | None = None
@@ -343,7 +357,8 @@ class Turn:
             {"id": call_id, "guid": guid, "method": method, "params": params or {}, "metadata": {}}
         )
         while True:
-            answer = json.loads((await self._socket.receive(timeout=5)).data)
+            self.received.append((await self._socket.receive(timeout=5)).data)
+            answer = json.loads(self.received[-1])
             if answer.get("id") == call_id:
                 return answer
 
@@ -487,7 +502,7 @@ def test_a_turn_reaches_its_browser_only_by_the_calls_the_browser_tools_make(tmp
     refused, allowed, service = asyncio.run(scenario())
 
     assert [answer["error"] for answer in refused] == [
-        {"error": {"name": "Error", "message": message}}
+        {"error": {"name": "Error", "message": message, "stack": ""}}
         for message in [
             'The hub\'s browser route refuses "storageState".',
             'The hub\'s browser route refuses "cookies".',

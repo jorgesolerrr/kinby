@@ -13,7 +13,14 @@ from kinby.contracts import (
     BrowserProfileListResult,
     BrowserProfileName,
     TakeoverInput,
+    VaultEntryListResult,
+    VaultEntryName,
+    VaultField,
 )
+
+#: What a vault fill types, which the hub's browser route replaces with the value. Its NUL bytes
+#: keep it apart from any text a page or the model types.
+VAULT_PLACEHOLDER = "\0kinby-vault\0"
 
 
 @dataclass(frozen=True)
@@ -71,7 +78,23 @@ class Upload:
     path: Path
 
 
-type BrowserAction = Navigate | Scroll | Wait | Click | Type | Select | Press | Upload
+@dataclass(frozen=True)
+class FillCredential:
+    """Fill a field with the *field* of the vault entry *name*. The hub's browser route puts the
+    value in place of the placeholder, on the entry's site only, so the turn never holds it."""
+
+    ref: str
+    name: VaultEntryName
+    field: VaultField
+
+    @property
+    def placeholder(self) -> str:
+        return f"{VAULT_PLACEHOLDER}{self.field.value}\0{self.name}"
+
+
+type BrowserAction = (
+    Navigate | Scroll | Wait | Click | Type | Select | Press | Upload | FillCredential
+)
 
 
 @dataclass(frozen=True)
@@ -130,6 +153,9 @@ class BrowserService(Protocol):
 
     async def profiles(self) -> BrowserProfileListResult:
         """The instance's profiles, by name and site."""
+
+    async def vault(self) -> VaultEntryListResult:
+        """The instance's vault entries, by name and site."""
 
     async def save_profile(self, turn: UUID, name: BrowserProfileName) -> BrowserProfile:
         """Save the turn's context as the instance's profile *name*, for its site. The context's

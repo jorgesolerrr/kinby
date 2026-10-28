@@ -1,6 +1,6 @@
 """The hub's browser route: one browser for one turn of a browser-on instance, opened with one of
-its profiles, a cap on browsers at once, and a browser service that runs only while it is needed
-(ADR 0113)."""
+its profiles and filled from its vault, a cap on browsers at once, and a browser service that runs
+only while it is needed (ADR 0113)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from uuid import UUID
 from kinby.contracts import BrowserProfileName, BrowserToken, ErrorCode
 from kinby.core.errors import CoreError
 from kinby.hub.browser_profiles import BrowserProfiles, BrowserSession
+from kinby.hub.vault import Vault
 
 
 @dataclass(frozen=True)
@@ -65,14 +66,19 @@ class _Lent:
 
 class HubBrowsers:
     """Lend browsers on the service *runtime* runs, at most *limits.cap* at once, each opened
-    with one of *profiles*."""
+    with one of *profiles* and filled from *vault*."""
 
     def __init__(
-        self, runtime: BrowserRuntime, limits: BrowserLimits, profiles: BrowserProfiles
+        self,
+        runtime: BrowserRuntime,
+        limits: BrowserLimits,
+        profiles: BrowserProfiles,
+        vault: Vault,
     ) -> None:
         self._runtime = runtime
         self._limits = limits
         self._profiles = profiles
+        self._vault = vault
         self._free = asyncio.Semaphore(limits.cap)
         self._lent = 0
         #: What each token not connected with yet was lent for.
@@ -122,7 +128,7 @@ class HubBrowsers:
             return None
         lent = self._tokens.pop(spent)
         turn = (instance_id, lent.turn_id)
-        session = BrowserSession(self._profiles, instance_id, lent.profile)
+        session = BrowserSession(self._profiles, self._vault, instance_id, lent.profile)
         self._sessions[turn] = session
 
         def close() -> None:

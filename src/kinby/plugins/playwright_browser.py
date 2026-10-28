@@ -25,6 +25,7 @@ from kinby.contracts import (
     BROWSER_OPEN,
     BROWSER_PROFILE_SAVE,
     BROWSER_PROFILES,
+    BROWSER_VAULT,
     BrowserOpenCommand,
     BrowserOpenResult,
     BrowserProfile,
@@ -32,15 +33,18 @@ from kinby.contracts import (
     BrowserProfileName,
     BrowserProfileSaveCommand,
     BrowserProfilesCommand,
+    BrowserVaultCommand,
     TakeoverInput,
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
+    VaultEntryListResult,
 )
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
     Download,
+    FillCredential,
     Navigate,
     Page,
     PageRead,
@@ -100,6 +104,8 @@ class BrowserRoute(Protocol):
 
     async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile: ...
 
+    async def vault(self) -> VaultEntryListResult: ...
+
 
 class HubBrowserRoute:
     """The browser route on this instance's hub route."""
@@ -120,6 +126,11 @@ class HubBrowserRoute:
             BROWSER_PROFILE_SAVE.name, command.model_dump(mode="json"), "the browser profile"
         )
         return BrowserProfile.model_validate(result)
+
+    async def vault(self) -> VaultEntryListResult:
+        command = BrowserVaultCommand()
+        result = await call_hub(BROWSER_VAULT.name, command.model_dump(mode="json"), "the vault")
+        return VaultEntryListResult.model_validate(result)
 
 
 @dataclass
@@ -169,6 +180,9 @@ class PlaywrightBrowser:
 
     async def profiles(self) -> BrowserProfileListResult:
         return await self._route.profiles()
+
+    async def vault(self) -> VaultEntryListResult:
+        return await self._route.vault()
 
     async def save_profile(self, turn: UUID, name: BrowserProfileName) -> BrowserProfile:
         page = await self._page(turn)
@@ -314,6 +328,8 @@ async def _run(page: PlaywrightPage, action: BrowserAction) -> None:
             await page.keyboard.press(key)
         case Upload(ref=ref, path=path):
             await (await _element(page, ref)).set_input_files(path, timeout=_ELEMENT_MS)
+        case FillCredential(ref=ref):
+            await (await _element(page, ref)).fill(action.placeholder, timeout=_ELEMENT_MS)
 
 
 async def _click(element: Locator, ref: str) -> None:

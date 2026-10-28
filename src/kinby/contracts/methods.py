@@ -19,6 +19,7 @@ from kinby.contracts.models import (
     BrowserTakeoverFinishCommand,
     BrowserTakeoverInputCommand,
     BrowserTakeoverStartCommand,
+    BrowserVaultCommand,
     Channel,
     ChannelCreateCommand,
     ChannelDeleteCommand,
@@ -204,6 +205,11 @@ from kinby.contracts.models import (
     ToolReadOnlySetCommand,
     UsageGetCommand,
     UsageGetResult,
+    VaultEntryAddCommand,
+    VaultEntryDeleteCommand,
+    VaultEntryEditCommand,
+    VaultEntryListCommand,
+    VaultEntryListResult,
     View,
     ViewDeleteCommand,
     ViewGetCommand,
@@ -566,6 +572,24 @@ BROWSER_PROFILE_DELETE = Method(
     BrowserProfileDeleteCommand,
     BrowserProfileListResult,
 )
+BROWSER_VAULT = Method(
+    "browser.vault", Scope.BROWSER_OPEN, BrowserVaultCommand, VaultEntryListResult
+)
+BROWSER_VAULT_LIST = Method(
+    "browser.vault.list", Scope.HUB_READ, VaultEntryListCommand, VaultEntryListResult
+)
+#: Answers with the instance's vault entries.
+BROWSER_VAULT_ADD = Method(
+    "browser.vault.add", Scope.HUB_ADMIN, VaultEntryAddCommand, VaultEntryListResult
+)
+#: Answers with the instance's vault entries.
+BROWSER_VAULT_EDIT = Method(
+    "browser.vault.edit", Scope.HUB_ADMIN, VaultEntryEditCommand, VaultEntryListResult
+)
+#: Answers with the instance's vault entries.
+BROWSER_VAULT_DELETE = Method(
+    "browser.vault.delete", Scope.HUB_ADMIN, VaultEntryDeleteCommand, VaultEntryListResult
+)
 NOTIFICATION_LIST = Method(
     "notification.list", Scope.HUB_ADMIN, NotificationListCommand, NotificationListResult
 )
@@ -699,6 +723,11 @@ METHODS = (
     BROWSER_PROFILE_LIST,
     BROWSER_PROFILE_RENAME,
     BROWSER_PROFILE_DELETE,
+    BROWSER_VAULT,
+    BROWSER_VAULT_LIST,
+    BROWSER_VAULT_ADD,
+    BROWSER_VAULT_EDIT,
+    BROWSER_VAULT_DELETE,
     NOTIFICATION_LIST,
     NOTIFICATION_REPLY,
 )

@@ -27,14 +27,19 @@ from kinby.contracts import (
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
+    VaultEntryAddCommand,
+    VaultEntryListResult,
+    VaultField,
 )
 from kinby.hub.browser_profiles import BrowserProfiles, BrowserSession
 from kinby.hub.browser_service import serve_proxy
 from kinby.hub.relay import relay_browser
+from kinby.hub.vault import Vault
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
     Download,
+    FillCredential,
     Navigate,
     Page,
     Press,
@@ -74,6 +79,18 @@ _FORM = """<html><head><title>Apply</title></head><body>
 <input type="file" aria-label="CV" onchange="said.textContent = 'Attached ' + this.files[0].name">
 </body></html>"""
 _REPORT = b"company,status\nAcme,open\n"
+_SIGN_IN = """<html><head><title>Sign in</title></head><body>
+<form method="post" action="/signed-in">
+<input name="username" aria-label="Email">
+<input name="password" type="password" aria-label="Password">
+<input name="code" aria-label="Code">
+<button>Sign in</button>
+</form></body></html>"""
+_USERNAME = "alice@example.com"
+_PASSWORD = "correct horse battery staple"
+#: The seed of RFC 6238's SHA-1 test vectors, whose code at 59 seconds is 287082.
+_SEED = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+_VAULT_TIME = 59
 _PAD = """<html><body style="margin: 0; height: 100vh"
   onclick="said.textContent = 'Clicked at ' + event.clientX + ',' + event.clientY">
 <p id="said">Nothing yet.</p>
@@ -91,6 +108,21 @@ async def _form(request: web.Request) -> web.Response:
 
 async def _pad(request: web.Request) -> web.Response:
     return web.Response(text=_PAD, content_type="text/html")
+
+
+async def _sign_in(request: web.Request) -> web.Response:
+    return web.Response(text=_SIGN_IN, content_type="text/html")
+
+
+async def _signed_in(request: web.Request) -> web.Response:
+    """Say who signed in, and whether the password and the code were right."""
+    form = await request.post()
+    password = "right" if form["password"] == _PASSWORD else "wrong"
+    code = "right" if form["code"] == "287082" else "wrong"
+    return web.Response(
+        text=f"<p>Signed in as {form['username']}. Password {password}. Code {code}.</p>",
+        content_type="text/html",
+    )
 
 
 async def _report(request: web.Request) -> web.Response:
@@ -136,6 +168,8 @@ async def site() -> AsyncIterator[int]:
     application.router.add_get("/sign-in", _set_cookie)
     application.router.add_get("/refresh", _refresh_cookie)
     application.router.add_get("/cookies", _cookies)
+    application.router.add_get("/login", _sign_in)
+    application.router.add_post("/signed-in", _signed_in)
     runner = web.AppRunner(application)
     await runner.setup()
     served = web.TCPSite(runner, "127.0.0.1", 0)
@@ -246,33 +280,41 @@ def _launch_options(proxy_address: str) -> str:
 
 class _RelayedRoute:
     """The hub's browser route for one instance: each turn's browser relayed to the service
-    through a session that keeps the instance's profiles in *profiles*."""
+    through a session that keeps the instance's profiles in *profiles*, and fills from
+    *vault*."""
 
-    def __init__(self, relay: str, profiles: BrowserProfiles) -> None:
+    def __init__(self, relay: str, profiles: BrowserProfiles, vault: Vault) -> None:
         self._relay = relay
         self._profiles = profiles
-        self._instance_id = uuid4()
+        self._vault = vault
+        self.instance_id = uuid4()
         self.sessions: dict[UUID, BrowserSession] = {}
 
     async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
         self.sessions[command.turn_id] = BrowserSession(
-            self._profiles, self._instance_id, command.profile
+            self._profiles, self._vault, self.instance_id, command.profile
         )
         return BrowserOpenResult(
             address=f"{self._relay}/{command.turn_id}", token=BrowserToken("token")
         )
 
     async def profiles(self) -> BrowserProfileListResult:
-        return self._profiles.list(self._instance_id)
+        return self._profiles.list(self.instance_id)
 
     async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile:
         return await self.sessions[command.turn_id].save_as(command.name, command.site)
 
+    async def vault(self) -> VaultEntryListResult:
+        return self._vault.list(self.instance_id)
+
 
 @asynccontextmanager
-async def relayed(server: str, proxy_address: str) -> AsyncIterator[PlaywrightBrowser]:
+async def relayed(
+    server: str, proxy_address: str, vault_site: str | None = None
+) -> AsyncIterator[PlaywrightBrowser]:
     """The adapter on the hub's relay to *server*, which applies the instance's profiles and
-    lets through only the calls the browser tools make."""
+    lets through only the calls the browser tools make. Its vault holds an entry for
+    *vault_site*, when it names one, and counts TOTP codes at a fixed time."""
     routes: list[_RelayedRoute] = []
 
     async def relay(request: web.Request) -> web.WebSocketResponse:
@@ -286,11 +328,27 @@ async def relayed(server: str, proxy_address: str) -> AsyncIterator[PlaywrightBr
     served = web.TCPSite(runner, "127.0.0.1", 0)
     await served.start()
     try:
-        with TemporaryDirectory() as profiles:
-            routes.append(
-                _RelayedRoute(f"ws://127.0.0.1:{served.port}", BrowserProfiles(Path(profiles)))
+        with TemporaryDirectory() as kept:
+            directory = Path(kept)
+            vault = Vault(directory / "vault", clock=lambda: _VAULT_TIME)
+            route = _RelayedRoute(
+                f"ws://127.0.0.1:{served.port}", BrowserProfiles(directory), vault
             )
-            yield PlaywrightBrowser(routes[0])
+            if vault_site is not None:
+                vault.add(
+                    VaultEntryAddCommand.model_validate(
+                        {
+                            "instance_id": route.instance_id,
+                            "name": "Site",
+                            "site": vault_site,
+                            "username": _USERNAME,
+                            "password": _PASSWORD,
+                            "totp_seed": _SEED,
+                        }
+                    )
+                )
+            routes.append(route)
+            yield PlaywrightBrowser(route)
     finally:
         await runner.cleanup()
 
@@ -623,3 +681,71 @@ def test_the_route_lets_through_each_read_the_browser_tools_make(browser_server)
 
     assert titles == ["Applications"] * 4
     assert screenshot.startswith(b"\x89PNG")
+
+
+async def _ref(browser: PlaywrightBrowser, turn: UUID, label: str) -> str:
+    tree = await browser.snapshot(turn, interactive=True, max_chars=20_000)
+    ref = re.search(rf'"{label}" \[ref=(e\d+)\]', tree.text)
+    assert ref is not None, tree.text
+    return ref.group(1)
+
+
+@pytest.mark.browser
+def test_a_vault_fill_signs_in_on_the_entrys_site_and_the_turn_never_reads_a_value(
+    browser_server,
+) -> None:
+    async def scenario() -> tuple[str, str, list[Page]]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address, f"http://site.test:{port}") as browser,
+        ):
+            turn = uuid4()
+            await browser.open(turn)
+            try:
+                await browser.run(turn, Navigate(f"http://site.test:{port}/login"))
+                pages = [
+                    await browser.run(
+                        turn, FillCredential(await _ref(browser, turn, label), "Site", field)
+                    )
+                    for label, field in [
+                        ("Email", VaultField.USERNAME),
+                        ("Password", VaultField.PASSWORD),
+                        ("Code", VaultField.TOTP),
+                    ]
+                ]
+                filled = await browser.snapshot(turn, interactive=True, max_chars=20_000)
+                await browser.run(turn, Click(await _ref(browser, turn, "Sign in")))
+                said = await browser.text(turn, None)
+            finally:
+                await browser.close(turn)
+        return filled.text, said.text, pages
+
+    filled, said, pages = asyncio.run(scenario())
+
+    assert said == "Signed in as [a vault value]. Password right. Code right."
+    assert _PASSWORD not in filled
+    assert _USERNAME not in filled
+    assert 'textbox "Password" [ref=' in filled
+    assert all(page.title == "Sign in" for page in pages)
+
+
+@pytest.mark.browser
+def test_a_vault_fill_on_another_site_is_refused(browser_server) -> None:
+    async def scenario() -> None:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            relayed(browser_server, address, "https://site.test") as browser,
+        ):
+            turn = uuid4()
+            await browser.open(turn)
+            try:
+                await browser.run(turn, Navigate(f"http://site.test:{port}/login"))
+                ref = await _ref(browser, turn, "Password")
+                await browser.run(turn, FillCredential(ref, "Site", VaultField.PASSWORD))
+            finally:
+                await browser.close(turn)
+
+    with pytest.raises(PlaywrightError, match=r"fills pages on https://site\.test only"):
+        asyncio.run(scenario())

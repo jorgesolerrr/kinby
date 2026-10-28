@@ -43,6 +43,9 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnInterrupted,
+    VaultEntry,
+    VaultEntryListResult,
+    VaultField,
     is_turn_closing,
 )
 from kinby.core import LangGraphRunner
@@ -56,6 +59,7 @@ from kinby.plugins.browser import (
     BrowserService,
     Click,
     Download,
+    FillCredential,
     Navigate,
     Page,
     PageRead,
@@ -115,6 +119,7 @@ class FakeBrowser:
         self.signed_in: dict[UUID, str | None] = {}
         self.saved: list[tuple[UUID, str]] = []
         self.kept: list[BrowserProfile] = []
+        self.entries: list[VaultEntry] = []
         self._refusal = refusal
         self._snapshot = snapshot
         self._downloads = downloads
@@ -131,6 +136,9 @@ class FakeBrowser:
 
     async def profiles(self) -> BrowserProfileListResult:
         return BrowserProfileListResult(profiles=tuple(self.kept))
+
+    async def vault(self) -> VaultEntryListResult:
+        return VaultEntryListResult(entries=tuple(self.entries))
 
     async def save_profile(self, turn: UUID, name: str) -> BrowserProfile:
         assert turn in self.opened
@@ -351,6 +359,8 @@ def test_a_browser_on_instance_has_the_browser_tools(tmp_path) -> None:
         "browser_press",
         "browser_upload",
         "browser_profiles",
+        "browser_vault",
+        "browser_fill_credential",
     } <= names
 
 
@@ -390,6 +400,34 @@ def test_browser_profiles_says_when_there_is_none(tmp_path) -> None:
 
     assert _results(payloads)["browser_profiles"].output == (
         "You have no browser profiles. The user creates them from the instance page."
+    )
+
+
+def test_browser_vault_lists_the_instances_entries_by_name_and_site(tmp_path) -> None:
+    browser = FakeBrowser()
+    browser.entries = [
+        VaultEntry(name="Indeed", site="https://secure.indeed.com"),
+        VaultEntry(name="LinkedIn", site="https://www.linkedin.com"),
+    ]
+    model = _calls(("browser_vault", {}))
+
+    _, payloads = _turn(_instance(tmp_path), model, "Which sign-ins do you have?", browser)
+
+    [gate] = [p for p in payloads if isinstance(p, ToolGated)]
+    assert gate.action is GateOutcome.ALLOW
+    assert _results(payloads)["browser_vault"].output == (
+        "Indeed: https://secure.indeed.com\nLinkedIn: https://www.linkedin.com"
+    )
+    assert browser.opened == []
+
+
+def test_browser_vault_says_when_there_is_none(tmp_path) -> None:
+    model = _calls(("browser_vault", {}))
+
+    _, payloads = _turn(_instance(tmp_path), model, "Which sign-ins?", FakeBrowser())
+
+    assert _results(payloads)["browser_vault"].output == (
+        "Your vault is empty. The user adds sign-ins to it from the instance page."
     )
 
 
@@ -447,6 +485,11 @@ _ACTIONS = [
         {"ref": "e9", "path": "cv.pdf"},
         lambda workspace: Upload("e9", (workspace / "cv.pdf").resolve()),
     ),
+    (
+        "browser_fill_credential",
+        {"ref": "e4", "name": "LinkedIn", "field": "password"},
+        lambda _: FillCredential("e4", "LinkedIn", VaultField.PASSWORD),
+    ),
 ]
 
 
@@ -501,6 +544,18 @@ def test_an_action_runs_on_a_routine_turn_with_a_grant(tmp_path, name, args, act
         (name, GateOutcome.ALLOW, "routine.grant")
     ]
     assert browser.acted == [action(instance.manifest.workspace.path)]
+
+
+def test_a_vault_fill_says_what_it_filled_and_not_the_value(tmp_path) -> None:
+    browser = FakeBrowser()
+    model = _calls(("browser_fill_credential", {"ref": "e4", "name": "LinkedIn", "field": "totp"}))
+
+    _, payloads = _turn(_instance(tmp_path, mode="full-access"), model, "Sign in.", browser)
+
+    assert _results(payloads)["browser_fill_credential"].output == (
+        "Filled the totp of LinkedIn into e4 on about:blank."
+    )
+    assert browser.acted == [FillCredential("e4", "LinkedIn", VaultField.TOTP)]
 
 
 def test_a_download_lands_in_the_workspace_where_the_file_tools_read_it(tmp_path) -> None:

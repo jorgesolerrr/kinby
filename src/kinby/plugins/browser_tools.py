@@ -11,13 +11,14 @@ from uuid import UUID
 
 from pydantic import Field
 
-from kinby.contracts import BrowserProfileName
+from kinby.contracts import BrowserProfileName, VaultEntryName, VaultField
 from kinby.instance import Instance
 from kinby.plugins.browser import (
     BrowserAction,
     BrowserService,
     Click,
     Download,
+    FillCredential,
     Navigate,
     Page,
     Press,
@@ -55,8 +56,10 @@ def browser_tools(instance: Instance) -> tuple[Tool, ...]:
         browser_select,
         browser_press,
         browser_upload,
+        browser_fill_credential,
         browser_takeover,
         browser_profiles,
+        browser_vault,
     )
 
 
@@ -166,6 +169,17 @@ async def browser_upload(ref: str, path: str, context: ToolContext) -> str:
 
 
 @tool(write=True)
+async def browser_fill_credential(
+    ref: str, name: VaultEntryName, field: VaultField, context: ToolContext
+) -> str:
+    """Fill the field with `ref` with the `field` of your vault entry `name`: its username, its
+    password, or the current code of its TOTP seed. The hub fills it only on the entry's site,
+    and you never see the value."""
+    action = FillCredential(ref, name, field)
+    return await _act(context, action, f"Filled the {field} of {name} into {ref}")
+
+
+@tool(write=True)
 async def browser_takeover(reason: str, context: ToolContext) -> str:
     """Hand the browser to the user, when the page asks for what you cannot give, such as a
     sign-in or a CAPTCHA. `reason` tells the user what to do. The turn waits until the user
@@ -184,6 +198,18 @@ async def browser_profiles(context: ToolContext) -> str:
     if not listed.profiles:
         return "You have no browser profiles. The user creates them from the instance page."
     return "\n".join(f"{profile.name}: {profile.site}" for profile in listed.profiles)
+
+
+@tool(write=False)
+async def browser_vault(context: ToolContext) -> str:
+    """Your vault: sign-ins browser_fill_credential fills by name, each with the site it is
+    for."""
+    if context.browser is None:
+        raise ValueError("The browser opens only in a turn of a browser-on instance.")
+    listed = await context.browser.vault()
+    if not listed.entries:
+        return "Your vault is empty. The user adds sign-ins to it from the instance page."
+    return "\n".join(f"{entry.name}: {entry.site}" for entry in listed.entries)
 
 
 async def _act(context: ToolContext, action: BrowserAction, done: str) -> str:

@@ -377,7 +377,7 @@ def test_prompt_sections_name_their_sources(tmp_path: Path) -> None:
     ]
 
 
-def test_a_browser_on_instance_is_told_to_report_an_expired_sign_in_rather_than_sign_in(
+def test_a_browser_on_instance_is_told_to_sign_in_from_its_vault_or_report_the_sign_in(
     tmp_path: Path,
 ) -> None:
     instance_path = _instance_with_prompt_files(tmp_path)
@@ -392,8 +392,8 @@ def test_a_browser_on_instance_is_told_to_report_an_expired_sign_in_rather_than_
         ("browser", "kinby"),
     ]
     assert "browser_profiles" in sections[1].text
+    assert "browser_fill_credential" in sections[1].text
     assert "notify" in sections[1].text
-    assert "instead of signing in" in sections[1].text
 
 
 def test_prompt_version_hashes_rendered_sections_without_environment(tmp_path: Path) -> None:

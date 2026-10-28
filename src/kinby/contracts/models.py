@@ -50,8 +50,9 @@ class Scope(StrEnum):
     #: Raise a notification for the hub to send through its channels. Every instance holds it, on
     #: its hub route.
     NOTIFICATION_RAISE = "notification:raise"
-    #: Ask the hub's browser service for a browser for one turn, and list and save the instance's
-    #: browser profiles. Only a browser-on instance holds it, on its hub route (ADR 0113).
+    #: Ask the hub's browser service for a browser for one turn, list and save the instance's
+    #: browser profiles, and list its vault entries. Only a browser-on instance holds it, on its
+    #: hub route (ADR 0113).
     BROWSER_OPEN = "browser:open"
 
 
@@ -3033,6 +3034,84 @@ class BrowserProfileRenameCommand(ContractModel):
 class BrowserProfileDeleteCommand(ContractModel):
     instance_id: UUID
     name: BrowserProfileName
+
+
+type VaultEntryName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+
+
+class VaultField(StrEnum):
+    """What of a vault entry the browser service fills into a page."""
+
+    USERNAME = "username"
+    PASSWORD = "password"
+    #: The current code of the entry's TOTP seed.
+    TOTP = "totp"
+
+
+class VaultEntry(ContractModel):
+    """One sign-in in an instance's vault, as anyone but the hub sees it: its values never leave
+    the hub."""
+
+    name: VaultEntryName
+    #: The origin of the pages it fills, such as https://www.linkedin.com.
+    site: str
+
+
+class VaultEntryListResult(ContractModel):
+    #: By name.
+    entries: tuple[VaultEntry, ...]
+
+
+class BrowserVaultCommand(ContractModel):
+    """List the vault entries of the instance that calls."""
+
+
+class VaultEntryListCommand(ContractModel):
+    instance_id: UUID
+
+
+class VaultEntryAddCommand(ContractModel):
+    """Add a sign-in to an instance's vault. The result carries no value back."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    instance_id: UUID
+    name: VaultEntryName
+    #: A URL of the site, whose origin the entry is bound to.
+    site: str
+    username: Annotated[SecretStr, Field(min_length=1)]
+    password: Annotated[SecretStr, Field(min_length=1)]
+    #: The base32 seed of the site's authenticator codes.
+    totp_seed: Annotated[SecretStr, Field(min_length=1)] | None = None
+
+    @field_serializer("username", "password", "totp_seed", when_used="json")
+    def serialize_value(self, value: SecretStr | None) -> str | None:
+        return None if value is None else value.get_secret_value()
+
+
+class VaultEntryEditCommand(ContractModel):
+    """Replace what an entry of an instance's vault holds. Each value left out keeps the one
+    saved. The result carries no value back."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    instance_id: UUID
+    name: VaultEntryName
+    site: str | None = None
+    username: Annotated[SecretStr, Field(min_length=1)] | None = None
+    password: Annotated[SecretStr, Field(min_length=1)] | None = None
+    totp_seed: Annotated[SecretStr, Field(min_length=1)] | None = None
+
+    @field_serializer("username", "password", "totp_seed", when_used="json")
+    def serialize_value(self, value: SecretStr | None) -> str | None:
+        return None if value is None else value.get_secret_value()
+
+
+class VaultEntryDeleteCommand(ContractModel):
+    instance_id: UUID
+    name: VaultEntryName
 
 
 class DeliveryStatus(StrEnum):
