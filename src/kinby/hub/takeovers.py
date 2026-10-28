@@ -37,8 +37,8 @@ type _Takeover = tuple[UUID, UUID]
 
 class Takeovers:
     """A turn's takeover drives the page its turn left open. A takeover with no turn keeps a page
-    of its own open while the user watches it, until they save it as a profile, and opens one
-    only for an instance whose browser is on."""
+    of its own open while the user watches it, until they save it as a profile. Either opens a
+    page only for an instance whose browser is on."""
 
     def __init__(
         self, browsers: PlaywrightBrowser, browser_on: Callable[[UUID], bool], resume: Resume
@@ -49,7 +49,11 @@ class Takeovers:
         self._open: set[_Takeover] = set()
 
     async def watch_turn(self, command: ThreadTakeoverStartCommand) -> Stream[TakeoverFrame]:
-        return Stream(0, await self._browsers.screencast(command.instance_id, command.turn_id))
+        """Stream the turn's page, opened first when the turn parked with no browser free."""
+        instance_id, turn_id = command.instance_id, command.turn_id
+        self._require_browser(instance_id)
+        await self._browsers.open(instance_id, BrowserOpenCommand(turn_id=turn_id))
+        return Stream(0, await self._browsers.screencast(instance_id, turn_id))
 
     async def drive_turn(self, command: ThreadTakeoverInputCommand) -> ThreadTakeoverInputResult:
         await self._browsers.send_input(command.instance_id, command.turn_id, command.input)
@@ -68,8 +72,7 @@ class Takeovers:
     async def start(self, command: BrowserTakeoverStartCommand) -> Stream[TakeoverFrame]:
         """Open a page at the command's URL, and stream it until the watching stops."""
         instance_id, page = command.instance_id, command.takeover_id
-        if not self._browser_on(instance_id):
-            raise BrowserNotOpen(f'Instance "{instance_id}" has the browser off.')
+        self._require_browser(instance_id)
         takeover = (instance_id, page)
         self._open.add(takeover)
         try:
@@ -116,6 +119,10 @@ class Takeovers:
                 yield frame
         finally:
             await self._close(takeover)
+
+    def _require_browser(self, instance_id: UUID) -> None:
+        if not self._browser_on(instance_id):
+            raise BrowserNotOpen(f'Instance "{instance_id}" has the browser off.')
 
     def _require(self, instance_id: UUID, takeover_id: UUID) -> _Takeover:
         takeover = (instance_id, takeover_id)

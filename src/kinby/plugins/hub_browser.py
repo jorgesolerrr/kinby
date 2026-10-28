@@ -67,6 +67,8 @@ class HubBrowser:
         self._opened: set[UUID] = set()
 
     async def open(self, turn: UUID, profile: BrowserProfileName | None = None) -> None:
+        # An open that failed may still leave the turn a page, which the hub opens for a takeover's
+        # live view, so the turn's close goes to the hub all the same.
         self._opened.add(turn)
         await _call(BROWSER_OPEN, BrowserOpenCommand(turn_id=turn, profile=profile))
 

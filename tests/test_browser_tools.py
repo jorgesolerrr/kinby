@@ -614,6 +614,24 @@ def test_a_takeover_parks_the_turn_needing_the_user_and_resuming_it_finishes_it(
     assert browser.closed == [parked.turn_id]
 
 
+def test_a_takeover_parks_the_turn_even_when_no_browser_comes_free_for_it(tmp_path) -> None:
+    browser = FakeBrowser(refusal="The hub's browser cap of 3 is reached.")
+    dispatcher = _takeover_runtime(tmp_path, browser)
+
+    async def scenario() -> tuple[Event, list[ThreadStatus], list[Event]]:
+        parked = await _parked_on_takeover(dispatcher)
+        listed = await call(dispatcher, "thread.list")
+        await call(dispatcher, "thread.turn.interrupt", thread_id=parked.thread_id)
+        statuses = [thread.status for thread in listed.threads]
+        return parked, statuses, await turn_events(dispatcher, parked.thread_id)
+
+    parked, statuses, events = asyncio.run(scenario())
+
+    assert statuses == [ThreadStatus.AWAITING_TAKEOVER]
+    assert isinstance(events[-1].payload, TurnInterrupted)
+    assert browser.closed == [parked.turn_id]
+
+
 def test_a_takeover_raises_a_notification_with_its_reason(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(HUB_URL_VARIABLE, "ws://127.0.0.1:9/hub")
     monkeypatch.setenv(HUB_SCOPES_VARIABLE, Scope.NOTIFICATION_RAISE.value)

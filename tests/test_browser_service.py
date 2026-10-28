@@ -612,6 +612,37 @@ def test_the_user_watches_a_turns_takeover_on_the_hub_and_drives_its_page(browse
 
 
 @pytest.mark.browser
+def test_the_live_view_opens_the_page_of_a_turn_that_parked_with_no_browser_free(
+    browser_server,
+) -> None:
+    async def scenario() -> tuple[bytes, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, _ONE_BROWSER) as hub,
+        ):
+            parked = uuid4()
+            with as_instance(hub, hub.alice) as alices:
+                holding = await _open(alices, port)
+                with pytest.raises(ValueError, match="browser cap of 1 is reached"):
+                    await alices.open(parked)
+                await alices.close(holding)
+                watched = await _watched(
+                    hub, THREAD_TAKEOVER_START.name, {"instance_id": hub.alice, "turn_id": parked}
+                )
+                frame = await _first_frame(watched)
+                await watched.aclose()
+                # The turn ends, and its close reaches the page the hub opened for the user.
+                await alices.close(parked)
+            return frame, await _read_by_bob(hub, port)
+
+    frame, read_by_bob = asyncio.run(scenario())
+
+    assert frame.startswith(b"\xff\xd8")
+    assert "You have 3 open applications." in read_by_bob
+
+
+@pytest.mark.browser
 def test_finishing_a_turns_takeover_as_a_profile_saves_it_and_resumes_the_turn_with_it(
     browser_server,
 ) -> None:

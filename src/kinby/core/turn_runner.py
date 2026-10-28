@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
@@ -651,8 +651,10 @@ class LangGraphRunner:
                 await self._browser.close(turn.turn_id)
         if isinstance(parked, TakeoverRequested):
             try:
-                # The user drives the page on the hub, which needs it open before they arrive.
-                await self._browser.open(turn.turn_id)
+                # The user drives the page on the hub. With no browser free, the turn parks all the
+                # same, and the user's live view opens the page once one comes free.
+                with suppress(Exception):
+                    await self._browser.open(turn.turn_id)
                 await emit(parked)
                 if raises_notifications():
                     source = self._notification_source(turn) or UNTITLED

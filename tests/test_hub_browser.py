@@ -23,12 +23,14 @@ from kinby.contracts import (
     BrowserProfileDeleteCommand,
     BrowserProfileListResult,
     BrowserProfileRenameCommand,
+    ContractModel,
     ControlToken,
     ErrorCode,
     ErrorEnvelope,
     FrameType,
     InstanceStatusCommand,
     InstanceStatusResult,
+    Stream,
     TakeoverKey,
     ThreadTakeoverInputCommand,
 )
@@ -212,41 +214,46 @@ def test_a_turn_with_no_browser_open_has_nothing_to_act_on_or_save(tmp_path):
     assert [answer["code"] for answer in refused] == [ErrorCode.NOT_FOUND.value] * 3
 
 
-def test_a_turn_with_no_browser_open_has_no_takeover_to_watch_or_drive(tmp_path):
-    async def scenario() -> tuple[object, object]:
+def test_a_turn_with_no_browser_open_has_no_page_to_drive(tmp_path):
+    async def scenario() -> object:
         async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            turn = {"instance_id": hub.alice, "turn_id": uuid4()}
-            watched = await hub.hub.dispatcher.subscribe(
-                THREAD_TAKEOVER_START.name, turn, HUB_SCOPES
-            )
-            driven = await hub_client(hub.hub).call(
+            return await hub_client(hub.hub).call(
                 THREAD_TAKEOVER_INPUT,
-                ThreadTakeoverInputCommand(**turn, input=TakeoverKey(key="a")),
+                ThreadTakeoverInputCommand(
+                    instance_id=hub.alice, turn_id=uuid4(), input=TakeoverKey(key="a")
+                ),
             )
-            return watched, driven
 
-    watched, driven = asyncio.run(scenario())
+    driven = asyncio.run(scenario())
 
-    assert isinstance(watched, ErrorEnvelope)
-    assert watched.code is ErrorCode.NOT_FOUND
     assert isinstance(driven, ErrorEnvelope)
     assert driven.code is ErrorCode.NOT_FOUND
 
 
-def test_a_browser_off_instance_has_no_takeover_to_save_a_profile_from(tmp_path):
-    async def scenario() -> tuple[object, int]:
+def test_a_browser_off_instance_has_no_takeover_to_open_a_page_for(tmp_path):
+    async def scenario() -> tuple[list[Stream[ContractModel] | ErrorEnvelope], int]:
         async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
-            started = await hub.hub.dispatcher.subscribe(
-                BROWSER_TAKEOVER_START.name,
-                {"instance_id": hub.bob, "takeover_id": uuid4(), "url": "https://example.com/"},
-                HUB_SCOPES,
-            )
+            started = [
+                await hub.hub.dispatcher.subscribe(subscription, params, HUB_SCOPES)
+                for subscription, params in [
+                    (
+                        BROWSER_TAKEOVER_START.name,
+                        {
+                            "instance_id": hub.bob,
+                            "takeover_id": uuid4(),
+                            "url": "https://example.com/",
+                        },
+                    ),
+                    (THREAD_TAKEOVER_START.name, {"instance_id": hub.bob, "turn_id": uuid4()}),
+                ]
+            ]
             return started, hub.runtime.starts
 
     started, starts = asyncio.run(scenario())
 
-    assert isinstance(started, ErrorEnvelope)
-    assert started.code is ErrorCode.NOT_FOUND
+    assert [(type(answer), getattr(answer, "code", None)) for answer in started] == [
+        (ErrorEnvelope, ErrorCode.NOT_FOUND)
+    ] * 2
     assert starts == 0
 
 
