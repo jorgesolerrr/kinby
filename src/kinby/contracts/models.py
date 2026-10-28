@@ -50,8 +50,9 @@ class Scope(StrEnum):
     #: Raise a notification for the hub to send through its channels. Every instance holds it, on
     #: its hub route.
     NOTIFICATION_RAISE = "notification:raise"
-    #: Ask the hub's browser service for a browser for one turn, and list and save the instance's
-    #: browser profiles. Only a browser-on instance holds it, on its hub route (ADR 0113).
+    #: Open the hub's browser for one turn, act on its page and read it, and list and save the
+    #: instance's browser profiles. Only a browser-on instance holds it, on its hub route
+    #: (ADR 0114).
     BROWSER_OPEN = "browser:open"
 
 
@@ -92,9 +93,6 @@ AccessToken = NewType("AccessToken", str)
 
 #: The secret CI presents to the hub's contract server. It holds the update scopes only.
 UpdateToken = NewType("UpdateToken", str)
-
-#: The secret that connects one turn of one instance to the hub's browser service, once.
-BrowserToken = NewType("BrowserToken", str)
 
 
 class ErrorCode(StrEnum):
@@ -3003,7 +3001,8 @@ class NotificationRaiseResult(ContractModel):
 
 
 class BrowserOpenCommand(ContractModel):
-    """Ask for a browser for one turn of the instance that calls."""
+    """Open the hub's browser for one turn of the instance that calls, unless it is open. A
+    browser opened without the profile refuses it."""
 
     #: The turn, or the takeover the user started with no turn.
     turn_id: UUID
@@ -3012,10 +3011,160 @@ class BrowserOpenCommand(ContractModel):
 
 
 class BrowserOpenResult(ContractModel):
-    """Where the turn's browser connects, and the token it connects with."""
+    pass
 
-    address: str
-    token: BrowserToken
+
+#: The most a turn uploads to a page in one call, or a page downloads in one action, in bytes.
+BROWSER_FILE_BYTES = 10 * 1024 * 1024
+#: The largest frame on an instance's hub route: a browser file, base64-encoded, and its call.
+HUB_ROUTE_FRAME_BYTES = BROWSER_FILE_BYTES * 4 // 3 + 1024 * 1024
+
+
+class BrowserFile(ContractModel):
+    """A file on its way to a page, or from one."""
+
+    name: str
+    #: base64-encoded.
+    content: Annotated[str, Field(max_length=BROWSER_FILE_BYTES * 4 // 3 + 4)]
+
+
+class BrowserNavigate(ContractModel):
+    type: Literal["navigate"] = "navigate"
+    url: str
+
+
+class BrowserScroll(ContractModel):
+    type: Literal["scroll"] = "scroll"
+    direction: Literal["up", "down"]
+    #: The element to scroll into view instead, by its ref in a snapshot.
+    ref: str | None = None
+
+
+class BrowserWait(ContractModel):
+    type: Literal["wait"] = "wait"
+    #: The text to wait for. Without it, wait for the page to finish loading.
+    text: str | None = None
+    seconds: Annotated[float, Field(gt=0, le=60)]
+
+
+class BrowserClick(ContractModel):
+    type: Literal["click"] = "click"
+    ref: str
+
+
+class BrowserType(ContractModel):
+    """Type *text* into a field, in place of what it holds."""
+
+    type: Literal["type"] = "type"
+    ref: str
+    text: str
+
+
+class BrowserSelect(ContractModel):
+    """Select an option of a list, by its value or its label."""
+
+    type: Literal["select"] = "select"
+    ref: str
+    value: str
+
+
+class BrowserPress(ContractModel):
+    """Press a key on the element that has the focus."""
+
+    type: Literal["press"] = "press"
+    key: str
+
+
+class BrowserUpload(ContractModel):
+    """Attach *file* to a file field."""
+
+    type: Literal["upload"] = "upload"
+    ref: str
+    file: BrowserFile
+
+
+BrowserPageAction = Annotated[
+    BrowserNavigate
+    | BrowserScroll
+    | BrowserWait
+    | BrowserClick
+    | BrowserType
+    | BrowserSelect
+    | BrowserPress
+    | BrowserUpload,
+    Field(discriminator="type"),
+]
+
+
+class BrowserRunCommand(ContractModel):
+    """Run one action on the page of a turn of the instance that calls."""
+
+    turn_id: UUID
+    action: BrowserPageAction
+
+
+class BrowserPage(ContractModel):
+    """Where the turn's page is after an action, and the files it downloaded since the last."""
+
+    url: str
+    title: str
+    downloads: tuple[BrowserFile, ...] = ()
+
+
+class BrowserSnapshotCommand(ContractModel):
+    """The page's accessibility tree with a ref on each element, cut at *max_chars*.
+    *interactive* keeps only the elements the page lets you act on."""
+
+    turn_id: UUID
+    interactive: bool
+    max_chars: Annotated[int, Field(ge=1)]
+
+
+class BrowserTextCommand(ContractModel):
+    """The text of the element with *ref*, or of the whole page."""
+
+    turn_id: UUID
+    ref: str | None = None
+
+
+class BrowserPageRead(ContractModel):
+    """What the browser read from the page at *url*."""
+
+    url: str
+    text: str
+
+
+class BrowserScreenshotCommand(ContractModel):
+    turn_id: UUID
+
+
+class BrowserScreenshot(ContractModel):
+    #: The page's viewport as a PNG, base64-encoded.
+    image: str
+
+
+class BrowserFrameCommand(ContractModel):
+    """The page's viewport for a takeover's live view, once it changes, or as it is when it
+    does not change for a while."""
+
+    turn_id: UUID
+
+
+class BrowserInputCommand(ContractModel):
+    """Pass the user's mouse or keyboard to the page of a turn, during a takeover."""
+
+    turn_id: UUID
+    input: TakeoverInput
+
+
+class BrowserCloseCommand(ContractModel):
+    """Close the turn's browser, if it is open, saving its state back to its profile."""
+
+    turn_id: UUID
+
+
+class BrowserCloseResult(ContractModel):
+    pass
 
 
 type BrowserProfileName = Annotated[
@@ -3042,12 +3191,12 @@ class BrowserProfilesCommand(ContractModel):
 
 class BrowserProfileSaveCommand(ContractModel):
     """Save the state of a turn's browser as a profile of the instance that calls, replacing one
-    by that name. The turn's state is saved back to it when the turn ends."""
+    by that name, for the site of its page. The turn's state is saved back to it when the turn
+    ends."""
 
     #: The turn, or the takeover the user started with no turn.
     turn_id: UUID
     name: BrowserProfileName
-    site: str
 
 
 class BrowserProfileListCommand(ContractModel):

@@ -1,16 +1,19 @@
-"""The browser service: its proxy refuses every address that is not public, and the real adapter
-reads and acts on a page through Playwright's browser server (ADR 0113)."""
+"""The browser service: its proxy refuses every address that is not public, and an instance reads
+and acts on a page in Playwright's browser server through the hub's browser methods, with its
+control token (ADR 0114)."""
 
 import asyncio
 import json
 import re
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import aclosing, asynccontextmanager
+from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
+import aiohttp
 import httpx
 import pytest
 from aiohttp import web
@@ -18,19 +21,24 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 from kinby.contracts import (
-    BrowserOpenCommand,
-    BrowserOpenResult,
+    BROWSER_FILE_BYTES,
+    BROWSER_PROFILE_LIST,
+    INSTANCE_STOP,
     BrowserProfile,
+    BrowserProfileListCommand,
     BrowserProfileListResult,
-    BrowserProfileSaveCommand,
-    BrowserToken,
+    ErrorCode,
+    InstanceStopCommand,
+    LifecycleOperationResult,
+    OperationState,
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
 )
-from kinby.hub.browser_profiles import BrowserProfiles, BrowserSession
+from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
+from kinby.hub.browser import BrowserLimits
 from kinby.hub.browser_service import serve_proxy
-from kinby.hub.relay import relay_browser
+from kinby.plugins import hub_browser
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
@@ -44,8 +52,12 @@ from kinby.plugins.browser import (
     Upload,
     Wait,
 )
-from kinby.plugins.defaults.web import REFUSED_HEADER, RefusedUrl, public_address
-from kinby.plugins.playwright_browser import PlaywrightBrowser
+from kinby.plugins.defaults.web import REFUSED_HEADER, public_address
+from kinby.plugins.hub import HUB_URL_VARIABLE
+from kinby.plugins.hub_browser import HubBrowser
+from tests.test_hub import finished_operation, hub_client
+from tests.test_hub_browser import BrowserHub, browser_hub, browser_on, error, result
+from tests.test_hub_server import frame
 
 _PAGE = """<html><head><title>Applications</title></head><body>
 <h1>Applications</h1>
@@ -71,9 +83,13 @@ _FORM = """<html><head><title>Apply</title></head><body>
 </div>
 <a href="/report.csv" download>Report</a>
 <a href="/export.csv" download>Export</a>
-<input type="file" aria-label="CV" onchange="said.textContent = 'Attached ' + this.files[0].name">
+<a href="/big.bin" download>Archive</a>
+<input type="file" aria-label="CV"
+  onchange="said.textContent = 'Attached ' + this.files[0].name + ' as ' + this.files[0].type">
 </body></html>"""
 _REPORT = b"company,status\nAcme,open\n"
+#: The session cookie the site signs a browser in with.
+_SESSION = "signed-in-at-the-hub"
 _PAD = """<html><body style="margin: 0; height: 100vh"
   onclick="said.textContent = 'Clicked at ' + event.clientX + ',' + event.clientY">
 <p id="said">Nothing yet.</p>
@@ -87,6 +103,20 @@ async def _page(request: web.Request) -> web.Response:
 
 async def _form(request: web.Request) -> web.Response:
     return web.Response(text=_FORM, content_type="text/html")
+
+
+#: A page in one colour, with a link that opens a page in another in a new tab.
+_OPENER = """<html><body style="margin: 0; height: 100vh; background: #c00">
+<a href="/blue" target="_blank">Blue</a></body></html>"""
+_BLUE = """<html><body style="margin: 0; height: 100vh; background: #00c"></body></html>"""
+
+
+async def _opener(request: web.Request) -> web.Response:
+    return web.Response(text=_OPENER, content_type="text/html")
+
+
+async def _blue(request: web.Request) -> web.Response:
+    return web.Response(text=_BLUE, content_type="text/html")
 
 
 async def _pad(request: web.Request) -> web.Response:
@@ -106,9 +136,13 @@ async def _export(request: web.Request) -> web.Response:
     return web.Response(body=_REPORT, content_type="text/csv")
 
 
+async def _big(request: web.Request) -> web.Response:
+    return web.Response(body=bytes(BROWSER_FILE_BYTES + 1), content_type="application/zip")
+
+
 async def _set_cookie(request: web.Request) -> web.Response:
     response = web.Response(text="<p>Signed in.</p>", content_type="text/html")
-    response.set_cookie("session", "alice")
+    response.set_cookie("session", _SESSION)
     return response
 
 
@@ -131,8 +165,11 @@ async def site() -> AsyncIterator[int]:
     application.router.add_get("/", _page)
     application.router.add_get("/form", _form)
     application.router.add_get("/pad", _pad)
+    application.router.add_get("/opener", _opener)
+    application.router.add_get("/blue", _blue)
     application.router.add_get("/report.csv", _report)
     application.router.add_get("/export.csv", _export)
+    application.router.add_get("/big.bin", _big)
     application.router.add_get("/sign-in", _set_cookie)
     application.router.add_get("/refresh", _refresh_cookie)
     application.router.add_get("/cookies", _cookies)
@@ -239,60 +276,37 @@ def browser_server() -> Iterator[str]:
         server.wait()
 
 
-def _launch_options(proxy_address: str) -> str:
-    """The options that send the browser's every request through the service's proxy."""
-    return json.dumps({"proxy": {"server": proxy_address}})
-
-
-class _RelayedRoute:
-    """The hub's browser route for one instance: each turn's browser relayed to the service
-    through a session that keeps the instance's profiles in *profiles*."""
-
-    def __init__(self, relay: str, profiles: BrowserProfiles) -> None:
-        self._relay = relay
-        self._profiles = profiles
-        self._instance_id = uuid4()
-        self.sessions: dict[UUID, BrowserSession] = {}
-
-    async def open(self, command: BrowserOpenCommand) -> BrowserOpenResult:
-        self.sessions[command.turn_id] = BrowserSession(
-            self._profiles, self._instance_id, command.profile
-        )
-        return BrowserOpenResult(
-            address=f"{self._relay}/{command.turn_id}", token=BrowserToken("token")
-        )
-
-    async def profiles(self) -> BrowserProfileListResult:
-        return self._profiles.list(self._instance_id)
-
-    async def save(self, command: BrowserProfileSaveCommand) -> BrowserProfile:
-        return await self.sessions[command.turn_id].save_as(command.name, command.site)
+_LIMITS = BrowserLimits(cap=3, wait_seconds=5, idle_seconds=300)
 
 
 @asynccontextmanager
-async def relayed(server: str, proxy_address: str) -> AsyncIterator[PlaywrightBrowser]:
-    """The adapter on the hub's relay to *server*, which applies the instance's profiles and
-    lets through only the calls the browser tools make."""
-    routes: list[_RelayedRoute] = []
+async def browsers(
+    server: str, proxy_address: str, limits: BrowserLimits = _LIMITS
+) -> AsyncIterator[BrowserHub]:
+    """A served hub whose browsers run on *server*, and send every request through the proxy at
+    *proxy_address*."""
+    options = urlencode({"launch-options": json.dumps({"proxy": {"server": proxy_address}})})
+    with TemporaryDirectory() as directory:
+        async with browser_hub(Path(directory) / "hub", limits, f"{server}?{options}") as hub:
+            yield hub
 
-    async def relay(request: web.Request) -> web.WebSocketResponse:
-        session = routes[0].sessions[UUID(request.match_info["turn"])]
-        return await relay_browser(request, server, _launch_options(proxy_address), session)
 
-    application = web.Application()
-    application.router.add_get("/{turn}", relay)
-    runner = web.AppRunner(application)
-    await runner.setup()
-    served = web.TCPSite(runner, "127.0.0.1", 0)
-    await served.start()
-    try:
-        with TemporaryDirectory() as profiles:
-            routes.append(
-                _RelayedRoute(f"ws://127.0.0.1:{served.port}", BrowserProfiles(Path(profiles)))
-            )
-            yield PlaywrightBrowser(routes[0])
-    finally:
-        await runner.cleanup()
+@contextmanager
+def as_instance(hub: BrowserHub, instance_id: UUID) -> Iterator[HubBrowser]:
+    """The browser service as the instance reaches it, on its hub route with its control
+    token."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(HUB_URL_VARIABLE, hub.route(instance_id).replace("http", "ws", 1))
+        patch.setenv(CONTROL_TOKEN_VARIABLE, hub.token(instance_id))
+        yield HubBrowser()
+
+
+@asynccontextmanager
+async def on_the_hub(server: str, proxy_address: str) -> AsyncIterator[HubBrowser]:
+    """The browser service as alice reaches it, on a hub whose browsers run on *server*."""
+    async with browsers(server, proxy_address) as hub:
+        with as_instance(hub, hub.alice) as browser:
+            yield browser
 
 
 @pytest.mark.browser
@@ -303,7 +317,7 @@ def test_an_interactive_snapshot_holds_refs_to_what_can_be_acted_on_and_respects
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             turn = uuid4()
             await browser.open(turn)
@@ -338,7 +352,7 @@ def test_the_service_refuses_an_address_that_is_not_public(browser_server) -> No
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             turn = uuid4()
             await browser.open(turn)
@@ -347,7 +361,7 @@ def test_the_service_refuses_an_address_that_is_not_public(browser_server) -> No
             finally:
                 await browser.close(turn)
 
-    with pytest.raises(RefusedUrl, match="not a public address"):
+    with pytest.raises(ValueError, match="not a public address"):
         asyncio.run(scenario())
 
 
@@ -357,7 +371,7 @@ def test_two_turns_get_contexts_that_share_no_cookie(browser_server) -> None:
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             first, second = uuid4(), uuid4()
             await browser.open(first)
@@ -375,7 +389,7 @@ def test_two_turns_get_contexts_that_share_no_cookie(browser_server) -> None:
 
     signed_in, other = asyncio.run(scenario())
 
-    assert signed_in == "session: alice"
+    assert signed_in == f"session: {_SESSION}"
     assert other == "session: none"
 
 
@@ -388,7 +402,7 @@ def _on_the_form(server: str, scenario: Callable[[Act], Awaitable[None]]) -> Non
     page says after."""
 
     async def run() -> None:
-        async with site() as port, proxy(port) as address, relayed(server, address) as browser:
+        async with site() as port, proxy(port) as address, on_the_hub(server, address) as browser:
             turn = uuid4()
             await browser.open(turn)
             try:
@@ -443,7 +457,7 @@ def test_typing_into_a_password_field_is_refused(browser_server) -> None:
     async def scenario(act: Act) -> None:
         await act('textbox "Password"', lambda ref: Type(ref, "hunter2"))
 
-    with pytest.raises(PermissionError, match="password field"):
+    with pytest.raises(ValueError, match="password field"):
         _on_the_form(browser_server, scenario)
 
 
@@ -454,7 +468,7 @@ def test_a_key_press_types_no_character_into_a_password_field(browser_server) ->
     async def scenario(act: Act) -> None:
         await act('textbox "Password"', Click)
         said.append((await act('textbox "Password"', lambda _: Press("Enter")))[0])
-        with pytest.raises(PermissionError, match="password field"):
+        with pytest.raises(ValueError, match="password field"):
             await act('textbox "Password"', lambda _: Press("a"))
 
     _on_the_form(browser_server, scenario)
@@ -501,7 +515,7 @@ def test_an_upload_attaches_the_file(browser_server, tmp_path: Path) -> None:
 
     _on_the_form(browser_server, scenario)
 
-    assert said == ["Attached cv.pdf"]
+    assert said == ["Attached cv.pdf as application/pdf"]
 
 
 @pytest.mark.browser
@@ -510,7 +524,7 @@ def test_a_takeover_streams_the_page_and_takes_the_users_mouse_and_keys(browser_
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             turn = uuid4()
             await browser.open(turn)
@@ -544,7 +558,7 @@ def test_a_profile_saved_from_one_turns_browser_opens_the_next_signed_in(browser
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             first, second = uuid4(), uuid4()
             await browser.open(first)
@@ -563,14 +577,14 @@ def test_a_profile_saved_from_one_turns_browser_opens_the_next_signed_in(browser
     saved, signed_in = asyncio.run(scenario())
 
     assert saved == BrowserProfile(name="Site", site="site.test")
-    assert signed_in == "session: alice"
+    assert signed_in == f"session: {_SESSION}"
 
 
 @pytest.mark.browser
 def test_a_cookie_the_site_renews_during_a_turn_is_in_the_profile_after_it(
     browser_server,
 ) -> None:
-    async def turn(browser: PlaywrightBrowser, profile: str | None, url: str) -> str:
+    async def turn(browser: HubBrowser, profile: str | None, url: str) -> str:
         turn = uuid4()
         await browser.open(turn, profile)
         try:
@@ -585,13 +599,13 @@ def test_a_cookie_the_site_renews_during_a_turn_is_in_the_profile_after_it(
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             await turn(browser, None, f"http://site.test:{port}/sign-in")
             await turn(browser, "Site", f"http://site.test:{port}/refresh")
             return await turn(browser, "Site", f"http://site.test:{port}/cookies")
 
-    assert asyncio.run(scenario()) == "session: alice-renewed"
+    assert asyncio.run(scenario()) == f"session: {_SESSION}-renewed"
 
 
 @pytest.mark.browser
@@ -600,7 +614,7 @@ def test_the_route_lets_through_each_read_the_browser_tools_make(browser_server)
         async with (
             site() as port,
             proxy(port) as address,
-            relayed(browser_server, address) as browser,
+            on_the_hub(browser_server, address) as browser,
         ):
             turn = uuid4()
             await browser.open(turn)
@@ -623,3 +637,330 @@ def test_the_route_lets_through_each_read_the_browser_tools_make(browser_server)
 
     assert titles == ["Applications"] * 4
     assert screenshot.startswith(b"\x89PNG")
+
+
+async def _open(browser: HubBrowser, port: int) -> UUID:
+    """A turn whose browser is open on the site."""
+    turn = uuid4()
+    await browser.open(turn)
+    await browser.run(turn, Navigate(f"http://site.test:{port}/"))
+    return turn
+
+
+@pytest.mark.browser
+def test_a_call_naming_another_instances_turn_is_refused(browser_server) -> None:
+    async def scenario() -> tuple[UUID, list[dict[str, object]], dict[str, object], str]:
+        async with site() as port, proxy(port) as address, browsers(browser_server, address) as hub:
+            browser_on(hub.hub, hub.bob)
+            with as_instance(hub, hub.alice) as alices:
+                turn = await _open(alices, port)
+                named: dict[str, object] = {"turn_id": str(turn)}
+                refused = [
+                    error(await hub.call(hub.bob, method, params))
+                    for method, params in [
+                        ("browser.text", named),
+                        ("browser.screenshot", named),
+                        ("browser.run", {**named, "action": {"type": "press", "key": "a"}}),
+                    ]
+                ]
+                closed = result(await hub.call(hub.bob, "browser.close", named))
+                still_open = (await alices.text(turn, None)).text
+                await alices.close(turn)
+            return turn, refused, closed, still_open
+
+    turn, refused, closed, still_open = asyncio.run(scenario())
+
+    assert [(answer["code"], answer["message"]) for answer in refused] == [
+        (ErrorCode.NOT_FOUND.value, f'Turn "{turn}" has no browser open.')
+    ] * 3
+    assert closed == {}
+    assert "You have 3 open applications." in still_open
+
+
+@pytest.mark.browser
+def test_with_the_cap_full_a_turn_waits_until_a_browser_closes(browser_server) -> None:
+    limits = BrowserLimits(cap=1, wait_seconds=0.05, idle_seconds=300)
+
+    async def scenario() -> tuple[dict[str, object], str, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, limits) as hub,
+        ):
+            with as_instance(hub, hub.alice) as browser:
+                first = await _open(browser, port)
+                refused = error(await hub.open(hub.alice, uuid4()))
+                with pytest.raises(ValueError, match="cap of 1") as raised:
+                    await browser.open(uuid4())
+                await browser.close(first)
+                second = await _open(browser, port)
+                read = await browser.text(second, None)
+                await browser.close(second)
+            return refused, str(raised.value), read.text
+
+    refused, raised, read = asyncio.run(scenario())
+
+    assert refused["code"] == ErrorCode.RESOURCE_EXHAUSTED.value
+    assert refused["retryable"] is True
+    assert refused["message"] == (
+        "The hub's browser cap of 1 is reached, and no browser came free within 0.05 seconds. "
+        "Try again later."
+    )
+    assert raised == f"The hub refused the browser: {refused['message']}"
+    assert "You have 3 open applications." in read
+
+
+@pytest.mark.browser
+def test_a_turns_browser_left_idle_closes_and_goes_back_to_the_cap(browser_server) -> None:
+    limits = BrowserLimits(cap=1, wait_seconds=5, idle_seconds=0.05, turn_idle_seconds=0.2)
+
+    async def scenario() -> tuple[str, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, limits) as hub,
+        ):
+            with as_instance(hub, hub.alice) as browser:
+                idle = await _open(browser, port)
+                # The service stops only once no browser is open.
+                await asyncio.wait_for(hub.runtime.stopped.wait(), 10)
+                with pytest.raises(ValueError, match="has no browser open") as closed:
+                    await browser.text(idle, None)
+                fresh = await _open(browser, port)
+                read = await browser.text(fresh, None)
+                await browser.close(fresh)
+            return str(closed.value), read.text
+
+    closed, read = asyncio.run(scenario())
+
+    assert "has no browser open" in closed
+    assert "You have 3 open applications." in read
+
+
+@pytest.mark.browser
+def test_a_stopped_instances_browsers_close_and_go_back_to_the_cap(browser_server) -> None:
+    limits = BrowserLimits(cap=1, wait_seconds=0.05, idle_seconds=300)
+
+    async def scenario() -> tuple[OperationState, str]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, limits) as hub,
+        ):
+            browser_on(hub.hub, hub.bob)
+            with as_instance(hub, hub.alice) as alices:
+                await _open(alices, port)
+            client = hub_client(hub.hub)
+            # The instance has no drain to answer, so its container goes down at once.
+            stopping = await client.call(
+                INSTANCE_STOP, InstanceStopCommand(instance_id=hub.alice, force=True)
+            )
+            assert isinstance(stopping, LifecycleOperationResult)
+            stopped = await finished_operation(client, stopping)
+            with as_instance(hub, hub.bob) as bobs:
+                turn = await _open(bobs, port)
+                read = await bobs.text(turn, None)
+                await bobs.close(turn)
+            return stopped.state, read.text
+
+    stopped, read = asyncio.run(scenario())
+
+    assert stopped is OperationState.SUCCEEDED
+    assert "You have 3 open applications." in read
+
+
+@pytest.mark.browser
+def test_the_hub_starts_the_service_on_the_first_browser_and_stops_it_once_idle(
+    browser_server,
+) -> None:
+    limits = BrowserLimits(cap=3, wait_seconds=5, idle_seconds=0.05)
+
+    async def scenario() -> tuple[int, int, int]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address, limits) as hub,
+        ):
+            with as_instance(hub, hub.alice) as browser:
+                first, second = await _open(browser, port), await _open(browser, port)
+                starts = hub.runtime.starts
+                await browser.close(first)
+                await browser.close(second)
+                await asyncio.wait_for(hub.runtime.stopped.wait(), 10)
+                await browser.close(await _open(browser, port))
+            return starts, hub.runtime.stops, hub.runtime.starts
+
+    assert asyncio.run(scenario()) == (1, 1, 2)
+
+
+@pytest.mark.browser
+def test_a_service_that_died_starts_again_on_the_next_browser(browser_server) -> None:
+    async def scenario() -> int:
+        async with site() as port, proxy(port) as address, browsers(browser_server, address) as hub:
+            with as_instance(hub, hub.alice) as browser:
+                first = await _open(browser, port)
+                hub.runtime.up = False
+                second = await _open(browser, port)
+                await browser.close(first)
+                await browser.close(second)
+            return hub.runtime.starts
+
+    assert asyncio.run(scenario()) == 2
+
+
+def _holding(directory: Path, secret: str) -> list[Path]:
+    """The files under *directory* that hold *secret*."""
+    return [
+        path
+        for path in directory.rglob("*")
+        if path.is_file() and secret.encode() in path.read_bytes()
+    ]
+
+
+@pytest.mark.browser
+def test_a_profile_is_listed_and_its_cookie_stays_with_the_hub(browser_server) -> None:
+    async def scenario() -> tuple[object, object, list[Path], list[tuple[Path, int]], Path]:
+        async with site() as port, proxy(port) as address, browsers(browser_server, address) as hub:
+            with as_instance(hub, hub.alice) as browser:
+                turn = uuid4()
+                await browser.open(turn)
+                await browser.run(turn, Navigate(f"http://site.test:{port}/sign-in"))
+                await browser.save_profile(turn, "Site")
+                await browser.close(turn)
+                listed = await browser.profiles()
+            as_the_user = await hub_client(hub.hub).call(
+                BROWSER_PROFILE_LIST, BrowserProfileListCommand(instance_id=hub.alice)
+            )
+            record = hub.hub.registry.instance(hub.alice)
+            assert record is not None
+            profiles = hub.hub.directory / "browser-profiles"
+            return (
+                listed,
+                as_the_user,
+                _holding(record.path, _SESSION),
+                [
+                    (path, path.stat().st_mode & 0o777)
+                    for path in _holding(hub.hub.directory, _SESSION)
+                ],
+                profiles,
+            )
+
+    listed, as_the_user, in_the_instance, in_the_hub, profiles = asyncio.run(scenario())
+
+    saved = BrowserProfileListResult(profiles=(BrowserProfile(name="Site", site="site.test"),))
+    assert listed == as_the_user == saved
+    assert in_the_instance == []
+    assert [(path.parent, mode) for path, mode in in_the_hub] == [(profiles, 0o600)]
+
+
+@pytest.mark.browser
+def test_a_download_over_the_cap_is_refused(browser_server) -> None:
+    async def scenario(act: Act) -> None:
+        await act('link "Archive"', Click)
+
+    with pytest.raises(ValueError, match="over the browser's cap"):
+        _on_the_form(browser_server, scenario)
+
+
+def test_an_upload_over_the_cap_never_reaches_the_hub(tmp_path: Path) -> None:
+    archive = tmp_path / "archive.zip"
+    with archive.open("wb") as file:
+        file.truncate(BROWSER_FILE_BYTES + 1)
+
+    with pytest.raises(ValueError, match="over the browser's cap"):
+        asyncio.run(HubBrowser().run(uuid4(), Upload("e1", archive)))
+
+
+def test_a_turn_that_opened_no_browser_closes_without_calling_the_hub() -> None:
+    asyncio.run(HubBrowser().close(uuid4()))
+
+
+@pytest.mark.browser
+def test_a_takeover_after_a_new_tab_opens_watches_the_new_tab(browser_server) -> None:
+    async def first_frame(browser: HubBrowser, turn: UUID) -> bytes:
+        async with aclosing(browser.screencast(turn)) as frames, asyncio.timeout(10):
+            return await anext(frames)
+
+    async def scenario() -> tuple[bytes, bytes]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            on_the_hub(browser_server, address) as browser,
+        ):
+            alone, opener = uuid4(), uuid4()
+            await browser.open(alone)
+            await browser.run(alone, Navigate(f"http://site.test:{port}/blue"))
+            blue = await first_frame(browser, alone)
+            await browser.close(alone)
+            await browser.open(opener)
+            await browser.run(opener, Navigate(f"http://site.test:{port}/opener"))
+            await first_frame(browser, opener)
+            tree = await browser.snapshot(opener, interactive=True, max_chars=2_000)
+            ref = re.search(r'link "Blue" \[ref=(e\d+)\]', tree.text)
+            assert ref is not None, tree.text
+            await browser.run(opener, Click(ref.group(1)))
+            await browser.run(opener, Wait(None, 5))
+            watched = await first_frame(browser, opener)
+            await browser.close(opener)
+            return blue, watched
+
+    blue, watched = asyncio.run(scenario())
+
+    assert watched == blue
+
+
+@pytest.mark.browser
+def test_a_close_sent_while_the_open_is_pending_closes_the_browser(browser_server) -> None:
+    async def scenario() -> tuple[list[str], dict[str, object]]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address) as hub,
+            aiohttp.ClientSession(
+                headers={"Authorization": f"Bearer {hub.token(hub.alice)}"}
+            ) as session,
+            session.ws_connect(hub.route(hub.alice)) as socket,
+        ):
+            turn = {"turn_id": str(uuid4())}
+            for frame_id, method in [("open", "browser.open"), ("close", "browser.close")]:
+                await socket.send_json(
+                    {"type": "call", "id": frame_id, "method": method, "params": turn}
+                )
+            answered = [(await frame(socket))["id"] for _ in range(2)]
+            return sorted(str(frame_id) for frame_id in answered), await hub.call(
+                hub.alice, "browser.text", turn
+            )
+
+    answered, read = asyncio.run(scenario())
+
+    assert answered == ["close", "open"]
+    assert error(read)["code"] == ErrorCode.NOT_FOUND.value
+
+
+def test_a_turn_whose_open_was_cancelled_still_closes_its_browser_on_the_hub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: list[str] = []
+    reached = asyncio.Event()
+
+    async def call_hub(method: str, params: dict[str, object], named: str) -> dict[str, object]:
+        called.append(method)
+        if method == "browser.open":
+            reached.set()
+            await asyncio.Event().wait()
+        return {}
+
+    monkeypatch.setattr(hub_browser, "call_hub", call_hub)
+
+    async def scenario() -> None:
+        browser, turn = HubBrowser(), uuid4()
+        opening = asyncio.create_task(browser.open(turn))
+        await reached.wait()
+        opening.cancel()
+        with suppress(asyncio.CancelledError):
+            await opening
+        await browser.close(turn)
+
+    asyncio.run(scenario())
+
+    assert called == ["browser.open", "browser.close"]

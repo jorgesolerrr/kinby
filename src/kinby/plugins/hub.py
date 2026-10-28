@@ -12,6 +12,7 @@ import aiohttp
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    HUB_ROUTE_FRAME_BYTES,
     HUB_WRITE,
     INSTANCE_RELAY_READ,
     RELAYED_READS,
@@ -365,7 +366,9 @@ async def call_hub(method: str, params: dict[str, JsonValue], named: str) -> dic
     try:
         async with (
             aiohttp.ClientSession(headers=headers) as session,
-            session.ws_connect(os.environ[HUB_URL_VARIABLE]) as socket,
+            session.ws_connect(
+                os.environ[HUB_URL_VARIABLE], max_msg_size=HUB_ROUTE_FRAME_BYTES
+            ) as socket,
         ):
             await socket.send_str(call.model_dump_json())
             answer = await socket.receive_str()

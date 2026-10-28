@@ -8,6 +8,7 @@ import shlex
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlencode
 
 from docker.errors import APIError, ContainerError, DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
@@ -17,6 +18,7 @@ from docker.types import Mount
 
 import docker
 from kinby.contracts import ContainerOwner, DeclaredSetup, StorageItem, StorageKind
+from kinby.hub.browser_service import LAUNCH_OPTIONS
 from kinby.hub.browser_service import PORT as BROWSER_PORT
 from kinby.hub.models import (
     BuildResult,
@@ -539,7 +541,8 @@ class DockerBrowserRuntime:
                     await asyncio.sleep(0.5)
                     continue
                 writer.close()
-                return f"ws://{self._name}:{BROWSER_PORT}/"
+                options = urlencode({"launch-options": LAUNCH_OPTIONS})
+                return f"ws://{self._name}:{BROWSER_PORT}/?{options}"
 
     async def running(self) -> bool:
         try:

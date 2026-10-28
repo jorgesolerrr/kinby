@@ -203,6 +203,18 @@ export type ViewChange = "created" | "changed" | "deleted";
 export interface Contract {
   client_frame: ClientFrame;
   methods: {
+    "browser.close": {
+      command: BrowserCloseCommand;
+      result: BrowserCloseResult;
+    };
+    "browser.frame": {
+      command: BrowserFrameCommand;
+      result: TakeoverFrame;
+    };
+    "browser.input": {
+      command: BrowserInputCommand;
+      result: ThreadTakeoverInputResult;
+    };
     "browser.open": {
       command: BrowserOpenCommand;
       result: BrowserOpenResult;
@@ -227,6 +239,18 @@ export interface Contract {
       command: BrowserProfilesCommand;
       result: BrowserProfileListResult;
     };
+    "browser.run": {
+      command: BrowserRunCommand;
+      result: BrowserPage;
+    };
+    "browser.screenshot": {
+      command: BrowserScreenshotCommand;
+      result: BrowserScreenshot;
+    };
+    "browser.snapshot": {
+      command: BrowserSnapshotCommand;
+      result: BrowserPageRead;
+    };
     "browser.takeover.finish": {
       command: BrowserTakeoverFinishCommand;
       result: BrowserProfile;
@@ -234,6 +258,10 @@ export interface Contract {
     "browser.takeover.input": {
       command: BrowserTakeoverInputCommand;
       result: ThreadTakeoverInputResult;
+    };
+    "browser.text": {
+      command: BrowserTextCommand;
+      result: BrowserPageRead;
     };
     "channel.create": {
       command: ChannelCreateCommand;
@@ -757,67 +785,31 @@ export interface CancelFrame {
   type: "cancel";
 }
 /**
- * Ask for a browser for one turn of the instance that calls.
+ * Close the turn's browser, if it is open, saving its state back to its profile.
  */
-export interface BrowserOpenCommand {
-  profile?: BrowserProfileName | null;
+export interface BrowserCloseCommand {
+  turn_id: string;
+}
+export interface BrowserCloseResult {}
+/**
+ * The page's viewport for a takeover's live view, once it changes, or as it is when it
+ * does not change for a while.
+ */
+export interface BrowserFrameCommand {
   turn_id: string;
 }
 /**
- * Where the turn's browser connects, and the token it connects with.
+ * One frame of the live view: the page as a JPEG image, base64-encoded.
  */
-export interface BrowserOpenResult {
-  address: string;
-  token: string;
-}
-export interface BrowserProfileDeleteCommand {
-  instance_id: string;
-  name: BrowserProfileName;
-}
-export interface BrowserProfileListResult {
-  profiles: BrowserProfile[];
+export interface TakeoverFrame {
+  data: string;
 }
 /**
- * A named signed-in state of one instance's browser. Its cookies never leave the hub.
+ * Pass the user's mouse or keyboard to the page of a turn, during a takeover.
  */
-export interface BrowserProfile {
-  name: BrowserProfileName;
-  site: string;
-}
-export interface BrowserProfileListCommand {
-  instance_id: string;
-}
-export interface BrowserProfileRenameCommand {
-  instance_id: string;
-  name: BrowserProfileName;
-  new_name: BrowserProfileName;
-}
-/**
- * Save the state of a turn's browser as a profile of the instance that calls, replacing one
- * by that name. The turn's state is saved back to it when the turn ends.
- */
-export interface BrowserProfileSaveCommand {
-  name: BrowserProfileName;
-  site: string;
-  turn_id: string;
-}
-/**
- * List the profiles of the instance that calls.
- */
-export interface BrowserProfilesCommand {}
-/**
- * Save the browser of a takeover with no turn as a profile, and close it.
- */
-export interface BrowserTakeoverFinishCommand {
-  profile: BrowserProfileName;
-  takeover_id: string;
-}
-/**
- * Pass the user's mouse or keyboard to the browser of a takeover with no turn.
- */
-export interface BrowserTakeoverInputCommand {
+export interface BrowserInputCommand {
   input: TakeoverPointer | TakeoverWheel | TakeoverKey;
-  takeover_id: string;
+  turn_id: string;
 }
 /**
  * The user's mouse at a point of the page, in the pixels of the live view's frames.
@@ -844,6 +836,172 @@ export interface TakeoverKey {
   type: "key";
 }
 export interface ThreadTakeoverInputResult {}
+/**
+ * Open the hub's browser for one turn of the instance that calls, unless it is open. A
+ * browser opened without the profile refuses it.
+ */
+export interface BrowserOpenCommand {
+  profile?: BrowserProfileName | null;
+  turn_id: string;
+}
+export interface BrowserOpenResult {}
+export interface BrowserProfileDeleteCommand {
+  instance_id: string;
+  name: BrowserProfileName;
+}
+export interface BrowserProfileListResult {
+  profiles: BrowserProfile[];
+}
+/**
+ * A named signed-in state of one instance's browser. Its cookies never leave the hub.
+ */
+export interface BrowserProfile {
+  name: BrowserProfileName;
+  site: string;
+}
+export interface BrowserProfileListCommand {
+  instance_id: string;
+}
+export interface BrowserProfileRenameCommand {
+  instance_id: string;
+  name: BrowserProfileName;
+  new_name: BrowserProfileName;
+}
+/**
+ * Save the state of a turn's browser as a profile of the instance that calls, replacing one
+ * by that name, for the site of its page. The turn's state is saved back to it when the turn
+ * ends.
+ */
+export interface BrowserProfileSaveCommand {
+  name: BrowserProfileName;
+  turn_id: string;
+}
+/**
+ * List the profiles of the instance that calls.
+ */
+export interface BrowserProfilesCommand {}
+/**
+ * Run one action on the page of a turn of the instance that calls.
+ */
+export interface BrowserRunCommand {
+  action:
+    | BrowserNavigate
+    | BrowserScroll
+    | BrowserWait
+    | BrowserClick
+    | BrowserType
+    | BrowserSelect
+    | BrowserPress
+    | BrowserUpload;
+  turn_id: string;
+}
+export interface BrowserNavigate {
+  type: "navigate";
+  url: string;
+}
+export interface BrowserScroll {
+  direction: "up" | "down";
+  ref?: string | null;
+  type: "scroll";
+}
+export interface BrowserWait {
+  seconds: number;
+  text?: string | null;
+  type: "wait";
+}
+export interface BrowserClick {
+  ref: string;
+  type: "click";
+}
+/**
+ * Type *text* into a field, in place of what it holds.
+ */
+export interface BrowserType {
+  ref: string;
+  text: string;
+  type: "type";
+}
+/**
+ * Select an option of a list, by its value or its label.
+ */
+export interface BrowserSelect {
+  ref: string;
+  type: "select";
+  value: string;
+}
+/**
+ * Press a key on the element that has the focus.
+ */
+export interface BrowserPress {
+  key: string;
+  type: "press";
+}
+/**
+ * Attach *file* to a file field.
+ */
+export interface BrowserUpload {
+  file: BrowserFile;
+  ref: string;
+  type: "upload";
+}
+/**
+ * A file on its way to a page, or from one.
+ */
+export interface BrowserFile {
+  content: string;
+  name: string;
+}
+/**
+ * Where the turn's page is after an action, and the files it downloaded since the last.
+ */
+export interface BrowserPage {
+  downloads?: BrowserFile[];
+  title: string;
+  url: string;
+}
+export interface BrowserScreenshotCommand {
+  turn_id: string;
+}
+export interface BrowserScreenshot {
+  image: string;
+}
+/**
+ * The page's accessibility tree with a ref on each element, cut at *max_chars*.
+ * *interactive* keeps only the elements the page lets you act on.
+ */
+export interface BrowserSnapshotCommand {
+  interactive: boolean;
+  max_chars: number;
+  turn_id: string;
+}
+/**
+ * What the browser read from the page at *url*.
+ */
+export interface BrowserPageRead {
+  text: string;
+  url: string;
+}
+/**
+ * Save the browser of a takeover with no turn as a profile, and close it.
+ */
+export interface BrowserTakeoverFinishCommand {
+  profile: BrowserProfileName;
+  takeover_id: string;
+}
+/**
+ * Pass the user's mouse or keyboard to the browser of a takeover with no turn.
+ */
+export interface BrowserTakeoverInputCommand {
+  input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  takeover_id: string;
+}
+/**
+ * The text of the element with *ref*, or of the whole page.
+ */
+export interface BrowserTextCommand {
+  ref?: string | null;
+  turn_id: string;
+}
 /**
  * Set up a channel of one kind. The hub keeps its secret settings as hub secrets.
  */
@@ -2922,12 +3080,6 @@ export interface EndFrame {
 export interface BrowserTakeoverStartCommand {
   takeover_id: string;
   url: string;
-}
-/**
- * One frame of the live view: the page as a JPEG image, base64-encoded.
- */
-export interface TakeoverFrame {
-  data: string;
 }
 /**
  * Follow every factory run of the hub as its state changes. Nothing is replayed.

@@ -24,7 +24,6 @@ from kinby.contracts import (
 if TYPE_CHECKING:
     from kinby.core.dispatcher import Dispatcher
     from kinby.hub.approvals import HomeApprovals
-    from kinby.hub.browser import BrowserConnection
 
 
 @dataclass(frozen=True)
@@ -118,9 +117,6 @@ class InstanceRouting(Protocol):
 
     def home_approvals(self, instance_id: UUID) -> HomeApprovals | None:
         """What the hub witnesses on the instance's relay: the home instance's approvals only."""
-
-    def connect_browser(self, instance_id: UUID, token: str) -> BrowserConnection | None:
-        """The browser *token* connects the instance to, once, when the hub lent it that one."""
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]

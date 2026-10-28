@@ -144,7 +144,7 @@ from kinby.instance import Instance, ModelPrice
 from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
 from kinby.plugins.browser import BrowserService
-from kinby.plugins.playwright_browser import PlaywrightBrowser
+from kinby.plugins.hub_browser import HubBrowser
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], Awaitable[Stream[ContractModel]]]
@@ -593,7 +593,7 @@ async def turn_config(
     model_override: str | None = None,
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
-    browser = PlaywrightBrowser()
+    browser = HubBrowser()
     runner = LangGraphRunner(
         instance,
         event_log=event_log,

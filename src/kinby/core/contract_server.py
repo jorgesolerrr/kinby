@@ -79,9 +79,12 @@ async def serve_contract(
     request: web.Request,
     dispatcher: Dispatcher,
     scopes: frozenset[Scope],
+    *,
+    max_frame_bytes: int = 4 * 1024 * 1024,
 ) -> web.WebSocketResponse:
-    """Upgrade an authenticated request and carry the contract over it until it closes."""
-    socket = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS)
+    """Upgrade an authenticated request and carry the contract over it until it closes, taking
+    frames of up to *max_frame_bytes*."""
+    socket = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS, max_msg_size=max_frame_bytes)
     await socket.prepare(request)
     await _Connection(socket, dispatcher, scopes).serve()
     return socket

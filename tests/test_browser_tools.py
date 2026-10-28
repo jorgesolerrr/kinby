@@ -4,6 +4,8 @@ reads it, acts on it under the gate, and gets a context of its own (ADR 0113).""
 import asyncio
 import base64
 import socket
+import subprocess
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -931,3 +933,15 @@ def test_a_takeover_with_no_turn_left_while_its_page_loads_closes_its_browser(tm
     asyncio.run(scenario())
 
     assert browser.closed == [takeover_id]
+
+
+def test_an_instance_runs_without_playwright() -> None:
+    """Only the hub image installs Playwright (ADR 0114)."""
+    script = (
+        "import sys; sys.modules['playwright'] = None; "
+        "import kinby.cli.main, kinby.core.dispatcher, kinby.plugins.hub_browser"
+    )
+
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+
+    assert ran.returncode == 0, ran.stderr

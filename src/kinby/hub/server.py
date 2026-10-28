@@ -12,6 +12,7 @@ from aiohttp import web
 
 from kinby.contracts import (
     CONTRACT_VERSION,
+    HUB_ROUTE_FRAME_BYTES,
     HUB_SCOPES,
     AccessToken,
     RoutineName,
@@ -20,12 +21,10 @@ from kinby.contracts import (
 from kinby.core.contract_server import serve_contract
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
-from kinby.hub.browser_service import LAUNCH_OPTIONS
 from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
 from kinby.hub.relay import (
     forward_signal,
     forwarded_headers,
-    relay_browser,
     relay_socket,
     unreachable,
 )
@@ -99,11 +98,6 @@ class HubContractServer:
             self._hub_socket,
             allow_head=False,
         )
-        application.router.add_get(
-            "/instances/{instance_id}/browser",
-            self._browser_socket,
-            allow_head=False,
-        )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
         application.router.add_post("/channels/{channel_id}/{kind}", self._channel)
         if self._web_app.is_dir():
@@ -170,24 +164,9 @@ class HubContractServer:
         ):
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         scopes, dispatcher = self._routing.hub_route(instance_id)
-        return await serve_contract(request, dispatcher, scopes)
-
-    async def _browser_socket(self, request: web.Request) -> web.WebSocketResponse:
-        """A turn's browser connects once, with the token the hub lent the instance for it."""
-        try:
-            instance_id = UUID(request.match_info["instance_id"])
-        except ValueError as exc:
-            raise web.HTTPUnauthorized(reason=_UNAUTHORIZED) from exc
-        token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-        connection = self._routing.connect_browser(instance_id, token)
-        if connection is None:
-            raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
-        try:
-            return await relay_browser(
-                request, connection.address, LAUNCH_OPTIONS, connection.session
-            )
-        finally:
-            connection.close()
+        return await serve_contract(
+            request, dispatcher, scopes, max_frame_bytes=HUB_ROUTE_FRAME_BYTES
+        )
 
     async def _channel(self, request: web.Request) -> web.Response:
         """A channel's service calls with what the user sent. Its kind authenticates the call."""
