@@ -17,9 +17,11 @@ from kinby.contracts import (
     BROWSER_SCREENSHOT,
     BROWSER_SNAPSHOT,
     BROWSER_TEXT,
+    BROWSER_VAULT,
     BrowserClick,
     BrowserCloseCommand,
     BrowserFile,
+    BrowserFillCredential,
     BrowserNavigate,
     BrowserOpenCommand,
     BrowserPageAction,
@@ -37,14 +39,17 @@ from kinby.contracts import (
     BrowserTextCommand,
     BrowserType,
     BrowserUpload,
+    BrowserVaultCommand,
     BrowserWait,
     ContractModel,
     Method,
+    VaultEntryListResult,
 )
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
     Download,
+    FillCredential,
     Navigate,
     Page,
     PageRead,
@@ -98,6 +103,9 @@ class HubBrowser:
     async def profiles(self) -> BrowserProfileListResult:
         return await _call(BROWSER_PROFILES, BrowserProfilesCommand())
 
+    async def vault(self) -> VaultEntryListResult:
+        return await _call(BROWSER_VAULT, BrowserVaultCommand())
+
     async def save_profile(self, turn: UUID, name: BrowserProfileName) -> BrowserProfile:
         return await _call(BROWSER_PROFILE_SAVE, BrowserProfileSaveCommand(turn_id=turn, name=name))
 
@@ -131,6 +139,8 @@ async def _sent(action: BrowserAction) -> BrowserPageAction:
             return BrowserSelect(ref=ref, value=value)
         case Press(key=key):
             return BrowserPress(key=key)
+        case FillCredential(ref=ref, name=name, field=field):
+            return BrowserFillCredential(ref=ref, name=name, field=field)
         case Upload(ref=ref, path=path):
             if (size := (await asyncio.to_thread(path.stat)).st_size) > BROWSER_FILE_BYTES:
                 raise ValueError(

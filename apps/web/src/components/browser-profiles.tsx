@@ -380,7 +380,7 @@ function SignIn({
   )
 }
 
-function Refusal({ title, error }: { title: string; error: unknown }) {
+export function Refusal({ title, error }: { title: string; error: unknown }) {
   return (
     <Alert variant="destructive">
       <CircleXIcon />

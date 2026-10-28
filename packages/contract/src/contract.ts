@@ -8,6 +8,11 @@
 export type ClientFrame = CallFrame | SubscribeFrame | CancelFrame;
 export type JsonValue = unknown;
 export type BrowserProfileName = string;
+/**
+ * What of a vault entry the hub fills into a page.
+ */
+export type VaultField = "username" | "password" | "totp";
+export type VaultEntryName = string;
 export type ChannelKindName = string;
 export type SetupValue = boolean | number | string;
 /**
@@ -254,6 +259,26 @@ export interface Contract {
     "browser.text": {
       command: BrowserTextCommand;
       result: BrowserPageRead;
+    };
+    "browser.vault": {
+      command: BrowserVaultCommand;
+      result: VaultEntryListResult;
+    };
+    "browser.vault.add": {
+      command: VaultEntryAddCommand;
+      result: VaultEntryListResult;
+    };
+    "browser.vault.delete": {
+      command: VaultEntryDeleteCommand;
+      result: VaultEntryListResult;
+    };
+    "browser.vault.edit": {
+      command: VaultEntryEditCommand;
+      result: VaultEntryListResult;
+    };
+    "browser.vault.list": {
+      command: VaultEntryListCommand;
+      result: VaultEntryListResult;
     };
     "channel.create": {
       command: ChannelCreateCommand;
@@ -843,7 +868,8 @@ export interface BrowserRunCommand {
     | BrowserType
     | BrowserSelect
     | BrowserPress
-    | BrowserUpload;
+    | BrowserUpload
+    | BrowserFillCredential;
   turn_id: string;
 }
 export interface BrowserNavigate {
@@ -901,6 +927,16 @@ export interface BrowserUpload {
 export interface BrowserFile {
   content: string;
   name: string;
+}
+/**
+ * Fill a field with the *field* of the vault entry *name*. The hub fills it on the entry's
+ * site only, a password into a password field only, and the turn never reads the value.
+ */
+export interface BrowserFillCredential {
+  field: VaultField;
+  name: VaultEntryName;
+  ref: string;
+  type: "fill_credential";
 }
 /**
  * Where the turn's page is after an action, and the files it downloaded since the last.
@@ -979,6 +1015,51 @@ export interface ThreadTakeoverInputResult {}
 export interface BrowserTextCommand {
   ref?: string | null;
   turn_id: string;
+}
+/**
+ * List the vault entries of the instance that calls.
+ */
+export interface BrowserVaultCommand {}
+export interface VaultEntryListResult {
+  entries: VaultEntry[];
+}
+/**
+ * One sign-in in an instance's vault, as anyone but the hub sees it: its values never leave
+ * the hub.
+ */
+export interface VaultEntry {
+  name: VaultEntryName;
+  site: string;
+}
+/**
+ * Add a sign-in to an instance's vault. The result carries no value back.
+ */
+export interface VaultEntryAddCommand {
+  instance_id: string;
+  name: VaultEntryName;
+  password: string;
+  site: string;
+  totp_seed?: string | null;
+  username: string;
+}
+export interface VaultEntryDeleteCommand {
+  instance_id: string;
+  name: VaultEntryName;
+}
+/**
+ * Replace what an entry of an instance's vault holds. Each value left out keeps the one
+ * saved. The result carries no value back.
+ */
+export interface VaultEntryEditCommand {
+  instance_id: string;
+  name: VaultEntryName;
+  password?: string | null;
+  site?: string | null;
+  totp_seed?: string | null;
+  username?: string | null;
+}
+export interface VaultEntryListCommand {
+  instance_id: string;
 }
 /**
  * Set up a channel of one kind. The hub keeps its secret settings as hub secrets.

@@ -335,6 +335,34 @@
       "title": "BrowserFile",
       "type": "object"
     },
+    "BrowserFillCredential": {
+      "additionalProperties": false,
+      "description": "Fill a field with the *field* of the vault entry *name*. The hub fills it on the entry's\nsite only, a password into a password field only, and the turn never reads the value.",
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/VaultField"
+        },
+        "name": {
+          "$ref": "#/$defs/VaultEntryName"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "const": "fill_credential",
+          "default": "fill_credential",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "name",
+        "field",
+        "type"
+      ],
+      "title": "BrowserFillCredential",
+      "type": "object"
+    },
     "BrowserNavigate": {
       "additionalProperties": false,
       "properties": {
@@ -576,6 +604,7 @@
           "discriminator": {
             "mapping": {
               "click": "#/$defs/BrowserClick",
+              "fill_credential": "#/$defs/BrowserFillCredential",
               "navigate": "#/$defs/BrowserNavigate",
               "press": "#/$defs/BrowserPress",
               "scroll": "#/$defs/BrowserScroll",
@@ -610,6 +639,9 @@
             },
             {
               "$ref": "#/$defs/BrowserUpload"
+            },
+            {
+              "$ref": "#/$defs/BrowserFillCredential"
             }
           ]
         },
@@ -896,6 +928,13 @@
         "type"
       ],
       "title": "BrowserUpload",
+      "type": "object"
+    },
+    "BrowserVaultCommand": {
+      "additionalProperties": false,
+      "description": "List the vault entries of the instance that calls.",
+      "properties": {},
+      "title": "BrowserVaultCommand",
       "type": "object"
     },
     "BrowserWait": {
@@ -10722,6 +10761,210 @@
       "pattern": "^[a-z_][a-z0-9_]*$",
       "type": "string"
     },
+    "VaultEntry": {
+      "additionalProperties": false,
+      "description": "One sign-in in an instance's vault, as anyone but the hub sees it: its values never leave\nthe hub.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/VaultEntryName"
+        },
+        "site": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "site"
+      ],
+      "title": "VaultEntry",
+      "type": "object"
+    },
+    "VaultEntryAddCommand": {
+      "additionalProperties": false,
+      "description": "Add a sign-in to an instance's vault. The result carries no value back.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/VaultEntryName"
+        },
+        "password": {
+          "format": "password",
+          "minLength": 1,
+          "type": "string",
+          "writeOnly": true
+        },
+        "site": {
+          "type": "string"
+        },
+        "totp_seed": {
+          "anyOf": [
+            {
+              "format": "password",
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "username": {
+          "format": "password",
+          "minLength": 1,
+          "type": "string",
+          "writeOnly": true
+        }
+      },
+      "required": [
+        "instance_id",
+        "name",
+        "site",
+        "username",
+        "password"
+      ],
+      "title": "VaultEntryAddCommand",
+      "type": "object"
+    },
+    "VaultEntryDeleteCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/VaultEntryName"
+        }
+      },
+      "required": [
+        "instance_id",
+        "name"
+      ],
+      "title": "VaultEntryDeleteCommand",
+      "type": "object"
+    },
+    "VaultEntryEditCommand": {
+      "additionalProperties": false,
+      "description": "Replace what an entry of an instance's vault holds. Each value left out keeps the one\nsaved. The result carries no value back.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/VaultEntryName"
+        },
+        "password": {
+          "anyOf": [
+            {
+              "format": "password",
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "site": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "totp_seed": {
+          "anyOf": [
+            {
+              "format": "password",
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "username": {
+          "anyOf": [
+            {
+              "format": "password",
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "instance_id",
+        "name"
+      ],
+      "title": "VaultEntryEditCommand",
+      "type": "object"
+    },
+    "VaultEntryListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "title": "VaultEntryListCommand",
+      "type": "object"
+    },
+    "VaultEntryListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/VaultEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "VaultEntryListResult",
+      "type": "object"
+    },
+    "VaultEntryName": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "VaultField": {
+      "description": "What of a vault entry the hub fills into a page.",
+      "enum": [
+        "username",
+        "password",
+        "totp"
+      ],
+      "title": "VaultField",
+      "type": "string"
+    },
     "View": {
       "additionalProperties": false,
       "description": "A page of UI an instance keeps: its layout from the view catalogue, and the data the\nlayout's bindings read.",
@@ -11617,6 +11860,86 @@
             },
             "result": {
               "$ref": "#/$defs/BrowserPageRead"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.vault": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/BrowserVaultCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/VaultEntryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.vault.add": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/VaultEntryAddCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/VaultEntryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.vault.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/VaultEntryDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/VaultEntryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.vault.edit": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/VaultEntryEditCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/VaultEntryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "browser.vault.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/VaultEntryListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/VaultEntryListResult"
             }
           },
           "required": [
@@ -13678,6 +14001,11 @@
         "browser.profile.list",
         "browser.profile.rename",
         "browser.profile.delete",
+        "browser.vault",
+        "browser.vault.list",
+        "browser.vault.add",
+        "browser.vault.edit",
+        "browser.vault.delete",
         "notification.list",
         "notification.reply"
       ],

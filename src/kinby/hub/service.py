@@ -35,6 +35,11 @@ from kinby.contracts import (
     BROWSER_TAKEOVER_INPUT,
     BROWSER_TAKEOVER_START,
     BROWSER_TEXT,
+    BROWSER_VAULT,
+    BROWSER_VAULT_ADD,
+    BROWSER_VAULT_DELETE,
+    BROWSER_VAULT_EDIT,
+    BROWSER_VAULT_LIST,
     CHANNEL_CREATE,
     CHANNEL_DELETE,
     CHANNEL_KINDS,
@@ -118,6 +123,7 @@ from kinby.contracts import (
     BrowserProfileListResult,
     BrowserProfileRenameCommand,
     BrowserProfilesCommand,
+    BrowserVaultCommand,
     Capability,
     ChannelKindName,
     ContainerOwner,
@@ -211,6 +217,11 @@ from kinby.contracts import (
     ThreadAskCommand,
     ThreadTakeoverResumeCommand,
     ThreadTurnStartCommand,
+    VaultEntryAddCommand,
+    VaultEntryDeleteCommand,
+    VaultEntryEditCommand,
+    VaultEntryListCommand,
+    VaultEntryListResult,
     WaitingApproval,
 )
 from kinby.core.clock import utc_now
@@ -296,6 +307,7 @@ from kinby.hub.setup import (
 from kinby.hub.takeovers import Takeovers
 from kinby.hub.template_sync import sync_template
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
+from kinby.hub.vault import Vault
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
@@ -587,6 +599,7 @@ class Hub:
             self.library.receive()
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
             self.browser_profiles = BrowserProfiles(self.directory / "browser-profiles")
+            self.vault = Vault(self.directory / "vault")
             self.approvals = HomeApprovals()
             self.channels = Channels(
                 self.registry,
@@ -610,7 +623,7 @@ class Hub:
             )
             self._control = control if control is not None else HttpInstanceControl()
             self._browsers = (
-                PlaywrightBrowser(browser, browser_limits, self.browser_profiles)
+                PlaywrightBrowser(browser, browser_limits, self.browser_profiles, self.vault)
                 if browser is not None
                 else None
             )
@@ -687,6 +700,10 @@ class Hub:
         dispatcher.register(BROWSER_PROFILE_LIST, self.list_browser_profiles)
         dispatcher.register(BROWSER_PROFILE_RENAME, self.rename_browser_profile)
         dispatcher.register(BROWSER_PROFILE_DELETE, self.delete_browser_profile)
+        dispatcher.register(BROWSER_VAULT_LIST, self.list_vault_entries)
+        dispatcher.register(BROWSER_VAULT_ADD, self.add_vault_entry)
+        dispatcher.register(BROWSER_VAULT_EDIT, self.edit_vault_entry)
+        dispatcher.register(BROWSER_VAULT_DELETE, self.delete_vault_entry)
         if self._takeovers is not None:
             dispatcher.register_subscription(THREAD_TAKEOVER_START, self._takeovers.watch_turn)
             dispatcher.register(THREAD_TAKEOVER_INPUT, self._takeovers.drive_turn)
@@ -760,6 +777,7 @@ class Hub:
             dispatcher.register(BROWSER_PROFILE_SAVE, partial(browsers.save_profile, instance_id))
             dispatcher.register(BROWSER_CLOSE, partial(browsers.close, instance_id))
             dispatcher.register(BROWSER_PROFILES, partial(self.own_browser_profiles, instance_id))
+            dispatcher.register(BROWSER_VAULT, partial(self.own_vault_entries, instance_id))
         if Scope.HUB_HOME in scopes:
             self._serve_hub(dispatcher)
             dispatcher.register(INSTANCE_RELAY_READ, self.relay_read)
@@ -792,6 +810,27 @@ class Hub:
         self, command: BrowserProfileDeleteCommand
     ) -> BrowserProfileListResult:
         return self.browser_profiles.delete(
+            self._active_instance(command.instance_id).instance_id, command.name
+        )
+
+    async def own_vault_entries(
+        self, instance_id: UUID, command: BrowserVaultCommand
+    ) -> VaultEntryListResult:
+        return self.vault.list(instance_id)
+
+    async def list_vault_entries(self, command: VaultEntryListCommand) -> VaultEntryListResult:
+        return self.vault.list(self._active_instance(command.instance_id).instance_id)
+
+    async def add_vault_entry(self, command: VaultEntryAddCommand) -> VaultEntryListResult:
+        self._active_instance(command.instance_id)
+        return self.vault.add(command)
+
+    async def edit_vault_entry(self, command: VaultEntryEditCommand) -> VaultEntryListResult:
+        self._active_instance(command.instance_id)
+        return self.vault.edit(command)
+
+    async def delete_vault_entry(self, command: VaultEntryDeleteCommand) -> VaultEntryListResult:
+        return self.vault.delete(
             self._active_instance(command.instance_id).instance_id, command.name
         )
 

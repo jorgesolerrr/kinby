@@ -1090,7 +1090,7 @@ async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
 const stops = (caller: StubCaller) =>
   caller.calls.filter((call) => call.method === "instance.stop").map((call) => call.params)
 
-describe("the browser profiles of an instance", () => {
+describe("the browser profiles and the vault of an instance", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
   function openWithBrowser(browser: boolean, instance: InstanceSummary = running) {
@@ -1099,6 +1099,9 @@ describe("the browser profiles of an instance", () => {
         "instance.status": () => status({ process: instance.process, browser }),
         "browser.profile.list": () => ({
           profiles: [{ name: "LinkedIn", site: "www.linkedin.com" }],
+        }),
+        "browser.vault.list": () => ({
+          entries: [{ name: "Indeed", site: "https://secure.indeed.com" }],
         }),
       }),
       ...stubSubscriber(),
@@ -1122,6 +1125,14 @@ describe("the browser profiles of an instance", () => {
     expect(within(profiles).getByRole("listitem", { name: "LinkedIn" })).toBeDefined()
   })
 
+  it("lists the vault on an instance the hub opens browsers for", async () => {
+    openWithBrowser(true)
+
+    const vault = await screen.findByRole("list", { name: "Vault" })
+
+    expect(within(vault).getByRole("listitem", { name: "Indeed" })).toBeDefined()
+  })
+
   it("lists them on a stopped instance too, since the hub keeps its browser", async () => {
     openWithBrowser(true, { ...stopped, setup_pending: false })
 
@@ -1136,5 +1147,6 @@ describe("the browser profiles of an instance", () => {
     await screen.findByRole("button", { name: "Stop" })
 
     expect(screen.queryByRole("heading", { name: "Browser profiles" })).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Vault" })).toBeNull()
   })
 })

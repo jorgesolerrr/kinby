@@ -11,6 +11,9 @@ from kinby.contracts import (
     BrowserProfile,
     BrowserProfileListResult,
     BrowserProfileName,
+    VaultEntryListResult,
+    VaultEntryName,
+    VaultField,
 )
 
 
@@ -69,7 +72,19 @@ class Upload:
     path: Path
 
 
-type BrowserAction = Navigate | Scroll | Wait | Click | Type | Select | Press | Upload
+@dataclass(frozen=True)
+class FillCredential:
+    """Fill a field with the *field* of the vault entry *name*. The hub reads the value and
+    fills it, on the entry's site only, so the turn never holds it."""
+
+    ref: str
+    name: VaultEntryName
+    field: VaultField
+
+
+type BrowserAction = (
+    Navigate | Scroll | Wait | Click | Type | Select | Press | Upload | FillCredential
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +136,9 @@ class BrowserService(Protocol):
 
     async def profiles(self) -> BrowserProfileListResult:
         """The instance's profiles, by name and site."""
+
+    async def vault(self) -> VaultEntryListResult:
+        """The instance's vault entries, by name and site."""
 
     async def save_profile(self, turn: UUID, name: BrowserProfileName) -> BrowserProfile:
         """Save the turn's context as the instance's profile *name*, for its site. The context's

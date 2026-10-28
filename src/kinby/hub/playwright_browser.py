@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, quote_plus, urljoin, urlsplit
 from uuid import UUID
 
 from playwright.async_api import (
@@ -38,6 +38,7 @@ from kinby.contracts import (
     BrowserCloseCommand,
     BrowserCloseResult,
     BrowserFile,
+    BrowserFillCredential,
     BrowserNavigate,
     BrowserOpenCommand,
     BrowserOpenResult,
@@ -63,10 +64,12 @@ from kinby.contracts import (
     TakeoverKey,
     TakeoverPointer,
     TakeoverWheel,
+    VaultField,
 )
-from kinby.core.errors import BrowserActionFailed, BrowserNotOpen
+from kinby.core.errors import BrowserActionFailed, BrowserNotOpen, VaultFillRefused
 from kinby.hub.browser import BrowserLimits, BrowserRuntime, HubBrowsers
 from kinby.hub.browser_profiles import BrowserProfiles, StorageState
+from kinby.hub.vault import Vault
 from kinby.plugins.defaults.web import REFUSED_HEADER, capped
 
 _NAVIGATION_MS = 30_000
@@ -105,6 +108,12 @@ _HREF = re.compile(r'^(\s*- /url: )"?(.*?)"?$', re.MULTILINE)
 _URL_LINE = "- /url: "
 #: What Playwright's call log says when another element would take a click.
 _COVERED = re.compile(r"- (.+) intercepts pointer events$", re.MULTILINE)
+#: A ref in the page's own frame. A ref like f1e3 reaches into a child frame, which can be on
+#: another site.
+_FRAME_REF = re.compile(r"e\d+")
+_PASSWORD_FIELD = "input[type=password i]"
+#: What the turn reads in place of a vault value the page holds.
+_HIDDEN = "[a vault value]"
 
 type _Turn = tuple[UUID, UUID]
 _STATE = TypeAdapter(StorageState)
@@ -144,6 +153,16 @@ class _Opened:
     begun: asyncio.Event = field(default_factory=asyncio.Event)
     idle: asyncio.TimerHandle | None = None
     screencast: _Screencast | None = None
+    #: The usernames and passwords the vault filled into the turn's pages, which the turn reads
+    #: hidden.
+    filled: set[str] = field(default_factory=set)
+
+    def hidden(self, text: str) -> str:
+        """*text* with each filled value hidden, as the page holds it and as a URL encodes it."""
+        for value in self.filled:
+            for written in {value, quote(value, safe=""), quote_plus(value)}:
+                text = text.replace(written, _HIDDEN)
+        return text
 
     def collect(self, download: PlaywrightDownload) -> None:
         self.downloads.append(download)
@@ -157,13 +176,19 @@ class _Opened:
 class PlaywrightBrowser:
     """A fresh context for each turn of each instance, on a browser the service *runtime* runs
     lends it, at most *limits.cap* at once. A context opens with one of the instance's
-    *profiles*, and its state is saved back to the profile when it closes."""
+    *profiles*, and its state is saved back to the profile when it closes. A sign-in fills from
+    the instance's *vault*, and the turn never reads a value it filled."""
 
     def __init__(
-        self, runtime: BrowserRuntime, limits: BrowserLimits, profiles: BrowserProfiles
+        self,
+        runtime: BrowserRuntime,
+        limits: BrowserLimits,
+        profiles: BrowserProfiles,
+        vault: Vault,
     ) -> None:
         self._browsers = HubBrowsers(runtime, limits)
         self._profiles = profiles
+        self._vault = vault
         self._idle_seconds = limits.turn_idle_seconds
         self._opened: dict[_Turn, _Opened] = {}
         #: Each turn's open and close take turns, so a close that comes while the open is still
@@ -198,9 +223,12 @@ class PlaywrightBrowser:
 
     async def run(self, instance_id: UUID, command: BrowserRunCommand) -> BrowserPage:
         opened = self._turn(instance_id, command.turn_id)
-        with _on_the_page():
+        with _on_the_page(opened):
             page = await opened.page()
-            await _run(page, command.action)
+            if isinstance(command.action, BrowserFillCredential):
+                await self._fill(instance_id, opened, page, command.action)
+            else:
+                await _run(page, command.action)
             # A download begins when its server answers, which can be after the action returns.
             if isinstance(command.action, BrowserClick | BrowserPress):
                 with suppress(TimeoutError):
@@ -208,34 +236,42 @@ class PlaywrightBrowser:
             downloads = [*opened.downloads]
             opened.downloads.clear()
             opened.begun.clear()
+            files = await _downloaded(downloads)
             return BrowserPage(
-                url=page.url, title=await page.title(), downloads=await _downloaded(downloads)
+                url=opened.hidden(page.url),
+                title=opened.hidden(await page.title()),
+                downloads=tuple(
+                    file.model_copy(update={"name": opened.hidden(file.name)}) for file in files
+                ),
             )
 
     async def snapshot(self, instance_id: UUID, command: BrowserSnapshotCommand) -> BrowserPageRead:
         opened = self._turn(instance_id, command.turn_id)
-        with _on_the_page():
+        with _on_the_page(opened):
             page = await opened.page()
             tree = _HREF.sub(
                 lambda href: f"{href.group(1)}{urljoin(page.url, href.group(2))}",
                 await page.aria_snapshot(mode="ai"),
             )
+        # Hidden before the cut, so the cut cannot leave part of a value.
+        tree = opened.hidden(tree)
         if command.interactive:
             tree = _interactive(tree)
-        return BrowserPageRead(url=page.url, text=capped(tree, command.max_chars))
+        return BrowserPageRead(url=opened.hidden(page.url), text=capped(tree, command.max_chars))
 
     async def text(self, instance_id: UUID, command: BrowserTextCommand) -> BrowserPageRead:
         opened = self._turn(instance_id, command.turn_id)
-        with _on_the_page():
+        with _on_the_page(opened):
             page = await opened.page()
             element = await _element(page, command.ref) if command.ref else page.locator("body")
-            return BrowserPageRead(url=page.url, text=await element.inner_text(timeout=_ELEMENT_MS))
+            text = await element.inner_text(timeout=_ELEMENT_MS)
+            return BrowserPageRead(url=opened.hidden(page.url), text=opened.hidden(text))
 
     async def screenshot(
         self, instance_id: UUID, command: BrowserScreenshotCommand
     ) -> BrowserScreenshot:
         opened = self._turn(instance_id, command.turn_id)
-        with _on_the_page():
+        with _on_the_page(opened):
             image = await (await opened.page()).screenshot(type="png")
         return BrowserScreenshot(image=base64.b64encode(image).decode())
 
@@ -292,6 +328,41 @@ class PlaywrightBrowser:
         """Close the contexts of the instance's turns, which a stopped instance cannot close."""
         for turn in [turn for turn in self._opened if turn[0] == instance_id]:
             await self._close(turn)
+
+    async def _fill(
+        self,
+        instance_id: UUID,
+        opened: _Opened,
+        page: PlaywrightPage,
+        action: BrowserFillCredential,
+    ) -> None:
+        """Fill the field with the vault value *action* names, on the entry's site only: a
+        password into a password field, which a snapshot and a screenshot show masked, and a
+        username or a code into any other field."""
+        if not _FRAME_REF.fullmatch(action.ref):
+            raise VaultFillRefused(
+                f"The field with ref {action.ref} is in a frame of the page. A vault entry fills "
+                "a field of the page itself."
+            )
+        element = await _element(page, action.ref)
+        password_field = await element.and_(page.locator(_PASSWORD_FIELD)).count() > 0
+        if password_field != (action.field == VaultField.PASSWORD):
+            kind = "a password field" if password_field else "not a password field"
+            raise VaultFillRefused(
+                f"The field with ref {action.ref} is {kind}, so the vault fills no {action.field} "
+                "into it."
+            )
+        value = self._vault.value(instance_id, action.name, action.field, page.url)
+        # A TOTP code is used once, and its six digits could match unrelated text (ADR 0114).
+        if action.field != VaultField.TOTP:
+            opened.filled.add(value)
+        try:
+            await element.fill(value, timeout=_ELEMENT_MS)
+        except PlaywrightError:
+            # Playwright's message can quote what it filled.
+            raise BrowserActionFailed(
+                f"The vault could not fill the field with ref {action.ref}."
+            ) from None
 
     async def _frames(
         self, instance_id: UUID, turn_id: UUID, screencast: _Screencast
@@ -373,12 +444,14 @@ def _kept(state: PlaywrightState) -> StorageState:
 
 
 @contextmanager
-def _on_the_page() -> Iterator[None]:
-    """Tell the turn what failed on its page, which the hub would otherwise hide."""
+def _on_the_page(opened: _Opened | None = None) -> Iterator[None]:
+    """Tell the turn what failed on its page, which the hub would otherwise hide, with the
+    values the vault filled into *opened* hidden."""
     try:
         yield
     except PlaywrightError as exc:
-        raise BrowserActionFailed(exc.message) from exc
+        message = exc.message if opened is None else opened.hidden(exc.message)
+        raise BrowserActionFailed(message) from exc
 
 
 async def _run(page: PlaywrightPage, action: BrowserPageAction) -> None:

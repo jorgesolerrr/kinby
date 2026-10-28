@@ -32,7 +32,9 @@ BROWSER_GUIDANCE = (
     "# Browser\n"
     "Open a signed-in site with one of your browser profiles: browser_profiles lists them, and "
     "browser_open takes one by name. When a page shows you a sign-in, the session has expired. "
-    "Report the login page and tell the user with notify, instead of signing in."
+    "Sign in with the site's entry in your vault, which browser_vault lists and "
+    "browser_fill_credential fills. When the vault has none for the site, report the login page "
+    "and tell the user with notify, instead of signing in."
 )
 
 

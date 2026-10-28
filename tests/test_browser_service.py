@@ -7,6 +7,7 @@ import base64
 import json
 import re
 import subprocess
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
@@ -54,16 +55,20 @@ from kinby.contracts import (
     ThreadTakeoverInputCommand,
     ThreadTakeoverInputResult,
     ThreadTakeoverResumeCommand,
+    VaultEntryAddCommand,
+    VaultField,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import Dispatcher
 from kinby.hub.browser import BrowserLimits
 from kinby.hub.browser_service import serve_proxy
+from kinby.hub.vault import totp
 from kinby.plugins import hub_browser
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
     Download,
+    FillCredential,
     Navigate,
     Page,
     Press,
@@ -180,6 +185,38 @@ async def _cookies(request: web.Request) -> web.Response:
     return web.Response(text=f"<p>session: {sent}</p>", content_type="text/html")
 
 
+#: A sign-in form, sent by the method the page is asked for with, such as /login?method=get.
+_SIGN_IN = """<html><head><title>Sign in</title></head><body>
+<form method="{method}" action="/signed-in">
+<input name="username" aria-label="Email">
+<input name="password" type="password" aria-label="Password">
+<input name="code" aria-label="Code">
+<button>Sign in</button>
+</form></body></html>"""
+_USERNAME = "alice@example.com"
+_PASSWORD = "correct horse battery staple"
+#: The seed of RFC 6238's SHA-1 test vectors.
+_SEED = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+
+async def _sign_in(request: web.Request) -> web.Response:
+    method = request.query.get("method", "post")
+    return web.Response(text=_SIGN_IN.format(method=method), content_type="text/html")
+
+
+async def _signed_in(request: web.Request) -> web.Response:
+    """Say who signed in, and whether the password and the code were right."""
+    form = request.query if request.method == "GET" else await request.post()
+    password = "right" if form["password"] == _PASSWORD else "wrong"
+    # The code may be of the 30 seconds before the form was sent.
+    now = time.time()
+    code = "right" if form["code"] in {totp(_SEED, now), totp(_SEED, now - 30)} else "wrong"
+    return web.Response(
+        text=f"<p>Signed in as {form['username']}. Password {password}. Code {code}.</p>",
+        content_type="text/html",
+    )
+
+
 @asynccontextmanager
 async def site(stalled: asyncio.Event | None = None) -> AsyncIterator[int]:
     """The test pages, on a local port. The proxy lets the browser reach this port alone. A page
@@ -205,6 +242,8 @@ async def site(stalled: asyncio.Event | None = None) -> AsyncIterator[int]:
     application.router.add_get("/sign-in", _set_cookie)
     application.router.add_get("/refresh", _refresh_cookie)
     application.router.add_get("/cookies", _cookies)
+    application.router.add_get("/login", _sign_in)
+    application.router.add_route("*", "/signed-in", _signed_in)
     runner = web.AppRunner(application)
     await runner.setup()
     served = web.TCPSite(runner, "127.0.0.1", 0)
@@ -507,6 +546,141 @@ def test_a_key_press_types_no_character_into_a_password_field(browser_server) ->
     _on_the_form(browser_server, scenario)
 
     assert said == ["Key: Enter"]
+
+
+@asynccontextmanager
+async def with_a_vault_entry(
+    server: str, proxy_address: str, entry_site: str
+) -> AsyncIterator[HubBrowser]:
+    """The browser service as alice reaches it, whose vault holds the entry "Site" for
+    *entry_site*."""
+    async with browsers(server, proxy_address) as hub:
+        hub.hub.vault.add(
+            VaultEntryAddCommand.model_validate(
+                {
+                    "instance_id": hub.alice,
+                    "name": "Site",
+                    "site": entry_site,
+                    "username": _USERNAME,
+                    "password": _PASSWORD,
+                    "totp_seed": _SEED,
+                }
+            )
+        )
+        with as_instance(hub, hub.alice) as browser:
+            yield browser
+
+
+async def _ref(browser: HubBrowser, turn: UUID, label: str) -> str:
+    tree = await browser.snapshot(turn, interactive=True, max_chars=20_000)
+    ref = re.search(rf'"{label}" \[ref=(e\d+)\]', tree.text)
+    assert ref is not None, tree.text
+    return ref.group(1)
+
+
+_SIGN_IN_FIELDS = [
+    ("Email", VaultField.USERNAME),
+    ("Password", VaultField.PASSWORD),
+    ("Code", VaultField.TOTP),
+]
+
+
+async def _signed_in_by_the_vault(server: str, method: str) -> tuple[str, Page, str]:
+    """Fill the sign-in form sent by *method* from the vault and send it: what a snapshot of the
+    filled form shows, the page the form sent the browser to, and what that page says."""
+    async with (
+        site() as port,
+        proxy(port) as address,
+        with_a_vault_entry(server, address, f"http://site.test:{port}") as browser,
+    ):
+        turn = uuid4()
+        await browser.open(turn)
+        try:
+            await browser.run(turn, Navigate(f"http://site.test:{port}/login?method={method}"))
+            for label, field in _SIGN_IN_FIELDS:
+                await browser.run(
+                    turn, FillCredential(await _ref(browser, turn, label), "Site", field)
+                )
+            filled = await browser.snapshot(turn, interactive=False, max_chars=20_000)
+            page = await browser.run(turn, Click(await _ref(browser, turn, "Sign in")))
+            said = await browser.text(turn, None)
+        finally:
+            await browser.close(turn)
+    return filled.text, page, said.text
+
+
+@pytest.mark.browser
+def test_a_vault_fill_signs_in_and_the_turn_never_reads_a_value(browser_server) -> None:
+    filled, _, said = asyncio.run(_signed_in_by_the_vault(browser_server, "post"))
+
+    assert said == "Signed in as [a vault value]. Password right. Code right."
+    assert _USERNAME not in filled
+    assert _PASSWORD not in filled
+    assert 'textbox "Password"' in filled
+
+
+@pytest.mark.browser
+def test_a_sign_in_form_sent_by_get_leaves_no_value_in_the_url(browser_server) -> None:
+    _, page, said = asyncio.run(_signed_in_by_the_vault(browser_server, "get"))
+
+    assert said == "Signed in as [a vault value]. Password right. Code right."
+    assert "username=[a vault value]" in page.url
+    assert "password=[a vault value]" in page.url
+    assert "alice" not in page.url
+    assert "horse" not in page.url
+
+
+def _fill_refused(
+    server: str, entry_site: str, label: str, field: VaultField, ref: str | None = None
+) -> None:
+    """Fill the sign-in form's field *label*, or the field *ref*, with *field*."""
+
+    async def scenario() -> None:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            with_a_vault_entry(server, address, entry_site.format(port=port)) as browser,
+        ):
+            turn = uuid4()
+            await browser.open(turn)
+            try:
+                await browser.run(turn, Navigate(f"http://site.test:{port}/login"))
+                filled = ref or await _ref(browser, turn, label)
+                await browser.run(turn, FillCredential(filled, "Site", field))
+            finally:
+                await browser.close(turn)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_vault_fill_on_another_site_is_refused(browser_server) -> None:
+    with pytest.raises(ValueError, match=r"fills pages on https://site\.test only"):
+        _fill_refused(browser_server, "https://site.test", "Password", VaultField.PASSWORD)
+
+
+@pytest.mark.browser
+def test_a_vault_fill_into_a_child_frame_is_refused(browser_server) -> None:
+    with pytest.raises(ValueError, match="in a frame of the page"):
+        _fill_refused(
+            browser_server, "http://site.test:{port}", "", VaultField.PASSWORD, ref="f1e3"
+        )
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    ("label", "field", "refused"),
+    [
+        ("Email", VaultField.PASSWORD, "not a password field"),
+        ("Password", VaultField.USERNAME, "is a password field"),
+        ("Password", VaultField.TOTP, "is a password field"),
+    ],
+)
+def test_a_password_fills_only_a_password_field_and_nothing_else_does(
+    browser_server, label: str, field: VaultField, refused: str
+) -> None:
+    with pytest.raises(ValueError, match=refused):
+        _fill_refused(browser_server, "http://site.test:{port}", label, field)
 
 
 @pytest.mark.browser

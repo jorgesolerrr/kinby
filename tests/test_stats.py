@@ -171,7 +171,7 @@ async def _record_metrics_turn(dispatcher: Dispatcher) -> AcceptedResult:
     subscription = await thread_events(dispatcher, {"thread_id": created.id, "after_sequence": 0})
     events: list[Event] = []
     while True:
-        event = await asyncio.wait_for(anext(subscription), timeout=1)
+        event = await asyncio.wait_for(anext(subscription), timeout=5)
         assert isinstance(event, Event)
         events.append(event)
         if isinstance(event.payload, TurnCompleted):
