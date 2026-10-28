@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
+from functools import partial
 from typing import Annotated, Protocol, cast
 from uuid import UUID, uuid4, uuid5
 
@@ -71,10 +72,11 @@ from kinby.core.errors import (
     InvalidParkedTurn,
     ModelNoResponse,
     PermissionDenied,
+    ReadOnlyMarkRefused,
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.gate import evaluate
+from kinby.core.gate import AUTHORED_RULE, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import price_map
@@ -109,6 +111,7 @@ from kinby.instance.permissions import (
     load_permissions,
     validate_bash_regexes,
 )
+from kinby.instance.read_only_tools import read_only_tools, set_read_only
 from kinby.instance.routine_grants import RoutineGrants
 from kinby.memory import GraphStore
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
@@ -190,6 +193,9 @@ class ModelState:
     #: The hash of the routine's directory when the turn started. A grant from the turn holds
     #: only while the routine is unchanged, since any edit revokes its grants (ADR 0112).
     revision: FileHash | None = None
+    #: The authored tools the user marked read-only: those marked when the turn started, and
+    #: those marked from its approvals since, kept for a resume's replay as *granted* is.
+    read_only: tuple[str, ...] = ()
 
 
 _MODEL_STATE = TypeAdapter(ModelState)
@@ -398,6 +404,7 @@ class LangGraphRunner:
                 turn=turn,
                 granted=self._granted_tools(turn),
                 revision=self._routine_revision(turn),
+                read_only=tuple(sorted(read_only_tools(self._instance.path))),
             ),
             config,
             progress,
@@ -438,6 +445,8 @@ class LangGraphRunner:
         self._restore_emitted_tool_calls(turn)
         if answer.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
             await self._grant_parked_tool(turn, context.emit)
+        if answer.decision is ApprovalDecision.MARK_READ_ONLY:
+            await self._mark_parked_tool_read_only(turn)
         return await self._invoke(
             turn,
             context,
@@ -484,6 +493,15 @@ class LangGraphRunner:
                 granted_at=datetime.now(UTC),
                 approval_id=pending.request.approval_id,
             )
+        )
+
+    async def _mark_parked_tool_read_only(self, turn: PreparedTurnRequest) -> None:
+        """Mark the authored tool of the approval the turn is parked on read-only, as the user."""
+        pending = pending_approval(self._event_log.stored(turn.thread_id))
+        if pending is None or pending.request.rule != AUTHORED_RULE:
+            raise ReadOnlyMarkRefused("Only an authored tool's approval marks it read-only.")
+        await asyncio.to_thread(
+            partial(set_read_only, read_only=True), self._instance, pending.request.name
         )
 
     async def _count_profiles(self, model: ModelName, emit: Emit) -> None:
@@ -799,6 +817,7 @@ class LangGraphRunner:
             call,
             code_step,
             self._instance.manifest.workspace.path,
+            marked_read_only=code_step.name in read_only_tools(self._instance.path),
         )
         await emit(
             ToolGated(
@@ -954,6 +973,7 @@ class LangGraphRunner:
             output_tokens=output_tokens,
             granted=state.granted,
             revision=state.revision,
+            read_only=state.read_only,
         )
 
     async def _call_tools(
@@ -966,6 +986,7 @@ class LangGraphRunner:
             raise ModelNoResponse("The model returned an invalid tool call response.")
         calls: list[ToolCallResolution] = []
         granted = list(state.granted)
+        read_only = list(state.read_only)
         message_index = len(state.messages) - 1
         for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
@@ -988,22 +1009,31 @@ class LangGraphRunner:
                 selected,
                 runtime.context.tool_context.workspace,
                 granted=name in granted,
+                marked_read_only=name in read_only,
             )
             approval_id = None
             if gate_decision.action is GateAction.ASK:
                 # The node runs again on resume, so the id must come out the same both times.
                 approval_id = uuid5(state.turn.turn_id, f"approval:{call_id}")
+                preview = (
+                    selected.preview(arguments, runtime.context.tool_context.instance)
+                    if selected is not None and selected.preview is not None
+                    else None
+                )
                 answer: ApprovalAnswer = interrupt(
                     ApprovalRequested(
                         approval_id=approval_id,
                         name=name,
                         arguments=arguments,
                         rule=gate_decision.rule,
+                        preview=preview,
                     )
                 )
                 approved = answer.decision is not ApprovalDecision.DENY
                 if answer.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
                     granted.append(name)
+                if answer.decision is ApprovalDecision.MARK_READ_ONLY:
+                    read_only.append(name)
                 gate = ToolGated(
                     call_id=call.call_id,
                     name=call.name,
@@ -1068,6 +1098,7 @@ class LangGraphRunner:
             output_tokens=state.output_tokens,
             granted=tuple(granted),
             revision=state.revision,
+            read_only=tuple(read_only),
         )
 
     async def _emit_tool_call_once(

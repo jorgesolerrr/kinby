@@ -1364,6 +1364,7 @@ def test_instance_tool_metadata(tmp_path: Path) -> None:
     assert set(tools) == {
         "code_add_package",
         "code_delete",
+        "code_expose_tool",
         "code_run",
         "code_write",
         "repository_commands_write",
@@ -1379,6 +1380,7 @@ def test_instance_tool_metadata(tmp_path: Path) -> None:
     assert not tools["routine_read"].write
     assert tools["code_add_package"].write
     assert tools["code_delete"].write
+    assert tools["code_expose_tool"].write
     assert tools["code_run"].write
     assert tools["code_write"].write
     assert tools["repository_commands_write"].write

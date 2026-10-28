@@ -921,6 +921,56 @@ describe("a thread's panel", () => {
       ])
     })
 
+    /** Open a thread parked on approval a1 of a call to the authored tool echo. */
+    async function reopenAuthored(preview: string | null = null) {
+      const opened = openThread({ "thread.approval.respond": accepted })
+      const authored = thread(
+        ["turn-1", started("Echo it")],
+        ["turn-1", { type: "tool.call", call_id: "c1", name: "echo", arguments: { text: "hi" } }],
+        [
+          "turn-1",
+          {
+            type: "approval.requested",
+            approval_id: "a1",
+            name: "echo",
+            arguments: { text: "hi" },
+            rule: "authored.write",
+            preview,
+          },
+        ],
+      )
+      await act(async () => {
+        opened.subscription().subscribed(authored.length)
+        for (const event of authored) opened.subscription().deliver(event)
+      })
+      return opened
+    }
+
+    it("does not offer to mark a tool read-only unless the agent authored it", async () => {
+      await reopenParked()
+
+      expect(screen.queryByRole("button", { name: "Mark read-only" })).toBeNull()
+    })
+
+    it("marks the authored tool that asked read-only", async () => {
+      const { sent } = await reopenAuthored()
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Mark read-only" }))
+
+      expect(sent()).toEqual([
+        {
+          method: "thread.approval.respond",
+          params: { thread_id: "t1", approval_id: "a1", decision: "mark_read_only" },
+        },
+      ])
+    })
+
+    it("shows what the approval previews beside the arguments", async () => {
+      await reopenAuthored("echo declares write=False.")
+
+      expect(screen.getByText("echo declares write=False.")).toBeDefined()
+    })
+
     it("denies it with the reason typed", async () => {
       const { sent } = await reopenParked()
       const user = userEvent.setup()

@@ -158,7 +158,7 @@ export type CodingClient = "claude" | "codex";
  */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
-export type ApprovalDecision = "approve" | "deny" | "allow_in_routine";
+export type ApprovalDecision = "approve" | "deny" | "allow_in_routine" | "mark_read_only";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_reply" | "failed";
 export type ThreadFilter = "sidebar" | "all" | "archived";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
@@ -647,6 +647,10 @@ export interface Contract {
     };
     "tool.list": {
       command: ToolListCommand;
+      result: ToolListResult;
+    };
+    "tool.read_only.set": {
+      command: ToolReadOnlySetCommand;
       result: ToolListResult;
     };
     "usage.get": {
@@ -1688,6 +1692,7 @@ export interface ApprovalRequested {
     [k: string]: JsonValue;
   };
   name: string;
+  preview?: string | null;
   rule: string;
   type: "approval.requested";
 }
@@ -2498,6 +2503,13 @@ export interface ToolSummary {
   rule: ToolRule;
   source: string;
   write: boolean;
+}
+/**
+ * Mark an authored tool read-only, so the gate lets it run as a read, or unmark it.
+ */
+export interface ToolReadOnlySetCommand {
+  name: ToolName;
+  read_only: boolean;
 }
 export interface UsageGetCommand {
   since?: string | null;

@@ -147,7 +147,8 @@
       "enum": [
         "approve",
         "deny",
-        "allow_in_routine"
+        "allow_in_routine",
+        "mark_read_only"
       ],
       "title": "ApprovalDecision",
       "type": "string"
@@ -167,6 +168,17 @@
         },
         "name": {
           "type": "string"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "rule": {
           "type": "string"
@@ -8965,6 +8977,24 @@
       "minLength": 1,
       "type": "string"
     },
+    "ToolReadOnlySetCommand": {
+      "additionalProperties": false,
+      "description": "Mark an authored tool read-only, so the gate lets it run as a read, or unmark it.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "read_only"
+      ],
+      "title": "ToolReadOnlySetCommand",
+      "type": "object"
+    },
     "ToolResult": {
       "additionalProperties": false,
       "properties": {
@@ -12188,6 +12218,22 @@
           ],
           "type": "object"
         },
+        "tool.read_only.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ToolReadOnlySetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ToolListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "usage.get": {
           "additionalProperties": false,
           "properties": {
@@ -12305,6 +12351,7 @@
         "skill.customize",
         "skill.delete",
         "tool.list",
+        "tool.read_only.set",
         "view.list",
         "view.get",
         "view.delete",

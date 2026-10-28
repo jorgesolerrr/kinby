@@ -184,6 +184,7 @@ from kinby.contracts.models import (
     ThreadUnarchiveCommand,
     ToolListCommand,
     ToolListResult,
+    ToolReadOnlySetCommand,
     UsageGetCommand,
     UsageGetResult,
     View,
@@ -337,6 +338,10 @@ SKILL_CUSTOMIZE = Method(
 )
 SKILL_DELETE = Method("skill.delete", Scope.INSTANCE_ADMIN, SkillDeleteCommand, SkillListResult)
 TOOL_LIST = Method("tool.list", Scope.INSTANCE_READ, ToolListCommand, ToolListResult)
+#: Answers with the instance's tools.
+TOOL_READ_ONLY_SET = Method(
+    "tool.read_only.set", Scope.INSTANCE_ADMIN, ToolReadOnlySetCommand, ToolListResult
+)
 VIEW_LIST = Method("view.list", Scope.INSTANCE_READ, ViewListCommand, ViewListResult)
 VIEW_GET = Method("view.get", Scope.INSTANCE_READ, ViewGetCommand, View)
 VIEW_SUBSCRIBE = Subscription("view.subscribe", Scope.INSTANCE_READ, ViewSubscribeCommand, View)
@@ -555,6 +560,7 @@ METHODS = (
     SKILL_CUSTOMIZE,
     SKILL_DELETE,
     TOOL_LIST,
+    TOOL_READ_ONLY_SET,
     VIEW_LIST,
     VIEW_GET,
     VIEW_DELETE,

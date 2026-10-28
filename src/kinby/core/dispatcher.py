@@ -65,6 +65,7 @@ from kinby.contracts import (
     THREAD_TURN_TARGET_LIST,
     THREAD_UNARCHIVE,
     TOOL_LIST,
+    TOOL_READ_ONLY_SET,
     USAGE_GET,
     VIEW_DELETE,
     VIEW_GET,
@@ -516,6 +517,7 @@ def build_dispatcher(
         dispatcher.register(SKILL_CUSTOMIZE, config.customize_skill)
         dispatcher.register(SKILL_DELETE, config.delete_skill)
         dispatcher.register(TOOL_LIST, config.list_tools)
+        dispatcher.register(TOOL_READ_ONLY_SET, config.set_tool_read_only)
         dispatcher.register(ROUTINE_READ, config.read_routine)
         dispatcher.register(ROUTINE_WRITE, config.write_routine)
         dispatcher.register(ROUTINE_SET_ENABLED, config.set_routine_enabled)

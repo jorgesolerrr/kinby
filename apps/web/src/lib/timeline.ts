@@ -45,6 +45,8 @@ export interface ParkedApproval {
   name: string
   arguments: Record<string, JsonValue>
   rule: string
+  /** What the approval shows beside the arguments, when the tool says more about its call. */
+  preview?: string
 }
 
 type Step = TextStep | ToolStep | NotificationStep | ViewStep
@@ -167,6 +169,7 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
         name: payload.name,
         arguments: payload.arguments,
         rule: payload.rule,
+        ...(payload.preview != null && { preview: payload.preview }),
       }
       return { ...turn, approval }
     }

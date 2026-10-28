@@ -140,6 +140,10 @@ class ViewNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class AuthoredToolNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class MemoryNodeNotFound(CoreError):
     """No live knowledge graph node has this id: none was written, or it was forgotten."""
 
@@ -356,6 +360,12 @@ class ApprovalNotFound(CoreError):
 
 class GrantOutsideRoutine(CoreError):
     """Only an approval raised in a routine's turn allows its tool in the routine (ADR 0112)."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class ReadOnlyMarkRefused(CoreError):
+    """Only an approval for an authored tool's call marks the tool read-only (ADR 0109)."""
 
     code = ErrorCode.INVALID_ARGUMENT
 

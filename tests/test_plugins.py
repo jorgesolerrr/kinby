@@ -256,6 +256,7 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "bash",
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "edit",
@@ -343,6 +344,7 @@ def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeyp
             [
                 "code_add_package",
                 "code_delete",
+                "code_expose_tool",
                 "code_run",
                 "code_write",
                 "forget",
@@ -368,6 +370,7 @@ def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeyp
             [
                 "code_add_package",
                 "code_delete",
+                "code_expose_tool",
                 "code_run",
                 "code_write",
                 "forget",
@@ -464,6 +467,7 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
                 "available",
                 "code_add_package",
                 "code_delete",
+                "code_expose_tool",
                 "code_run",
                 "code_write",
                 "forget",
@@ -489,6 +493,7 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
                 "available",
                 "code_add_package",
                 "code_delete",
+                "code_expose_tool",
                 "code_run",
                 "code_write",
                 "forget",
@@ -547,6 +552,7 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
         assert [tool.name for tool in model.bound_tools[0]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -598,6 +604,7 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
             [
                 "code_add_package",
                 "code_delete",
+                "code_expose_tool",
                 "code_run",
                 "code_write",
                 "forget",
@@ -639,6 +646,7 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "bash",
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "edit",
@@ -1181,6 +1189,7 @@ def greet(name: str) -> str:
         assert [tool.name for tool in model.bound_tools[0]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -1654,6 +1663,7 @@ def {tool_name}() -> str:
             "alpha",
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -1721,6 +1731,7 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
         assert [tool.name for tool in model.bound_tools[0]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -2211,6 +2222,7 @@ def version() -> str:
         assert [tool.name for tool in model.bound_tools[0]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -2236,6 +2248,7 @@ def version() -> str:
         assert [tool.name for tool in model.bound_tools[1]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -2261,6 +2274,7 @@ def version() -> str:
         assert [tool.name for tool in model.bound_tools[2]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
@@ -2353,6 +2367,7 @@ def fresh() -> str:
         assert [tool.name for tool in model.bound_tools[1]] == [
             "code_add_package",
             "code_delete",
+            "code_expose_tool",
             "code_run",
             "code_write",
             "forget",
