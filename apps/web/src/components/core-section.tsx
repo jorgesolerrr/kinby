@@ -24,6 +24,7 @@ const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
   revision_behind: "Behind the hub",
   template_behind: "Behind the factory",
   hub_route_missing: "No hub route",
+  mcp_server_failed: "MCP server failed",
 }
 
 /**
@@ -44,7 +45,7 @@ export function CoreSection({
   return (
     <div className="flex max-w-2xl flex-col gap-6">
       {instance.notices.map((notice) => (
-        <Notice key={notice.code} notice={notice} />
+        <Notice key={`${notice.code} ${notice.message}`} notice={notice} />
       ))}
       <ItemGroup aria-label="Core version">
         <Fact label="kinby">{instance.source_revision.slice(0, 7)}</Fact>

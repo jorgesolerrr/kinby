@@ -1366,8 +1366,18 @@ class HubRouteMissing(ContractModel):
     message: str
 
 
+class McpServerFailed(ContractModel):
+    """An MCP server the instance picked failed to start or list its tools at its last turn, which
+    ran without them."""
+
+    code: Literal["mcp_server_failed"] = "mcp_server_failed"
+    message: str
+    server: McpServerName
+
+
 InstanceNotice = Annotated[
-    RevisionBehind | TemplateBehind | HubRouteMissing, Field(discriminator="code")
+    RevisionBehind | TemplateBehind | HubRouteMissing | McpServerFailed,
+    Field(discriminator="code"),
 ]
 
 
@@ -2764,10 +2774,19 @@ class InstancePicksGetCommand(ContractModel):
     instance_id: UUID
 
 
+class McpServerChoice(ContractModel):
+    """An MCP server an instance should hold, and whether the user trusts its read-only hints."""
+
+    name: McpServerName
+    trust_hints: bool = False
+
+
 class InstancePicksSetCommand(ContractModel):
     instance_id: UUID
     #: Every library skill the instance should hold. A pick left out is dropped.
     skills: list[SkillName]
+    #: Every library MCP server the instance should hold. A pick left out is dropped.
+    mcp_servers: list[McpServerChoice]
     #: The lock's hash the client read. The set is refused as STALE when the picks changed since.
     hash: FileHash | None
 
@@ -2789,9 +2808,20 @@ class SkillPick(ContractModel):
     state: PickState
 
 
+class McpServerPick(ContractModel):
+    name: McpServerName
+    #: Whether a tool the server declares read-only runs as a read. Until then every call is a
+    #: write.
+    trust_hints: bool
+    #: Up to date or behind. The instance holds no copy of its own to edit.
+    state: PickState
+
+
 class InstancePicksResult(ContractModel):
     #: By name. A pick whose folder the instance deleted is no pick.
     picks: list[SkillPick]
+    #: By name.
+    mcp_servers: list[McpServerPick]
     #: The hash of the instance's ``skills-lock.json``. Null when it has none.
     hash: FileHash | None
 

@@ -387,6 +387,7 @@ def test_an_instance_summary_carries_its_notices() -> None:
         {"$ref": "#/$defs/RevisionBehind"},
         {"$ref": "#/$defs/TemplateBehind"},
         {"$ref": "#/$defs/HubRouteMissing"},
+        {"$ref": "#/$defs/McpServerFailed"},
     ]
     assert set(cast(list[str], _object(definitions["RevisionBehind"])["required"])) == {
         "code",

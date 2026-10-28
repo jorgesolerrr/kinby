@@ -1,5 +1,5 @@
 """An instance's ``skills-lock.json``: each skill it picked from the library, as the ``skills`` CLI
-records a skill it installed."""
+records a skill it installed, and each MCP server it picked."""
 
 from __future__ import annotations
 
@@ -10,7 +10,15 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - the lock's file boundary
 from pydantic.alias_generators import to_camel
 
-from kinby.contracts import FileHash, GitCommit, GitSource, LibrarySource, SkillName
+from kinby.contracts import (
+    FileHash,
+    GitCommit,
+    GitSource,
+    LibrarySource,
+    McpServer,
+    McpServerName,
+    SkillName,
+)
 from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SKILLS_LOCK_NAME
 
@@ -54,9 +62,26 @@ class LockedSkill(BaseModel):
         return cls(source=_SOURCES[source], source_type=source, computed_hash=skill_hash(folder))
 
 
+class LockedMcpServer(BaseModel):
+    """One MCP server pick: the library's definition as copied, and whether the user trusts its
+    read-only hints."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_name=True, serialize_by_alias=True, frozen=True
+    )
+
+    server: McpServer
+    trust_hints: bool = False
+
+
 class SkillsLock(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_name=True, serialize_by_alias=True
+    )
+
     version: int = 1
     skills: dict[SkillName, LockedSkill] = Field(default_factory=dict)
+    mcp_servers: dict[McpServerName, LockedMcpServer] = Field(default_factory=dict)
 
 
 def read_lock(instance_path: Path) -> SkillsLock:
@@ -74,9 +99,15 @@ def lock_hash(instance_path: Path) -> FileHash | None:
 
 
 def write_lock(instance_path: Path, lock: SkillsLock) -> None:
-    ordered = SkillsLock(skills=dict(sorted(lock.skills.items())))
+    ordered = SkillsLock(
+        skills=dict(sorted(lock.skills.items())),
+        mcp_servers=dict(sorted(lock.mcp_servers.items())),
+    )
+    # A lock without MCP servers stays the file the ``skills`` CLI writes.
+    excluded = None if lock.mcp_servers else {"mcp_servers"}
     (instance_path / SKILLS_LOCK_NAME).write_text(
-        ordered.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8"
+        ordered.model_dump_json(indent=2, exclude_none=True, exclude=excluded) + "\n",
+        encoding="utf-8",
     )
 
 

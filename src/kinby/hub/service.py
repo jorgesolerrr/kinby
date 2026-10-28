@@ -172,6 +172,7 @@ from kinby.contracts import (
     LibrarySkillWriteCommand,
     LifecycleOperationResult,
     LoginPrompt,
+    McpServerFailed,
     NewerVersion,
     OperationGetCommand,
     OperationGetResult,
@@ -300,6 +301,7 @@ from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from kinby.plugins.mcp import failed_mcp_servers
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
 
 _logger = logging.getLogger(__name__)
@@ -336,6 +338,7 @@ _NOTICE_TITLES = {
     "revision_behind": "Revision behind",
     "template_behind": "Template behind",
     "hub_route_missing": "Hub route missing",
+    "mcp_server_failed": "MCP server failed",
 }
 #: What an instance answers for an approval that no longer waits: gone, or its turn ended.
 _NOT_WAITING = frozenset({ErrorCode.NOT_FOUND, ErrorCode.NO_ACTIVE_TURN})
@@ -372,9 +375,11 @@ def _notices(
     served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
     route: Mapping[str, str],
     environment: Mapping[str, str],
+    failed_servers: Mapping[str, str],
 ) -> dict[str, InstanceNotice]:
-    """The hub route the instance's environment lacks, the kinby revision the hub moved past, and
-    the template the factory moved past, if any, each by its kind and the value it reports.
+    """The hub route the instance's environment lacks, the kinby revision the hub moved past, the
+    template the factory moved past, and the MCP servers its last turn ran without, if any, each by
+    its kind and the value it reports.
 
     *served* holds each template the hub serves now, by its factory and name. *route* is what the
     hub writes into the instance's *environment* when it creates a container. An update refuses a
@@ -415,6 +420,10 @@ def _notices(
         baseline = file_hash(json.dumps(template.baseline, sort_keys=True).encode())
         notices[f"template_behind:{baseline}"] = TemplateBehind(
             message=f"{found} An instance update brings the files up to the factory's."
+        )
+    for server, message in failed_servers.items():
+        notices[f"mcp_server_failed:{server}:{message}"] = McpServerFailed(
+            message=message, server=server
         )
     return notices
 
@@ -1704,7 +1713,9 @@ class Hub:
     async def set_picks(self, command: InstancePicksSetCommand) -> InstancePicksResult:
         """Change the instance's picks in place. A running instance reads them at its next turn."""
         record = self._active_instance(command.instance_id)
-        return self.library.pick(inspect_instance(record.path), command.skills, command.hash)
+        return self.library.pick(
+            inspect_instance(record.path), command.skills, command.hash, command.mcp_servers
+        )
 
     async def stop(
         self, command: InstanceStopCommand, requester: UUID | None = None
@@ -2062,7 +2073,8 @@ class Hub:
         taken: tuple[SkillName, ...] = ()
         if template is not None and baseline is not None:
             baseline, taken = self.library.take_supplied(record.path, baseline, template.files)
-        if taken or read_lock(record.path).skills:
+        lock = read_lock(record.path)
+        if taken or lock.skills or lock.mcp_servers:
             self._record(operation_id, "picks", "Bringing the picks up to the library's.")
             detail = self.library.sync(record.path).detail
             if taken:
@@ -2737,8 +2749,14 @@ class Hub:
         hub_revision: str,
         served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
     ) -> dict[str, InstanceNotice]:
+        manifest = self._manifest(record)
         return _notices(
-            record, hub_revision, served, self._hub_route(record), self._environment(record.path)
+            record,
+            hub_revision,
+            served,
+            self._hub_route(record),
+            self._environment(record.path),
+            {} if manifest is None else failed_mcp_servers(manifest.state_dir),
         )
 
     async def _raise_notices(self) -> None:
