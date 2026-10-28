@@ -289,6 +289,29 @@ describe("a thread's timeline", () => {
   })
 
   describe("a running turn", () => {
+    it("is parked on a takeover, with its reason, until the turn moves on", () => {
+      const reason = "Sign in to LinkedIn"
+      const takeover: Payload[] = [
+        started("Check LinkedIn"),
+        { type: "tool.call", call_id: "c1", name: "browser_takeover", arguments: { reason } },
+        { type: "takeover.requested", takeover_id: "k1", reason },
+      ]
+      const gated: Payload = {
+        type: "tool.gated",
+        call_id: "c1",
+        name: "browser_takeover",
+        action: "allow",
+        decided_by: "policy",
+        rule: "mode.full-access.write",
+      }
+
+      const [parked] = replay(["turn-1", ...takeover]).turns
+      const [resumed] = replay(["turn-1", ...takeover, gated]).turns
+
+      expect(parked?.takeover).toEqual({ takeoverId: "k1", reason })
+      expect(resumed?.takeover).toBeUndefined()
+    })
+
     const write = { path: "runtime.py", content: "fixed" }
     const parked: Payload[] = [
       started("Fix the runtime"),

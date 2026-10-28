@@ -159,7 +159,7 @@ export type CodingClient = "claude" | "codex";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
 export type ApprovalDecision = "approve" | "deny" | "allow_in_routine" | "mark_read_only";
-export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_reply" | "failed";
+export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_takeover" | "awaiting_reply" | "failed";
 export type ThreadFilter = "sidebar" | "all" | "archived";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 /**
@@ -192,6 +192,7 @@ export type ErrorCode =
   | "INVALID_SETUP"
   | "STALE"
   | "ROUTINE_PENDING"
+  | "TAKEOVER_ABANDONED"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";
@@ -613,6 +614,14 @@ export interface Contract {
       command: ThreadRenameCommand;
       result: ThreadSummary;
     };
+    "thread.takeover.finish": {
+      command: ThreadTakeoverFinishCommand;
+      result: AcceptedResult;
+    };
+    "thread.takeover.input": {
+      command: ThreadTakeoverInputCommand;
+      result: ThreadTakeoverInputResult;
+    };
     "thread.turn.diff": {
       command: ThreadTurnDiffCommand;
       result: ThreadTurnDiffResult;
@@ -683,6 +692,10 @@ export interface Contract {
     "thread.subscribe": {
       command: ThreadSubscribeCommand;
       item: Event;
+    };
+    "thread.takeover.start": {
+      command: ThreadTakeoverStartCommand;
+      item: TakeoverFrame;
     };
     "view.subscribe": {
       command: ViewSubscribeCommand;
@@ -2446,6 +2459,46 @@ export interface ThreadRenameCommand {
   thread_id: string;
   title: string;
 }
+/**
+ * Resume the turn parked on the takeover, with the browser as the user left it.
+ */
+export interface ThreadTakeoverFinishCommand {
+  takeover_id: string;
+  thread_id: string;
+}
+/**
+ * Pass the user's mouse or keyboard to the browser of the takeover.
+ */
+export interface ThreadTakeoverInputCommand {
+  input: TakeoverPointer | TakeoverWheel | TakeoverKey;
+  takeover_id: string;
+  thread_id: string;
+}
+/**
+ * The user's mouse at a point of the page, in the pixels of the live view's frames.
+ */
+export interface TakeoverPointer {
+  action: "move" | "down" | "up";
+  type: "pointer";
+  x: number;
+  y: number;
+}
+/**
+ * The user's wheel, scrolling the page where the mouse is.
+ */
+export interface TakeoverWheel {
+  delta_x: number;
+  delta_y: number;
+  type: "wheel";
+}
+/**
+ * A key the user pressed, as Playwright names it: a character, Enter or Control+A.
+ */
+export interface TakeoverKey {
+  key: string;
+  type: "key";
+}
+export interface ThreadTakeoverInputResult {}
 export interface ThreadTurnDiffCommand {
   thread_id: string;
   turn_id: string;
@@ -2773,6 +2826,7 @@ export interface Event {
     | ToolResult
     | Warning
     | ApprovalRequested
+    | TakeoverRequested
     | TurnCompleted
     | TurnFailed
     | TurnInterrupted
@@ -2848,6 +2902,14 @@ export interface ToolResult {
   name: string;
   output: string;
   type: "tool.result";
+}
+/**
+ * The turn waits while the user drives its browser, until the user finishes (ADR 0113).
+ */
+export interface TakeoverRequested {
+  reason: string;
+  takeover_id: string;
+  type: "takeover.requested";
 }
 export interface TurnCompleted {
   cache_creation_tokens?: number;
@@ -3001,6 +3063,19 @@ export interface ViewChanged {
   title: string;
   type: "view.changed";
   view: ViewId;
+}
+/**
+ * Watch the browser of the takeover the thread's turn is parked on, frame by frame.
+ */
+export interface ThreadTakeoverStartCommand {
+  takeover_id: string;
+  thread_id: string;
+}
+/**
+ * One frame of the live view: the page as a JPEG image, base64-encoded.
+ */
+export interface TakeoverFrame {
+  data: string;
 }
 /**
  * Follow one view: the view as it is, then the whole view again after each write, until it

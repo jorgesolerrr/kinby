@@ -32,6 +32,8 @@ export interface TurnBlock {
   steps: Step[]
   /** The approval the turn is parked on, until the turn moves on. */
   approval?: ParkedApproval
+  /** The takeover the turn is parked on, until the turn moves on. */
+  takeover?: ParkedTakeover
   /** How the turn closed. A running turn has none yet. */
   end?: TurnEnd
   /** What the turn's recap left in memory. It runs after the turn, so it can report late or never. */
@@ -47,6 +49,12 @@ export interface ParkedApproval {
   rule: string
   /** What the approval shows beside the arguments, when the tool says more about its call. */
   preview?: string
+}
+
+/** A takeover the user has not finished: why the agent handed them the browser. */
+export interface ParkedTakeover {
+  takeoverId: string
+  reason: string
 }
 
 type Step = TextStep | ToolStep | NotificationStep | ViewStep
@@ -124,11 +132,11 @@ export function project(timeline: Timeline, event: Event): Timeline {
 }
 
 function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): TurnBlock {
-  // Answering an approval appends nothing, so the turn's next event is what ends the wait. The
-  // notifications recorded while it waits leave it standing.
+  // Answering an approval or finishing a takeover appends nothing, so the turn's next event is
+  // what ends the wait. The notifications recorded while it waits leave it standing.
   const turn = payload.type.startsWith("notification.")
     ? previous
-    : { ...previous, approval: undefined }
+    : { ...previous, approval: undefined, takeover: undefined }
   switch (payload.type) {
     case "message.delta": {
       const last = turn.steps.at(-1)
@@ -173,6 +181,8 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
       }
       return { ...turn, approval }
     }
+    case "takeover.requested":
+      return { ...turn, takeover: { takeoverId: payload.takeover_id, reason: payload.reason } }
     case "tool.gated": {
       const gated = updateTool(turn, payload.call_id, (step) => ({
         ...step,

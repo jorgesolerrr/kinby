@@ -358,6 +358,10 @@ class ApprovalNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class TakeoverNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class GrantOutsideRoutine(CoreError):
     """Only an approval raised in a routine's turn allows its tool in the routine (ADR 0112)."""
 

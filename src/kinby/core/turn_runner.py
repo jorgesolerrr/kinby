@@ -55,6 +55,7 @@ from kinby.contracts import (
     RoutineTrigger,
     RunDelegated,
     SignalReceived,
+    TakeoverRequested,
     ToolCall,
     ToolGated,
     ToolResult,
@@ -119,6 +120,7 @@ from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
 from kinby.plugins.browser import BrowserService
+from kinby.plugins.browser_tools import browser_takeover
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.instance_tools import routine_config_file
@@ -127,6 +129,7 @@ from kinby.plugins.notify import (
     approval_notification,
     raise_notification,
     raises_notifications,
+    takeover_notification,
 )
 from kinby.plugins.playwright_browser import PlaywrightBrowser
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot
@@ -167,6 +170,7 @@ _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
         ApprovalRequested,
         EventType,
         PermissionMode,
+        TakeoverRequested,
         PreparedTurnRequest,
         TurnRequest,
         UserOrigin,
@@ -574,6 +578,7 @@ class LangGraphRunner:
         if progress.steps_remaining is not None:
             config["recursion_limit"] = progress.steps_remaining
         seconds_timeout = asyncio.timeout(progress.seconds_remaining)
+        parked = None
         try:
             async with self._graph() as (graph, _):
                 started_at = datetime.now(UTC).timestamp()
@@ -614,6 +619,8 @@ class LangGraphRunner:
                         # ADR 0011 keeps interrupted tool calls out of completed history.
                         durability="exit",
                     )
+            interrupts = _INTERRUPTS.validate_python(graph_result.get("__interrupt__", ()))
+            parked = interrupts[0].value if interrupts else None
         except TimeoutError as exc:
             if not seconds_timeout.expired() or budgets.seconds is None:
                 raise
@@ -623,10 +630,21 @@ class LangGraphRunner:
                 raise
             raise BudgetExceeded("steps", budgets.steps) from exc
         finally:
-            # A parked turn may wait for hours, so it gives its browser back and a resumed one
-            # opens a fresh one.
-            await self._browser.close(turn.turn_id)
-        interrupts = _INTERRUPTS.validate_python(graph_result.get("__interrupt__", ()))
+            # A turn parked on an approval may wait for hours, so it gives its browser back and a
+            # resumed one opens a fresh one. One parked on a takeover keeps it for the user.
+            if not isinstance(parked, TakeoverRequested):
+                await self._browser.close(turn.turn_id)
+        if isinstance(parked, TakeoverRequested):
+            try:
+                await emit(parked)
+                if raises_notifications():
+                    source = self._notification_source(turn) or UNTITLED
+                    await raise_notification(takeover_notification(source, parked), emit)
+            except BaseException:
+                # A turn stopped before it parks never gets the deadline that closes its browser.
+                await self._browser.close(turn.turn_id)
+                raise
+            return ParkedTurn()
         if interrupts:
             approval = interrupts[0].value
             if not isinstance(approval, ApprovalRequested):
@@ -1028,7 +1046,32 @@ class LangGraphRunner:
                 seen_urls=seen_urls,
             )
             approval_id = None
-            if gate_decision.action is GateAction.ASK:
+            if (
+                selected is not None
+                and name == browser_takeover.name
+                and gate_decision.action is not GateAction.DENY
+                and isinstance(reason := arguments.get("reason"), str)
+            ):
+                # The takeover asks the user itself, so it stands in for an approval. It comes
+                # before any call of the message runs, and the turn waits as on an approval.
+                interrupt(
+                    TakeoverRequested(
+                        takeover_id=uuid5(state.turn.turn_id, f"takeover:{call_id}"),
+                        reason=reason,
+                    )
+                )
+                gate = ToolGated(
+                    call_id=call.call_id,
+                    name=call.name,
+                    action=GateOutcome.ALLOW,
+                    rule=gate_decision.rule,
+                    decided_by=(
+                        GateDecider.USER
+                        if gate_decision.action is GateAction.ASK
+                        else GateDecider.POLICY
+                    ),
+                )
+            elif gate_decision.action is GateAction.ASK:
                 # The node runs again on resume, so the id must come out the same both times.
                 approval_id = uuid5(state.turn.turn_id, f"approval:{call_id}")
                 preview = (

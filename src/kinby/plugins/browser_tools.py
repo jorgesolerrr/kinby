@@ -54,6 +54,7 @@ def browser_tools(instance: Instance) -> tuple[Tool, ...]:
         browser_select,
         browser_press,
         browser_upload,
+        browser_takeover,
     )
 
 
@@ -156,6 +157,15 @@ async def browser_upload(ref: str, path: str, context: ToolContext) -> str:
     """Attach the workspace file at `path` to the file field with `ref`."""
     file = workspace_path(context.workspace, path)
     return await _act(context, Upload(ref, file), f"Attached {path} to {ref}")
+
+
+@tool(write=True)
+async def browser_takeover(reason: str, context: ToolContext) -> str:
+    """Hand the browser to the user, when the page asks for what you cannot give, such as a
+    sign-in or a CAPTCHA. `reason` tells the user what to do. The turn waits until the user
+    finishes, then the page is as they left it. Call it on its own, with no other tool."""
+    await _opened(context)
+    return "The user finished the takeover. Take a new snapshot to see the page as they left it."
 
 
 async def _act(context: ToolContext, action: BrowserAction, done: str) -> str:

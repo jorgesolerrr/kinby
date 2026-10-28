@@ -4,8 +4,9 @@ service, which the hub's browser route connects it to (ADR 0113)."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,15 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page as PlaywrightPage
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from kinby.contracts import BROWSER_OPEN, BrowserOpenCommand, BrowserOpenResult
+from kinby.contracts import (
+    BROWSER_OPEN,
+    BrowserOpenCommand,
+    BrowserOpenResult,
+    TakeoverInput,
+    TakeoverKey,
+    TakeoverPointer,
+    TakeoverWheel,
+)
 from kinby.plugins.browser import (
     BrowserAction,
     Click,
@@ -41,6 +50,8 @@ from kinby.plugins.hub import call_hub
 Lease = Callable[[UUID], Awaitable[BrowserOpenResult]]
 
 _NAVIGATION_MS = 30_000
+#: How sharp a takeover's live view is, out of 100.
+_SCREENCAST_QUALITY = 70
 _ELEMENT_MS = 5_000
 #: How long a click or a key press waits for a download it may have started.
 _DOWNLOAD_SECONDS = 1
@@ -152,6 +163,51 @@ class PlaywrightBrowser:
 
     async def screenshot(self, turn: UUID) -> bytes:
         return await (await self._page(turn)).screenshot(type="png")
+
+    async def screencast(self, turn: UUID) -> AsyncGenerator[bytes]:
+        page = await self._page(turn)
+        session = await page.context.new_cdp_session(page)
+        frames: asyncio.Queue[bytes] = asyncio.Queue()
+
+        async def framed(frame: dict[str, object]) -> None:
+            frames.put_nowait(base64.b64decode(str(frame["data"])))
+            # Chromium sends the next frame once this one is acknowledged.
+            with suppress(PlaywrightError):
+                await session.send("Page.screencastFrameAck", {"sessionId": frame["sessionId"]})
+
+        session.on("Page.screencastFrame", framed)
+        # Frames the viewport's size keep their pixels the page's, which the user's input names.
+        size = page.viewport_size or {"width": 1280, "height": 720}
+        await session.send(
+            "Page.startScreencast",
+            {
+                "format": "jpeg",
+                "quality": _SCREENCAST_QUALITY,
+                "maxWidth": size["width"],
+                "maxHeight": size["height"],
+            },
+        )
+        try:
+            while True:
+                yield await frames.get()
+        finally:
+            # A closed context has taken its session with it.
+            with suppress(PlaywrightError):
+                await session.detach()
+
+    async def send(self, turn: UUID, user_input: TakeoverInput) -> None:
+        page = await self._page(turn)
+        match user_input:
+            case TakeoverPointer(action=action, x=x, y=y):
+                await page.mouse.move(x, y)
+                if action == "down":
+                    await page.mouse.down()
+                elif action == "up":
+                    await page.mouse.up()
+            case TakeoverWheel(delta_x=delta_x, delta_y=delta_y):
+                await page.mouse.wheel(delta_x, delta_y)
+            case TakeoverKey(key=key):
+                await page.keyboard.press(key)
 
     async def close(self, turn: UUID) -> None:
         opened = self._opened.pop(turn, None)

@@ -119,6 +119,8 @@ class ErrorCode(StrEnum):
     STALE = "STALE"
     #: The routine has deliveries waiting to fire, so it cannot be deleted yet.
     ROUTINE_PENDING = "ROUTINE_PENDING"
+    #: Nobody finished the takeover the turn waited on before its deadline, so the turn ended.
+    TAKEOVER_ABANDONED = "TAKEOVER_ABANDONED"
     #: Raised by a client, never sent by a server: its connection dropped under a call,
     #: or never came up.
     CONNECTION_LOST = "CONNECTION_LOST"
@@ -169,6 +171,7 @@ class EventType(StrEnum):
     TOOL_RESULT = "tool.result"
     WARNING = "warning"
     APPROVAL_REQUESTED = "approval.requested"
+    TAKEOVER_REQUESTED = "takeover.requested"
     TURN_COMPLETED = "turn.completed"
     TURN_FAILED = "turn.failed"
     TURN_INTERRUPTED = "turn.interrupted"
@@ -331,6 +334,15 @@ class ApprovalRequested(ContractModel):
     rule: GateRule
     #: What the approval shows beside the arguments, for a tool that says more about its call.
     preview: str | None = None
+
+
+class TakeoverRequested(ContractModel):
+    """The turn waits while the user drives its browser, until the user finishes (ADR 0113)."""
+
+    type: Literal[EventType.TAKEOVER_REQUESTED] = EventType.TAKEOVER_REQUESTED
+    takeover_id: UUID
+    #: Why the agent asks, such as a sign-in or a CAPTCHA it cannot pass.
+    reason: str
 
 
 class TokenTotals(ContractModel):
@@ -609,6 +621,7 @@ Payload = Annotated[
     | ToolResult
     | Warning
     | ApprovalRequested
+    | TakeoverRequested
     | TurnCompleted
     | TurnFailed
     | TurnInterrupted
@@ -759,6 +772,67 @@ class ThreadApprovalRespondCommand(ContractModel):
         return self
 
 
+class TakeoverPointer(ContractModel):
+    """The user's mouse at a point of the page, in the pixels of the live view's frames."""
+
+    type: Literal["pointer"] = "pointer"
+    action: Literal["move", "down", "up"]
+    x: float
+    y: float
+
+
+class TakeoverWheel(ContractModel):
+    """The user's wheel, scrolling the page where the mouse is."""
+
+    type: Literal["wheel"] = "wheel"
+    delta_x: float
+    delta_y: float
+
+
+class TakeoverKey(ContractModel):
+    """A key the user pressed, as Playwright names it: a character, Enter or Control+A."""
+
+    type: Literal["key"] = "key"
+    key: Annotated[str, Field(min_length=1)]
+
+
+TakeoverInput = Annotated[
+    TakeoverPointer | TakeoverWheel | TakeoverKey, Field(discriminator="type")
+]
+
+
+class ThreadTakeoverStartCommand(ContractModel):
+    """Watch the browser of the takeover the thread's turn is parked on, frame by frame."""
+
+    thread_id: UUID
+    takeover_id: UUID
+
+
+class TakeoverFrame(ContractModel):
+    """One frame of the live view: the page as a JPEG image, base64-encoded."""
+
+    data: str
+
+
+class ThreadTakeoverInputCommand(ContractModel):
+    """Pass the user's mouse or keyboard to the browser of the takeover."""
+
+    thread_id: UUID
+    takeover_id: UUID
+    input: TakeoverInput
+
+
+class ThreadTakeoverInputResult(ContractModel):
+    pass
+
+
+class ThreadTakeoverFinishCommand(ContractModel):
+    """Resume the turn parked on the takeover, with the browser as the user left it."""
+
+    thread_id: UUID
+    takeover_id: UUID
+
+
 class AcceptedResult(ContractModel):
     thread_id: UUID
     turn_id: UUID
@@ -826,6 +900,7 @@ class ThreadStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
+    AWAITING_TAKEOVER = "awaiting_takeover"
     AWAITING_REPLY = "awaiting_reply"
     FAILED = "failed"
 

@@ -55,6 +55,9 @@ from kinby.contracts import (
     THREAD_MODE_SET,
     THREAD_RENAME,
     THREAD_SUBSCRIBE,
+    THREAD_TAKEOVER_FINISH,
+    THREAD_TAKEOVER_INPUT,
+    THREAD_TAKEOVER_START,
     THREAD_TURN_DIFF,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_LIST,
@@ -136,6 +139,8 @@ from kinby.core.views import InstanceViews
 from kinby.instance import Instance, ModelPrice
 from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
+from kinby.plugins.browser import BrowserService
+from kinby.plugins.playwright_browser import PlaywrightBrowser
 
 Handler = Callable[[ContractModel], Awaitable[ContractModel]]
 SubscriptionHandler = Callable[[ContractModel], Awaitable[Stream[ContractModel]]]
@@ -174,6 +179,8 @@ class TurnConfig:
     runner: TurnRunner
     recap: RecapWriter | None = None
     snapshots: SnapshotStore | None = None
+    #: The browser the runner's turns use, which a takeover hands to the user.
+    browser: BrowserService | None = None
 
 
 @dataclass(frozen=True)
@@ -363,6 +370,7 @@ def build_dispatcher(
             turn_settings.permission_ceiling,
             after_turn,
             turn_settings.snapshots,
+            turn_settings.browser,
         )
         if isinstance(turns, ScheduledTurnConfig):
             scheduler = Scheduler(turns.scheduler, event_log, store, turn_service)
@@ -563,6 +571,9 @@ def build_dispatcher(
         dispatcher.register(THREAD_MODE_SET, turn_service.set_mode)
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
+        dispatcher.register_subscription(THREAD_TAKEOVER_START, turn_service.start_takeover)
+        dispatcher.register(THREAD_TAKEOVER_INPUT, turn_service.send_takeover_input)
+        dispatcher.register(THREAD_TAKEOVER_FINISH, turn_service.finish_takeover)
     return dispatcher
 
 
@@ -573,11 +584,13 @@ async def turn_config(
     model_override: str | None = None,
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
+    browser = PlaywrightBrowser()
     runner = LangGraphRunner(
         instance,
         event_log=event_log,
         model_override=model_override,
         tokenizer=count_tokens,
+        browser=browser,
     )
     recap = RecapWriter(
         event_log,
@@ -596,4 +609,5 @@ async def turn_config(
         runner,
         recap,
         snapshots,
+        browser,
     )

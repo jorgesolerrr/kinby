@@ -211,13 +211,14 @@ describe("an instance's threads column", () => {
           thread({ id: "t1", title: "Deploy notes", status: "running" }),
           thread({ id: "t2", title: "Pull request review", status: "awaiting_approval" }),
           thread({ id: "t3", title: "Nightly digest", status: "failed" }),
+          thread({ id: "t4", title: "LinkedIn sign-in", status: "awaiting_takeover" }),
         ]),
     })
     await listed()
 
     await user.click(screen.getByRole("button", { name: "Needs you" }))
 
-    expect(await listed()).toEqual(["Pull request review", "Nightly digest"])
+    expect(await listed()).toEqual(["Pull request review", "Nightly digest", "LinkedIn sign-in"])
   })
 
   it("shows the routine runs from every thread, quiet ones included, but not archived ones", async () => {

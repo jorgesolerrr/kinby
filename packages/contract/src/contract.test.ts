@@ -149,7 +149,7 @@ test("thread.list reads each thread's status and last activity", () => {
 
   expectTypeOf<Thread["status"]>().toEqualTypeOf<ThreadStatus>()
   expectTypeOf<ThreadStatus>().toEqualTypeOf<
-    "idle" | "running" | "awaiting_approval" | "awaiting_reply" | "failed"
+    "idle" | "running" | "awaiting_approval" | "awaiting_takeover" | "awaiting_reply" | "failed"
   >()
   expectTypeOf<Thread["last_activity_at"]>().toEqualTypeOf<string>()
 })
