@@ -29,16 +29,11 @@ from kinby.contracts import (
     PromptVersion,
     RoutineName,
     RoutineOrigin,
-    Stream,
     SystemPrompt,
-    TakeoverFrame,
     ThreadApprovalRespondCommand,
     ThreadAskCommand,
     ThreadModeSetCommand,
-    ThreadTakeoverFinishCommand,
-    ThreadTakeoverInputCommand,
-    ThreadTakeoverInputResult,
-    ThreadTakeoverStartCommand,
+    ThreadTakeoverResumeCommand,
     ThreadTurnDiffCommand,
     ThreadTurnDiffResult,
     ThreadTurnInterruptCommand,
@@ -88,7 +83,6 @@ from kinby.core.snapshots import (
     SnapshotStore,
     snapshot_ref,
 )
-from kinby.core.takeovers import save_profile, takeover_frames
 from kinby.core.threads import (
     PendingTakeover,
     ThreadStore,
@@ -262,7 +256,8 @@ class Turns:
         snapshots: SnapshotStore | None = None,
         browser: BrowserService | None = None,
     ) -> None:
-        """*browser* is the one the runner's turns use, which a takeover hands to the user."""
+        """*browser* is the one the runner's turns use, which a turn ended on its takeover
+        closes."""
         self._store = store
         self._log = log
         self._runner = runner
@@ -784,50 +779,22 @@ class Turns:
             pending.event, origin, ApprovalAnswer(command.decision, command.reason)
         )
 
-    async def start_takeover(self, command: ThreadTakeoverStartCommand) -> Stream[TakeoverFrame]:
-        """The live view of the takeover: its browser's page, frame by frame."""
-        browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
-        await browser.open(turn_id)
-        return Stream(0, takeover_frames(browser.screencast(turn_id)))
-
-    async def send_takeover_input(
-        self, command: ThreadTakeoverInputCommand
-    ) -> ThreadTakeoverInputResult:
-        browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
-        await browser.send(turn_id, command.input)
-        return ThreadTakeoverInputResult()
-
-    async def finish_takeover(self, command: ThreadTakeoverFinishCommand) -> AcceptedResult:
-        """Resume the turn parked on the takeover, with its browser as the user left it, saved
-        first as the profile the command names."""
+    async def resume_takeover(self, command: ThreadTakeoverResumeCommand) -> AcceptedResult:
+        """Resume the turn parked on the takeover the user finished, with its page as they left
+        it on the hub."""
         if not self._answering:
             raise InstanceDraining(
                 "The instance has drained. The takeover waits for its next start."
             )
-        pending = self._takeover(command.thread_id, command.takeover_id)
+        self._require_thread(command.thread_id)
+        pending = pending_takeover(self._log.stored(command.thread_id))
+        if pending is None or pending.request.takeover_id != command.takeover_id:
+            raise TakeoverNotFound(f'Takeover "{command.takeover_id}" was not found.')
         running = self._running.get(command.thread_id)
         if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
-        if command.profile is not None:
-            browser, turn_id = self._takeover_browser(command.thread_id, command.takeover_id)
-            await save_profile(browser, turn_id, command.profile)
         origin = _turn_origin(self._log.stored(command.thread_id), pending.event.turn_id)
         return await self._resume_parked(pending.event, origin, _TAKEOVER_FINISHED)
-
-    def _takeover(self, thread_id: UUID, takeover_id: UUID) -> PendingTakeover:
-        """The takeover the thread's turn is parked on, by its id."""
-        self._require_thread(thread_id)
-        pending = pending_takeover(self._log.stored(thread_id))
-        if pending is None or pending.request.takeover_id != takeover_id:
-            raise TakeoverNotFound(f'Takeover "{takeover_id}" was not found.')
-        return pending
-
-    def _takeover_browser(self, thread_id: UUID, takeover_id: UUID) -> tuple[BrowserService, UUID]:
-        """The browser of the takeover, and the turn it belongs to."""
-        pending = self._takeover(thread_id, takeover_id)
-        if self._browser is None:
-            raise TakeoverNotFound(f'Takeover "{takeover_id}" has no browser.')
-        return self._browser, pending.event.turn_id
 
     def _abandon_later(self, takeover: PendingTakeover) -> None:
         task = asyncio.create_task(self._abandon(takeover))

@@ -25,6 +25,11 @@ function instanceClient(answers: Answers = {}) {
   }
 }
 
+/** A client of the hub, answering from `answers`. */
+function hubClient(answers: Answers = {}) {
+  return { ...stubCaller(answers), ...stubSubscriber() }
+}
+
 /**
  * Open thread t1 of Ada's instance, from a client that answers from `answers`, with a hub that
  * answers from `hub`, on `clock`.
@@ -32,7 +37,7 @@ function instanceClient(answers: Answers = {}) {
 function openThread(
   answers: Answers = {},
   client = instanceClient(answers),
-  hub = stubCaller({}),
+  hub = hubClient(),
   clock = fakeClock(),
 ) {
   const rendered = render(
@@ -1288,7 +1293,7 @@ describe("a thread's panel", () => {
         ["turn-1", raised],
         ...answers.map((payload): [string, Payload] => ["turn-1", payload]),
       )
-      const hub = stubCaller(hubAnswers)
+      const hub = hubClient(hubAnswers)
       const clock = fakeClock()
       const { subscription } = openThread({}, undefined, hub, clock)
       await act(async () => {
@@ -1442,7 +1447,7 @@ describe("a thread's panel", () => {
       /** Open thread t1 parked on approval a1, with `notification` raised and kept by the hub as n1. */
       async function opened(notification: NotificationRaised, hubAnswers: Answers = {}) {
         const { title, options } = notification
-        const hub = stubCaller({
+        const hub = hubClient({
           "notification.list": () => ({ notifications: [kept({ title, options })] }),
           ...hubAnswers,
         })
@@ -1607,24 +1612,30 @@ describe("a waiting takeover", () => {
     ],
     ["turn-1", { type: "takeover.requested", takeover_id: "k1", reason }],
   )
-  const takeover = { thread_id: "t1", takeover_id: "k1" }
+  const turn = { instance_id: "hub-ada", turn_id: "turn-1" }
+  const takeover = { ...turn, thread_id: "t1", takeover_id: "k1" }
 
-  /** Open the thread with its replay parked on takeover k1, and the live view's subscription. */
+  /**
+   * Open the thread with its replay parked on takeover k1, and the live view's subscription on
+   * the hub, which keeps the page.
+   */
   async function openParked() {
-    const opened = openThread({
+    const hub = hubClient({
       "thread.takeover.input": () => ({}),
       "thread.takeover.finish": () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" }),
     })
+    const opened = openThread({}, undefined, hub)
     const events = opened.subscription()
     await act(async () => {
       events.subscribed(parked.length)
       for (const event of parked) events.deliver(event)
     })
-    const view = opened.client.subscriptions.find(
+    const view = hub.subscriptions.find(
       (subscription) => subscription.method === "thread.takeover.start",
     )
     if (view === undefined) throw new Error("The panel did not start the live view.")
-    return { ...opened, view }
+    const sent = () => hub.calls.filter((call) => call.method.startsWith("thread.takeover"))
+    return { ...opened, view, sent }
   }
 
   it("takes the composer's place with the reason, and starts the live view of the takeover", async () => {
@@ -1633,7 +1644,7 @@ describe("a waiting takeover", () => {
 
     expect(screen.queryByRole("textbox", { name: "Message Ada" })).toBeNull()
     expect(panel.textContent).toContain(reason)
-    expect(view.params).toEqual(takeover)
+    expect(view.params).toEqual(turn)
   })
 
   it("shows each frame of the screencast", async () => {
@@ -1675,10 +1686,10 @@ describe("a waiting takeover", () => {
 
     await waitFor(() =>
       expect(sent().map((call) => call.params)).toEqual([
-        { ...takeover, input: { type: "pointer", action: "down", x: 200, y: 100 } },
-        { ...takeover, input: { type: "pointer", action: "up", x: 200, y: 100 } },
-        { ...takeover, input: { type: "key", key: "a" } },
-        { ...takeover, input: { type: "key", key: "Shift+Tab" } },
+        { ...turn, input: { type: "pointer", action: "down", x: 200, y: 100 } },
+        { ...turn, input: { type: "pointer", action: "up", x: 200, y: 100 } },
+        { ...turn, input: { type: "key", key: "a" } },
+        { ...turn, input: { type: "key", key: "Shift+Tab" } },
       ]),
     )
   })
@@ -1688,15 +1699,15 @@ describe("a waiting takeover", () => {
     const answers = stubCaller({
       "thread.takeover.finish": () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" }),
     })
-    const client = {
-      ...instanceClient(),
+    const hub = {
+      ...hubClient(),
       calls: answers.calls,
       call: ((method, params) =>
         method === "thread.takeover.input"
           ? new Promise((resolve) => (delivered = () => resolve({})))
           : answers.call(method, params)) as typeof answers.call,
     }
-    const { subscription } = openThread({}, client)
+    const { subscription } = openThread({}, undefined, hub)
     await act(async () => {
       subscription().subscribed(parked.length)
       for (const event of parked) subscription().deliver(event)
