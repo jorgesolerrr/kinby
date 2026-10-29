@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
+import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import partial
 from pathlib import Path
+from typing import TextIO
 
 from dotenv import dotenv_values
 from langchain_core.tools import StructuredTool
 from mcp import Client, StdioServerParameters
 from mcp.client import Transport
+from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import TextContent
@@ -29,6 +34,8 @@ from kinby.plugins.tools import Tool
 
 #: How long one server may take to start and list its tools at turn start.
 CONNECT_SECONDS = 60
+#: At most how many bytes of a failed server's stderr end its notice.
+STDERR_TAIL = 2000
 
 _FAILURES = TypeAdapter(dict[str, str])
 
@@ -52,12 +59,11 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     async with AsyncExitStack() as stack:
         for name, pick in sorted(picks.items()):
             try:
-                async with asyncio.timeout(CONNECT_SECONDS):
-                    client, listed = await _connect(pick.server, env, stack)
-            except Exception as exc:
+                client, listed = await _connect(pick.server, env, stack)
+            except _NotConnected as failed:
                 failures[name] = (
                     f'MCP server "{name}" did not start or list its tools, so the turn ran '
-                    f"without them: {exception_message(exc)}"
+                    f"without them: {failed}"
                 )
                 continue
             tools.extend(
@@ -88,39 +94,83 @@ def _record_failures(state_dir: Path, failures: dict[str, str]) -> None:
     staging.replace(path)
 
 
+class _NotConnected(Exception):
+    """Why a server did not start or list its tools."""
+
+
+class _Stderr:
+    """Where a uvx server writes its stderr: passed on to the instance's own, with its tail kept
+    to tell why the server failed. A URL server writes none."""
+
+    def __init__(self) -> None:
+        read, write = os.pipe()
+        self.file = open(write, "w")  # noqa: SIM115 - open until the server is closed
+        self._forward = sys.stderr.fileno()
+        self._tail = b""
+        self._reader = threading.Thread(target=self._pass_on, args=(read,), daemon=True)
+        self._reader.start()
+
+    def tail(self) -> str:
+        return self._tail.decode(errors="replace").strip()
+
+    def close(self) -> None:
+        self.file.close()
+        # Once the server's processes exit, the pipe closes and the reader holds all they wrote.
+        self._reader.join(timeout=1)
+
+    def _pass_on(self, read: int) -> None:
+        with open(read, "rb", buffering=0) as pipe:
+            while chunk := pipe.read(65536):
+                os.write(self._forward, chunk)
+                self._tail = (self._tail + chunk)[-STDERR_TAIL:]
+
+
 async def _connect(
     server: McpServer, env: Mapping[str, str], stack: AsyncExitStack
 ) -> tuple[Client, list[McpTool]]:
     """A client of *server* that *stack* closes, and every tool it lists. A server that fails
-    is closed at once."""
-    async with AsyncExitStack() as connecting:
-        client = await connecting.enter_async_context(Client(_transport(server, env)))
-        listed: list[McpTool] = []
-        cursor: str | None = None
-        while True:
-            page = await client.list_tools(cursor=cursor)
-            listed.extend(page.tools)
-            cursor = page.next_cursor
-            if cursor is None:
-                break
-        stack.push_async_exit(connecting.pop_all())
-    return client, listed
+    is closed at once, and raises why, ending with what it last wrote to stderr."""
+    stderr = _Stderr()
+    try:
+        async with asyncio.timeout(CONNECT_SECONDS), AsyncExitStack() as connecting:
+            connecting.callback(stderr.close)
+            client = await connecting.enter_async_context(
+                Client(_transport(server, env, stderr.file))
+            )
+            listed: list[McpTool] = []
+            cursor: str | None = None
+            while True:
+                page = await client.list_tools(cursor=cursor)
+                listed.extend(page.tools)
+                cursor = page.next_cursor
+                if cursor is None:
+                    break
+            stack.push_async_exit(connecting.pop_all())
+    except TimeoutError:
+        reason = f"it timed out after {CONNECT_SECONDS} seconds"
+    except Exception as exc:
+        reason = exception_message(exc)
+    else:
+        return client, listed
+    tail = stderr.tail()
+    raise _NotConnected(f"{reason}. Its stderr ended with: {tail}" if tail else reason)
 
 
-def _transport(server: McpServer, env: Mapping[str, str]) -> Transport | StdioServerParameters:
+def _transport(server: McpServer, env: Mapping[str, str], stderr: TextIO) -> Transport:
     """How to reach *server*: its URL with the headers its variables fill, or uvx over stdio with
-    only the variables it declares."""
+    only the variables it declares and its stderr to *stderr*."""
     transport = server.transport
     if isinstance(transport, McpUrlTransport):
         headers = {header: env.get(variable, "") for header, variable in transport.headers.items()}
         return streamable_http_client(
             transport.url, http_client=create_mcp_http_client(headers=headers)
         )
-    return StdioServerParameters(
+    parameters = StdioServerParameters(
         command="uvx",
         args=[transport.package, *transport.args],
         env={name: env[name] for name in server.env if name in env},
     )
+    return stdio_client(parameters, errlog=stderr)
 
 
 def _adapted(
