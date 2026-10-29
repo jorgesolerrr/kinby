@@ -94,7 +94,12 @@ const VARIANTS: Variant[] = [
     name: "A · Warm",
     pitch:
       "Claude-like. Warm paper neutrals, roomy, a serif for replies, kin on the primary button.",
-    facts: ["luma style", "radius 10px", "button 36px, 10px corners", "UI 14 · reply 16 serif"],
+    facts: [
+      "luma style",
+      "radius 10px",
+      "buttons and inputs: 10px corners",
+      "UI 14 · reply 16 serif",
+    ],
     kit: luma,
     panel: "gap-10 p-5 sm:p-8",
     section: "gap-4",
