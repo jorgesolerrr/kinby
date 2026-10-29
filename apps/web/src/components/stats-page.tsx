@@ -371,7 +371,7 @@ function DrilledTurns({
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <h2 id={titleId} className="font-medium">
+        <h2 id={titleId} className="text-base font-semibold">
           {title}
         </h2>
         <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>

@@ -354,7 +354,7 @@ function Pane({
     <section aria-label={title} className="flex min-w-0 flex-1 flex-col overflow-y-auto">
       <header className="flex items-center gap-2 border-b px-6 py-4">
         <BackButton onBack={onBack} />
-        <h2 className="font-heading text-lg font-semibold">{title}</h2>
+        <h2 className="font-heading text-base font-semibold">{title}</h2>
       </header>
       {children}
     </section>
@@ -389,7 +389,7 @@ function EntryPane({
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-6 py-4">
         <BackButton onBack={onBack} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h2 className="flex flex-wrap items-center gap-2 font-mono text-lg font-semibold">
+          <h2 className="flex flex-wrap items-center gap-2 font-mono text-base font-semibold">
             {entry.name}
             <Badge variant="secondary">{LIBRARY_SOURCES[entry.source]}</Badge>
             {entry.edited && <Badge variant="outline">Edited</Badge>}

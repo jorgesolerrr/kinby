@@ -114,7 +114,7 @@ function UpdateCore({
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-medium">Update core</h2>
+      <h2 className="text-base font-semibold">Update core</h2>
       <p className="text-sm text-muted-foreground">
         Moves the instance onto the kinby a revision builds. The hub checks the new image before it
         stops anything, so a failed check leaves the instance running.

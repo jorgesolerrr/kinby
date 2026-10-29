@@ -73,7 +73,7 @@ export function FactoryInstances({
 
   return (
     <section className="flex max-w-2xl flex-col gap-4">
-      <h2 className="font-medium">Instances</h2>
+      <h2 className="text-base font-semibold">Instances</h2>
       {failure !== undefined && <Failure error={failure} />}
       {held === undefined
         ? failure === undefined && <Skeleton className="h-24 w-full" />

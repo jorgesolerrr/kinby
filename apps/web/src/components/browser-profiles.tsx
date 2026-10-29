@@ -71,7 +71,7 @@ export function BrowserProfiles({
   return (
     <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
       <div className="flex items-center gap-2">
-        <h2 id={titleId} className="font-medium">
+        <h2 id={titleId} className="text-base font-semibold">
           Browser profiles
         </h2>
         {!creating && (

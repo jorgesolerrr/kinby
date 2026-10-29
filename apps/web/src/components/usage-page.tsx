@@ -137,7 +137,7 @@ function InstanceTable({ rows, sources }: { rows: UsageRow[]; sources: UsageSour
   const titleId = useId()
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h2 id={titleId} className="font-medium">
+      <h2 id={titleId} className="text-base font-semibold">
         Instances
       </h2>
       <Table aria-labelledby={titleId}>
@@ -198,7 +198,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
       <div>
-        <h2 id={titleId} className="font-medium">
+        <h2 id={titleId} className="text-base font-semibold">
           Totals
         </h2>
         <p className="text-sm text-muted-foreground">

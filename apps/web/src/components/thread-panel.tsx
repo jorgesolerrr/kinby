@@ -455,7 +455,7 @@ function ApprovalPanel({
         <CardContent>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1">
-              <h2 className="text-lg font-semibold">Can I run {approval.name}?</h2>
+              <h2 className="text-base font-semibold">Can I run {approval.name}?</h2>
               <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                 <ShieldAlertIcon aria-hidden className="size-3.5" />
                 {approval.rule}
@@ -623,7 +623,7 @@ function TakeoverPanel({
         <CardContent>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1">
-              <h2 className="text-lg font-semibold">Can you take over the browser?</h2>
+              <h2 className="text-base font-semibold">Can you take over the browser?</h2>
               <p className="text-sm text-muted-foreground">{takeover.reason}</p>
             </div>
             <LiveBrowser
@@ -903,9 +903,10 @@ const replyOptions = {
   plugins: { code },
   // Links open straight, without Streamdown's confirmation dialog.
   linkSafety: { enabled: false },
-  // A reply's headings stay below the thread's own title, in kinby's heading face.
+  // A reply reads in the serif that marks the instance's voice. Its headings stay below the
+  // thread's own title, in kinby's heading face, and none is smaller than the prose.
   className:
-    "[&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_h4]:text-sm [&_:is(h1,h2,h3,h4)]:mt-5 [&_:is(h1,h2,h3,h4)]:font-heading [&_:is(h1,h2,h3,h4)]:font-semibold",
+    "font-reading text-base leading-7 [&_h1]:text-lg [&_:is(h2,h3,h4)]:text-base [&_:is(h1,h2,h3,h4)]:mt-5 [&_:is(h1,h2,h3,h4)]:font-heading [&_:is(h1,h2,h3,h4)]:font-semibold",
 } satisfies StreamdownProps
 
 /** What the instance wrote, as the Markdown it writes in. */

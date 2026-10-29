@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/gabarito";
+@import "@fontsource-variable/source-serif-4";
 
 /* Streamdown styles replies with Tailwind classes that live in its bundle. */
 @source "../node_modules/streamdown/dist/*.js";
@@ -14,6 +15,7 @@
   --font-heading: "Gabarito Variable", "Geist Variable", sans-serif;
   --font-sans: "Geist Variable", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-reading: "Source Serif 4 Variable", Georgia, serif;
   --color-kin: var(--kin);
   --color-ember: var(--ember);
   --color-on-ember: var(--on-ember);

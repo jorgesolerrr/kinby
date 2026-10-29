@@ -492,7 +492,7 @@ function NodePane({
           <XIcon />
         </Button>
       </div>
-      <h2 id={headingId} className="text-lg font-semibold">
+      <h2 id={headingId} className="text-base font-semibold">
         {opened.description}
       </h2>
       {opened.subjects.length > 0 && (
@@ -635,7 +635,7 @@ function FactForm({
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-lg font-semibold">{title}</h2>
+      <h2 className="text-base font-semibold">{title}</h2>
       <p className="text-sm text-muted-foreground">{hint}</p>
       {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
