@@ -185,8 +185,8 @@ def _instance(tmp_path: Path, *, browser: bool = True, mode: str = "ask") -> Ins
     return load_instance(path)
 
 
-def _calls(*steps: tuple[str, dict[str, object]]) -> ScriptedModel:
-    """A model that makes one tool call per step, then finishes."""
+def _calls(*steps: tuple[str, dict[str, object]], finishes: bool = True) -> ScriptedModel:
+    """A model that makes one tool call per step, then finishes, or else fails the turn."""
     return ScriptedModel(
         [
             *(
@@ -198,7 +198,7 @@ def _calls(*steps: tuple[str, dict[str, object]]) -> ScriptedModel:
                 )
                 for index, (name, args) in enumerate(steps)
             ),
-            AIMessageChunk(content="Done."),
+            *([AIMessageChunk(content="Done.")] if finishes else []),
         ]
     )
 
@@ -597,14 +597,8 @@ def test_an_upload_from_outside_the_workspace_is_refused(tmp_path, path: str) ->
 _REASON = "Sign in to LinkedIn: it asks for a code from your phone."
 
 
-def _takeover_runtime(
-    tmp_path: Path, browser: FakeBrowser, *after: tuple[str, dict[str, object]]
-) -> Dispatcher:
-    """An instance whose turns call browser_takeover once, then the tools *after*, then
-    finish."""
-    instance = _instance(tmp_path, mode="full-access")
+def _runtime(instance: Instance, model: ScriptedModel, browser: FakeBrowser) -> Dispatcher:
     log = EventLog(instance.manifest.state_dir)
-    model = _calls(("browser_takeover", {"reason": _REASON}), *after)
     runner = LangGraphRunner(
         instance, event_log=log, model_factory=lambda _: model, browser=browser
     )
@@ -617,19 +611,33 @@ def _takeover_runtime(
     )
 
 
-async def _parked_on_takeover(dispatcher: Dispatcher) -> Event:
-    """Start a turn, and return the takeover it parks on."""
+def _takeover_runtime(
+    tmp_path: Path, browser: FakeBrowser, *after: tuple[str, dict[str, object]]
+) -> Dispatcher:
+    """An instance whose turns call browser_takeover once, then the tools *after*, then
+    finish."""
+    model = _calls(("browser_takeover", {"reason": _REASON}), *after)
+    return _runtime(_instance(tmp_path, mode="full-access"), model, browser)
+
+
+async def _parked(dispatcher: Dispatcher, message: str, request: type[Payload]) -> Event:
+    """Start a turn with *message*, and return the *request* it parks on."""
     created = await call(dispatcher, "thread.create")
-    await call(dispatcher, "thread.turn.start", thread_id=created.id, message="Check LinkedIn")
+    await call(dispatcher, "thread.turn.start", thread_id=created.id, message=message)
     items = await thread_events(dispatcher, {"thread_id": created.id})
     async with asyncio.timeout(5):
         async for item in items:
             assert isinstance(item, Event)
             assert not is_turn_closing(item.payload), item
-            if isinstance(item.payload, TakeoverRequested):
+            if isinstance(item.payload, request):
                 await items.aclose()
                 return item
     raise AssertionError("The thread stopped streaming.")
+
+
+async def _parked_on_takeover(dispatcher: Dispatcher) -> Event:
+    """Start a turn, and return the takeover it parks on."""
+    return await _parked(dispatcher, "Check LinkedIn", TakeoverRequested)
 
 
 async def _resume(dispatcher: Dispatcher, parked: Event) -> object:
@@ -821,6 +829,94 @@ def test_finishing_a_takeover_on_the_hub_resumes_the_instances_turn(tmp_path) ->
     assert isinstance(finished, AcceptedResult)
     assert (finished.thread_id, finished.turn_id) == (parked.thread_id, parked.turn_id)
     assert isinstance(events[-1].payload, TurnCompleted)
+
+
+_CLICK_NEXT: tuple[tuple[str, dict[str, object]], ...] = (
+    ("browser_open", {"url": _JOBS}),
+    ("browser_snapshot", {}),
+    ("browser_click", {"ref": "e5"}),
+)
+
+
+async def _parked_on_approval(dispatcher: Dispatcher) -> Event:
+    """Start a turn in ask mode that opens a page, reads it and clicks on it, and return the
+    approval the click parks on."""
+    return await _parked(dispatcher, f"Open {_JOBS} and click Next", ApprovalRequested)
+
+
+async def _answer(dispatcher: Dispatcher, parked: Event, decision: str) -> list[Event]:
+    """Answer the approval *parked* asks, and return the events up to the turn's close."""
+    assert isinstance(parked.payload, ApprovalRequested)
+    await call(
+        dispatcher,
+        "thread.approval.respond",
+        thread_id=parked.thread_id,
+        approval_id=parked.payload.approval_id,
+        decision=decision,
+    )
+    return await turn_events(dispatcher, parked.thread_id)
+
+
+def test_an_approved_action_runs_on_the_page_the_turn_read_before_it_parked(tmp_path) -> None:
+    browser = FakeBrowser()
+    dispatcher = _runtime(_instance(tmp_path), _calls(*_CLICK_NEXT), browser)
+
+    async def scenario() -> tuple[Event, list[UUID], list[BrowserAction], list[Event]]:
+        parked = await _parked_on_approval(dispatcher)
+        closed_while_parked, acted_while_parked = list(browser.closed), list(browser.acted)
+        return (
+            parked,
+            closed_while_parked,
+            acted_while_parked,
+            await _answer(dispatcher, parked, "approve"),
+        )
+
+    parked, closed_while_parked, acted_while_parked, events = asyncio.run(scenario())
+
+    assert closed_while_parked == []
+    assert acted_while_parked == []
+    assert browser.acted == [Click("e5")]
+    assert isinstance(events[-1].payload, TurnCompleted)
+    assert browser.opened == [parked.turn_id]
+    assert browser.closed == [parked.turn_id]
+
+
+@pytest.mark.parametrize(
+    ("decision", "finishes", "closing"),
+    [("deny", True, TurnCompleted), ("approve", False, TurnFailed)],
+)
+def test_a_turn_resumed_from_an_approval_closes_its_browser_when_it_ends(
+    tmp_path, decision: str, finishes: bool, closing: type[Payload]
+) -> None:
+    browser = FakeBrowser()
+    model = _calls(*_CLICK_NEXT, finishes=finishes)
+    dispatcher = _runtime(_instance(tmp_path), model, browser)
+
+    async def scenario() -> tuple[Event, list[Event]]:
+        parked = await _parked_on_approval(dispatcher)
+        return parked, await _answer(dispatcher, parked, decision)
+
+    parked, events = asyncio.run(scenario())
+
+    assert isinstance(events[-1].payload, closing)
+    assert browser.closed == [parked.turn_id]
+
+
+def test_stopping_a_turn_parked_on_an_approval_closes_its_browser(tmp_path) -> None:
+    browser = FakeBrowser()
+    dispatcher = _runtime(_instance(tmp_path), _calls(*_CLICK_NEXT), browser)
+
+    async def scenario() -> tuple[Event, list[UUID], list[Event]]:
+        parked = await _parked_on_approval(dispatcher)
+        closed_while_parked = list(browser.closed)
+        await call(dispatcher, "thread.turn.interrupt", thread_id=parked.thread_id)
+        return parked, closed_while_parked, await turn_events(dispatcher, parked.thread_id)
+
+    parked, closed_while_parked, events = asyncio.run(scenario())
+
+    assert closed_while_parked == []
+    assert isinstance(events[-1].payload, TurnInterrupted)
+    assert browser.closed == [parked.turn_id]
 
 
 def test_an_instance_runs_without_playwright() -> None:

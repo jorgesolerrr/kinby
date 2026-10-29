@@ -739,7 +739,7 @@ class Turns:
             self._release_claim(command.thread_id, claim)
         if running is not None and self._running.get(command.thread_id) is running:
             del self._running[command.thread_id]
-        if isinstance(pending, PendingTakeover) and self._browser is not None:
+        if pending is not None and self._browser is not None:
             await self._browser.close(turn_id)
         return accepted(interrupted)
 
