@@ -419,6 +419,25 @@ def test_an_interactive_snapshot_holds_refs_to_what_can_be_acted_on_and_respects
 
 
 @pytest.mark.browser
+def test_an_interactive_snapshot_of_a_blank_page_holds_nothing(browser_server) -> None:
+    async def scenario() -> str:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            on_the_hub(browser_server, address) as browser,
+        ):
+            turn = uuid4()
+            await browser.open(turn)
+            try:
+                read = await browser.snapshot(turn, interactive=True, max_chars=2_000)
+            finally:
+                await browser.close(turn)
+            return read.text
+
+    assert asyncio.run(scenario()) == ""
+
+
+@pytest.mark.browser
 def test_the_service_refuses_an_address_that_is_not_public(browser_server) -> None:
     async def scenario() -> None:
         async with (

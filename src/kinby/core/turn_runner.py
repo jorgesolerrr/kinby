@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -408,6 +408,9 @@ class LangGraphRunner:
         return self._gate_policy_override
 
     async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnResult:
+        return await self._closing_browser(turn.turn_id, self._run(turn, context))
+
+    async def _run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnResult:
         await self._count_profiles(turn.model, context.emit)
         config, start_step = await self._start_config(turn)
         progress = _BudgetProgress(context.budgets, start_step)
@@ -446,6 +449,14 @@ class LangGraphRunner:
         answer: ApprovalAnswer,
         context: TurnContext,
     ) -> TurnResult:
+        return await self._closing_browser(turn.turn_id, self._resume(turn, answer, context))
+
+    async def _resume(
+        self,
+        turn: PreparedTurnRequest,
+        answer: ApprovalAnswer,
+        context: TurnContext,
+    ) -> TurnResult:
         progress = await self._resume_budget_progress(
             turn,
             context.budgets,
@@ -468,6 +479,18 @@ class LangGraphRunner:
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
         )
+
+    async def _closing_browser(self, turn_id: UUID, running: Awaitable[TurnResult]) -> TurnResult:
+        """Await the turn *running*, and close its browser once the turn ends. A park is not an
+        end: the approved action, or the user's takeover, acts on the page the turn left."""
+        try:
+            result = await running
+        except BaseException:
+            await self._browser.close(turn_id)
+            raise
+        if not isinstance(result, ParkedTurn):
+            await self._browser.close(turn_id)
+        return result
 
     def _granted_tools(self, turn: PreparedTurnRequest) -> tuple[str, ...]:
         """The tools the routine's grants allow, when a routine started the turn."""
@@ -593,7 +616,6 @@ class LangGraphRunner:
         if progress.steps_remaining is not None:
             config["recursion_limit"] = progress.steps_remaining
         seconds_timeout = asyncio.timeout(progress.seconds_remaining)
-        parked = None
         try:
             async with self._graph() as (graph, _):
                 started_at = datetime.now(UTC).timestamp()
@@ -644,25 +666,15 @@ class LangGraphRunner:
             if budgets.steps is None:
                 raise
             raise BudgetExceeded("steps", budgets.steps) from exc
-        finally:
-            # A turn parked on an approval may wait for hours, so it gives its browser back and a
-            # resumed one opens a fresh one. One parked on a takeover keeps it for the user.
-            if not isinstance(parked, TakeoverRequested):
-                await self._browser.close(turn.turn_id)
         if isinstance(parked, TakeoverRequested):
-            try:
-                # The user drives the page on the hub. With no browser free, the turn parks all the
-                # same, and the user's live view opens the page once one comes free.
-                with suppress(Exception):
-                    await self._browser.open(turn.turn_id)
-                await emit(parked)
-                if raises_notifications():
-                    source = self._notification_source(turn) or UNTITLED
-                    await raise_notification(takeover_notification(source, parked), emit)
-            except BaseException:
-                # A turn stopped before it parks never gets the deadline that closes its browser.
-                await self._browser.close(turn.turn_id)
-                raise
+            # The user drives the page on the hub. With no browser free, the turn parks all the
+            # same, and the user's live view opens the page once one comes free.
+            with suppress(Exception):
+                await self._browser.open(turn.turn_id)
+            await emit(parked)
+            if raises_notifications():
+                source = self._notification_source(turn) or UNTITLED
+                await raise_notification(takeover_notification(source, parked), emit)
             return ParkedTurn()
         if interrupts:
             approval = interrupts[0].value

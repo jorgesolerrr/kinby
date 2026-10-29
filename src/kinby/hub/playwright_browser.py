@@ -11,6 +11,7 @@ import re
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -574,9 +575,8 @@ async def _element(page: PlaywrightPage, ref: str) -> Locator:
 
 def _interactive(tree: str) -> str:
     """The lines of *tree* for the elements a page lets you act on, a link with its URL."""
-    lines = tree.splitlines()
     kept: list[str] = []
-    for line, following in zip(lines, [*lines[1:], ""], strict=True):
+    for line, following in pairwise([*tree.splitlines(), ""]):
         role = _ROLE.match(line)
         if role is None or (role.group(1) not in _INTERACTIVE and "[cursor=pointer]" not in line):
             continue
