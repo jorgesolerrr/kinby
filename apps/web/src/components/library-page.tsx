@@ -328,7 +328,9 @@ function EntryItem({
       <ItemContent className="min-w-0">
         <ItemTitle className="w-full">
           <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
-          {newer && <span aria-hidden className="size-2 shrink-0 rounded-full bg-ember" />}
+          {newer && (
+            <span aria-hidden className="size-2 shrink-0 rounded-full bg-muted-foreground" />
+          )}
           <span className="shrink-0 text-xs font-normal text-muted-foreground">
             {LIBRARY_SOURCES[entry.source]}
             {entry.edited && " · edited"}

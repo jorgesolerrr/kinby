@@ -298,7 +298,7 @@ function PageLink({
 
 /**
  * A thread's link, named by its title, with its status and time as its description. A routine run
- * that needs no look shows an ember dot.
+ * that needs no look shows a muted dot.
  */
 function ThreadRow({
   thread,
@@ -326,13 +326,13 @@ function ThreadRow({
         event.preventDefault()
         onOpen(href)
       }}
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:bg-accent"
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground"
     >
       {status !== undefined ? (
         <status.icon aria-hidden className={cn("size-3.5 shrink-0", status.className)} />
       ) : (
         <span aria-hidden className="grid size-3.5 shrink-0 place-items-center">
-          {said !== undefined && <span className="size-2 rounded-full bg-ember" />}
+          {said !== undefined && <span className="size-2 rounded-full bg-muted-foreground" />}
         </span>
       )}
       {said !== undefined && (

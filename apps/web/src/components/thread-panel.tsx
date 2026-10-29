@@ -328,7 +328,7 @@ function Composer({
           transcript away. */}
       <InputGroup>
         <InputGroupAddon align="inline-start">
-          <span aria-hidden className="font-mono text-kin">
+          <span aria-hidden className="font-mono text-muted-foreground">
             ›
           </span>
         </InputGroupAddon>
@@ -801,7 +801,7 @@ function Turn({
         <div className="flex items-end justify-end gap-3">
           <div className="flex min-w-0 flex-col items-end gap-1">
             <p className="font-mono text-xs text-muted-foreground">{started}</p>
-            <Bubble align="end">
+            <Bubble align="end" variant="secondary">
               <BubbleContent className="whitespace-pre-wrap">{turn.request}</BubbleContent>
             </Bubble>
           </div>
@@ -826,7 +826,7 @@ function Turn({
           <p className="font-mono text-xs text-muted-foreground">{speaker.name}</p>
           {railed(turn.steps).map((run) =>
             run.kind === "text" ? (
-              <Bubble key={run.key} variant="tinted">
+              <Bubble key={run.key} variant="outline">
                 <BubbleContent>
                   <Reply text={run.text} />
                 </BubbleContent>
@@ -862,7 +862,7 @@ function StartedByNode({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
   return (
     <span
       aria-hidden
-      className="grid size-5 shrink-0 place-items-center rounded-full bg-ember text-on-ember"
+      className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
     >
       <Icon className="size-3" />
     </span>
@@ -1127,7 +1127,7 @@ function ToolStepRow({
   const { icon: Icon, decision } = gateDecision(step, waiting, end)
   const call = [step.name, mainArgument(step.arguments)].filter(Boolean).join(" ")
   const tone = waiting
-    ? "bg-primary text-primary-foreground"
+    ? "bg-ember text-on-ember"
     : step.result?.error === undefined
       ? "bg-muted text-muted-foreground"
       : "bg-destructive/10 text-destructive"
