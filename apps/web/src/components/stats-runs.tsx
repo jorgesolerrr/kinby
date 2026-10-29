@@ -72,7 +72,7 @@ function WeekTable({ weeks }: { weeks: RunWeek[] }) {
   const titleId = useId()
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h2 id={titleId} className="font-medium">
+      <h2 id={titleId} className="text-base font-semibold">
         Weekly medians
       </h2>
       <Table aria-labelledby={titleId}>
@@ -106,7 +106,7 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
   const titleId = useId()
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h2 id={titleId} className="font-medium">
+      <h2 id={titleId} className="text-base font-semibold">
         Runs
       </h2>
       <Table aria-labelledby={titleId}>

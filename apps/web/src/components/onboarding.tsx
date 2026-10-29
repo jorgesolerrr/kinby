@@ -215,7 +215,7 @@ export function Onboarding({
   return (
     <div className="flex flex-col gap-6 p-6">
       <header className="flex flex-col gap-1">
-        <h1 className="text-lg font-medium">New instance</h1>
+        <h1 className="text-xl font-semibold">New instance</h1>
         <p className="text-sm text-muted-foreground">{HINTS[creating ? "create" : stage]}</p>
       </header>
       {creating ? (
@@ -334,7 +334,7 @@ function ImageStep({
       </div>
       {preparation !== undefined && (
         <section className="flex max-w-2xl flex-col gap-3">
-          <h2 className="font-medium">Preparing the image</h2>
+          <h2 className="text-base font-semibold">Preparing the image</h2>
           <Progress
             label="Preparation steps"
             failure="The preparation failed"
@@ -342,7 +342,7 @@ function ImageStep({
           />
           {preparation.state === "prepared" && (
             <>
-              <h2 className="font-medium">What it asks for</h2>
+              <h2 className="text-base font-semibold">What it asks for</h2>
               <Fields fields={preparation.description.setup_fields} />
               <Logins logins={preparation.description.logins ?? []} />
               <div>
@@ -948,7 +948,7 @@ function CreationView({
 }) {
   return (
     <section className="flex max-w-2xl flex-col gap-3">
-      <h2 className="font-medium">Creating {name.trim()}</h2>
+      <h2 className="text-base font-semibold">Creating {name.trim()}</h2>
       <Progress label="Creation steps" failure="The creation failed" operation={creation} />
       {creation.state === "failed" && (
         <div>
@@ -959,7 +959,7 @@ function CreationView({
       )}
       {creation.state === "created" && logins.length > 0 && (
         <>
-          <h2 className="font-medium">Sign in</h2>
+          <h2 className="text-base font-semibold">Sign in</h2>
           <p className="text-sm text-muted-foreground">
             Each sign-in shows a link and a code. Open the link and enter the code there. Starting
             the instance does not wait for a sign-in.
@@ -1016,7 +1016,7 @@ function StartStep({
   const busy = request !== undefined && starting?.state !== "failed"
   return (
     <>
-      <h2 className="font-medium">Start</h2>
+      <h2 className="text-base font-semibold">Start</h2>
       <p className="text-sm text-muted-foreground">The instance is listed and stopped.</p>
       {starting !== undefined && starting.state !== "started" && (
         <Progress label="Start steps" failure="The start failed" operation={starting} />

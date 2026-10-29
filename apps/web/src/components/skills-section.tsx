@@ -324,7 +324,7 @@ function Picks({
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-medium">Picked from the library</h2>
+      <h2 className="text-base font-semibold">Picked from the library</h2>
       {stale && (
         <StaleAlert
           file="skills-lock.json"

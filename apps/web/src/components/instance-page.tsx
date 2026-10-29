@@ -204,7 +204,7 @@ export function InstancePage({
         <ProcessAlert instance={instance} name={name} />
         {logins.length > 0 && (
           <section className="flex max-w-2xl flex-col gap-3 p-6">
-            <h2 className="font-medium">Subscription logins</h2>
+            <h2 className="text-base font-semibold">Subscription logins</h2>
             <p className="text-sm text-muted-foreground">
               {loginsNote(logins)} The instance keeps running.
             </p>
@@ -673,7 +673,7 @@ function RepositoryCommands({ name, status }: { name: string; status: InstanceSt
   const titleId = useId()
   return (
     <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
-      <h2 id={titleId} className="font-medium">
+      <h2 id={titleId} className="text-base font-semibold">
         Repository commands
       </h2>
       <p className="text-sm text-muted-foreground">

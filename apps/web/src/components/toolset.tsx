@@ -54,7 +54,7 @@ export function Toolset({
 
   return (
     <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
-      <h2 id={titleId} className="font-medium">
+      <h2 id={titleId} className="text-base font-semibold">
         Toolset
       </h2>
       <p className="text-sm text-muted-foreground">

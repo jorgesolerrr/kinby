@@ -47,7 +47,7 @@ export function SecretsSection({
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-3">
-        <h2 className="font-medium">Secrets</h2>
+        <h2 className="text-base font-semibold">Secrets</h2>
         {setup.secrets.length > 0 ? (
           <Secrets
             caller={caller}
@@ -62,7 +62,7 @@ export function SecretsSection({
       </section>
       {setup.logins.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="font-medium">Subscription logins</h2>
+          <h2 className="text-base font-semibold">Subscription logins</h2>
           <p className="text-sm text-muted-foreground">
             Sign in again when a subscription stops working.
           </p>
