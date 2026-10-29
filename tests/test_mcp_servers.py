@@ -23,6 +23,8 @@ from kinby.contracts import (
 )
 from kinby.instance import Instance, inspect_instance
 from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
+from kinby.plugins import mcp
+from kinby.plugins.mcp import STDERR_TAIL, failed_mcp_servers
 from tests.test_hub import hub_at, hub_client, started_instance
 from tests.test_instance_code import turn
 from tests.test_routines import instance_at
@@ -42,12 +44,20 @@ def echo(*include: str, env: tuple[str, ...] = (), package: str = "echo-server")
 
 @pytest.fixture(autouse=True)
 def uvx(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stand in for uvx: it starts the echo server for the package echo-server, and fails for
-    any other."""
+    """Stand in for uvx: it starts the echo server for the package echo-server, starts one that
+    never answers for silent-server, floods stderr before failing for noisy-server, and fails
+    as a package missing from the registry for any other."""
     folder = tmp_path_factory.mktemp("bin")
     shim = folder / "uvx"
     shim.write_text(
-        f'#!/bin/sh\n[ "$1" = "echo-server" ] || exit 1\nexec "{sys.executable}" "{SERVER}"\n',
+        f"""#!/bin/sh
+case "$1" in
+  echo-server) exec "{sys.executable}" "{SERVER}" ;;
+  silent-server) while read -r _; do :; done; exit ;;
+  noisy-server) seq 100000 >&2; exit 1 ;;
+  *) echo "error: $1 was not found in the package registry" >&2; exit 1 ;;
+esac
+""",
         encoding="utf-8",
     )
     shim.chmod(0o755)
@@ -178,3 +188,34 @@ def test_a_server_that_failed_at_the_last_turn_is_an_instance_notice(tmp_path: P
     assert isinstance(notice, McpServerFailed)
     assert notice.server == "broken"
     assert notice.message.startswith('MCP server "broken" did not start or list its tools')
+
+
+def failure(instance: Instance, server: McpServer) -> str:
+    pick(instance, broken=server)
+    asyncio.run(turn(instance, [], PermissionMode.ASK))
+    return failed_mcp_servers(instance.manifest.state_dir)["broken"]
+
+
+def test_a_missing_package_is_told_by_its_cause_and_what_uvx_said(tmp_path: Path) -> None:
+    message = failure(instance_at(tmp_path), echo("look", package="missing-server"))
+
+    assert "ExceptionGroup" not in message
+    assert "MCPError: Connection closed" in message
+    assert "missing-server was not found in the package registry" in message
+
+
+def test_only_the_tail_of_a_noisy_servers_stderr_is_told(tmp_path: Path) -> None:
+    message = failure(instance_at(tmp_path), echo("look", package="noisy-server"))
+
+    assert message.endswith("\n99999\n100000")
+    assert len(message) < STDERR_TAIL + 200
+
+
+def test_a_server_that_never_answers_is_told_to_have_timed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp, "CONNECT_SECONDS", 0.1)
+
+    message = failure(instance_at(tmp_path), echo("look", package="silent-server"))
+
+    assert message.endswith("without them: it timed out after 0.1 seconds")
