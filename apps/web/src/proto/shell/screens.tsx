@@ -53,7 +53,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type * as React from "react"
-import { useState } from "react"
+import { createContext, useContext, useState } from "react"
 
 import {
   HUB_PAGES,
@@ -69,6 +69,12 @@ import {
 } from "./mock"
 
 export type Go = (screen: Screen) => void
+
+/** Lets /proto/thread draw the thread and the composer inside this shell. */
+export const ThreadSlot = createContext<{
+  thread?: (instanceId: string) => React.ReactNode
+  composer?: (instanceId: string, pick?: boolean) => React.ReactNode
+}>({})
 
 const STATUS: Record<Status, { label: string; icon: LucideIcon; className: string } | undefined> = {
   idle: undefined,
@@ -132,11 +138,14 @@ function Composer({ instanceId, pick }: { instanceId: string; pick?: boolean }) 
 
 export function HomeScreen({ instanceId, pick }: { instanceId: string; pick?: boolean }) {
   const instance = instanceById(instanceId)
+  const slot = useContext(ThreadSlot)
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-24">
       <h1 className="font-heading text-3xl font-semibold">Good evening, Jorge</h1>
       <div className="w-full max-w-3xl">
-        <Composer key={instance.id} instanceId={instance.id} pick={pick} />
+        {slot.composer?.(instance.id, pick) ?? (
+          <Composer key={instance.id} instanceId={instance.id} pick={pick} />
+        )}
       </div>
     </div>
   )
@@ -145,6 +154,8 @@ export function HomeScreen({ instanceId, pick }: { instanceId: string; pick?: bo
 export function ThreadScreen({ instanceId, threadId }: { instanceId: string; threadId: string }) {
   const instance = instanceById(instanceId)
   const thread = instance.threads.find((t) => t.id === threadId) ?? instance.threads[0]
+  const slot = useContext(ThreadSlot)
+  if (slot.thread) return slot.thread(instanceId)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">

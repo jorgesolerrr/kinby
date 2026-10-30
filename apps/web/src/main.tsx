@@ -17,6 +17,15 @@ if (window.location.pathname.startsWith("/proto/shell")) {
       </StrictMode>,
     )
   })
+} else if (window.location.pathname.startsWith("/proto/thread")) {
+  // PROTOTYPE: /proto/thread renders the throwaway thread prototype inside the shell.
+  void import("./proto/thread").then(({ ThreadPrototype }) => {
+    createRoot(root).render(
+      <StrictMode>
+        <ThreadPrototype />
+      </StrictMode>,
+    )
+  })
 } else {
   const client = createClient(window.location.origin, browserTransport)
   createRoot(root).render(
