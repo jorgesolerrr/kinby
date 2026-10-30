@@ -100,7 +100,8 @@ const unnamed = instanceSummary({
   process: "stopped",
 })
 
-const instanceLink = (name: string) => screen.findByRole("link", { name })
+/** An instance's row, the button named by the instance that folds its group. */
+const instanceRow = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}`) })
 
 /** The browser shows or hides the tab, as switching to another one does. */
 function showPage(visibility: DocumentVisibilityState) {
@@ -110,10 +111,31 @@ function showPage(visibility: DocumentVisibilityState) {
   })
 }
 
-async function instanceState(name: string) {
-  const row = (await instanceLink(name)).closest("li")
-  if (row === null) throw new Error(`${name} is not in a sidebar list`)
-  return within(row)
+async function instanceGroup(name: string) {
+  const group = (await instanceRow(name)).closest("li")
+  if (group === null) throw new Error(`${name} is not in a sidebar list`)
+  return within(group)
+}
+
+function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): ThreadSummary {
+  return {
+    title: null,
+    created_at: "2026-10-30T10:00:00Z",
+    last_activity_at: "2026-10-30T10:00:00Z",
+    status: "idle",
+    mode: "ask",
+    mode_pinned: false,
+    archived: false,
+    origin: { kind: "user" },
+    ...fields,
+  }
+}
+
+/** The main header, over the open page. */
+function mainHeader() {
+  const header = screen.getByRole("main").querySelector("header")
+  if (header === null) throw new Error("The main panel has no header")
+  return within(header)
 }
 
 describe("the instances", () => {
@@ -122,11 +144,11 @@ describe("the instances", () => {
     Reflect.deleteProperty(document, "visibilityState")
   })
 
-  it("lists every instance in the sidebar with its name and state", async () => {
+  it("lists every instance in the sidebar by its name, saying which one is stopped", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect((await instanceState("Ada")).getByText("running")).toBeDefined()
-    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+    expect(await screen.findByRole("button", { name: "Ada" })).toBeDefined()
+    expect((await instanceGroup("research")).getByText("stopped")).toBeDefined()
   })
 
   it("shows the state the runtime observed, not the one the instance is meant to be in", async () => {
@@ -134,61 +156,59 @@ describe("the instances", () => {
     const failed = { ...unnamed, intended_state: "running", process: "failed" } as const
     openApp({ signedIn: true, instances: [looping, failed] })
 
-    expect((await instanceState("Ada")).getByText("restarting")).toBeDefined()
-    expect((await instanceState("research")).getByText("failed")).toBeDefined()
+    expect((await instanceGroup("Ada")).getByText("restarting")).toBeDefined()
+    expect((await instanceGroup("research")).getByText("failed")).toBeDefined()
     expect(screen.queryByText("running")).toBeNull()
-  })
-
-  it("badges an instance whose setup is pending", async () => {
-    const pending = { ...unnamed, setup_pending: true }
-    openApp({ signedIn: true, instances: [ada, pending] })
-
-    expect((await instanceState("research")).getByText("Setup pending")).toBeDefined()
-    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
-    expect((await instanceState("Ada")).queryByText("Setup pending")).toBeNull()
   })
 
   it("draws each instance's avatar in its shape and palette color", async () => {
     const drawn = { ...ada, avatar: { shape: "squircle", color: "green" } } as const
     openApp({ signedIn: true, instances: [drawn, unnamed] })
 
-    const avatar = (await instanceLink("Ada")).querySelector("[data-slot=avatar]")
+    const avatar = (await instanceRow("Ada")).querySelector("[data-slot=avatar]")
     const fallback = avatar?.querySelector("[data-slot=avatar-fallback]")
     expect(avatar?.getAttribute("data-shape")).toBe("squircle")
     expect(fallback?.getAttribute("data-variant")).toBe("green")
     expect(fallback?.textContent).toBe("A")
-    const other = (await instanceLink("research")).querySelector("[data-slot=avatar]")
+    const other = (await instanceRow("research")).querySelector("[data-slot=avatar]")
     expect(other?.getAttribute("data-shape")).toBe("circle")
   })
 
-  it("marks the instance the user selects and puts it in the URL", async () => {
+  it("opens an instance's page from its row menu, and unfolds its group", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
+    expect((await instanceRow("research")).getAttribute("aria-expanded")).toBe("false")
 
-    await user.click(await instanceLink("Ada"))
+    await user.click(await screen.findByRole("button", { name: "Menu for research" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Overview" }))
 
-    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
-    expect((await instanceLink("research")).getAttribute("aria-current")).toBeNull()
-    expect(window.location.pathname).toBe("/instances/hub-ada")
-    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
+    expect(window.location.pathname).toBe("/instances/hub-unnamed")
+    expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
+    expect((await instanceRow("research")).getAttribute("aria-expanded")).toBe("true")
   })
 
   it("restores the selection from the URL on a reload or an opened link", async () => {
-    window.history.replaceState(null, "", "/instances/hub-ada")
+    window.history.replaceState(null, "", "/instances/hub-unnamed")
 
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
-    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
+    expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
+    expect((await instanceRow("research")).getAttribute("aria-expanded")).toBe("true")
   })
 
-  it("opens a running instance's threads beside it, and follows the selected one in the main panel", async () => {
+  it("opens the thread the URL names, marked in its group, with its instance and title in the main header", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
 
-    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
+    const { hub } = openApp({
+      signedIn: true,
+      instances: [ada, unnamed],
+      threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+    })
 
-    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBe("page")
-    expect(await screen.findByRole("button", { name: "New thread" })).toBeDefined()
+    const open = await (await instanceGroup("Ada")).findByRole("link", { name: "Deploy notes" })
+    expect(open.getAttribute("aria-current")).toBe("page")
+    expect(mainHeader().getByText("Ada")).toBeDefined()
+    expect(mainHeader().getByText("Deploy notes")).toBeDefined()
     const relayed = hub.sockets.find(
       (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
     )
@@ -199,20 +219,16 @@ describe("the instances", () => {
         params: { thread_id: "t1", after_sequence: 0 },
       }),
     )
-    expect(screen.getByRole("status", { name: "Loading the thread" })).toBeDefined()
     expect(screen.queryByText(/^Start a thread with/)).toBeNull()
   })
 
-  it("shows a running instance's threads column, and leaves it out of the hub's pages", async () => {
+  it("shows no threads column beside a running instance", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     openApp({ signedIn: true, instances: [ada, unnamed] })
-    const user = userEvent.setup()
 
-    expect(await screen.findByRole("complementary", { name: "Ada's threads" })).toBeDefined()
-    await user.click(screen.getByRole("link", { name: "Library" }))
-
-    expect(await screen.findByRole("heading", { name: "Library" })).toBeDefined()
-    expect(screen.queryByRole("complementary", { name: "Ada's threads" })).toBeNull()
+    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
+    expect(screen.queryByRole("complementary")).toBeNull()
+    expect(screen.queryByRole("searchbox", { name: "Search threads" })).toBeNull()
   })
 
   it("opens a running instance's config panel from its page, and puts it in the URL", async () => {
@@ -302,12 +318,12 @@ describe("the instances", () => {
     )
   })
 
-  it("opens the selected instance's thread list from its threads column, and puts it in the URL", async () => {
+  it("opens the selected instance's thread list from its group, and puts it in the URL", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
 
-    await user.click(await screen.findByRole("link", { name: "All threads and archived" }))
+    await user.click(await (await instanceGroup("Ada")).findByRole("link", { name: "All threads" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/threads")
     expect(await screen.findByRole("heading", { name: "Threads" })).toBeDefined()
@@ -375,8 +391,8 @@ describe("the instances", () => {
 
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect((await instanceLink("research")).getAttribute("aria-current")).toBe("page")
-    expect(screen.queryByRole("button", { name: "New thread" })).toBeNull()
+    expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
+    expect((await instanceGroup("research")).queryAllByRole("link")).toEqual([])
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
     )
@@ -396,52 +412,49 @@ describe("the instances", () => {
 
   it("lists the instances again once the connection is back", async () => {
     const { hub, clock } = openApp({ signedIn: true, instances: [ada] })
-    expect(await instanceLink("Ada")).toBeDefined()
+    expect(await instanceRow("Ada")).toBeDefined()
 
     act(() => hub.sockets[0]?.drop())
     hub.instances = [ada, unnamed]
     await act(() => clock.advance(16_000))
 
-    expect(await instanceLink("research")).toBeDefined()
+    expect(await instanceRow("research")).toBeDefined()
   })
 
   it("lists the instances again when the window regains focus, keeping the list meanwhile", async () => {
-    const pending = { ...unnamed, setup_pending: true }
-    const { hub } = openApp({ signedIn: true, instances: [pending] })
-    expect((await instanceState("research")).getByText("Setup pending")).toBeDefined()
+    const { hub } = openApp({ signedIn: true, instances: [unnamed] })
+    expect((await instanceGroup("research")).getByText("stopped")).toBeDefined()
 
-    // Signed in and started from another tab.
-    hub.instances = [
-      { ...pending, setup_pending: false, intended_state: "running", process: "running" },
-    ]
+    // Started from another tab.
+    hub.instances = [{ ...unnamed, intended_state: "running", process: "running" }]
     act(() => {
       window.dispatchEvent(new Event("focus"))
     })
 
     expect(screen.getByText("stopped")).toBeDefined()
-    expect(await (await instanceState("research")).findByText("running")).toBeDefined()
-    expect((await instanceState("research")).queryByText("Setup pending")).toBeNull()
+    expect(await screen.findByRole("button", { name: "research" })).toBeDefined()
   })
 
   it("lists the instances again every 30 seconds while the page is visible, and not while hidden", async () => {
     const { hub, clock } = openApp({ signedIn: true, instances: [unnamed] })
     const started = { ...unnamed, intended_state: "running", process: "running" } as const
-    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+    const stopped = async () => (await instanceGroup("research")).queryByText("stopped")
+    expect(await stopped()).not.toBeNull()
 
     hub.instances = [started]
     await act(() => clock.advance(29_000))
-    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+    expect(await stopped()).not.toBeNull()
     await act(() => clock.advance(1_000))
-    expect((await instanceState("research")).getByText("running")).toBeDefined()
+    expect(await stopped()).toBeNull()
 
     showPage("hidden")
     hub.instances = [unnamed]
     await act(() => clock.advance(120_000))
-    expect((await instanceState("research")).getByText("running")).toBeDefined()
+    expect(await stopped()).toBeNull()
 
     showPage("visible")
     await act(() => clock.advance(30_000))
-    expect((await instanceState("research")).getByText("stopped")).toBeDefined()
+    expect(await stopped()).not.toBeNull()
   })
 
   it("says the hub has no instances yet", async () => {
@@ -449,12 +462,180 @@ describe("the instances", () => {
 
     expect(await screen.findByText("No instances yet")).toBeDefined()
     expect(screen.queryByRole("complementary")).toBeNull()
-    expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual([
+  })
+})
+
+describe("the sidebar", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
+
+  it("holds New thread and Library in its top band, and the account alone in its foot", async () => {
+    openApp({ signedIn: true, instances: [unnamed] })
+    const account = await userMenu()
+    const inSidebar = (role: "link" | "button") =>
+      screen
+        .getAllByRole(role)
+        .filter((element) => !element.closest("main") && element.ariaLabel !== "Toggle Sidebar")
+
+    expect(inSidebar("link").map((link) => link.textContent)).toEqual([
       "kinby",
       "New thread",
-      "New instance",
       "Library",
+      "New instance",
     ])
+    const newInstance = screen.getByRole("link", { name: "New instance" })
+    const below = inSidebar("button").filter(
+      (button) => newInstance.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    expect(below).toEqual([account])
+  })
+
+  it("opens the Library from its top band", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("link", { name: "Library" }))
+
+    expect(window.location.pathname).toBe("/library")
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeDefined()
+  })
+
+  it("shows the dot while threads or factory runs need you, unfolding the group", async () => {
+    openApp({
+      signedIn: true,
+      instances: [{ ...ada, needs_human: 1 }, unnamed],
+      threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes", status: "failed" })] },
+    })
+
+    const group = await instanceGroup("Ada")
+    expect(await group.findByText("2 waiting for you")).toBeDefined()
+    expect(group.getByRole("link", { name: "Deploy notes" })).toBeDefined()
+    expect((await instanceRow("Ada")).getAttribute("aria-expanded")).toBe("true")
+    expect((await instanceGroup("research")).queryByText(/waiting for you/)).toBeNull()
+  })
+
+  it("starts a thread with an instance from its row menu", async () => {
+    const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+    openApp({ signedIn: true, instances: [kinby, ada] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Menu for Ada" }))
+    await user.click(await screen.findByRole("menuitem", { name: "New thread with Ada" }))
+
+    expect(window.location.pathname).toBe("/")
+    expect(window.location.search).toBe("?to=hub-ada")
+    expect((await screen.findByRole("combobox", { name: "Send to" })).textContent).toContain("Ada")
+  })
+
+  it("opens an instance's tab from its row menu", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Menu for Ada" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Config" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/config")
+    expect(await screen.findByRole("navigation", { name: "Config sections" })).toBeDefined()
+  })
+
+  it("hides from the main header's toggle", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    const sidebar = () => document.querySelector("[data-slot=sidebar]")
+    await instanceRow("Ada")
+    expect(sidebar()?.getAttribute("data-state")).toBe("expanded")
+
+    await user.click(mainHeader().getByRole("button", { name: "Toggle Sidebar" }))
+
+    expect(sidebar()?.getAttribute("data-state")).toBe("collapsed")
+  })
+
+  it("shows only the toggle in the main header off a thread", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    openApp({ signedIn: true, instances: [ada] })
+    await screen.findByText(/^Start a thread with/)
+
+    expect(mainHeader().queryByText("Ada")).toBeNull()
+  })
+
+  describe("on a phone", () => {
+    let wide: typeof window.matchMedia
+    beforeEach(() => {
+      wide = window.matchMedia
+      window.matchMedia = (query) =>
+        Object.assign(wide(query), { matches: query === "(max-width: 767px)" })
+    })
+    afterEach(() => {
+      window.matchMedia = wide
+    })
+
+    const drawer = () => screen.queryByRole("dialog", { name: "Sidebar" })
+
+    async function openDrawer() {
+      const user = userEvent.setup()
+      await user.click(await screen.findByRole("button", { name: "Toggle Sidebar" }))
+      return { user, drawer: within(await screen.findByRole("dialog", { name: "Sidebar" })) }
+    }
+
+    it("opens as a drawer from the main header, and closes on a pick", async () => {
+      openApp({ signedIn: true, instances: [ada] })
+      await screen.findByRole("textbox", { name: "Message" })
+      expect(drawer()).toBeNull()
+
+      const { user, drawer: opened } = await openDrawer()
+      await user.click(opened.getByRole("link", { name: "Library" }))
+
+      expect(window.location.pathname).toBe("/library")
+      await waitFor(() => expect(drawer()).toBeNull())
+    })
+
+    it("keeps the groups as the user folded them when it opens again", async () => {
+      const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+      openApp({ signedIn: true, instances: [kinby, ada] })
+      await screen.findByRole("textbox", { name: "Message" })
+      const expanded = (shown: ReturnType<typeof within>, name: string) =>
+        shown.getByRole("button", { name: new RegExp(`^${name}`) }).getAttribute("aria-expanded")
+
+      const { user, drawer: first } = await openDrawer()
+      await user.click(first.getByRole("button", { name: /^Kinby/ }))
+      await user.click(first.getByRole("button", { name: /^Ada/ }))
+      await user.click(first.getByRole("link", { name: "Library" }))
+      await waitFor(() => expect(drawer()).toBeNull())
+
+      const { drawer: again } = await openDrawer()
+      expect(expanded(again, "Kinby")).toBe("false")
+      expect(expanded(again, "Ada")).toBe("true")
+    })
+
+    it("closes on a thread picked in a group", async () => {
+      openApp({
+        signedIn: true,
+        instances: [{ ...ada, home: true }],
+        threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+      })
+      await screen.findByRole("textbox", { name: "Message" })
+
+      const { user, drawer: opened } = await openDrawer()
+      await user.click(await opened.findByRole("link", { name: "Deploy notes" }))
+
+      expect(window.location.pathname).toBe("/instances/hub-ada/threads/t1")
+      await waitFor(() => expect(drawer()).toBeNull())
+    })
+
+    it("closes on a pick from a row menu", async () => {
+      openApp({ signedIn: true, instances: [ada] })
+      await screen.findByRole("textbox", { name: "Message" })
+
+      const { user, drawer: opened } = await openDrawer()
+      await user.click(opened.getByRole("button", { name: "Menu for Ada" }))
+      await user.click(await screen.findByRole("menuitem", { name: "Stats" }))
+
+      expect(window.location.pathname).toBe("/instances/hub-ada/stats")
+      await waitFor(() => expect(drawer()).toBeNull())
+    })
   })
 })
 
@@ -769,7 +950,7 @@ describe("the Settings dialog", () => {
   it("leaves the hub pages and the removed instances out of the sidebar", async () => {
     openApp({ signedIn: true, instances: [ada], removed: [grace] })
 
-    expect(await instanceLink("Ada")).toBeDefined()
+    expect(await instanceRow("Ada")).toBeDefined()
     for (const name of ["Usage", "Secrets", "Channels", "Removed instances"]) {
       expect(screen.queryByRole("link", { name })).toBeNull()
     }
@@ -822,7 +1003,7 @@ describe("the Instances section", () => {
     const removing = await screen.findByRole("alertdialog", { name: "Remove Ada?" })
     await user.click(within(removing).getByRole("button", { name: "Remove" }))
     await act(() => clock.advance(0))
-    await waitFor(() => expect(screen.queryByRole("link", { name: "Ada" })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Ada/ })).toBeNull())
 
     const dialog = await openSettings()
     await user.click(dialog.getByRole("tab", { name: "Instances" }))
@@ -841,7 +1022,7 @@ describe("the Instances section", () => {
     expect(window.location.pathname).toBe("/instances/hub-grace")
     expect(await screen.findByText("Grace is stopped")).toBeDefined()
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined()
-    expect((await instanceLink("Grace")).getAttribute("aria-current")).toBe("page")
+    expect((await instanceRow("Grace")).getAttribute("aria-expanded")).toBe("true")
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
   })
 
@@ -887,7 +1068,7 @@ describe("a page that breaks", () => {
 
     expect((await screen.findByRole("alert")).textContent).toContain("This page could not be shown")
     expect(screen.getByRole("button", { name: "Reload" })).toBeDefined()
-    expect(await instanceLink("Ada")).toBeDefined()
+    expect(await instanceRow("Ada")).toBeDefined()
     await user.click(await screen.findByRole("link", { name: "Library" }))
     expect(await screen.findByRole("heading", { name: "Library" })).toBeDefined()
     expect(screen.queryByRole("alert")).toBeNull()
@@ -898,17 +1079,18 @@ describe("creating an instance", () => {
   beforeEach(() => window.history.replaceState(null, "", "/"))
 
   it("opens the onboarding from the sidebar, at its image step", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
     openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
 
-    await user.click(await instanceLink("Ada"))
     await user.click(await screen.findByRole("link", { name: "New instance" }))
 
     expect(await screen.findByRole("heading", { name: "New instance" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Prepare the image" })).toBeDefined()
     expect(window.location.pathname).toBe("/new")
-    expect((await instanceLink("New instance")).getAttribute("aria-current")).toBe("page")
-    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
+    expect(
+      (await screen.findByRole("link", { name: "New instance" })).getAttribute("aria-current"),
+    ).toBe("page")
   })
 })
 

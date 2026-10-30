@@ -1,31 +1,90 @@
-import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
-import { useCallback, useId, useSyncExternalStore } from "react"
+import type { Client, Clock, InstanceClient, InstanceSummary, ThreadSummary } from "@kinby/contract"
+import { cn } from "cn"
+import {
+  BellDotIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  LoaderCircleIcon,
+  type LucideIcon,
+  MoreHorizontalIcon,
+  MousePointerClickIcon,
+  PlusIcon,
+  ShieldAlertIcon,
+  SquarePenIcon,
+} from "lucide-react"
+import { useCallback, useId, useState, useSyncExternalStore } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   SidebarGroup,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { useInstanceClient } from "@/hooks/use-instance-client"
+import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
 import { usePolled } from "@/hooks/use-polled"
-import { instanceName, shownState } from "@/lib/instances"
+import { INSTANCE_TABS, instanceName, shownState } from "@/lib/instances"
 import {
   CREATE_PATH,
-  instancePath,
-  openOnboarding,
-  openView,
-  selectInstance,
+  homePath,
+  tabPath,
+  threadPath,
+  threadsPath,
+  useInstanceTab,
+  useSelectedThreadId,
+  useThreadsOpen,
   useViewOpen,
   viewPath,
 } from "@/lib/selection"
-import { needsYou, threadList } from "@/lib/thread-list"
-import { PlusIcon } from "lucide-react"
+import { needsYou, threadList, threadTitle } from "@/lib/thread-list"
+
+type Reached = Pick<InstanceClient, "call" | "state" | "onStateChange">
+
+/** How many of an instance's most recent threads its group lists. */
+const RECENT = 4
+
+/** How often a group reads again what it shows of an instance while the page is visible. */
+const POLL_INTERVAL_MS = 5_000
+
+/** What a thread's status shows. An idle thread needs no look, so it shows nothing. */
+const STATUS: Record<
+  ThreadSummary["status"],
+  { label: string; icon: LucideIcon; className: string } | undefined
+> = {
+  idle: undefined,
+  running: {
+    label: "Working",
+    icon: LoaderCircleIcon,
+    className: "animate-spin text-muted-foreground",
+  },
+  awaiting_approval: { label: "Needs you", icon: ShieldAlertIcon, className: "text-foreground" },
+  awaiting_takeover: {
+    label: "Needs you",
+    icon: MousePointerClickIcon,
+    className: "text-foreground",
+  },
+  awaiting_reply: { label: "Needs your reply", icon: BellDotIcon, className: "text-foreground" },
+  failed: { label: "Failed", icon: CircleAlertIcon, className: "text-destructive" },
+}
+
+/** The groups the user folded or unfolded, open or not, by instance. */
+export type Folds = Readonly<Record<string, boolean>>
 
 export function NavInstances({
   instances,
@@ -34,16 +93,22 @@ export function NavInstances({
   client,
   clock,
   selectedClient,
+  folds,
+  onFold,
 }: {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
-  /** Reaches the instances that are not selected, to count their threads that need the user. */
+  /** Reaches the instances that are not selected, to list their threads and views. */
   client: Pick<Client, "instance">
   clock: Clock
-  /** The selected instance's connection, whose threads column lists the threads its row counts. */
-  selectedClient: Pick<InstanceClient, "call" | "state" | "onStateChange"> | undefined
+  /** The selected instance's connection, whose thread list the open thread reads and changes. */
+  selectedClient: Reached | undefined
+  /** Kept above the phone's drawer, which unmounts the groups each time it closes. */
+  folds: Folds
+  onFold: (instanceId: string, open: boolean) => void
 }) {
+  const open = useOpenFromSidebar()
   const home = instances.filter((instance) => instance.home)
   const others = instances.filter((instance) => !instance.home)
   return (
@@ -51,28 +116,27 @@ export function NavInstances({
       <SidebarGroupLabel>Instances</SidebarGroupLabel>
       <SidebarMenu>
         {[...home, ...others].map((instance) => {
-          const name = instanceName(instance)
           const isSelected = instance === selected
           return (
-            <InstanceRow
+            <InstanceGroup
               key={instance.instance_id}
               instance={instance}
-              name={name}
               isSelected={isSelected}
               client={client}
               clock={clock}
               selectedClient={isSelected ? selectedClient : undefined}
+              folded={folds[instance.instance_id]}
+              onFold={(open) => onFold(instance.instance_id, open)}
             />
           )
         })}
         <SidebarMenuItem>
           <SidebarMenuButton
-            tooltip="New instance"
             isActive={creating}
             aria-current={creating ? "page" : undefined}
             onClick={(event) => {
               event.preventDefault()
-              openOnboarding()
+              open(CREATE_PATH)
             }}
             render={
               <a href={CREATE_PATH}>
@@ -88,99 +152,140 @@ export function NavInstances({
 }
 
 /**
- * An instance's row: its avatar, its name, and under the name what needs the user or else its
- * state, with an ember dot while something waits. The link is named by the instance alone; the
- * second line is its description. Under the row, a running instance lists its views. The selected
- * instance counts the threads its threads column lists, and the others count and list on
- * connections of their own.
+ * An instance's row, which folds the group under it, and its menu. The row says when the instance
+ * is not running, and shows an ember dot while its sidebar threads or factory runs need the user.
+ * Under a running instance come its views, its most recent sidebar threads, and "All threads". The
+ * selected instance lists on the connection the open thread uses, and the others on their own.
  */
-function InstanceRow({
+function InstanceGroup({
   instance,
-  name,
   isSelected,
   client,
   clock,
   selectedClient,
+  folded,
+  onFold,
 }: {
   instance: InstanceSummary
-  name: string
   isSelected: boolean
   client: Pick<Client, "instance">
   clock: Clock
-  selectedClient: Pick<InstanceClient, "call" | "state" | "onStateChange"> | undefined
+  selectedClient: Reached | undefined
+  folded: boolean | undefined
+  onFold: (open: boolean) => void
 }) {
-  const statusId = useId()
+  const name = instanceName(instance)
+  const running = instance.process === "running"
   const ownClient = useInstanceClient(
     client,
-    !isSelected && instance.process === "running" ? instance.instance_id : undefined,
+    !isSelected && running ? instance.instance_id : undefined,
   )
-  const reached = selectedClient ?? ownClient
+  const reached = running ? (selectedClient ?? ownClient) : undefined
+  const threads = useSidebarThreads(reached, clock)
+  const count = threads.filter(needsYou).length + instance.needs_human
+  // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.
+  const [opened, setOpened] = useState(false)
+  if (!opened && (instance.home || count > 0 || isSelected)) setOpened(true)
+  const open = folded ?? opened
+  const tab = useInstanceTab()
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        size="lg"
-        tooltip={name}
-        isActive={isSelected}
-        aria-current={isSelected ? "page" : undefined}
-        aria-describedby={statusId}
-        onClick={(event) => {
-          event.preventDefault()
-          selectInstance(instance.instance_id)
-        }}
-        render={
-          <a href={instancePath(instance.instance_id)}>
-            <InstanceAvatar avatar={instance.avatar} name={name} />
-            {selectedClient !== undefined ? (
-              <ListedNeedsYou client={selectedClient} instance={instance} id={statusId} />
-            ) : ownClient !== undefined ? (
-              <NeedsYouCount client={ownClient} clock={clock} instance={instance} id={statusId} />
-            ) : (
-              <NeedsYou count={instance.needs_human} instance={instance} id={statusId} />
-            )}
-          </a>
-        }
-      />
-      {reached !== undefined && (
-        <InstanceViews
-          client={reached}
-          clock={clock}
-          instanceId={instance.instance_id}
-          isSelected={isSelected}
+    <Collapsible open={open} onOpenChange={onFold} render={<SidebarMenuItem />}>
+      <CollapsibleTrigger render={<SidebarMenuButton isActive={isSelected && tab !== undefined} />}>
+        <InstanceAvatar avatar={instance.avatar} name={name} size="sm" />
+        <span className="truncate font-medium">{name}</span>
+        {!running && (
+          <span className="shrink-0 text-xs text-muted-foreground">{shownState(instance)}</span>
+        )}
+        {count > 0 && (
+          <span className="ml-auto size-2 shrink-0 rounded-full bg-ember">
+            <span className="sr-only">{count} waiting for you</span>
+          </span>
+        )}
+        <ChevronRightIcon
+          className={cn("transition-transform", count === 0 && "ml-auto", open && "rotate-90")}
         />
+      </CollapsibleTrigger>
+      <InstanceMenu instanceId={instance.instance_id} name={name} running={running} />
+      {reached !== undefined && (
+        <CollapsibleContent>
+          <SidebarMenuSub>
+            <InstanceViews
+              client={reached}
+              clock={clock}
+              instanceId={instance.instance_id}
+              isSelected={isSelected}
+            />
+            <RecentThreads
+              threads={threads.slice(0, RECENT)}
+              instanceId={instance.instance_id}
+              isSelected={isSelected}
+            />
+          </SidebarMenuSub>
+        </CollapsibleContent>
       )}
-    </SidebarMenuItem>
+    </Collapsible>
   )
 }
 
-/** How often a row reads again what it shows of an instance while the page is visible. */
-const POLL_INTERVAL_MS = 5_000
+/**
+ * The sidebar set of `client`'s instance, listed again as `usePolled` says. It is the list the open
+ * thread reads and changes, so a change there shows here at once. None while nothing reaches it.
+ */
+function useSidebarThreads(client: Reached | undefined, clock: Clock): ThreadSummary[] {
+  const list = client === undefined ? undefined : threadList(client, "sidebar")
+  const connected =
+    useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
+    "connected"
+  usePolled(list?.list ?? listNothing, clock, connected, POLL_INTERVAL_MS)
+  return useSyncExternalStore(list?.onChange ?? unsubscribed, () => list?.view())?.threads ?? []
+}
+
+function unsubscribed(): () => void {
+  return () => {}
+}
+
+async function listNothing(): Promise<void> {}
 
 /**
- * How many of a running instance's sidebar threads and factory runs need the user, in place of its
- * state. It reads the threads on the row's own connection, and the runs from the hub's summary of
- * the instance.
+ * The row's "…" menu: a new thread with the instance, which only a running one can take, then each
+ * of its page's tabs.
  */
-function NeedsYouCount({
-  client,
-  clock,
-  instance,
-  id,
+function InstanceMenu({
+  instanceId,
+  name,
+  running,
 }: {
-  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
-  clock: Clock
-  instance: InstanceSummary
-  id: string
+  instanceId: string
+  name: string
+  running: boolean
 }) {
-  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const count = useCallback(
-    () =>
-      client
-        .call("thread.list", { filter: "sidebar" })
-        .then(({ threads }) => threads.filter(needsYou).length),
-    [client],
+  const { isMobile } = useSidebar()
+  const open = useOpenFromSidebar()
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<SidebarMenuAction showOnHover aria-label={`Menu for ${name}`} />}
+      >
+        <MoreHorizontalIcon />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="start">
+        <DropdownMenuGroup>
+          <DropdownMenuItem disabled={!running} onClick={() => open(homePath(instanceId))}>
+            <SquarePenIcon />
+            New thread with {name}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          {INSTANCE_TABS.map(({ id, label }) => (
+            <DropdownMenuItem key={id} onClick={() => open(tabPath(instanceId, id))}>
+              {label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
-  const [threadsNeedingYou = 0] = usePolled(count, clock, connected, POLL_INTERVAL_MS)
-  return <NeedsYou count={threadsNeedingYou + instance.needs_human} instance={instance} id={id} />
 }
 
 /** An instance's views, each linking to its page, with the one the URL opens marked current. */
@@ -190,7 +295,7 @@ function InstanceViews({
   instanceId,
   isSelected,
 }: {
-  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
+  client: Reached
   clock: Clock
   instanceId: string
   isSelected: boolean
@@ -199,86 +304,108 @@ function InstanceViews({
   const list = useCallback(() => client.call("view.list", {}).then(({ views }) => views), [client])
   const [views = []] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
   const openedView = useViewOpen()
-  if (views.length === 0) return null
-  return (
-    <SidebarMenuSub>
-      {views.map((view) => {
-        const isOpen = isSelected && view.id === openedView
-        return (
-          <SidebarMenuSubItem key={view.id}>
-            <SidebarMenuSubButton
-              isActive={isOpen}
-              aria-current={isOpen ? "page" : undefined}
-              href={viewPath(instanceId, view.id)}
-              onClick={(event) => {
-                event.preventDefault()
-                openView(instanceId, view.id)
-              }}
-            >
-              <span>{view.title}</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-        )
-      })}
-    </SidebarMenuSub>
-  )
+  const open = useOpenFromSidebar()
+  return views.map((view) => {
+    const isOpen = isSelected && view.id === openedView
+    const path = viewPath(instanceId, view.id)
+    return (
+      <SidebarMenuSubItem key={view.id}>
+        <SidebarMenuSubButton
+          isActive={isOpen}
+          aria-current={isOpen ? "page" : undefined}
+          href={path}
+          onClick={(event) => {
+            event.preventDefault()
+            open(path)
+          }}
+        >
+          <span>{view.title}</span>
+        </SidebarMenuSubButton>
+      </SidebarMenuSubItem>
+    )
+  })
 }
 
-/** What needs the user among the threads the selected instance's threads column last listed. */
-function ListedNeedsYou({
-  client,
-  instance,
-  id,
+/** The instance's most recent threads, then "All threads", with the one the URL opens marked. */
+function RecentThreads({
+  threads,
+  instanceId,
+  isSelected,
 }: {
-  client: Pick<InstanceClient, "call">
-  instance: InstanceSummary
-  id: string
+  threads: ThreadSummary[]
+  instanceId: string
+  isSelected: boolean
 }) {
-  const list = threadList(client, "sidebar")
-  const threads = useSyncExternalStore(list.onChange, list.view)?.threads ?? []
-  return (
-    <NeedsYou
-      count={threads.filter(needsYou).length + instance.needs_human}
-      instance={instance}
-      id={id}
-    />
-  )
-}
-
-/**
- * The name over what needs the user, or over the instance's state when nothing does. A row that
- * cannot count threads still counts the factory runs from the hub's summary. The second line is
- * hidden from the link's name and read as its description, through `id`.
- */
-function NeedsYou({
-  count,
-  instance,
-  id,
-}: {
-  count: number
-  instance: InstanceSummary
-  id: string
-}) {
+  const openedThread = useSelectedThreadId()
+  const threadsOpen = useThreadsOpen()
+  const open = useOpenFromSidebar()
+  const allPath = threadsPath(instanceId)
   return (
     <>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium">{instanceName(instance)}</span>
-        <span id={id} aria-hidden className="truncate font-mono text-xs text-muted-foreground">
-          {count > 0 ? (
-            `${count} waiting for you`
-          ) : (
-            <>
-              {instance.setup_pending && (
-                <>
-                  <span>Setup pending</span> ·{" "}
-                </>
-              )}
-              <span>{shownState(instance)}</span>
-            </>
-          )}
-        </span>
-      </span>
-      {count > 0 && <span aria-hidden className="size-2 shrink-0 rounded-full bg-ember" />}
+      {threads.map((thread) => (
+        <RecentThread
+          key={thread.id}
+          thread={thread}
+          path={threadPath(instanceId, thread.id)}
+          current={isSelected && thread.id === openedThread}
+          onOpen={open}
+        />
+      ))}
+      <SidebarMenuSubItem>
+        {/* Archived threads and every routine run live on the thread list page. */}
+        <SidebarMenuSubButton
+          isActive={isSelected && threadsOpen}
+          aria-current={isSelected && threadsOpen ? "page" : undefined}
+          href={allPath}
+          onClick={(event) => {
+            event.preventDefault()
+            open(allPath)
+          }}
+        >
+          <span>All threads</span>
+        </SidebarMenuSubButton>
+      </SidebarMenuSubItem>
     </>
+  )
+}
+
+/** A thread's link, named by its title, with its status icon and the status as its description. */
+function RecentThread({
+  thread,
+  path,
+  current,
+  onOpen,
+}: {
+  thread: ThreadSummary
+  path: string
+  current: boolean
+  onOpen: (path: string) => void
+}) {
+  const id = useId()
+  const status = STATUS[thread.status]
+  return (
+    <SidebarMenuSubItem>
+      <SidebarMenuSubButton
+        isActive={current}
+        aria-current={current ? "page" : undefined}
+        aria-labelledby={`${id}-title`}
+        aria-describedby={status === undefined ? undefined : `${id}-status`}
+        href={path}
+        onClick={(event) => {
+          event.preventDefault()
+          onOpen(path)
+        }}
+      >
+        <span id={`${id}-title`} className="min-w-0 flex-1 truncate" title={threadTitle(thread)}>
+          {threadTitle(thread)}
+        </span>
+        {status !== undefined && (
+          <span id={`${id}-status`} className="flex shrink-0">
+            <status.icon aria-hidden className={cn("size-3.5", status.className)} />
+            <span className="sr-only">{status.label}</span>
+          </span>
+        )}
+      </SidebarMenuSubButton>
+    </SidebarMenuSubItem>
   )
 }

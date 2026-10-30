@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/empty"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { instanceName } from "@/lib/instances"
+import { INSTANCE_TABS, instanceName } from "@/lib/instances"
 import { behind, OlderCore } from "@/lib/older-core"
 import {
   type InstanceTab,
@@ -137,14 +137,6 @@ export function MainPanel({
   return <HomeScreen key={to} caller={caller} instances={instances} to={to} />
 }
 
-const TABS: { id: InstanceTab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "config", label: "Config" },
-  { id: "routines", label: "Routines" },
-  { id: "memory", label: "Memory" },
-  { id: "stats", label: "Stats" },
-]
-
 /** The instance's tab strip, named for the instance, over the open tab. */
 function InstanceTabs({
   instance,
@@ -167,7 +159,7 @@ function InstanceTabs({
           aria-label={instanceName(instance)}
           className="w-full justify-start overflow-x-auto"
         >
-          {TABS.map(({ id, label }) => (
+          {INSTANCE_TABS.map(({ id, label }) => (
             <TabsTrigger key={id} value={id} className="flex-none">
               {label}
             </TabsTrigger>
