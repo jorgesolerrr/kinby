@@ -15,6 +15,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 | Round on purpose  | `rounded-full`     | Avatars, switches and their thumb, status dots                                                                                                                                                                                   |
 
 - Buttons, inputs, textareas, input groups, select triggers and choice-card labels take `rounded-lg`. The xs button and xs icon button take `rounded-md`, so they don't turn back into pills at 24px.
+- The command palette and its dialog take `rounded-xl` where luma has `rounded-4xl`, and its rows `rounded-md` where luma has `rounded-2xl`, and `rounded-3xl` in a dialog.
 - The sidebar header and content don't raise `--radius` to the `xl` value, as luma's source does. Sidebar rows use the app's `--radius` like every other control.
 - Pages outside the kit take their corners from the kit and don't restyle them by hand. The one exception is the status dots, which stay round.
 
@@ -24,6 +25,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **badge**: the `success` and `attention` variants. Attention fills with ember.
 - **button**: the `aria-disabled` state looks and acts like `disabled`.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
+- **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
 - **dialog**: the content's `lg` size, a wide and tall flex column with no padding or gap, for a dialog that lays out its own body, as Settings does.
 - **empty**: the title at `text-base`, on the section title scale.
 - **input-group**: the textarea's `prompt` variant, and an addon click focuses a textarea as well as an input.
