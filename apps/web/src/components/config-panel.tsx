@@ -14,7 +14,6 @@ import { CoreSection } from "@/components/core-section"
 import { ManifestSection } from "@/components/manifest-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { RecreateNotice } from "@/components/recreate-notice"
-import { RoutinesSection } from "@/components/routines-section"
 import { SecretsSection } from "@/components/secrets-section"
 import { SkillsSection } from "@/components/skills-section"
 import { ToolsSection } from "@/components/tools-section"
@@ -39,14 +38,13 @@ import { lastChanged } from "@/lib/config-changes"
 import { OlderCore } from "@/lib/older-core"
 import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
-import { leaveLink, linkedCore, linkedRoutine } from "@/lib/selection"
+import { leaveLink, linkedCore } from "@/lib/selection"
 import {
   CpuIcon,
   FileTextIcon,
   KeyRoundIcon,
   type LucideIcon,
   NotebookPenIcon,
-  RepeatIcon,
   ShieldIcon,
   SparklesIcon,
   TagIcon,
@@ -72,8 +70,6 @@ interface Panel {
   onChanged: () => void
   /** Open another section by its label. */
   open: (label: string) => void
-  /** The routine a link opened the panel on, until another section is opened. */
-  routine: string | undefined
 }
 
 /** One section of the panel. A section without `render` is not built yet. */
@@ -87,7 +83,6 @@ interface Section {
 }
 
 const CORE = "Core version"
-const ROUTINES = "Routines"
 
 const GROUPS: { label: string; sections: Section[] }[] = [
   {
@@ -124,14 +119,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
   {
     label: "Capabilities",
     sections: [
-      {
-        label: ROUTINES,
-        hint: "schedules, signals, next firing",
-        icon: RepeatIcon,
-        render: ({ client, clock, routine }) => (
-          <RoutinesSection client={client} clock={clock} opened={routine} />
-        ),
-      },
       {
         label: "Skills",
         hint: "library picks, instance, kinby, workspace",
@@ -224,12 +211,10 @@ export function ConfigPanel({
   instance: InstanceSummary
   onChanged: () => void
 }) {
-  const [routine, setRoutine] = useState(linkedRoutine)
-  const [selected, setSelected] = useState(() => linkedSection(routine))
+  const [selected, setSelected] = useState(() => (linkedCore() ? CORE : "Behavior prompt"))
   const instanceId = instance.instance_id
   const open = (label: string) => {
     setSelected(label)
-    setRoutine(undefined)
     leaveLink(instanceId)
   }
   const section = SECTIONS.find((candidate) => candidate.label === selected)
@@ -250,7 +235,6 @@ export function ConfigPanel({
     statusChanged,
     onChanged,
     open,
-    routine,
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -288,13 +272,6 @@ export function ConfigPanel({
       </main>
     </div>
   )
-}
-
-/** The section a link opens the panel on: the routines for a linked routine, or the first one. */
-function linkedSection(routine: string | undefined): string {
-  if (routine !== undefined) return ROUTINES
-  if (linkedCore()) return CORE
-  return "Behavior prompt"
 }
 
 /**

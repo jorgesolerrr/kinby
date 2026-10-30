@@ -32,10 +32,8 @@ import {
   statsPath,
   threadPath,
   threadsPath,
-  useConfigOpen,
-  useMemoryOpen,
+  useInstanceTab,
   useSelectedThreadId,
-  useStatsOpen,
 } from "@/lib/selection"
 import { byDay, matching, needsYou, threadList, threadTitle } from "@/lib/thread-list"
 
@@ -98,9 +96,7 @@ export function ThreadsColumn({
   const list = shown === "routines" ? all : sidebar
   const listed = useSyncExternalStore(list.onChange, list.view)?.threads
   const selectedId = useSelectedThreadId()
-  const memoryOpen = useMemoryOpen()
-  const statsOpen = useStatsOpen()
-  const configOpen = useConfigOpen()
+  const tab = useInstanceTab()
 
   const kept = listed?.filter((thread) =>
     shown === "needs"
@@ -143,21 +139,21 @@ export function ThreadsColumn({
             label="Memory"
             icon={BrainIcon}
             path={memoryPath(instanceId)}
-            current={memoryOpen}
+            current={tab === "memory"}
             onOpen={open}
           />
           <PageLink
             label="Stats"
             icon={ChartColumnIcon}
             path={statsPath(instanceId)}
-            current={statsOpen}
+            current={tab === "stats"}
             onOpen={open}
           />
           <PageLink
             label="Configure"
             icon={Settings2Icon}
             path={configPath(instanceId)}
-            current={configOpen}
+            current={tab === "config"}
             onOpen={open}
           />
         </div>

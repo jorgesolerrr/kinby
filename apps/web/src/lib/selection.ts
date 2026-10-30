@@ -13,6 +13,10 @@ const VIEWS = "views"
 export const CREATE_PATH = "/new"
 export const LIBRARY_PATH = "/library"
 
+/** An instance's page holds these tabs, each at its own path under the instance but Overview. */
+const TABS = ["overview", CONFIG, ROUTINES, MEMORY, STATS] as const
+export type InstanceTab = (typeof TABS)[number]
+
 // The Settings dialog opens over whatever path is open, so its section is a search parameter.
 const SETTINGS = "settings"
 const SETTINGS_SECTIONS = ["general", "usage", "secrets", "channels", "instances"] as const
@@ -46,13 +50,17 @@ export function turnPath(instanceId: string, threadId: string, turnId: string): 
   return `${threadPath(instanceId, threadId)}/${TURNS}/${encodeURIComponent(turnId)}`
 }
 
-export function configPath(instanceId: string): string {
-  return `${instancePath(instanceId)}/${CONFIG}`
+function tabPath(instanceId: string, tab: InstanceTab): string {
+  return tab === "overview" ? instancePath(instanceId) : `${instancePath(instanceId)}/${tab}`
 }
 
-/** One routine in an instance's config panel. */
+export function configPath(instanceId: string): string {
+  return tabPath(instanceId, CONFIG)
+}
+
+/** One routine on an instance's Routines tab. */
 export function routinePath(instanceId: string, name: string): string {
-  return `${configPath(instanceId)}/${ROUTINES}/${encodeURIComponent(name)}`
+  return `${tabPath(instanceId, ROUTINES)}/${encodeURIComponent(name)}`
 }
 
 function corePath(instanceId: string): string {
@@ -60,7 +68,7 @@ function corePath(instanceId: string): string {
 }
 
 export function memoryPath(instanceId: string): string {
-  return `${instancePath(instanceId)}/${MEMORY}`
+  return tabPath(instanceId, MEMORY)
 }
 
 /** One node open on an instance's memory page. */
@@ -69,7 +77,7 @@ export function nodePath(instanceId: string, node: string): string {
 }
 
 export function statsPath(instanceId: string): string {
-  return `${instancePath(instanceId)}/${STATS}`
+  return tabPath(instanceId, STATS)
 }
 
 /** One of an instance's views, on its own page. */
@@ -92,12 +100,17 @@ export function selectTurn(instanceId: string, threadId: string, turnId: string)
   navigate(turnPath(instanceId, threadId, turnId))
 }
 
+/** Open one of an instance's tabs the same way. */
+export function openTab(instanceId: string, tab: InstanceTab): void {
+  navigate(tabPath(instanceId, tab))
+}
+
 /** Open an instance's config panel the same way. */
 export function openConfig(instanceId: string): void {
   navigate(configPath(instanceId))
 }
 
-/** Open a routine in an instance's config panel the same way. */
+/** Open a routine on an instance's Routines tab the same way. */
 export function openRoutine(instanceId: string, name: string): void {
   navigate(routinePath(instanceId, name))
 }
@@ -107,10 +120,7 @@ export function openCore(instanceId: string): void {
   navigate(corePath(instanceId))
 }
 
-/**
- * Drop the routine or the section a link named from the URL and keep the config panel, in the same
- * history entry.
- */
+/** Drop the section a link named from the URL and keep the config panel, in the same history entry. */
 export function leaveLink(instanceId: string): void {
   const path = configPath(instanceId)
   if (window.location.pathname === path) return
@@ -187,11 +197,19 @@ export function closeSettings(): void {
   changed()
 }
 
-/** Replace an old hub page's path with the root path and Settings open on its section. */
+/**
+ * Replace an old path with the one that took its place: an old hub page's with the root path and
+ * Settings open on its section, and a routine's in the config panel with its Routines tab path.
+ */
 export function replaceOldPath(): void {
   const section = OLD_PATHS[window.location.pathname]
-  if (section === undefined) return
-  window.history.replaceState(null, "", `/?${SETTINGS}=${section}`)
+  const [, root, instanceId, config, routines, name] = window.location.pathname.split("/")
+  if (section !== undefined) {
+    window.history.replaceState(null, "", `/?${SETTINGS}=${section}`)
+  } else if (root === SECTION && instanceId && config === CONFIG && routines === ROUTINES && name) {
+    const path = `/${SECTION}/${instanceId}/${ROUTINES}/${name}`
+    window.history.replaceState(null, "", path + window.location.search)
+  } else return
   changed()
 }
 
@@ -220,19 +238,9 @@ export function useThreadsOpen(): boolean {
   return useSyncExternalStore(subscribe, threadsOpen)
 }
 
-/** Whether the URL opens its instance's config panel. */
-export function useConfigOpen(): boolean {
-  return useSyncExternalStore(subscribe, configOpen)
-}
-
-/** Whether the URL opens its instance's memory page. */
-export function useMemoryOpen(): boolean {
-  return useSyncExternalStore(subscribe, memoryOpen)
-}
-
-/** Whether the URL opens its instance's stats page. */
-export function useStatsOpen(): boolean {
-  return useSyncExternalStore(subscribe, statsOpen)
+/** The tab the URL opens on its instance's page, or none off the page, as on a thread or a view. */
+export function useInstanceTab(): InstanceTab | undefined {
+  return useSyncExternalStore(subscribe, openedTab)
 }
 
 /** The view the URL opens under its instance, if it names one. */
@@ -287,15 +295,16 @@ function selectedTurnId(): string | undefined {
   return selectedThreadId() !== undefined && turns === TURNS && turnId ? decoded(turnId) : undefined
 }
 
-function configOpen(): boolean {
-  const [, section, instanceId, config] = window.location.pathname.split("/")
-  return section === SECTION && Boolean(instanceId) && config === CONFIG
+function openedTab(): InstanceTab | undefined {
+  const [, section, instanceId, page] = window.location.pathname.split("/")
+  if (section !== SECTION || !instanceId || page === THREADS || page === VIEWS) return undefined
+  return TABS.find((tab) => tab === page) ?? "overview"
 }
 
-/** The routine the URL opens in its instance's config panel, if it names one. */
+/** The routine the URL opens on its instance's Routines tab, if it names one. */
 export function linkedRoutine(): string | undefined {
-  const [, section, instanceId, config, routines, name] = window.location.pathname.split("/")
-  return section === SECTION && instanceId && config === CONFIG && routines === ROUTINES && name
+  const [, section, instanceId, routines, name] = window.location.pathname.split("/")
+  return section === SECTION && instanceId && routines === ROUTINES && name
     ? decoded(name)
     : undefined
 }
@@ -306,20 +315,10 @@ export function linkedCore(): boolean {
   return section === SECTION && Boolean(instanceId) && config === CONFIG && linked === CORE
 }
 
-function memoryOpen(): boolean {
-  const [, section, instanceId, memory] = window.location.pathname.split("/")
-  return section === SECTION && Boolean(instanceId) && memory === MEMORY
-}
-
 /** The node the URL opens on its instance's memory page, if it names one. */
 export function linkedNode(): string | undefined {
   const [, section, instanceId, memory, node] = window.location.pathname.split("/")
   return section === SECTION && instanceId && memory === MEMORY && node ? decoded(node) : undefined
-}
-
-function statsOpen(): boolean {
-  const [, section, instanceId, stats] = window.location.pathname.split("/")
-  return section === SECTION && Boolean(instanceId) && stats === STATS
 }
 
 function openedView(): string | undefined {
