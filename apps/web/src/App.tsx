@@ -23,15 +23,13 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { usePolled } from "@/hooks/use-polled"
 import {
   replaceOldPath,
-  useConfigOpen,
   useCreating,
+  useInstanceTab,
   useLibraryOpen,
-  useMemoryOpen,
   usePath,
   useSelectedInstanceId,
   useSelectedThreadId,
   useSettingsOpen,
-  useStatsOpen,
   useThreadsOpen,
   useViewOpen,
 } from "@/lib/selection"
@@ -56,9 +54,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const instances = listed?.instances
   const selectedId = useSelectedInstanceId()
   const creating = useCreating()
-  const configOpen = useConfigOpen()
-  const memoryOpen = useMemoryOpen()
-  const statsOpen = useStatsOpen()
+  const tab = useInstanceTab()
+  const configOpen = tab === "config"
   const viewId = useViewOpen()
   const libraryOpen = useLibraryOpen()
   const settingsOpen = useSettingsOpen()
@@ -90,13 +87,11 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
       onPicked={() => setThreadsShown(false)}
     />
   )
-  // An open thread, config panel, memory page, stats page, the library, or a page beside the
-  // threads column scrolls inside the window, not the page.
+  // An open thread, a tab but Overview, the library, or a page beside the threads column scrolls
+  // inside the window, not the page.
   const fixed =
     threadId !== undefined ||
-    configOpen ||
-    memoryOpen ||
-    statsOpen ||
+    (tab !== undefined && tab !== "overview") ||
     libraryOpen ||
     (column !== false && !isMobile)
 
@@ -150,9 +145,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                     selected={selected}
                     threadId={threadId}
                     threadsOpen={threadsOpen}
-                    configOpen={configOpen}
-                    memoryOpen={memoryOpen}
-                    statsOpen={statsOpen}
+                    tab={tab}
                     viewId={viewId}
                     instanceClient={instanceClient}
                     onChanged={listAgain}

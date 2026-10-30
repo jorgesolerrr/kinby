@@ -198,7 +198,7 @@ describe("ConfigPanel", () => {
       "Permissions",
       "Manifest",
     ])
-    expect(labels("Capabilities")).toEqual(["Routines", "Skills", "Tools"])
+    expect(labels("Capabilities")).toEqual(["Skills", "Tools"])
     expect(labels("Instance")).toEqual(["Secrets and login", "Core version"])
     expect(screen.getByRole("button", { name: "Behavior prompt" })).toHaveProperty(
       "disabled",
@@ -207,7 +207,6 @@ describe("ConfigPanel", () => {
     expect(screen.getByRole("button", { name: "Recap prompt" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Skills" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Tools" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Routines" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
     expect(screen.getByRole("button", { name: "Core version" })).toHaveProperty("disabled", false)
@@ -404,38 +403,6 @@ describe("ConfigPanel", () => {
     expect(await screen.findByRole("heading", { name: "Permissions" })).toBeDefined()
   })
 
-  it("opens the routine a link names in the routines section's editor", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1/config/routines/inbox")
-    try {
-      openPanel({
-        "routine.list": () => ({ routines: [], warnings: [] }),
-        "routine.read": ({ name }) => ({ name, content: "Check the inbox.\n", hash: "hash-1" }),
-      })
-
-      expect(await screen.findByRole("heading", { name: "Routines" })).toBeDefined()
-      expect(await screen.findByDisplayValue("Check the inbox.")).toBeDefined()
-    } finally {
-      window.history.replaceState(null, "", "/")
-    }
-  })
-
-  it("drops the routine from the URL when another section opens", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1/config/routines/inbox")
-    try {
-      const { user } = openPanel({
-        "routine.list": () => ({ routines: [], warnings: [] }),
-        "routine.read": ({ name }) => ({ name, content: "Check the inbox.\n", hash: "hash-1" }),
-      })
-      await screen.findByDisplayValue("Check the inbox.")
-
-      await user.click(screen.getByRole("button", { name: "Tools" }))
-
-      expect(window.location.pathname).toBe("/instances/instance-1/config")
-    } finally {
-      window.history.replaceState(null, "", "/")
-    }
-  })
-
   it("opens on Core version when a link names it, and drops it from the URL on leaving", async () => {
     window.history.replaceState(null, "", "/instances/instance-1/config/core")
     try {
@@ -449,15 +416,6 @@ describe("ConfigPanel", () => {
     } finally {
       window.history.replaceState(null, "", "/")
     }
-  })
-
-  it("opens the routines section", async () => {
-    const { user } = openPanel({ "routine.list": () => ({ routines: [], warnings: [] }) })
-
-    await user.click(screen.getByRole("button", { name: "Routines" }))
-
-    expect(await screen.findByRole("heading", { name: "Routines" })).toBeDefined()
-    expect(await screen.findByRole("button", { name: "New routine" })).toBeDefined()
   })
 
   describe("Permissions", () => {

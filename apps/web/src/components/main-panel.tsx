@@ -6,6 +6,7 @@ import { ConfigPanel } from "@/components/config-panel"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
 import { OpenHome } from "@/components/open-home"
+import { RoutinesSection } from "@/components/routines-section"
 import { StatsPage } from "@/components/stats-page"
 import { ThreadListPage } from "@/components/thread-list-page"
 import { ThreadPanel } from "@/components/thread-panel"
@@ -19,18 +20,18 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { instanceName } from "@/lib/instances"
-import { selectInstance } from "@/lib/selection"
+import { behind, OlderCore } from "@/lib/older-core"
+import { type InstanceTab, linkedRoutine, openCore, openTab, selectInstance } from "@/lib/selection"
 import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
 
 /**
- * The selected thread's panel, the selected instance's thread list, config panel, memory page,
- * stats page, one of its views, or its page, or why there is none. A thread, the thread list, the
- * config panel, the memory page, the stats page, or a view opens once `instanceClient` reaches its
- * instance. The config panel opens only on an instance meant to run, which is the one the hub
- * relays to, and stays open while an update restarts the container. The thread list, memory and
- * stats pages and a view need a running instance. With none selected, it opens the home instance.
- * `onChanged` lists the instances again.
+ * The selected thread's panel, the selected instance's thread list, one of its views, or its page
+ * open on `tab`, or why there is none. A thread, the thread list, or a view opens once
+ * `instanceClient` reaches its instance, and needs a running one. With none selected, it opens the
+ * home instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -39,9 +40,7 @@ export function MainPanel({
   selected,
   threadId,
   threadsOpen = false,
-  configOpen = false,
-  memoryOpen = false,
-  statsOpen = false,
+  tab = "overview",
   viewId,
   instanceClient,
   onChanged,
@@ -52,9 +51,7 @@ export function MainPanel({
   selected: InstanceSummary | undefined
   threadId: string | undefined
   threadsOpen?: boolean
-  configOpen?: boolean
-  memoryOpen?: boolean
-  statsOpen?: boolean
+  tab?: InstanceTab
   viewId?: string
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
@@ -89,48 +86,6 @@ export function MainPanel({
       />
     )
   }
-  if (selected !== undefined && configOpen && selected.intended_state === "running") {
-    if (instanceClient === undefined) return null
-    return (
-      <ConfigPanel
-        key={selected.instance_id}
-        client={instanceClient}
-        caller={caller}
-        clock={clock}
-        instance={selected}
-        onChanged={onChanged}
-      />
-    )
-  }
-  if (selected !== undefined && memoryOpen) {
-    if (selected.process !== "running") {
-      return <NotRunning instance={selected} what="memory" />
-    }
-    if (instanceClient === undefined) return null
-    return (
-      <MemoryPage
-        key={selected.instance_id}
-        client={instanceClient}
-        clock={clock}
-        instanceId={selected.instance_id}
-      />
-    )
-  }
-  if (selected !== undefined && statsOpen) {
-    if (selected.process !== "running") {
-      return <NotRunning instance={selected} what="stats" />
-    }
-    if (instanceClient === undefined) return null
-    return (
-      <StatsPage
-        key={selected.instance_id}
-        client={instanceClient}
-        caller={caller}
-        clock={clock}
-        instanceId={selected.instance_id}
-      />
-    )
-  }
   if (selected !== undefined && viewId !== undefined) {
     if (selected.process !== "running") {
       return <NotRunning instance={selected} what="views" />
@@ -147,14 +102,16 @@ export function MainPanel({
   }
   if (selected !== undefined) {
     return (
-      <InstancePage
-        key={selected.instance_id}
-        caller={caller}
-        client={instanceClient}
-        clock={clock}
-        instance={selected}
-        onChanged={onChanged}
-      />
+      <InstanceTabs instance={selected} tab={tab}>
+        <TabBody
+          caller={caller}
+          clock={clock}
+          instance={selected}
+          tab={tab}
+          instanceClient={instanceClient}
+          onChanged={onChanged}
+        />
+      </InstanceTabs>
     )
   }
   const home = instances.find((instance) => instance.home)
@@ -171,6 +128,139 @@ export function MainPanel({
       Pick one in the sidebar.
     </EmptyState>
   )
+}
+
+const TABS: { id: InstanceTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "config", label: "Config" },
+  { id: "routines", label: "Routines" },
+  { id: "memory", label: "Memory" },
+  { id: "stats", label: "Stats" },
+]
+
+/** The instance's tab strip, named for the instance, over the open tab. */
+function InstanceTabs({
+  instance,
+  tab,
+  children,
+}: {
+  instance: InstanceSummary
+  tab: InstanceTab
+  children: React.ReactNode
+}) {
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(picked: InstanceTab) => openTab(instance.instance_id, picked)}
+      className="min-h-0 flex-1"
+    >
+      <div className="shrink-0 border-b px-4">
+        <TabsList
+          variant="line"
+          aria-label={instanceName(instance)}
+          className="w-full justify-start overflow-x-auto"
+        >
+          {TABS.map(({ id, label }) => (
+            <TabsTrigger key={id} value={id} className="flex-none">
+              {label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </div>
+      <TabsContent value={tab} className="flex min-h-0 min-w-0 flex-col">
+        {/* The tab panel sets small text, and the pages keep the base size they had before. */}
+        <div className="flex min-h-0 flex-1 flex-col text-base">{children}</div>
+      </TabsContent>
+    </Tabs>
+  )
+}
+
+/**
+ * What the open tab holds. Config, Routines, Memory and Stats open once `instanceClient` reaches the
+ * instance. Config opens only on an instance meant to run, which is the one the hub relays to, and
+ * stays open while an update restarts the container. Routines, Memory and Stats need a running one.
+ */
+function TabBody({
+  caller,
+  clock,
+  instance,
+  tab,
+  instanceClient,
+  onChanged,
+}: {
+  caller: Pick<Client, "call" | "subscribe" | "instance">
+  clock: Clock
+  instance: InstanceSummary
+  tab: InstanceTab
+  instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
+  onChanged: () => void
+}) {
+  const instanceId = instance.instance_id
+  if (tab === "overview") {
+    return (
+      <InstancePage
+        key={instanceId}
+        caller={caller}
+        client={instanceClient}
+        clock={clock}
+        instance={instance}
+        onChanged={onChanged}
+      />
+    )
+  }
+  const state = tab === "config" ? instance.intended_state : instance.process
+  if (state !== "running") return <NotRunning instance={instance} what={tab} />
+  if (instanceClient === undefined) return null
+  switch (tab) {
+    case "config":
+      return (
+        <ConfigPanel
+          key={instanceId}
+          client={instanceClient}
+          caller={caller}
+          clock={clock}
+          instance={instance}
+          onChanged={onChanged}
+        />
+      )
+    case "routines":
+      return (
+        <div className="flex flex-col gap-4 p-6">
+          <div>
+            <h1 className="text-xl font-semibold">Routines</h1>
+            <p className="text-sm text-muted-foreground">schedules, signals, next firing</p>
+          </div>
+          <Separator />
+          <OlderCore value={behind(instance) ? () => openCore(instanceId) : undefined}>
+            <RoutinesSection
+              key={instanceId}
+              client={instanceClient}
+              clock={clock}
+              opened={linkedRoutine()}
+            />
+          </OlderCore>
+        </div>
+      )
+    case "memory":
+      return (
+        <MemoryPage
+          key={instanceId}
+          client={instanceClient}
+          clock={clock}
+          instanceId={instanceId}
+        />
+      )
+    case "stats":
+      return (
+        <StatsPage
+          key={instanceId}
+          client={instanceClient}
+          caller={caller}
+          clock={clock}
+          instanceId={instanceId}
+        />
+      )
+  }
 }
 
 /** A page that needs a running instance, sending the user to the instance's page, which has Start. */

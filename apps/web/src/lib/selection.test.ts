@@ -7,11 +7,14 @@ import {
   linkedNode,
   linkedRoutine,
   openSettings,
+  openTab,
   replaceOldPath,
+  routinePath,
   selectThread,
   switchSettings,
   selectTurn,
   turnPath,
+  useInstanceTab,
   useSelectedInstanceId,
   useSelectedThreadId,
   useSelectedTurnId,
@@ -55,6 +58,69 @@ describe("the selected turn", () => {
     act(() => selectThread("hub-ada", "t1"))
 
     expect(selected.current).toEqual({ instanceId: "hub-ada", threadId: "t1", turnId: undefined })
+  })
+})
+
+describe("the open tab of an instance's page", () => {
+  const tab = () => renderHook(() => useInstanceTab()).result
+
+  it.each([
+    ["/instances/hub-ada", "overview"],
+    ["/instances/hub-ada/config", "config"],
+    ["/instances/hub-ada/config/core", "config"],
+    ["/instances/hub-ada/routines", "routines"],
+    ["/instances/hub-ada/routines/inbox", "routines"],
+    ["/instances/hub-ada/memory", "memory"],
+    ["/instances/hub-ada/memory/a-node", "memory"],
+    ["/instances/hub-ada/stats", "stats"],
+  ])("comes back from %s as %s", (path, open) => {
+    window.history.replaceState(null, "", path)
+
+    expect(tab().current).toBe(open)
+  })
+
+  it.each([
+    "/instances/hub-ada/threads",
+    "/instances/hub-ada/threads/t1",
+    "/instances/hub-ada/views/v1",
+    "/library",
+    "/",
+  ])("is none on %s, which is not one of the tabs", (path) => {
+    window.history.replaceState(null, "", path)
+
+    expect(tab().current).toBeUndefined()
+  })
+
+  it("opens as one new history entry at the tab's path", () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const entries = window.history.length
+    const open = tab()
+
+    act(() => openTab("hub-ada", "routines"))
+
+    expect(window.history.length).toBe(entries + 1)
+    expect(window.location.pathname).toBe("/instances/hub-ada/routines")
+    expect(open.current).toBe("routines")
+
+    act(() => openTab("hub-ada", "overview"))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada")
+    expect(open.current).toBe("overview")
+  })
+})
+
+describe("a linked routine", () => {
+  it("comes back from its path on the Routines tab", () => {
+    window.history.replaceState(null, "", routinePath("hub ada", "inbox/2"))
+
+    expect(window.location.pathname).toBe("/instances/hub%20ada/routines/inbox%2F2")
+    expect(linkedRoutine()).toBe("inbox/2")
+  })
+
+  it("is none on the Routines tab with no routine named", () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/routines")
+
+    expect(linkedRoutine()).toBeUndefined()
   })
 })
 
@@ -121,7 +187,7 @@ describe("the open Settings section", () => {
   })
 })
 
-describe("an old hub page's path", () => {
+describe("an old path", () => {
   it.each([
     ["/usage", "usage"],
     ["/secrets", "secrets"],
@@ -136,6 +202,18 @@ describe("an old hub page's path", () => {
     expect(window.history.length).toBe(entries)
     expect(window.location.pathname).toBe("/")
     expect(renderHook(() => useSettingsOpen()).result.current).toBe(section)
+  })
+
+  it("gives way to the Routines tab when it links a routine in the config panel", () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/config/routines/inbox?settings=usage")
+    const entries = window.history.length
+
+    replaceOldPath()
+
+    expect(window.history.length).toBe(entries)
+    expect(window.location.pathname).toBe("/instances/hub-ada/routines/inbox")
+    expect(window.location.search).toBe("?settings=usage")
+    expect(linkedRoutine()).toBe("inbox")
   })
 
   it("leaves any other path as it is", () => {
@@ -172,7 +250,7 @@ describe("a malformed URL", () => {
   })
 
   it("links no routine", () => {
-    window.history.replaceState(null, "", "/instances/a/config/routines/50%")
+    window.history.replaceState(null, "", "/instances/a/routines/50%")
 
     expect(linkedRoutine()).toBeUndefined()
   })

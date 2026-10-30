@@ -986,7 +986,7 @@ describe("the Origin tab", () => {
     ])
   })
 
-  it("links a routine to it in the config panel, and a name routine.list lacks to nothing", async () => {
+  it("links a routine to it on the Routines tab, and a name routine.list lacks to nothing", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/stats")
     openOrigins()
     const user = userEvent.setup()
@@ -996,7 +996,7 @@ describe("the Origin tab", () => {
     await user.click(await within(table).findByRole("link", { name: "inbox" }))
 
     expect(within(table).queryByRole("link", { name: /morning/ })).toBeNull()
-    expect(window.location.pathname).toBe("/instances/hub-ada/config/routines/inbox")
+    expect(window.location.pathname).toBe("/instances/hub-ada/routines/inbox")
   })
 
   it("filters the drill-down to a clicked row, here and in the Overview", async () => {
