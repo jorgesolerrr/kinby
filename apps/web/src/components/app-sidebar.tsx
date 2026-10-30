@@ -1,4 +1,5 @@
 import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
+import { SquarePenIcon } from "lucide-react"
 import type * as React from "react"
 
 import { KinbyMark } from "@/components/kinby-mark"
@@ -57,6 +58,21 @@ export function AppSidebar({
                     <KinbyMark className="size-7!" />
                   </span>
                   <span className="font-heading text-lg font-semibold tracking-tight">kinby</span>
+                </a>
+              }
+            />
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="New thread"
+              onClick={(event) => {
+                event.preventDefault()
+                openHome()
+              }}
+              render={
+                <a href="/">
+                  <SquarePenIcon />
+                  <span>New thread</span>
                 </a>
               }
             />

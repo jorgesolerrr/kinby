@@ -22,6 +22,9 @@ const SETTINGS = "settings"
 const SETTINGS_SECTIONS = ["general", "usage", "secrets", "channels", "instances"] as const
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
 
+// The home screen's "Send to" opens on the instance this search parameter names.
+const TO = "to"
+
 /** The hub pages that became sections of the Settings dialog, by their old paths. */
 const OLD_PATHS: Record<string, SettingsSection> = {
   "/usage": "usage",
@@ -164,7 +167,7 @@ export function landOn(instanceId: string, threadId?: string): void {
   changed()
 }
 
-/** Go to the home route, where no instance is selected, the same way. */
+/** Go to the home screen, where no instance is selected, the same way. */
 export function openHome(): void {
   navigate("/")
 }
@@ -261,6 +264,14 @@ export function useLibraryOpen(): boolean {
 /** The section the URL opens the Settings dialog on, if it opens the dialog. */
 export function useSettingsOpen(): SettingsSection | undefined {
   return useSyncExternalStore(subscribe, settingsOpen)
+}
+
+/** The instance the URL presets the home screen's "Send to" with, if it names one. */
+export function useSendTo(): string | undefined {
+  return useSyncExternalStore(
+    subscribe,
+    () => new URLSearchParams(window.location.search).get(TO) ?? undefined,
+  )
 }
 
 /** Open a page of the app by its path, without reloading the page, as a new history entry. */

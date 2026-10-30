@@ -29,6 +29,7 @@ import {
   usePath,
   useSelectedInstanceId,
   useSelectedThreadId,
+  useSendTo,
   useSettingsOpen,
   useThreadsOpen,
   useViewOpen,
@@ -60,8 +61,9 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const libraryOpen = useLibraryOpen()
   const settingsOpen = useSettingsOpen()
   const threadsOpen = useThreadsOpen()
+  const sendTo = useSendTo()
   const path = usePath()
-  // Before the pages' effects run, so the home route opening the home instance keeps the section.
+  // Before the page paints, so an old path never shows.
   useLayoutEffect(replaceOldPath, [path])
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
@@ -147,6 +149,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                     threadsOpen={threadsOpen}
                     tab={tab}
                     viewId={viewId}
+                    to={sendTo}
                     instanceClient={instanceClient}
                     onChanged={listAgain}
                   />

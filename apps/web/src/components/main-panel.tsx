@@ -5,7 +5,7 @@ import type * as React from "react"
 import { ConfigPanel } from "@/components/config-panel"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
-import { OpenHome } from "@/components/open-home"
+import { HomeScreen } from "@/components/home-screen"
 import { RoutinesSection } from "@/components/routines-section"
 import { StatsPage } from "@/components/stats-page"
 import { ThreadListPage } from "@/components/thread-list-page"
@@ -24,14 +24,21 @@ import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { instanceName } from "@/lib/instances"
 import { behind, OlderCore } from "@/lib/older-core"
-import { type InstanceTab, linkedRoutine, openCore, openTab, selectInstance } from "@/lib/selection"
-import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
+import {
+  type InstanceTab,
+  linkedRoutine,
+  openCore,
+  openOnboarding,
+  openTab,
+  selectInstance,
+} from "@/lib/selection"
+import { CirclePauseIcon, ServerIcon } from "lucide-react"
 
 /**
  * The selected thread's panel, the selected instance's thread list, one of its views, or its page
  * open on `tab`, or why there is none. A thread, the thread list, or a view opens once
- * `instanceClient` reaches its instance, and needs a running one. With none selected, it opens the
- * home instance. `onChanged` lists the instances again.
+ * `instanceClient` reaches its instance, and needs a running one. With none selected, it shows the
+ * home screen, preset to send `to` an instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -42,6 +49,7 @@ export function MainPanel({
   threadsOpen = false,
   tab = "overview",
   viewId,
+  to,
   instanceClient,
   onChanged,
 }: {
@@ -53,6 +61,7 @@ export function MainPanel({
   threadsOpen?: boolean
   tab?: InstanceTab
   viewId?: string
+  to?: string
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
 }) {
@@ -114,20 +123,18 @@ export function MainPanel({
       </InstanceTabs>
     )
   }
-  const home = instances.find((instance) => instance.home)
-  if (home !== undefined) return <OpenHome client={caller} home={home} />
   if (instances.length === 0) {
     return (
-      <EmptyState icon={<ServerIcon />} title="No instances yet">
-        The instances this hub manages will show in the sidebar.
+      <EmptyState
+        icon={<ServerIcon />}
+        title="No instances yet"
+        action={<Button onClick={openOnboarding}>New instance</Button>}
+      >
+        Create one to start a thread with it.
       </EmptyState>
     )
   }
-  return (
-    <EmptyState icon={<MousePointerClickIcon />} title="No instance selected">
-      Pick one in the sidebar.
-    </EmptyState>
-  )
+  return <HomeScreen key={to} caller={caller} instances={instances} to={to} />
 }
 
 const TABS: { id: InstanceTab; label: string }[] = [

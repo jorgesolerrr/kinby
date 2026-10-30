@@ -3,7 +3,7 @@ import type { InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import App from "@/App"
 
@@ -387,7 +387,7 @@ describe("the instances", () => {
 
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByText("No instance selected")).toBeDefined()
+    expect(await screen.findByRole("textbox", { name: "Message" })).toBeDefined()
     expect(screen.queryByText(/^Start a thread with/)).toBeNull()
     for (const link of screen.getAllByRole("link")) {
       expect(link.getAttribute("aria-current")).toBeNull()
@@ -451,6 +451,7 @@ describe("the instances", () => {
     expect(screen.queryByRole("complementary")).toBeNull()
     expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual([
       "kinby",
+      "New thread",
       "New instance",
       "Library",
     ])
@@ -911,55 +912,125 @@ describe("creating an instance", () => {
   })
 })
 
-describe("the home instance", () => {
-  beforeEach(() => window.history.replaceState(null, "", "/"))
+describe("the home screen", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
+  afterEach(() => vi.useRealTimers())
 
   const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
-  const thread = (id: string, last_activity_at: string): ThreadSummary => ({
-    id,
-    title: null,
-    created_at: "2026-10-01T10:00:00Z",
-    last_activity_at,
-    status: "idle",
-    mode: "ask",
-    mode_pinned: false,
-    archived: false,
-    origin: { kind: "user" },
+  const stopped = (instance: InstanceSummary) =>
+    ({ ...instance, intended_state: "stopped", process: "stopped" }) as const
+  const sendTo = () => screen.findByRole("combobox", { name: "Send to" })
+  const message = () => screen.findByRole("textbox", { name: "Message" })
+
+  /** The thread.create and thread.turn.start calls an instance's connections were sent, oldest first. */
+  async function threadStarts(hub: ReturnType<typeof fakeHub>, instanceId: string) {
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    return hub.sockets
+      .filter((socket) => socket.url === `ws://hub.test/instances/${instanceId}/ws`)
+      .flatMap((socket) => socket.sent as { method?: string; params?: unknown }[])
+      .filter(({ method }) => method === "thread.create" || method === "thread.turn.start")
+      .map(({ method, params }) => ({ method, params }))
+  }
+
+  it.each([
+    [9, "Good morning"],
+    [15, "Good afternoon"],
+    [21, "Good evening"],
+  ])(
+    "opens at %i o'clock with %s and the composer, and stays on the root path",
+    async (hour, greeting) => {
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 9, 30, hour) })
+      const { clock } = openApp({ signedIn: true, instances: [ada, kinby] })
+
+      expect(await screen.findByRole("heading", { name: greeting })).toBeDefined()
+      expect(await message()).toBeDefined()
+      await act(() => clock.advance(1_000))
+      expect(window.location.pathname).toBe("/")
+    },
+  )
+
+  it("sends to the running instances only, the home one first picked and marked", async () => {
+    openApp({ signedIn: true, instances: [ada, unnamed, kinby] })
+    const user = userEvent.setup()
+
+    expect((await sendTo()).textContent).toContain("Kinby (home)")
+    await user.click(await sendTo())
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Ada",
+      "Kinby (home)",
+    ])
   })
 
-  it("opens on its newest thread when no instance is selected", async () => {
-    openApp({
-      signedIn: true,
-      instances: [ada, kinby],
-      threads: {
-        "hub-kinby": [thread("t2", "2026-10-15T09:00:00Z"), thread("t1", "2026-10-14T09:00:00Z")],
+  it("picks the first running instance when the home one is not running", async () => {
+    openApp({ signedIn: true, instances: [unnamed, stopped(kinby), ada] })
+
+    expect((await sendTo()).textContent).toContain("Ada")
+  })
+
+  it("picks the instance the URL's to parameter names", async () => {
+    window.history.replaceState(null, "", "/?to=hub-ada")
+
+    openApp({ signedIn: true, instances: [ada, kinby] })
+
+    expect((await sendTo()).textContent).toContain("Ada")
+  })
+
+  it("starts a thread on the picked instance with the message, and opens it", async () => {
+    const { hub } = openApp({ signedIn: true, instances: [kinby, ada] })
+    const user = userEvent.setup()
+
+    await user.click(await sendTo())
+    await user.click(await screen.findByRole("option", { name: "Ada" }))
+    await user.type(await message(), "What is on today?")
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+        "false",
+      ),
+    )
+    await user.click(screen.getByRole("button", { name: "Send" }))
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-1"),
+    )
+    expect(await threadStarts(hub, "hub-ada")).toEqual([
+      { method: "thread.create", params: {} },
+      {
+        method: "thread.turn.start",
+        params: { thread_id: "thread-1", message: "What is on today?" },
       },
-    })
-
-    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-kinby/threads/t2"))
-    expect((await instanceLink("Kinby")).getAttribute("aria-current")).toBe("page")
+    ])
+    expect(await threadStarts(hub, "hub-kinby")).toEqual([])
   })
 
-  it("opens on its page when it has no thread yet", async () => {
-    openApp({ signedIn: true, instances: [ada, kinby], threads: { "hub-kinby": [] } })
+  it("is disabled and says why when no instance is running", async () => {
+    openApp({ signedIn: true, instances: [unnamed, stopped(kinby)] })
 
-    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-kinby"))
+    expect((await message()).hasAttribute("disabled")).toBe(true)
+    expect(screen.getByText(/^No instance is running/)).toBeDefined()
   })
 
-  it("opens on its page when it is not running", async () => {
-    const stopped = { ...kinby, intended_state: "stopped", process: "stopped" } as const
-    openApp({ signedIn: true, instances: [ada, stopped] })
+  it("points to New instance when the hub has none", async () => {
+    openApp({ signedIn: true })
+    const user = userEvent.setup()
 
-    expect(await screen.findByText("Kinby is stopped")).toBeDefined()
-    expect(window.location.pathname).toBe("/instances/hub-kinby")
+    expect(await screen.findByText("No instances yet")).toBeDefined()
+    expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "New instance" }))
+    expect(window.location.pathname).toBe("/new")
   })
 
-  it("leaves the instance the URL selects", async () => {
+  it("opens from New thread in the sidebar", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
-
-    openApp({ signedIn: true, instances: [ada, kinby], threads: { "hub-kinby": [] } })
-
+    openApp({ signedIn: true, instances: [ada, kinby] })
+    const user = userEvent.setup()
     expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
-    expect(window.location.pathname).toBe("/instances/hub-ada")
+
+    await user.click(await screen.findByRole("link", { name: "New thread" }))
+
+    expect(window.location.pathname).toBe("/")
+    expect(await message()).toBeDefined()
   })
 })
