@@ -3,6 +3,6 @@
   "ignoreBinaries": ["uv"],
   "ignore": [".design-sync/**"],
   "ignoreIssues": {
-    "apps/web/src/components/ui/**": ["exports", "types"]
+    "apps/web/src/components/ui/**": ["exports", "types", "files"]
   }
 }
