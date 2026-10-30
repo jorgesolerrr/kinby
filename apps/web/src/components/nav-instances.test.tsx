@@ -486,8 +486,8 @@ describe("a running instance's group", () => {
 describe("an instance's row menu", () => {
   const ada = instanceSummary({ instance_id: "instance-1", persona_name: "Ada" })
 
-  async function openMenu() {
-    render(sidebar(fakeHub({}), fakeClock(), [ada]))
+  async function openMenu(instance = ada) {
+    render(sidebar(fakeHub({}), fakeClock(), [instance]))
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Menu for Ada" }))
     return user
@@ -513,6 +513,15 @@ describe("an instance's row menu", () => {
 
     expect(window.location.pathname).toBe("/")
     expect(window.location.search).toBe("?to=instance-1")
+  })
+
+  it("offers no new thread with an instance that is not running", async () => {
+    const user = await openMenu({ ...ada, intended_state: "stopped", process: "stopped" })
+
+    const newThread = await screen.findByRole("menuitem", { name: "New thread with Ada" })
+    expect(newThread.getAttribute("aria-disabled")).toBe("true")
+    await user.click(newThread)
+    expect(window.location.search).toBe("")
   })
 
   it.each([

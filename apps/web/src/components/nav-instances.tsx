@@ -190,7 +190,7 @@ function InstanceGroup({
           className={cn("transition-transform", count === 0 && "ml-auto", open && "rotate-90")}
         />
       </CollapsibleTrigger>
-      <InstanceMenu instanceId={instance.instance_id} name={name} />
+      <InstanceMenu instanceId={instance.instance_id} name={name} running={running} />
       {reached !== undefined && (
         <CollapsibleContent>
           <SidebarMenuSub>
@@ -231,8 +231,19 @@ function unsubscribed(): () => void {
 
 async function listNothing(): Promise<void> {}
 
-/** The row's "…" menu: a new thread with the instance, then each of its page's tabs. */
-function InstanceMenu({ instanceId, name }: { instanceId: string; name: string }) {
+/**
+ * The row's "…" menu: a new thread with the instance, which only a running one can take, then each
+ * of its page's tabs.
+ */
+function InstanceMenu({
+  instanceId,
+  name,
+  running,
+}: {
+  instanceId: string
+  name: string
+  running: boolean
+}) {
   const { isMobile } = useSidebar()
   const open = useOpenFromSidebar()
   return (
@@ -244,7 +255,7 @@ function InstanceMenu({ instanceId, name }: { instanceId: string; name: string }
       </DropdownMenuTrigger>
       <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="start">
         <DropdownMenuGroup>
-          <DropdownMenuItem onClick={() => open(homePath(instanceId))}>
+          <DropdownMenuItem disabled={!running} onClick={() => open(homePath(instanceId))}>
             <SquarePenIcon />
             New thread with {name}
           </DropdownMenuItem>
