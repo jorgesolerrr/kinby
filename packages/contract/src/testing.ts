@@ -47,7 +47,8 @@ export interface FakeHub {
  * A removal or a restoration moves the instance between the lists at once, and a deletion drops
  * it from the removed list. Their operations have already succeeded when first read. A deletion
  * previews the instance's directory under /srv/kinby/instances. An instance's connection answers
- * `thread.list` for an instance `threads` names.
+ * `thread.list` for an instance `threads` names, `thread.create` with `thread-1`, `thread-2` and on,
+ * and accepts every `thread.turn.start`.
  */
 export function fakeHub({
   signedIn = true,
@@ -61,6 +62,7 @@ export function fakeHub({
   threads?: Record<string, ThreadSummary[]>
 } = {}): FakeHub {
   const operations = new Map<string, OperationGetResult>()
+  let created = 0
   const finished = (kind: "remove" | "restore" | "delete", instanceId: string) => {
     const operation_id = `op-${operations.size + 1}`
     operations.set(operation_id, {
@@ -87,6 +89,13 @@ export function fakeHub({
           const listed = instanceId && hub.threads[decodeURIComponent(instanceId)]
           if (method === "thread.list" && listed) {
             return { threads: listed, ceiling: "full-access", cursor: null }
+          }
+          if (method === "thread.create" && instanceId) {
+            created += 1
+            return { id: `thread-${created}`, created_at: "2026-10-01T10:00:00Z" }
+          }
+          if (method === "thread.turn.start" && instanceId && isRecord(params)) {
+            return { thread_id: String(params.thread_id), turn_id: "turn-1", sequence: 1 }
           }
           if (method === "instance.list") {
             return { instances: isRecord(params) && params.removed ? hub.removed : hub.instances }

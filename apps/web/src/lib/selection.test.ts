@@ -18,6 +18,7 @@ import {
   useSelectedInstanceId,
   useSelectedThreadId,
   useSelectedTurnId,
+  useSendTo,
   useSettingsOpen,
 } from "@/lib/selection"
 
@@ -184,6 +185,23 @@ describe("the open Settings section", () => {
 
     expect(window.location.pathname).toBe("/instances/hub-kinby/threads/t2")
     expect(settings().current).toBe("usage")
+  })
+})
+
+describe("the instance the home screen sends to", () => {
+  const sendTo = () => renderHook(() => useSendTo()).result
+
+  it("comes back from the URL's to parameter, with the root path selecting no instance", () => {
+    window.history.replaceState(null, "", "/?to=hub%20ada")
+
+    expect(sendTo().current).toBe("hub ada")
+    expect(selection().current.instanceId).toBeUndefined()
+  })
+
+  it("is none when the URL names none", () => {
+    window.history.replaceState(null, "", "/?settings=general")
+
+    expect(sendTo().current).toBeUndefined()
   })
 })
 
