@@ -381,6 +381,8 @@ describe("a thread's header", () => {
             client={{ instance: () => expect.unreachable() }}
             clock={clock}
             selectedClient={instance}
+            folds={{}}
+            onFold={() => {}}
           />
           <ThreadHeader client={instance} threadId="t1" />
         </SidebarProvider>,

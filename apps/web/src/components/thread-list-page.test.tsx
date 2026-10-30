@@ -275,6 +275,8 @@ describe("the thread list page", () => {
           client={{ instance: () => expect.unreachable() }}
           clock={clock}
           selectedClient={client}
+          folds={{}}
+          onFold={() => {}}
         />
         <ThreadListPage client={client} clock={clock} instanceId="hub-ada" />
       </SidebarProvider>,

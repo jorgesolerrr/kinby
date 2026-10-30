@@ -83,6 +83,9 @@ const STATUS: Record<
   failed: { label: "Failed", icon: CircleAlertIcon, className: "text-destructive" },
 }
 
+/** The groups the user folded or unfolded, open or not, by instance. */
+export type Folds = Readonly<Record<string, boolean>>
+
 export function NavInstances({
   instances,
   selected,
@@ -90,6 +93,8 @@ export function NavInstances({
   client,
   clock,
   selectedClient,
+  folds,
+  onFold,
 }: {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
@@ -99,6 +104,9 @@ export function NavInstances({
   clock: Clock
   /** The selected instance's connection, whose thread list the open thread reads and changes. */
   selectedClient: Reached | undefined
+  /** Kept above the phone's drawer, which unmounts the groups each time it closes. */
+  folds: Folds
+  onFold: (instanceId: string, open: boolean) => void
 }) {
   const open = useOpenFromSidebar()
   const home = instances.filter((instance) => instance.home)
@@ -117,6 +125,8 @@ export function NavInstances({
               client={client}
               clock={clock}
               selectedClient={isSelected ? selectedClient : undefined}
+              folded={folds[instance.instance_id]}
+              onFold={(open) => onFold(instance.instance_id, open)}
             />
           )
         })}
@@ -153,12 +163,16 @@ function InstanceGroup({
   client,
   clock,
   selectedClient,
+  folded,
+  onFold,
 }: {
   instance: InstanceSummary
   isSelected: boolean
   client: Pick<Client, "instance">
   clock: Clock
   selectedClient: Reached | undefined
+  folded: boolean | undefined
+  onFold: (open: boolean) => void
 }) {
   const name = instanceName(instance)
   const running = instance.process === "running"
@@ -170,11 +184,12 @@ function InstanceGroup({
   const threads = useSidebarThreads(reached, clock)
   const count = threads.filter(needsYou).length + instance.needs_human
   // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.
-  const [open, setOpen] = useState<boolean>()
-  if (open === undefined && (instance.home || count > 0 || isSelected)) setOpen(true)
+  const [opened, setOpened] = useState(false)
+  if (!opened && (instance.home || count > 0 || isSelected)) setOpened(true)
+  const open = folded ?? opened
   const tab = useInstanceTab()
   return (
-    <Collapsible open={open ?? false} onOpenChange={setOpen} render={<SidebarMenuItem />}>
+    <Collapsible open={open} onOpenChange={onFold} render={<SidebarMenuItem />}>
       <CollapsibleTrigger render={<SidebarMenuButton isActive={isSelected && tab !== undefined} />}>
         <InstanceAvatar avatar={instance.avatar} name={name} size="sm" />
         <span className="truncate font-medium">{name}</span>

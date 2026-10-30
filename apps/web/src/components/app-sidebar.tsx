@@ -1,9 +1,10 @@
 import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
 import { LibraryIcon, SquarePenIcon } from "lucide-react"
 import type * as React from "react"
+import { useState } from "react"
 
 import { KinbyMark } from "@/components/kinby-mark"
-import { NavInstances } from "@/components/nav-instances"
+import { type Folds, NavInstances } from "@/components/nav-instances"
 import { NavUser } from "@/components/nav-user"
 import {
   Sidebar,
@@ -41,6 +42,7 @@ export function AppSidebar({
   onSignOut: () => void
 }) {
   const open = useOpenFromSidebar()
+  const [folds, setFolds] = useState<Folds>({})
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
@@ -102,6 +104,8 @@ export function AppSidebar({
           client={client}
           clock={clock}
           selectedClient={selectedClient}
+          folds={folds}
+          onFold={(instanceId, opened) => setFolds((kept) => ({ ...kept, [instanceId]: opened }))}
         />
       </SidebarContent>
       <SidebarFooter>

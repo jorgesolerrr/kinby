@@ -592,6 +592,24 @@ describe("the sidebar", () => {
       await waitFor(() => expect(drawer()).toBeNull())
     })
 
+    it("keeps the groups as the user folded them when it opens again", async () => {
+      const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+      openApp({ signedIn: true, instances: [kinby, ada] })
+      await screen.findByRole("textbox", { name: "Message" })
+      const expanded = (shown: ReturnType<typeof within>, name: string) =>
+        shown.getByRole("button", { name: new RegExp(`^${name}`) }).getAttribute("aria-expanded")
+
+      const { user, drawer: first } = await openDrawer()
+      await user.click(first.getByRole("button", { name: /^Kinby/ }))
+      await user.click(first.getByRole("button", { name: /^Ada/ }))
+      await user.click(first.getByRole("link", { name: "Library" }))
+      await waitFor(() => expect(drawer()).toBeNull())
+
+      const { drawer: again } = await openDrawer()
+      expect(expanded(again, "Kinby")).toBe("false")
+      expect(expanded(again, "Ada")).toBe("true")
+    })
+
     it("closes on a thread picked in a group", async () => {
       openApp({
         signedIn: true,
