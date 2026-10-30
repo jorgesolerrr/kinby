@@ -5,6 +5,7 @@ import type {
   GateOutcome,
   JsonValue,
   TurnStarted,
+  TurnVerdict,
   ViewChange,
 } from "@kinby/contract"
 
@@ -28,6 +29,8 @@ export interface TurnBlock {
     | { kind: "factory-run"; factory: string; step: string }
     | { kind: "home-instance" }
   startedAt: string
+  /** The day it started, `YYYY-MM-DD` in the browser's time zone. */
+  startedOn: string
   request: string
   steps: Step[]
   /** The approval the turn is parked on, until the turn moves on. */
@@ -38,6 +41,8 @@ export interface TurnBlock {
   end?: TurnEnd
   /** What the turn's recap left in memory. It runs after the turn, so it can report late or never. */
   recap?: Recap
+  /** The user's latest verdict on the turn. A turn nobody rated has none. */
+  rating?: TurnVerdict
 }
 
 /** An approval the user has not answered, and the tool call it asks about. */
@@ -118,6 +123,7 @@ export function project(timeline: Timeline, event: Event): Timeline {
       turnId: event.turn_id,
       startedBy: startedBy(payload.origin),
       startedAt: event.timestamp,
+      startedOn: localDay(event.timestamp),
       request: payload.message,
       steps: [],
     }
@@ -246,6 +252,8 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
         ...turn,
         recap: payload.node === null ? { kind: "none" } : { kind: "episode", node: payload.node },
       }
+    case "turn.rated":
+      return { ...turn, rating: payload.verdict }
     case "warning":
       return payload.sources.includes("recap")
         ? { ...turn, recap: { kind: "failed", message: payload.message } }
@@ -298,6 +306,13 @@ function settleApprovals(
         : step,
     ),
   }
+}
+
+function localDay(timestamp: string): string {
+  const date = new Date(timestamp)
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${date.getFullYear()}-${month}-${day}`
 }
 
 function startedBy(origin: TurnStarted["origin"]): TurnBlock["startedBy"] {
