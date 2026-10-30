@@ -23,7 +23,8 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { instanceName } from "@/lib/instances"
-import { type InstanceTab, linkedRoutine, openTab, selectInstance } from "@/lib/selection"
+import { behind, OlderCore } from "@/lib/older-core"
+import { type InstanceTab, linkedRoutine, openCore, openTab, selectInstance } from "@/lib/selection"
 import { CirclePauseIcon, MousePointerClickIcon, ServerIcon } from "lucide-react"
 
 /**
@@ -230,12 +231,14 @@ function TabBody({
             <p className="text-sm text-muted-foreground">schedules, signals, next firing</p>
           </div>
           <Separator />
-          <RoutinesSection
-            key={instanceId}
-            client={instanceClient}
-            clock={clock}
-            opened={linkedRoutine()}
-          />
+          <OlderCore value={behind(instance) ? () => openCore(instanceId) : undefined}>
+            <RoutinesSection
+              key={instanceId}
+              client={instanceClient}
+              clock={clock}
+              opened={linkedRoutine()}
+            />
+          </OlderCore>
         </div>
       )
     case "memory":

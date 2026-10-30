@@ -547,6 +547,51 @@ describe("an instance's tabs", () => {
     expect(read).toEqual(expect.objectContaining({ params: { name: "inbox" } }))
   })
 
+  it("says an instance behind the hub lacks routines on its older core, and opens the update", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/routines")
+    const behind = instanceSummary({
+      instance_id: "hub-ada",
+      persona_name: "Ada",
+      intended_state: "running",
+      notices: [
+        {
+          code: "revision_behind",
+          message: "The instance runs kinby aaaaaaa, and the hub is at bbbbbbb.",
+          instance_revision: "a".repeat(40),
+          hub_revision: "b".repeat(40),
+        },
+      ],
+    })
+    const { hub, clock } = openApp({ signedIn: true, instances: [behind] })
+    const user = userEvent.setup()
+    await screen.findByRole("tablist", { name: "Ada" })
+    // The section lists before the relayed socket is up, and asks again a second later.
+    await act(() => clock.advance(1_000))
+    const relayed = hub.sockets.find(
+      (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
+    )
+    const listed = relayed?.sent.findLast(
+      (frame) => (frame as { method?: string }).method === "routine.list",
+    ) as { id: string } | undefined
+
+    act(() =>
+      relayed?.receive({
+        type: "error",
+        id: listed?.id,
+        error: {
+          code: "NOT_FOUND",
+          message: 'Method "routine.list" was not found.',
+          retryable: false,
+        },
+      }),
+    )
+
+    expect(await screen.findByText("This instance runs an older core")).toBeDefined()
+    await user.click(screen.getByRole("button", { name: "Open Core version" }))
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/core")
+    expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
+  })
+
   it("lands an old link to a routine in the config panel on the Routines tab, in its place", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/config/routines/inbox")
     const entries = window.history.length

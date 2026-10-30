@@ -35,7 +35,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { usePace } from "@/hooks/use-pace"
 import { usePolled } from "@/hooks/use-polled"
 import { lastChanged } from "@/lib/config-changes"
-import { OlderCore } from "@/lib/older-core"
+import { behind, OlderCore } from "@/lib/older-core"
 import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import { leaveLink, linkedCore } from "@/lib/selection"
@@ -291,10 +291,6 @@ function needsOf(
   else if (codes.has("template_behind")) needs[CORE] = "behind the factory"
   else if (codes.has("hub_route_missing")) needs[CORE] = "no hub route"
   return needs
-}
-
-function behind(instance: InstanceSummary): boolean {
-  return instance.notices.some((notice) => notice.code === "revision_behind")
 }
 
 /** One group of the left column, as a list named for the group. A need replaces a hint. */
