@@ -5,8 +5,9 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it } from "vitest"
 
+import { NavInstances } from "@/components/nav-instances"
 import { ThreadListPage } from "@/components/thread-list-page"
-import { ThreadsColumn } from "@/components/threads-column"
+import { SidebarProvider } from "@/components/ui/sidebar"
 
 function thread(fields: Pick<ThreadSummary, "id"> & Partial<ThreadSummary>): ThreadSummary {
   return {
@@ -264,20 +265,28 @@ describe("the thread list page", () => {
       onStateChange: () => () => {},
     }
     const clock = fakeClock()
+    const ada = instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })
     render(
-      <>
-        <ThreadsColumn
-          client={client}
+      <SidebarProvider>
+        <NavInstances
+          instances={[ada]}
+          selected={ada}
+          creating={false}
+          client={{ instance: () => expect.unreachable() }}
           clock={clock}
-          instance={instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })}
+          selectedClient={client}
         />
         <ThreadListPage client={client} clock={clock} instanceId="hub-ada" />
-      </>,
+      </SidebarProvider>,
     )
     const user = userEvent.setup()
-    const sidebar = within(screen.getByRole("navigation", { name: "Threads" }))
+    const sidebar = within(screen.getByRole("button", { name: "Ada" }).closest("li")!)
     const sidebarTitles = () =>
-      sidebar.queryAllByRole("link").map((link) => within(link).getByTitle(/./).textContent)
+      sidebar.queryAllByRole("link").flatMap((link) =>
+        within(link)
+          .queryAllByTitle(/./)
+          .map((title) => title.textContent),
+      )
     const row = async (title: string) =>
       within(await screen.findByRole("row", { name: new RegExp(title) }))
     expect(await sidebar.findByRole("link", { name: "Deploy notes" })).toBeDefined()

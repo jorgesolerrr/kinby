@@ -35,7 +35,7 @@ const OLD_PATHS: Record<string, SettingsSection> = {
 
 const listeners = new Set<() => void>()
 
-export function instancePath(instanceId: string): string {
+function instancePath(instanceId: string): string {
   return `/${SECTION}/${encodeURIComponent(instanceId)}`
 }
 
@@ -53,11 +53,11 @@ export function turnPath(instanceId: string, threadId: string, turnId: string): 
   return `${threadPath(instanceId, threadId)}/${TURNS}/${encodeURIComponent(turnId)}`
 }
 
-function tabPath(instanceId: string, tab: InstanceTab): string {
+export function tabPath(instanceId: string, tab: InstanceTab): string {
   return tab === "overview" ? instancePath(instanceId) : `${instancePath(instanceId)}/${tab}`
 }
 
-export function configPath(instanceId: string): string {
+function configPath(instanceId: string): string {
   return tabPath(instanceId, CONFIG)
 }
 
@@ -70,7 +70,7 @@ function corePath(instanceId: string): string {
   return `${configPath(instanceId)}/${CORE}`
 }
 
-export function memoryPath(instanceId: string): string {
+function memoryPath(instanceId: string): string {
   return tabPath(instanceId, MEMORY)
 }
 
@@ -167,19 +167,19 @@ export function landOn(instanceId: string, threadId?: string): void {
   changed()
 }
 
+/** The home screen, its "Send to" preset to `to` when it names an instance. */
+export function homePath(to?: string): string {
+  return to === undefined ? "/" : `/?${new URLSearchParams({ [TO]: to })}`
+}
+
 /** Go to the home screen, where no instance is selected, the same way. */
 export function openHome(): void {
-  navigate("/")
+  navigate(homePath())
 }
 
 /** Open the onboarding the same way. */
 export function openOnboarding(): void {
   navigate(CREATE_PATH)
-}
-
-/** Open the hub's library page the same way. */
-export function openLibrary(): void {
-  navigate(LIBRARY_PATH)
 }
 
 /** Open the Settings dialog over the open page as a new history entry, so Back closes it. */

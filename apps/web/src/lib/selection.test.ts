@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   closeSettings,
+  homePath,
   landOn,
   linkedNode,
   linkedRoutine,
@@ -202,6 +203,13 @@ describe("the instance the home screen sends to", () => {
     window.history.replaceState(null, "", "/?settings=general")
 
     expect(sendTo().current).toBeUndefined()
+  })
+
+  it("comes back from the home screen's path preset to it", () => {
+    window.history.replaceState(null, "", homePath("hub ada"))
+
+    expect(window.location.pathname).toBe("/")
+    expect(sendTo().current).toBe("hub ada")
   })
 })
 

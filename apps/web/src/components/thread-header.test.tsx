@@ -19,8 +19,9 @@ import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
+import { NavInstances } from "@/components/nav-instances"
 import { ThreadHeader } from "@/components/thread-header"
-import { ThreadsColumn } from "@/components/threads-column"
+import { SidebarProvider } from "@/components/ui/sidebar"
 import { threadList } from "@/lib/thread-list"
 
 function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -360,21 +361,29 @@ describe("a thread's header", () => {
     })
   })
 
-  describe("beside the threads column", () => {
+  describe("beside the sidebar", () => {
     const ada = instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })
 
     /**
-     * Render thread t1's header beside Ada's threads column. `poll` advances the column's
-     * clock to its next poll and returns the filters `thread.list` was called with meanwhile.
+     * Render thread t1's header beside the sidebar, with Ada selected. `poll` advances the
+     * sidebar's clock to its next poll and returns the filters `thread.list` was called with
+     * meanwhile.
      */
     function openBesideSidebar(client: StubCaller) {
       const clock = fakeClock()
       const instance = connected(client)
       render(
-        <>
-          <ThreadsColumn client={instance} clock={clock} instance={ada} />
+        <SidebarProvider>
+          <NavInstances
+            instances={[ada]}
+            selected={ada}
+            creating={false}
+            client={{ instance: () => expect.unreachable() }}
+            clock={clock}
+            selectedClient={instance}
+          />
           <ThreadHeader client={instance} threadId="t1" />
-        </>,
+        </SidebarProvider>,
       )
       const listings = () =>
         client.calls

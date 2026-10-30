@@ -1,5 +1,16 @@
 import type { InstanceSummary, ProcessState } from "@kinby/contract"
 
+import type { InstanceTab } from "@/lib/selection"
+
+/** An instance's tabs, by their labels, in the order its page lists them. */
+export const INSTANCE_TABS: { id: InstanceTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "config", label: "Config" },
+  { id: "routines", label: "Routines" },
+  { id: "memory", label: "Memory" },
+  { id: "stats", label: "Stats" },
+]
+
 /** The persona name the user gave the instance, or its manifest id when it has none. */
 export function instanceName(instance: InstanceSummary): string {
   return instance.persona_name ?? instance.manifest_id
