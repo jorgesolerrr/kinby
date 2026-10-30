@@ -7,6 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import App from "@/App"
 
+// jsdom lays nothing out, so it has no ResizeObserver or scrollIntoView, and the search palette calls
+// both. The stubs stay in this file: with a ResizeObserver, the chart tests' charts never draw.
+window.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+Element.prototype.scrollIntoView = () => {}
+
 function openApp({
   signedIn,
   instances = [],
@@ -636,6 +645,121 @@ describe("the sidebar", () => {
       expect(window.location.pathname).toBe("/instances/hub-ada/stats")
       await waitFor(() => expect(drawer()).toBeNull())
     })
+
+    it("closes with the palette on a thread picked there", async () => {
+      openApp({
+        signedIn: true,
+        instances: [ada],
+        threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+      })
+      await screen.findByRole("textbox", { name: "Message" })
+
+      const { user, drawer: opened } = await openDrawer()
+      await user.click(opened.getByRole("button", { name: "Search" }))
+      await user.click(await (await palette()).findByRole("option", { name: "Deploy notes" }))
+
+      expect(window.location.pathname).toBe("/instances/hub-ada/threads/t1")
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Search threads" })).toBeNull(),
+      )
+      await waitFor(() => expect(drawer()).toBeNull())
+    })
+  })
+})
+
+async function palette() {
+  return within(await screen.findByRole("dialog", { name: "Search threads" }))
+}
+
+describe("the search palette", () => {
+  const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+  const threads = {
+    "hub-kinby": [thread({ id: "k1", title: "Weekly plan" })],
+    "hub-ada": [
+      thread({ id: "a1", title: "Deploy notes" }),
+      thread({ id: "a2", title: "Release plan" }),
+    ],
+    "hub-unnamed": [thread({ id: "u1", title: "Stopped plan" })],
+  }
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
+
+  it("opens from Search in the top band, which shows its shortcut", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    const search = await screen.findByRole("button", { name: "Search" })
+
+    expect(within(search).getByText("Ctrl K")).toBeDefined()
+    await user.click(search)
+
+    expect(await palette()).toBeDefined()
+  })
+
+  it.each(["Control", "Meta"])("opens on %s K from anywhere in the app", async (key) => {
+    window.history.replaceState(null, "", "/instances/hub-ada/stats")
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    await instanceRow("Ada")
+
+    await user.keyboard(`{${key}>}k{/${key}}`)
+
+    expect(await palette()).toBeDefined()
+  })
+
+  it("lists each running instance's threads under its name, leaving stopped ones out", async () => {
+    openApp({ signedIn: true, instances: [ada, kinby, unnamed], threads })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "Search" }))
+    const opened = await palette()
+
+    const titles = (name: string) =>
+      within(opened.getByRole("group", { name }))
+        .getAllByRole("option")
+        .map((option) => option.textContent)
+    await waitFor(() =>
+      expect(opened.getAllByRole("option").map((option) => option.textContent)).toEqual([
+        "Weekly plan",
+        "Deploy notes",
+        "Release plan",
+      ]),
+    )
+    expect(titles("Kinby")).toEqual(["Weekly plan"])
+    expect(titles("Ada")).toEqual(["Deploy notes", "Release plan"])
+    expect(opened.queryByRole("group", { name: "research" })).toBeNull()
+    expect(opened.queryByText("Stopped plan")).toBeNull()
+  })
+
+  it("filters by title, and says when nothing matches", async () => {
+    openApp({ signedIn: true, instances: [ada, kinby], threads })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Search" }))
+    const opened = await palette()
+    await opened.findByRole("option", { name: "Deploy notes" })
+
+    await user.type(opened.getByRole("combobox"), "PLAN")
+
+    expect(opened.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Weekly plan",
+      "Release plan",
+    ])
+    await user.type(opened.getByRole("combobox"), "ets")
+    expect(opened.queryAllByRole("option")).toEqual([])
+    expect(opened.getByText("No thread matches.")).toBeDefined()
+  })
+
+  it("opens a picked thread and closes", async () => {
+    openApp({ signedIn: true, instances: [ada, kinby], threads })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Search" }))
+
+    await user.click(await (await palette()).findByRole("option", { name: "Release plan" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/threads/a2")
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search threads" })).toBeNull())
   })
 })
 

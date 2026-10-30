@@ -277,6 +277,8 @@ describe("the thread list page", () => {
           selectedClient={client}
           folds={{}}
           onFold={() => {}}
+          searching={false}
+          onSearchingChange={() => {}}
         />
         <ThreadListPage client={client} clock={clock} instanceId="hub-ada" />
       </SidebarProvider>,

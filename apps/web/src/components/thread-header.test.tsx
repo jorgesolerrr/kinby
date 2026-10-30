@@ -383,6 +383,8 @@ describe("a thread's header", () => {
             selectedClient={instance}
             folds={{}}
             onFold={() => {}}
+            searching={false}
+            onSearchingChange={() => {}}
           />
           <ThreadHeader client={instance} threadId="t1" />
         </SidebarProvider>,

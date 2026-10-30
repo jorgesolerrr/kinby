@@ -1,7 +1,7 @@
 import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
-import { LibraryIcon, SquarePenIcon } from "lucide-react"
+import { LibraryIcon, SearchIcon, SquarePenIcon } from "lucide-react"
 import type * as React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { KinbyMark } from "@/components/kinby-mark"
 import { type Folds, NavInstances } from "@/components/nav-instances"
@@ -15,6 +15,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
 import { homePath, LIBRARY_PATH } from "@/lib/selection"
@@ -43,6 +44,19 @@ export function AppSidebar({
 }) {
   const open = useOpenFromSidebar()
   const [folds, setFolds] = useState<Folds>({})
+  const [searching, setSearching] = useState(false)
+  const { isMobile, setOpenMobile } = useSidebar()
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "k" || !(event.ctrlKey || event.metaKey)) return
+      event.preventDefault()
+      setSearching(true)
+      // The palette lists what the groups list, and on a phone they live in the drawer.
+      if (isMobile) setOpenMobile(true)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [isMobile, setOpenMobile])
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
@@ -80,6 +94,18 @@ export function AppSidebar({
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
+              aria-keyshortcuts="Control+K Meta+K"
+              onClick={() => setSearching(true)}
+            >
+              <SearchIcon />
+              <span>Search</span>
+              <kbd aria-hidden className="ml-auto font-mono text-xs text-muted-foreground">
+                Ctrl K
+              </kbd>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
               isActive={libraryOpen}
               aria-current={libraryOpen ? "page" : undefined}
               onClick={(event) => {
@@ -106,6 +132,8 @@ export function AppSidebar({
           selectedClient={selectedClient}
           folds={folds}
           onFold={(instanceId, opened) => setFolds((kept) => ({ ...kept, [instanceId]: opened }))}
+          searching={searching}
+          onSearchingChange={setSearching}
         />
       </SidebarContent>
       <SidebarFooter>

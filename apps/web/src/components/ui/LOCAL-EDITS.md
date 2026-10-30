@@ -15,6 +15,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 | Round on purpose  | `rounded-full`     | Avatars, switches and their thumb, status dots                                                                                                                                                                                   |
 
 - Buttons, inputs, textareas, input groups, select triggers and choice-card labels take `rounded-lg`. The xs button and xs icon button take `rounded-md`, so they don't turn back into pills at 24px.
+- The command palette and its dialog take `rounded-xl` where luma has `rounded-4xl`, and its rows `rounded-md` where luma has `rounded-2xl`, and `rounded-3xl` in a dialog.
 - The sidebar header and content don't raise `--radius` to the `xl` value, as luma's source does. Sidebar rows use the app's `--radius` like every other control.
 - Pages outside the kit take their corners from the kit and don't restyle them by hand. The one exception is the status dots, which stay round.
 

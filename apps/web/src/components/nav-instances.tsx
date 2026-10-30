@@ -12,9 +12,10 @@ import {
   ShieldAlertIcon,
   SquarePenIcon,
 } from "lucide-react"
-import { useCallback, useId, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useId, useState, useSyncExternalStore } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
+import { SearchPalette } from "@/components/search-palette"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   DropdownMenu,
@@ -95,6 +96,8 @@ export function NavInstances({
   selectedClient,
   folds,
   onFold,
+  searching,
+  onSearchingChange,
 }: {
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
@@ -107,15 +110,29 @@ export function NavInstances({
   /** Kept above the phone's drawer, which unmounts the groups each time it closes. */
   folds: Folds
   onFold: (instanceId: string, open: boolean) => void
+  /** Whether the search palette is open. It searches the threads the groups list. */
+  searching: boolean
+  onSearchingChange: (searching: boolean) => void
 }) {
   const open = useOpenFromSidebar()
   const home = instances.filter((instance) => instance.home)
   const others = instances.filter((instance) => !instance.home)
+  const ordered = [...home, ...others]
+  // Each running instance's group says which connection it lists the instance's threads on.
+  const [reached, setReached] = useState<ReadonlyMap<string, Reached>>(new Map())
+  const reach = useCallback((instanceId: string, client: Reached | undefined) => {
+    setReached((was) => {
+      const next = new Map(was)
+      if (client === undefined) next.delete(instanceId)
+      else next.set(instanceId, client)
+      return next
+    })
+  }, [])
   return (
     <SidebarGroup>
       <SidebarGroupLabel>Instances</SidebarGroupLabel>
       <SidebarMenu>
-        {[...home, ...others].map((instance) => {
+        {ordered.map((instance) => {
           const isSelected = instance === selected
           return (
             <InstanceGroup
@@ -127,6 +144,7 @@ export function NavInstances({
               selectedClient={isSelected ? selectedClient : undefined}
               folded={folds[instance.instance_id]}
               onFold={(open) => onFold(instance.instance_id, open)}
+              onReach={reach}
             />
           )
         })}
@@ -147,6 +165,14 @@ export function NavInstances({
           />
         </SidebarMenuItem>
       </SidebarMenu>
+      <SearchPalette
+        open={searching}
+        onOpenChange={onSearchingChange}
+        instances={ordered.flatMap((instance) => {
+          const client = reached.get(instance.instance_id)
+          return client === undefined ? [] : [{ instance, client }]
+        })}
+      />
     </SidebarGroup>
   )
 }
@@ -155,7 +181,8 @@ export function NavInstances({
  * An instance's row, which folds the group under it, and its menu. The row says when the instance
  * is not running, and shows an ember dot while its sidebar threads or factory runs need the user.
  * Under a running instance come its views, its most recent sidebar threads, and "All threads". The
- * selected instance lists on the connection the open thread uses, and the others on their own.
+ * selected instance lists on the connection the open thread uses, and the others on their own, and
+ * `onReach` hears which one it is.
  */
 function InstanceGroup({
   instance,
@@ -165,6 +192,7 @@ function InstanceGroup({
   selectedClient,
   folded,
   onFold,
+  onReach,
 }: {
   instance: InstanceSummary
   isSelected: boolean
@@ -173,6 +201,7 @@ function InstanceGroup({
   selectedClient: Reached | undefined
   folded: boolean | undefined
   onFold: (open: boolean) => void
+  onReach: (instanceId: string, client: Reached | undefined) => void
 }) {
   const name = instanceName(instance)
   const running = instance.process === "running"
@@ -181,6 +210,10 @@ function InstanceGroup({
     !isSelected && running ? instance.instance_id : undefined,
   )
   const reached = running ? (selectedClient ?? ownClient) : undefined
+  useEffect(() => {
+    onReach(instance.instance_id, reached)
+    return () => onReach(instance.instance_id, undefined)
+  }, [onReach, instance.instance_id, reached])
   const threads = useSidebarThreads(reached, clock)
   const count = threads.filter(needsYou).length + instance.needs_human
   // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.

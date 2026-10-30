@@ -101,6 +101,8 @@ function sidebar(
         selected={selected}
         creating={false}
         selectedClient={selectedClient}
+        searching={false}
+        onSearchingChange={() => {}}
       />
     </SidebarProvider>
   )
