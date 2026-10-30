@@ -8,10 +8,20 @@ import App from "./App.tsx"
 const root = document.getElementById("root")
 if (root === null) throw new Error("index.html has no #root element")
 
-const client = createClient(window.location.origin, browserTransport)
-
-createRoot(root).render(
-  <StrictMode>
-    <App client={client} />
-  </StrictMode>,
-)
+// PROTOTYPE: /proto/shell renders the throwaway shell prototype on mock data, without a hub.
+if (window.location.pathname.startsWith("/proto/shell")) {
+  void import("./proto/shell").then(({ Shell }) => {
+    createRoot(root).render(
+      <StrictMode>
+        <Shell />
+      </StrictMode>,
+    )
+  })
+} else {
+  const client = createClient(window.location.origin, browserTransport)
+  createRoot(root).render(
+    <StrictMode>
+      <App client={client} />
+    </StrictMode>,
+  )
+}

@@ -3,6 +3,7 @@
   "plugins": ["eslint", "typescript", "unicorn", "oxc", "react", "jsx-a11y", "import"],
   "jsPlugins": ["@shadcn/lint", "./lint/explicit-locale.js"],
   "categories": { "correctness": "error" },
+  "ignorePatterns": ["src/proto/**"],
   "options": { "typeAware": true },
   "rules": {
     "react/rules-of-hooks": "error",
