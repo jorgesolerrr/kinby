@@ -24,9 +24,11 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **badge**: the `success` and `attention` variants. Attention fills with ember.
 - **button**: the `aria-disabled` state looks and acts like `disabled`.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
+- **dialog**: the content's `lg` size, a wide and tall flex column with no padding or gap, for a dialog that lays out its own body, as Settings does.
 - **empty**: the title at `text-base`, on the section title scale.
 - **input-group**: the textarea's `prompt` variant, and an addon click focuses a textarea as well as an input.
 - **item**: the description's `lines` variant.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).
 - **sidebar**: the softer hover on menu buttons, the selected row's icon in the sidebar primary (kin), and the action and badge centred on the lg menu button at `top-4.5`.
+- **tabs**: the root passes `orientation` on to Base UI, so a vertical tab list reads and moves with the arrow keys as vertical. The list and its triggers take their orientation styles from their own `data-orientation` rather than from a `group/tabs` ancestor, so horizontal tabs inside a vertical tabs panel, as the Usage charts in Settings, stay horizontal.

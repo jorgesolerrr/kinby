@@ -20,8 +20,10 @@ function openApp({
 }) {
   const hub = fakeHub({ signedIn, instances, removed, threads })
   const clock = fakeClock()
-  render(<App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />)
-  return { hub, clock }
+  const { unmount } = render(
+    <App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />,
+  )
+  return { hub, clock, unmount }
 }
 
 const userMenu = () => screen.findByRole("button", { name: /You/ })
@@ -449,45 +451,8 @@ describe("the instances", () => {
     expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual([
       "kinby",
       "New instance",
-      "Usage",
       "Library",
-      "Secrets",
-      "Channels",
     ])
-  })
-})
-
-describe("the usage page", () => {
-  beforeEach(() => window.history.replaceState(null, "", "/"))
-
-  it("opens from the foot of the sidebar, below the instances, and reads on the hub", async () => {
-    window.history.replaceState(null, "", "/instances/hub-ada")
-    const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
-    const user = userEvent.setup()
-    const usage = await screen.findByRole("link", { name: "Usage" })
-
-    expect(usage.compareDocumentPosition(await instanceLink("Ada"))).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING,
-    )
-    await user.click(usage)
-
-    expect(window.location.pathname).toBe("/usage")
-    expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
-    expect(usage.getAttribute("aria-current")).toBe("page")
-    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
-    const onHub = hub.sockets.find((socket) => socket.url === "ws://hub.test/ws")
-    expect(onHub?.sent).toContainEqual(
-      expect.objectContaining({ type: "call", method: "stats.summary" }),
-    )
-  })
-
-  it("restores the usage page from the URL", async () => {
-    window.history.replaceState(null, "", "/usage")
-
-    openApp({ signedIn: true, instances: [ada] })
-
-    expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
   })
 })
 
@@ -498,112 +463,229 @@ const grace = instanceSummary({
   process: "missing",
 })
 
-const removedLink = () => screen.queryByRole("link", { name: "Removed instances" })
+const settingsDialog = () => screen.findByRole("dialog", { name: "Settings" })
 
-describe("removed instances", () => {
+async function openSettings() {
+  const user = userEvent.setup()
+  await user.click(await userMenu())
+  await user.click(await screen.findByRole("menuitem", { name: "Settings" }))
+  return within(await settingsDialog())
+}
+
+describe("the Settings dialog", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/")
     Reflect.deleteProperty(document, "visibilityState")
   })
 
-  it("links to them at the foot of the instances while one is removed, and not otherwise", async () => {
-    const { hub } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
-
-    const link = await screen.findByRole("link", { name: "Removed instances" })
-    expect(link.getAttribute("href")).toBe("/removed")
-    expect((await instanceLink("New instance")).compareDocumentPosition(link)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    )
-    expect(screen.queryByRole("link", { name: "Grace" })).toBeNull()
-
-    // Restored from the CLI.
-    hub.removed = []
-    act(() => {
-      window.dispatchEvent(new Event("focus"))
-    })
-
-    await waitFor(() => expect(removedLink()).toBeNull())
-  })
-
-  it("opens the Removed instances page from the link, and puts it in the URL", async () => {
-    window.history.replaceState(null, "", "/instances/hub-ada")
-    openApp({ signedIn: true, instances: [ada], removed: [grace] })
+  it("opens from the account menu, which holds Settings and Sign out and no theme", async () => {
+    openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
 
-    await user.click(await screen.findByRole("link", { name: "Removed instances" }))
+    await user.click(await userMenu())
 
-    expect(window.location.pathname).toBe("/removed")
-    expect(await screen.findByRole("heading", { name: "Removed instances" })).toBeDefined()
-    expect(removedLink()?.getAttribute("aria-current")).toBe("page")
-    expect((await instanceLink("Ada")).getAttribute("aria-current")).toBeNull()
+    const items = await screen.findAllByRole("menuitem")
+    expect(items.map((item) => item.textContent)).toEqual(["Settings", "Sign out"])
+    expect(screen.queryByRole("menuitemradio")).toBeNull()
   })
 
-  it("restores the Removed instances page from the URL", async () => {
-    window.history.replaceState(null, "", "/removed")
+  it("opens on General over the open page, and puts it in the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    openApp({ signedIn: true, instances: [ada] })
+
+    const dialog = await openSettings()
+
+    expect(dialog.getByRole("tab", { name: "General", selected: true })).toBeDefined()
+    expect(dialog.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "General",
+      "Usage",
+      "Hub secrets",
+      "Channels",
+      "Instances",
+    ])
+    expect(window.location.pathname).toBe("/instances/hub-ada")
+    expect(window.location.search).toBe("?settings=general")
+  })
+
+  it("sets the theme from General", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    const dialog = await openSettings()
+
+    await user.click(dialog.getByRole("button", { name: "Dark" }))
+    expect(document.documentElement.classList.contains("dark")).toBe(true)
+    expect(dialog.getByRole("button", { name: "Dark" }).getAttribute("aria-pressed")).toBe("true")
+
+    await user.click(dialog.getByRole("button", { name: "System" }))
+    expect(document.documentElement.classList.contains("dark")).toBe(false)
+  })
+
+  it("switches sections in place, and Back closes it onto the page under it", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+    const { hub } = openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    const entries = window.history.length
+    const dialog = await openSettings()
+
+    await user.click(dialog.getByRole("tab", { name: "Usage" }))
+
+    expect(await dialog.findByRole("heading", { name: "Usage" })).toBeDefined()
+    expect(window.location.search).toBe("?settings=usage")
+    expect(window.history.length).toBe(entries + 1)
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    const onHub = hub.sockets.find((socket) => socket.url === "ws://hub.test/ws")
+    expect(onHub?.sent).toContainEqual(
+      expect.objectContaining({ type: "call", method: "stats.summary" }),
+    )
+
+    act(() => window.history.back())
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull())
+    expect(window.location.pathname).toBe("/instances/hub-ada")
+    expect(window.location.search).toBe("")
+    expect(await screen.findByText(/^Start a thread with/)).toBeDefined()
+  })
+
+  it("closes from its Close button, dropping the section from the URL", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada?settings=channels")
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+
+    await user.click(within(await settingsDialog()).getByRole("button", { name: "Close" }))
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull())
+    expect(window.location.pathname).toBe("/instances/hub-ada")
+    expect(window.location.search).toBe("")
+  })
+
+  it.each([
+    ["usage", "Usage"],
+    ["secrets", "Secrets"],
+    ["channels", "Channels"],
+    ["instances", "Removed instances"],
+  ])("restores ?settings=%s over the page from the URL", async (section, heading) => {
+    window.history.replaceState(null, "", `/instances/hub-ada?settings=${section}`)
 
     openApp({ signedIn: true, instances: [ada], removed: [grace] })
 
-    expect(await screen.findByRole("heading", { name: "Removed instances" })).toBeDefined()
-    expect(await screen.findByText("Grace")).toBeDefined()
+    const dialog = within(await settingsDialog())
+    expect(await dialog.findByRole("heading", { name: heading })).toBeDefined()
+    expect(window.location.pathname).toBe("/instances/hub-ada")
   })
 
-  it("links to the removed instance once a removal finishes, with no reload", async () => {
+  it.each([
+    ["/usage", "usage", "Usage"],
+    ["/secrets", "secrets", "Secrets"],
+    ["/channels", "channels", "Channels"],
+    ["/removed", "instances", "Removed instances"],
+  ])("lands %s on the home route with its section open", async (path, section, heading) => {
+    window.history.replaceState(null, "", path)
+
+    openApp({ signedIn: true, instances: [ada], removed: [grace] })
+
+    const dialog = within(await settingsDialog())
+    expect(await dialog.findByRole("heading", { name: heading })).toBeDefined()
+    expect(window.location.pathname).toBe("/")
+    expect(window.location.search).toBe(`?settings=${section}`)
+  })
+
+  it("leaves the hub pages and the removed instances out of the sidebar", async () => {
+    openApp({ signedIn: true, instances: [ada], removed: [grace] })
+
+    expect(await instanceLink("Ada")).toBeDefined()
+    for (const name of ["Usage", "Secrets", "Channels", "Removed instances"]) {
+      expect(screen.queryByRole("link", { name })).toBeNull()
+    }
+  })
+
+  it("lists its sections down the side, and across the top on a narrow screen", async () => {
+    window.history.replaceState(null, "", "/?settings=general")
+    const wide = window.matchMedia
+    const sectionList = async () => within(await settingsDialog()).getByRole("tablist")
+
+    const shown = openApp({ signedIn: true, instances: [ada] })
+    expect((await sectionList()).getAttribute("aria-orientation")).toBe("vertical")
+    shown.unmount()
+
+    window.matchMedia = (query) =>
+      Object.assign(wide(query), { matches: query === "(max-width: 767px)" })
+    try {
+      openApp({ signedIn: true, instances: [ada] })
+      expect((await sectionList()).getAttribute("aria-orientation")).not.toBe("vertical")
+    } finally {
+      window.matchMedia = wide
+    }
+  })
+})
+
+describe("the Instances section", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/")
+    Reflect.deleteProperty(document, "visibilityState")
+  })
+
+  it("is listed when nothing is removed, and says so", async () => {
+    openApp({ signedIn: true, instances: [ada] })
+    const user = userEvent.setup()
+    const dialog = await openSettings()
+
+    await user.click(dialog.getByRole("tab", { name: "Instances" }))
+
+    expect(await dialog.findByText("No removed instances")).toBeDefined()
+  })
+
+  it("lists the removed instance once a removal finishes, with no reload", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     const { clock } = openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
     expect(await screen.findByRole("button", { name: "Configure" })).toBeDefined()
-    expect(removedLink()).toBeNull()
 
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Remove" }))
-    const dialog = await screen.findByRole("alertdialog", { name: "Remove Ada?" })
-    await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+    const removing = await screen.findByRole("alertdialog", { name: "Remove Ada?" })
+    await user.click(within(removing).getByRole("button", { name: "Remove" }))
     await act(() => clock.advance(0))
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Ada" })).toBeNull())
 
-    expect(await screen.findByRole("link", { name: "Removed instances" })).toBeDefined()
-    expect(screen.queryByRole("link", { name: "Ada" })).toBeNull()
+    const dialog = await openSettings()
+    await user.click(dialog.getByRole("tab", { name: "Instances" }))
+    expect(await dialog.findByText("Ada")).toBeDefined()
   })
 
-  it("restores one, lands on it shown stopped with Start, and drops the link once none is left", async () => {
-    window.history.replaceState(null, "", "/removed")
+  it("restores one and lands on it shown stopped with Start", async () => {
+    window.history.replaceState(null, "", "/?settings=instances")
     const { clock } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
     const user = userEvent.setup()
+    const dialog = within(await settingsDialog())
 
-    await user.click(await screen.findByRole("button", { name: "Restore" }))
+    await user.click(await dialog.findByRole("button", { name: "Restore" }))
     await act(() => clock.advance(0))
 
     expect(window.location.pathname).toBe("/instances/hub-grace")
     expect(await screen.findByText("Grace is stopped")).toBeDefined()
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined()
     expect((await instanceLink("Grace")).getAttribute("aria-current")).toBe("page")
-    expect(removedLink()).toBeNull()
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
   })
 
-  it("deletes one permanently, drops its row, and drops the link once none is left", async () => {
-    window.history.replaceState(null, "", "/removed")
+  it("deletes one permanently, drops its row, and stays open", async () => {
+    window.history.replaceState(null, "", "/?settings=instances")
     const { clock } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
     const user = userEvent.setup()
 
     await user.click(await screen.findByRole("button", { name: "Delete permanently" }))
-    const dialog = within(
+    const confirm = within(
       await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
     )
-    await dialog.findByText("/srv/kinby/instances/hub-grace")
-    await user.type(dialog.getByRole("textbox", { name: "Type Grace to confirm" }), "Grace")
-    await user.click(dialog.getByRole("button", { name: "Delete permanently" }))
+    await confirm.findByText("/srv/kinby/instances/hub-grace")
+    await user.type(confirm.getByRole("textbox", { name: "Type Grace to confirm" }), "Grace")
+    await user.click(confirm.getByRole("button", { name: "Delete permanently" }))
     await act(() => clock.advance(0))
 
-    expect(await screen.findByText("No removed instances")).toBeDefined()
-    expect(screen.queryByText("Grace")).toBeNull()
-    expect(removedLink()).toBeNull()
-    expect(window.location.pathname).toBe("/removed")
-  })
-
-  it("shows no link when nothing is removed", async () => {
-    openApp({ signedIn: true, instances: [ada] })
-
-    expect(await instanceLink("Ada")).toBeDefined()
-    expect(removedLink()).toBeNull()
+    const dialog = within(await settingsDialog())
+    expect(await dialog.findByText("No removed instances")).toBeDefined()
+    expect(dialog.queryByText("Grace")).toBeNull()
+    expect(window.location.search).toBe("?settings=instances")
   })
 })
 
@@ -629,8 +711,8 @@ describe("a page that breaks", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("This page could not be shown")
     expect(screen.getByRole("button", { name: "Reload" })).toBeDefined()
     expect(await instanceLink("Ada")).toBeDefined()
-    await user.click(await screen.findByRole("link", { name: "Usage" }))
-    expect(await screen.findByRole("heading", { name: "Usage" })).toBeDefined()
+    await user.click(await screen.findByRole("link", { name: "Library" }))
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeDefined()
     expect(screen.queryByRole("alert")).toBeNull()
   })
 })

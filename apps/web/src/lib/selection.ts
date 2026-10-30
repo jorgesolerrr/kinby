@@ -11,11 +11,20 @@ const MEMORY = "memory"
 const STATS = "stats"
 const VIEWS = "views"
 export const CREATE_PATH = "/new"
-export const USAGE_PATH = "/usage"
-export const REMOVED_PATH = "/removed"
 export const LIBRARY_PATH = "/library"
-export const SECRETS_PATH = "/secrets"
-export const CHANNELS_PATH = "/channels"
+
+// The Settings dialog opens over whatever path is open, so its section is a search parameter.
+const SETTINGS = "settings"
+const SETTINGS_SECTIONS = ["general", "usage", "secrets", "channels", "instances"] as const
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
+
+/** The hub pages that became sections of the Settings dialog, by their old paths. */
+const OLD_PATHS: Record<string, SettingsSection> = {
+  "/usage": "usage",
+  "/secrets": "secrets",
+  "/channels": "channels",
+  "/removed": "instances",
+}
 
 const listeners = new Set<() => void>()
 
@@ -141,7 +150,7 @@ export function openView(instanceId: string, viewId: string): void {
  */
 export function landOn(instanceId: string, threadId?: string): void {
   const path = threadId === undefined ? instancePath(instanceId) : threadPath(instanceId, threadId)
-  window.history.replaceState(null, "", path)
+  window.history.replaceState(null, "", path + window.location.search)
   changed()
 }
 
@@ -155,29 +164,35 @@ export function openOnboarding(): void {
   navigate(CREATE_PATH)
 }
 
-/** Open the hub's usage page the same way. */
-export function openUsage(): void {
-  navigate(USAGE_PATH)
-}
-
-/** Open the hub's Removed instances page the same way. */
-export function openRemoved(): void {
-  navigate(REMOVED_PATH)
-}
-
 /** Open the hub's library page the same way. */
 export function openLibrary(): void {
   navigate(LIBRARY_PATH)
 }
 
-/** Open the hub's Secrets page the same way. */
-export function openSecrets(): void {
-  navigate(SECRETS_PATH)
+/** Open the Settings dialog over the open page as a new history entry, so Back closes it. */
+export function openSettings(section: SettingsSection = "general"): void {
+  window.history.pushState(null, "", settingsUrl(section))
+  changed()
 }
 
-/** Open the hub's Channels page the same way. */
-export function openChannels(): void {
-  navigate(CHANNELS_PATH)
+/** Open another section of the Settings dialog in the same history entry. */
+export function switchSettings(section: SettingsSection): void {
+  window.history.replaceState(null, "", settingsUrl(section))
+  changed()
+}
+
+/** Close the Settings dialog, keeping the page under it, in the same history entry. */
+export function closeSettings(): void {
+  window.history.replaceState(null, "", settingsUrl(undefined))
+  changed()
+}
+
+/** Replace an old hub page's path with the root path and Settings open on its section. */
+export function replaceOldPath(): void {
+  const section = OLD_PATHS[window.location.pathname]
+  if (section === undefined) return
+  window.history.replaceState(null, "", `/?${SETTINGS}=${section}`)
+  changed()
 }
 
 /** The URL's path, which changes with every page, instance, and thread picked. */
@@ -230,29 +245,14 @@ export function useCreating(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === CREATE_PATH)
 }
 
-/** Whether the URL opens the hub's usage page. */
-export function useUsageOpen(): boolean {
-  return useSyncExternalStore(subscribe, () => window.location.pathname === USAGE_PATH)
-}
-
-/** Whether the URL opens the hub's Removed instances page. */
-export function useRemovedOpen(): boolean {
-  return useSyncExternalStore(subscribe, () => window.location.pathname === REMOVED_PATH)
-}
-
 /** Whether the URL opens the hub's library page. */
 export function useLibraryOpen(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === LIBRARY_PATH)
 }
 
-/** Whether the URL opens the hub's Secrets page. */
-export function useSecretsOpen(): boolean {
-  return useSyncExternalStore(subscribe, () => window.location.pathname === SECRETS_PATH)
-}
-
-/** Whether the URL opens the hub's Channels page. */
-export function useChannelsOpen(): boolean {
-  return useSyncExternalStore(subscribe, () => window.location.pathname === CHANNELS_PATH)
+/** The section the URL opens the Settings dialog on, if it opens the dialog. */
+export function useSettingsOpen(): SettingsSection | undefined {
+  return useSyncExternalStore(subscribe, settingsOpen)
 }
 
 /** Open a page of the app by its path, without reloading the page, as a new history entry. */
@@ -327,6 +327,20 @@ function openedView(): string | undefined {
   return section === SECTION && instanceId && views === VIEWS && viewId
     ? decoded(viewId)
     : undefined
+}
+
+function settingsOpen(): SettingsSection | undefined {
+  const section = new URLSearchParams(window.location.search).get(SETTINGS)
+  return SETTINGS_SECTIONS.find((known) => known === section)
+}
+
+/** The current path and its search, with the Settings dialog open on `section`, or closed. */
+function settingsUrl(section: SettingsSection | undefined): string {
+  const search = new URLSearchParams(window.location.search)
+  if (section === undefined) search.delete(SETTINGS)
+  else search.set(SETTINGS, section)
+  const query = search.toString()
+  return query === "" ? window.location.pathname : `${window.location.pathname}?${query}`
 }
 
 function decoded(part: string): string | undefined {
