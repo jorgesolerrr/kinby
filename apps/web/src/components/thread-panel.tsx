@@ -447,7 +447,7 @@ function ApprovalPanel({
       ref={ref}
       tabIndex={-1}
       aria-label={`Approve ${call}?`}
-      className="flex gap-3 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="flex gap-3 rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
       {/* The instance asks in its own voice, beside the avatar it speaks with in the transcript. */}
       <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
@@ -862,7 +862,7 @@ function StartedByNode({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
   return (
     <span
       aria-hidden
-      className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+      className="grid size-5 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
     >
       <Icon className="size-3" />
     </span>
@@ -1136,7 +1136,7 @@ function ToolStepRow({
     <li className="flex gap-3">
       <span className="relative flex w-5 shrink-0 justify-center">
         {!last && <span aria-hidden className="absolute top-6 bottom-0 w-px bg-border" />}
-        <span aria-hidden className={`mt-0.5 grid size-5 place-items-center rounded-full ${tone}`}>
+        <span aria-hidden className={`mt-0.5 grid size-5 place-items-center rounded-md ${tone}`}>
           <Icon className="size-3" />
         </span>
       </span>
