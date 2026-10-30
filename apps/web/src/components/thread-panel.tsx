@@ -2,7 +2,7 @@ import type { Avatar as AvatarChoice, Client, Clock, InstanceClient } from "@kin
 import { useEffect, useRef, useSyncExternalStore } from "react"
 
 import { ApprovalPanel } from "@/components/thread-approval"
-import { Composer } from "@/components/thread-composer"
+import { ThreadComposer } from "@/components/thread-composer"
 import { ThreadHeader } from "@/components/thread-header"
 import { TakeoverPanel } from "@/components/thread-takeover"
 import { Transcript, TranscriptSkeleton } from "@/components/thread-transcript"
@@ -113,7 +113,7 @@ export function ThreadPanel({
                 speaker={speaker}
               />
             ) : (
-              <Composer
+              <ThreadComposer
                 client={client}
                 threadId={threadId}
                 name={name}

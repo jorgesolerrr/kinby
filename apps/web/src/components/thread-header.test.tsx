@@ -21,23 +21,9 @@ import { describe, expect, it } from "vitest"
 
 import { NavInstances } from "@/components/nav-instances"
 import { ThreadHeader } from "@/components/thread-header"
+import { threadSummary as thread } from "@/components/thread-testing"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { threadList } from "@/lib/thread-list"
-
-function thread(fields: Partial<ThreadSummary> = {}): ThreadSummary {
-  return {
-    id: "t1",
-    title: "Deploy notes",
-    created_at: "2026-09-27T10:00:00Z",
-    last_activity_at: "2026-09-27T10:00:00Z",
-    status: "idle",
-    mode: "ask",
-    mode_pinned: false,
-    archived: false,
-    origin: { kind: "user" },
-    ...fields,
-  }
-}
 
 /** `caller` as an instance client whose socket is up. */
 function connected<Caller>(caller: Caller) {
@@ -87,8 +73,6 @@ async function openHeaderOffline() {
   return { sent, loseConnection: () => act(async () => fail(lost)) }
 }
 
-const modePicker = () => screen.getByRole("combobox", { name: "Mode" })
-
 describe("a thread's header", () => {
   it("names a thread without a title as untitled", async () => {
     await openHeader({ listed: () => thread({ title: null }) })
@@ -96,46 +80,11 @@ describe("a thread's header", () => {
     expect(screen.getByRole("heading").textContent).toBe("Untitled thread")
   })
 
-  it("shows the thread's mode and disables the modes above the instance's ceiling", async () => {
-    await openHeader({ ceiling: "ask" })
-    const user = userEvent.setup()
+  it("leaves the thread's mode to the composer", async () => {
+    await openHeader()
 
-    expect(modePicker().textContent).toContain("Ask")
-    await user.click(modePicker())
-    await screen.findAllByRole("option")
-    const option = (name: RegExp) => screen.getByRole("option", { name })
-    const modes = [/^Read-only/, /^Ask/, /^Auto/, /^Full access/].map(option)
-
-    expect(modes.map((mode) => mode.getAttribute("aria-disabled") === "true")).toEqual([
-      false,
-      false,
-      true,
-      true,
-    ])
-    expect(
-      modes.map((mode) => mode.textContent?.includes("Above the ceiling. Raise it in Configure.")),
-    ).toEqual([false, false, true, true])
-  })
-
-  it("pins the mode picked and shows it once the instance lists it", async () => {
-    let mode: PermissionMode = "ask"
-    const client = await openHeader({
-      listed: () => thread({ mode, mode_pinned: mode !== "ask" }),
-      "thread.mode.set": (params) => {
-        mode = params.mode
-        return { thread_id: "t1", turn_id: "pin", sequence: 1 }
-      },
-    })
-    const user = userEvent.setup()
-
-    await user.click(modePicker())
-    await user.click(await screen.findByRole("option", { name: /^Read-only/ }))
-
-    expect(client.calls).toContainEqual({
-      method: "thread.mode.set",
-      params: { thread_id: "t1", mode: "read-only" },
-    })
-    expect(modePicker().textContent).toContain("Read-only")
+    expect(await screen.findByRole("heading")).toBeDefined()
+    expect(screen.queryByRole("combobox", { name: "Mode" })).toBeNull()
   })
 
   it("renames the thread in place", async () => {
@@ -209,7 +158,7 @@ describe("a thread's header", () => {
     await user.tab()
 
     expect(screen.queryByRole("textbox", { name: "Thread title" })).toBeNull()
-    expect(document.activeElement).toBe(modePicker())
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Archive" }))
   })
 
   it("shows why the instance refused a rename, and keeps the title being typed in focus", async () => {
@@ -257,36 +206,6 @@ describe("a thread's header", () => {
     expect(field).toHaveProperty("value", "Deploy notes v2")
   })
 
-  it("holds the mode picker in focus while the change is out, and shows why once it fails", async () => {
-    const { sent, loseConnection } = await openHeaderOffline()
-    const user = userEvent.setup()
-
-    act(() => modePicker().focus())
-    await user.keyboard("{ArrowDown}")
-    await screen.findAllByRole("option")
-    await user.keyboard("{ArrowUp}{Enter}")
-
-    expect(sent).toEqual(["thread.mode.set"])
-    expect(modePicker().hasAttribute("disabled")).toBe(false)
-    expect(modePicker().getAttribute("aria-readonly")).toBe("true")
-    expect(document.activeElement).toBe(modePicker())
-    expect(screen.getByRole("status", { name: "Changing the mode" })).toBeDefined()
-
-    await user.click(modePicker())
-    await user.click(await screen.findByRole("option", { name: /^Full access/ }))
-
-    expect(sent).toEqual(["thread.mode.set"])
-
-    await loseConnection()
-
-    expect(screen.getByRole("alert").textContent).toContain(
-      "The connection to the instance dropped.",
-    )
-    expect(screen.queryByRole("status", { name: "Changing the mode" })).toBeNull()
-    expect(modePicker().hasAttribute("aria-readonly")).toBe(false)
-    expect(modePicker().textContent).toContain("Ask")
-  })
-
   describe("without the sidebar", () => {
     it("lists the threads itself when nothing has listed them", async () => {
       const client = connected(
@@ -298,7 +217,6 @@ describe("a thread's header", () => {
       render(<ThreadHeader client={client} threadId="t1" />)
 
       expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
-      expect(modePicker().textContent).toContain("Ask")
     })
 
     it("lists the threads again when the last list came before the thread", async () => {
@@ -346,7 +264,6 @@ describe("a thread's header", () => {
       })
 
       expect((await screen.findByRole("heading")).textContent).toBe("Deploy notes")
-      expect(modePicker().textContent).toContain("Ask")
     })
 
     it("stays empty when the threads do not list", async () => {

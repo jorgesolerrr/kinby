@@ -1311,6 +1311,18 @@ describe("the home screen", () => {
     expect(await threadStarts(hub, "hub-kinby")).toEqual([])
   })
 
+  it("says under the composer that the instance picked can make mistakes", async () => {
+    openApp({ signedIn: true, instances: [kinby, ada] })
+    const user = userEvent.setup()
+    const note = (name: string) =>
+      `${name} can make mistakes. It asks before anything it can't undo.`
+
+    expect(await screen.findByText(note("Kinby"))).toBeDefined()
+    await user.click(await sendTo())
+    await user.click(await screen.findByRole("option", { name: "Ada" }))
+    expect(await screen.findByText(note("Ada"))).toBeDefined()
+  })
+
   it("is disabled and says why when no instance is running", async () => {
     openApp({ signedIn: true, instances: [unnamed, stopped(kinby)] })
 
