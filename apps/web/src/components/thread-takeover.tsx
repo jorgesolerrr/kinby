@@ -1,0 +1,144 @@
+import type { Client, InstanceClient } from "@kinby/contract"
+import { useCallback, useId, useRef, useState } from "react"
+
+import { InstanceAvatar } from "@/components/instance-avatar"
+import { LiveBrowser, type LiveBrowserInput } from "@/components/live-browser"
+import type { Speaker } from "@/components/thread-transcript"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Spinner } from "@/components/ui/spinner"
+import { reason } from "@/lib/operation"
+import type { ParkedTakeover } from "@/lib/timeline"
+import { CircleStopIcon, FlagIcon } from "lucide-react"
+
+/**
+ * The takeover a turn is parked on, in the composer's place: why the agent asks, and its browser's
+ * page live, which takes the user's mouse and keyboard. The hub keeps the page, so the user drives
+ * it there. Finish resumes the turn with the page as the user left it, saved first as a profile
+ * when the user names one.
+ */
+export function TakeoverPanel({
+  client,
+  hub,
+  instanceId,
+  threadId,
+  turnId,
+  takeover,
+  speaker,
+}: {
+  client: Pick<InstanceClient, "call">
+  hub: Pick<Client, "call" | "subscribe">
+  instanceId: string
+  threadId: string
+  turnId: string
+  takeover: ParkedTakeover
+  speaker: Speaker
+}) {
+  const page = { instance_id: instanceId, turn_id: turnId }
+  const ids = { ...page, thread_id: threadId, takeover_id: takeover.takeoverId }
+  const watch = useCallback(
+    () => hub.subscribe("thread.takeover.start", { instance_id: instanceId, turn_id: turnId }),
+    [hub, instanceId, turnId],
+  )
+  const profileId = useId()
+  const [profile, setProfile] = useState("")
+  const [failure, setFailure] = useState<string>()
+  const [answering, setAnswering] = useState<"finish" | "stop">()
+
+  const live = useRef<LiveBrowserInput>(null)
+  const answer = async (pressed: "finish" | "stop", work: () => Promise<unknown>) => {
+    setAnswering(pressed)
+    try {
+      await work()
+    } catch (error) {
+      setFailure(reason(error))
+      setAnswering(undefined)
+    }
+  }
+  const busy = answering !== undefined
+  const name = profile.trim()
+
+  return (
+    <section aria-label="Take over the browser" className="flex gap-3">
+      <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
+      <Card className="min-w-0 flex-1">
+        <CardContent>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-base font-semibold">Can you take over the browser?</h2>
+              <p className="text-sm text-muted-foreground">{takeover.reason}</p>
+            </div>
+            <LiveBrowser
+              ref={live}
+              watch={watch}
+              send={(input) => hub.call("thread.takeover.input", { ...page, input })}
+              // Input after Finish or Stop would reach a turn that already moved on.
+              disabled={busy}
+            />
+            {failure !== undefined && (
+              <p role="alert" className="text-sm text-destructive">
+                {failure}
+              </p>
+            )}
+            <Field>
+              <FieldLabel htmlFor={profileId}>Save as a profile</FieldLabel>
+              <Input
+                id={profileId}
+                value={profile}
+                placeholder="LinkedIn"
+                readOnly={busy}
+                onChange={(event) => setProfile(event.target.value)}
+              />
+              <FieldDescription>
+                Name the sign-in to let {speaker.name} open the site signed in later.
+              </FieldDescription>
+            </Field>
+            <div className="flex w-full flex-wrap items-center gap-2">
+              <Button
+                size="lg"
+                className="max-md:h-11"
+                disabled={busy}
+                onClick={() =>
+                  void answer("finish", async () => {
+                    // What the user typed last reaches the page before the turn resumes.
+                    await live.current?.drained()
+                    return hub.call(
+                      "thread.takeover.finish",
+                      name === "" ? ids : { ...ids, profile: name },
+                    )
+                  })
+                }
+              >
+                {answering === "finish" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <FlagIcon data-icon="inline-start" />
+                )}
+                Finish
+              </Button>
+              <Button
+                variant="link"
+                className="ml-auto max-md:h-11"
+                disabled={busy}
+                onClick={() =>
+                  void answer("stop", () =>
+                    client.call("thread.turn.interrupt", { thread_id: threadId }),
+                  )
+                }
+              >
+                {answering === "stop" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <CircleStopIcon data-icon="inline-start" />
+                )}
+                Stop the turn
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  )
+}

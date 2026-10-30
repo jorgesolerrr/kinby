@@ -312,3 +312,8 @@ function startedBy(origin: TurnStarted["origin"]): TurnBlock["startedBy"] {
       return { kind: "user" }
   }
 }
+
+/** The first text argument. Tools take the thing they act on first: the path, the command, the pattern. */
+export function mainArgument(args: Record<string, JsonValue>): string | undefined {
+  return Object.values(args).find((value): value is string => typeof value === "string")
+}
