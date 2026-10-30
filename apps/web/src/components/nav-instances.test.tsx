@@ -99,8 +99,6 @@ function sidebar(
         instances={instances}
         selected={selected}
         creating={false}
-        anyRemoved={false}
-        removedOpen={false}
         selectedClient={selectedClient}
       />
     </SidebarProvider>

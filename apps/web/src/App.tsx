@@ -2,19 +2,16 @@ import { browserClock } from "@kinby/contract"
 import type { Client, Clock, InstanceSummary } from "@kinby/contract"
 import { cn } from "cn"
 import { MessagesSquareIcon } from "lucide-react"
-import { useCallback, useState, useSyncExternalStore } from "react"
+import { useCallback, useLayoutEffect, useState, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
-import { ChannelsPage } from "@/components/channels-page"
-import { HubSecretsPage } from "@/components/hub-secrets-page"
 import { Onboarding } from "@/components/onboarding"
 import { LibraryPage } from "@/components/library-page"
 import { MainPanel } from "@/components/main-panel"
 import { PageBoundary } from "@/components/page-boundary"
-import { RemovedInstancesPage } from "@/components/removed-instances-page"
 import { SignIn } from "@/components/sign-in"
+import { SettingsDialog } from "@/components/settings-dialog"
 import { ThreadsColumn } from "@/components/threads-column"
-import { UsagePage } from "@/components/usage-page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { KinbyMark } from "@/components/kinby-mark"
@@ -25,19 +22,17 @@ import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePolled } from "@/hooks/use-polled"
 import {
-  useChannelsOpen,
+  replaceOldPath,
   useConfigOpen,
   useCreating,
   useLibraryOpen,
   useMemoryOpen,
   usePath,
-  useRemovedOpen,
-  useSecretsOpen,
   useSelectedInstanceId,
   useSelectedThreadId,
+  useSettingsOpen,
   useStatsOpen,
   useThreadsOpen,
-  useUsageOpen,
   useViewOpen,
 } from "@/lib/selection"
 
@@ -65,13 +60,12 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const memoryOpen = useMemoryOpen()
   const statsOpen = useStatsOpen()
   const viewId = useViewOpen()
-  const usageOpen = useUsageOpen()
   const libraryOpen = useLibraryOpen()
-  const secretsOpen = useSecretsOpen()
-  const channelsOpen = useChannelsOpen()
-  const removedOpen = useRemovedOpen()
+  const settingsOpen = useSettingsOpen()
   const threadsOpen = useThreadsOpen()
   const path = usePath()
+  // Before the pages' effects run, so the home route opening the home instance keeps the section.
+  useLayoutEffect(replaceOldPath, [path])
   // An instance the hub does not have, or no longer has, selects nothing.
   const selected = instances?.find((instance) => instance.instance_id === selectedId)
   // The hub relays only to a running instance. An open config panel keeps its connection while the
@@ -113,12 +107,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           instances={instances ?? []}
           selected={selected}
           creating={creating}
-          anyRemoved={(listed?.removed.length ?? 0) > 0}
-          removedOpen={removedOpen}
-          usageOpen={usageOpen}
           libraryOpen={libraryOpen}
-          secretsOpen={secretsOpen}
-          channelsOpen={channelsOpen}
           client={client}
           clock={clock}
           selectedClient={columnFor !== undefined ? instanceClient : undefined}
@@ -151,21 +140,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               <PageBoundary path={path}>
                 {creating ? (
                   <Onboarding caller={client} clock={clock} onPublished={listAgain} />
-                ) : usageOpen ? (
-                  <UsagePage client={client} clock={clock} />
                 ) : libraryOpen ? (
                   <LibraryPage client={client} clock={clock} />
-                ) : secretsOpen ? (
-                  <HubSecretsPage client={client} clock={clock} />
-                ) : channelsOpen ? (
-                  <ChannelsPage client={client} clock={clock} />
-                ) : removedOpen ? (
-                  <RemovedInstancesPage
-                    caller={client}
-                    clock={clock}
-                    removed={listed?.removed}
-                    onChanged={listAgain}
-                  />
                 ) : (
                   <MainPanel
                     caller={client}
@@ -186,6 +162,13 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
             </div>
           </div>
         </SidebarInset>
+        <SettingsDialog
+          section={settingsOpen}
+          client={client}
+          clock={clock}
+          removed={listed?.removed}
+          onChanged={listAgain}
+        />
       </SidebarProvider>
     </TooltipProvider>
   )
