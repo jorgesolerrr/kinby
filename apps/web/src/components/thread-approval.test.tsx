@@ -27,6 +27,21 @@ describe("a thread's panel", () => {
       ],
     )
     const accepted = () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" })
+    const card = () => screen.getByRole("region", { name: "Approve bash make deploy?" })
+
+    /** Open the card's More menu and return what it offers. */
+    async function more() {
+      await userEvent.setup().click(screen.getByRole("button", { name: "More" }))
+      const items = await screen.findAllByRole("menuitem")
+      return items.map((item) => item.textContent)
+    }
+
+    /** Pick `item` from the card's More menu. */
+    async function choose(item: string) {
+      const user = userEvent.setup()
+      await user.click(screen.getByRole("button", { name: "More" }))
+      await user.click(await screen.findByRole("menuitem", { name: item }))
+    }
 
     /** Reopen the thread with its replay parked on approval a1. */
     async function reopenParked(answers: Answers = {}) {
@@ -60,7 +75,7 @@ describe("a thread's panel", () => {
 
       await userEvent.setup().click(button("Approve"))
 
-      expect(["Approve", "Deny", "Stop the turn"].map((name) => button(name).disabled)).toEqual([
+      expect(["Approve", "Deny", "More"].map((name) => button(name).disabled)).toEqual([
         true,
         true,
         true,
@@ -85,22 +100,33 @@ describe("a thread's panel", () => {
       expect(button("Approve")).toHaveProperty("disabled", false)
     })
 
-    it("takes the composer's place with the tool, its main argument, the rule, and the arguments", async () => {
+    it("shows under the call that asked, with the tool, its main argument, the rule, and the arguments", async () => {
       await reopenParked()
-      const approval = screen.getByRole("region", { name: "Approve bash make deploy?" })
+      const approval = card()
 
-      expect(screen.queryByRole("textbox", { name: "Message Ada" })).toBeNull()
-      expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
+      expect(
+        traceLine("Waiting for you to approve bash").compareDocumentPosition(approval) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+      expect(screen.getByText("Deploy it")).toBeDefined()
       expect(approval.textContent).toContain("mode.ask.write")
       expect(approval.textContent).toContain('"command": "make deploy"')
     })
 
-    it("puts focus in the reason when the thread opens on it", async () => {
+    it("leaves the composer in place, with Stop in place of Send", async () => {
+      const { sent } = await reopenParked()
+
+      expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
+      await userEvent.setup().click(screen.getByRole("button", { name: "Stop" }))
+
+      expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
+    })
+
+    it("takes focus when the thread opens on it", async () => {
       await reopenParked()
 
-      expect(document.activeElement).toBe(
-        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
-      )
+      expect(document.activeElement).toBe(card())
     })
 
     /** The instance's thread list, so the header shows t1's title. */
@@ -142,27 +168,18 @@ describe("a thread's panel", () => {
       return opened
     }
 
-    it("takes focus from the composer into the panel itself, not a field or button in it", async () => {
+    it("takes focus from the composer into the card itself, not a field or button in it", async () => {
       const { sent } = await parkLive(async () => {
         expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
       })
       const user = userEvent.setup()
 
-      expect(document.activeElement).toBe(
-        screen.getByRole("region", { name: "Approve bash make deploy?" }),
-      )
+      expect(document.activeElement).toBe(card())
 
       await user.keyboard("x{Enter}")
       expect(sent()).toEqual([])
-      expect(screen.getByRole("textbox", { name: "Reason to deny (optional)" })).toHaveProperty(
-        "value",
-        "",
-      )
+      expect(screen.getByRole("textbox", { name: "Message Ada" })).toHaveProperty("value", "")
 
-      await user.tab()
-      expect(document.activeElement).toBe(
-        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
-      )
       await user.tab()
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Approve" }))
     })
@@ -193,7 +210,7 @@ describe("a thread's panel", () => {
     it("does not offer to always allow it on a turn the user started", async () => {
       await reopenParked()
 
-      expect(screen.queryByRole("button", { name: "Always allow in this routine" })).toBeNull()
+      expect(await more()).not.toContain("Always allow in this routine")
     })
 
     it("always allows it in the routine whose turn parked on it", async () => {
@@ -213,9 +230,7 @@ describe("a thread's panel", () => {
         for (const event of [...routineStarted, ...rest]) opened.subscription().deliver(event)
       })
 
-      await userEvent
-        .setup()
-        .click(screen.getByRole("button", { name: "Always allow in this routine" }))
+      await choose("Always allow in this routine")
 
       expect(opened.sent()).toEqual([
         {
@@ -253,13 +268,13 @@ describe("a thread's panel", () => {
     it("does not offer to mark a tool read-only unless the agent authored it", async () => {
       await reopenParked()
 
-      expect(screen.queryByRole("button", { name: "Mark read-only" })).toBeNull()
+      expect(await more()).not.toContain("Mark read-only")
     })
 
     it("marks the authored tool that asked read-only", async () => {
       const { sent } = await reopenAuthored()
 
-      await userEvent.setup().click(screen.getByRole("button", { name: "Mark read-only" }))
+      await choose("Mark read-only")
 
       expect(sent()).toEqual([
         {
@@ -275,38 +290,18 @@ describe("a thread's panel", () => {
       expect(screen.getByText("echo declares write=False.")).toBeDefined()
     })
 
-    it("denies it with the reason typed", async () => {
-      const { sent } = await reopenParked()
-      const user = userEvent.setup()
+    it("offers no reason to deny until it is asked for", async () => {
+      await reopenParked()
 
-      await user.type(
-        screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
-        "  Use staging instead ",
-      )
-      await user.click(screen.getByRole("button", { name: "Deny" }))
-
-      expect(sent()).toEqual([
-        {
-          method: "thread.approval.respond",
-          params: {
-            thread_id: "t1",
-            approval_id: "a1",
-            decision: "deny",
-            reason: "Use staging instead",
-          },
-        },
-      ])
+      expect(screen.queryByRole("textbox", { name: "Reason to deny" })).toBeNull()
     })
 
-    it("denies it with the reason typed when Enter is pressed, once", async () => {
+    it("denies it with the reason typed on the card when Enter is pressed, once", async () => {
       const { sent } = await reopenParked()
 
-      await userEvent
-        .setup()
-        .type(
-          screen.getByRole("textbox", { name: "Reason to deny (optional)" }),
-          "Use staging instead{Enter}{Enter}",
-        )
+      await choose("Deny with a reason…")
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reason to deny" }))
+      await userEvent.setup().keyboard("  Use staging instead {Enter}{Enter}")
 
       expect(sent()).toEqual([
         {
@@ -324,7 +319,8 @@ describe("a thread's panel", () => {
     it("does not deny while an input method is composing the reason", async () => {
       const { sent } = await reopenParked()
 
-      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason to deny (optional)" }), {
+      await choose("Deny with a reason…")
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Reason to deny" }), {
         key: "Enter",
         isComposing: true,
       })
@@ -348,7 +344,7 @@ describe("a thread's panel", () => {
     it("stops the turn instead", async () => {
       const { sent } = await reopenParked()
 
-      await userEvent.setup().click(screen.getByRole("button", { name: "Stop the turn" }))
+      await choose("Stop the turn")
 
       expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
     })
@@ -411,13 +407,12 @@ describe("a thread's panel", () => {
       },
     })
 
-    it("gives the composer back once the turn moves on", async () => {
+    it("gives way to the call's outcome once the turn moves on", async () => {
       const { subscription } = await reopenParked()
 
       await act(async () => subscription().deliver(denied("Use staging instead")))
 
       expect(screen.queryByRole("region", { name: "Approve bash make deploy?" })).toBeNull()
-      expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
       await userEvent.click(traceLine("Used bash"))
       expect(within(traceLine("bash make deploy")).getByText("denied by you")).toBeDefined()
     })

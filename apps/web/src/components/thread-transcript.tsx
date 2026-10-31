@@ -1,5 +1,5 @@
 import type { Avatar as AvatarChoice, InstanceClient } from "@kinby/contract"
-import { type ComponentProps, useEffect, useRef } from "react"
+import { type ComponentProps, Fragment, type ReactNode, useEffect, useRef } from "react"
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
@@ -31,7 +31,7 @@ import {
 } from "@/lib/timeline"
 import { FactoryIcon, HouseIcon, RepeatIcon, type LucideIcon } from "lucide-react"
 
-/** The instance as the approval and takeover panels show it. */
+/** The instance as the takeover panel shows it. */
 export interface Speaker {
   name: string
   avatar: AvatarChoice
@@ -43,12 +43,15 @@ export function Transcript({
   client,
   threadId,
   instanceId,
+  approvalCard,
 }: {
   turns: TurnBlock[]
   notifications: Notifications
   client: Pick<InstanceClient, "call">
   threadId: string
   instanceId: string
+  /** The card of the approval the latest turn is parked on, which shows under the call that asked. */
+  approvalCard?: ReactNode
 }) {
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
@@ -71,6 +74,7 @@ export function Transcript({
                   client={client}
                   threadId={threadId}
                   instanceId={instanceId}
+                  approvalCard={index === turns.length - 1 ? approvalCard : undefined}
                 />
               </MessageScrollerItem>
             ))}
@@ -123,6 +127,7 @@ function Turn({
   client,
   threadId,
   instanceId,
+  approvalCard,
 }: {
   turn: TurnBlock
   previous: TurnBlock | undefined
@@ -131,6 +136,7 @@ function Turn({
   client: Pick<InstanceClient, "call">
   threadId: string
   instanceId: string
+  approvalCard: ReactNode
 }) {
   const { startedBy } = turn
   const thinking = turn.end === undefined && turn.steps.length === 0
@@ -171,7 +177,10 @@ function Turn({
         ) : run.kind === "view" ? (
           <ViewLine key={run.key} step={run.step} instanceId={instanceId} />
         ) : (
-          <ToolRun key={run.key} steps={run.steps} approval={turn.approval} end={turn.end} />
+          <Fragment key={run.key}>
+            <ToolRun steps={run.steps} approval={turn.approval} end={turn.end} />
+            {run.steps.some((step) => step.callId === turn.approval?.callId) && approvalCard}
+          </Fragment>
         ),
       )}
       {thinking && <span className="shimmer text-sm text-muted-foreground">Thinking</span>}
