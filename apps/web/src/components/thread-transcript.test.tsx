@@ -1,4 +1,5 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react"
+import type { Event } from "@kinby/contract"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
 
@@ -95,35 +96,60 @@ describe("a thread's panel", () => {
     ]) {
       expect(screen.getByText(marker)).toBeDefined()
     }
-    expect(screen.getAllByText(/^You ·/)).toHaveLength(3)
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
   })
 
-  it("marks a turn the home instance started", async () => {
+  describe("the line a turn opens with", () => {
+    async function opened(origin: Extract<Payload, { type: "turn.started" }>["origin"]) {
+      const events = thread([
+        "turn-1",
+        { type: "turn.started", message: "Check my job applications.", model: "claude", origin },
+      ])
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+    }
+
+    it("names the routine that started the turn", async () => {
+      await opened({ kind: "routine", name: "nightly-digest", trigger: "scheduled" })
+
+      expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
+    })
+
+    it("says the home instance started the turn", async () => {
+      await opened({ kind: "home-instance" })
+
+      expect(screen.getByText(/^Home instance ·/)).toBeDefined()
+    })
+
+    it("says a factory run started the turn", async () => {
+      await opened({ kind: "factory-run", factory: "software", run_id: "r1", step: "implement" })
+
+      expect(screen.getByText(/^Factory software · implement ·/)).toBeDefined()
+    })
+
+    it("is not there on a turn the user started", async () => {
+      await opened({ kind: "user" })
+
+      expect(screen.getByText("Check my job applications.")).toBeDefined()
+      expect(screen.queryByText(/^You ·/)).toBeNull()
+    })
+  })
+
+  it("names the browser's zone in the time a routine's turn started", async () => {
+    vi.stubEnv("TZ", "America/Bogota")
+    onTestFinished(() => void vi.unstubAllEnvs())
     const events = thread([
       "turn-1",
       {
         type: "turn.started",
-        message: "Check my job applications.",
+        message: "Summarize the night's email",
         model: "claude",
-        origin: { kind: "home-instance" },
+        origin: { kind: "routine", name: "nightly-digest", trigger: "scheduled" },
       },
     ])
-    const { subscription } = openThread()
-
-    await act(async () => {
-      subscription().subscribed(events.length)
-      for (const event of events) subscription().deliver(event)
-    })
-
-    expect(screen.getByText(/^Home instance ·/)).toBeDefined()
-    expect(screen.queryByText(/^You ·/)).toBeNull()
-  })
-
-  it("names the browser's zone in the time a turn started", async () => {
-    vi.stubEnv("TZ", "America/Bogota")
-    onTestFinished(() => void vi.unstubAllEnvs())
-    const events = thread(["turn-1", started("Fix the runtime")])
     const { subscription } = openThread()
 
     await act(async () => {
@@ -138,7 +164,8 @@ describe("a thread's panel", () => {
       .formatToParts(new Date("2026-09-28T10:00:00Z"))
       .find((part) => part.type === "timeZoneName")?.value
     if (bogota === undefined) throw new Error("America/Bogota has no short zone name")
-    const time = screen.getByText(/^You ·/).querySelector("time")?.textContent ?? ""
+    const time =
+      screen.getByText(/^Routine nightly-digest ·/).querySelector("time")?.textContent ?? ""
     expect(time).toContain(bogota)
   })
 
@@ -211,23 +238,114 @@ describe("a thread's panel", () => {
     })
   })
 
-  it("lines up the instance's name the same in a turn of only tool steps as in one with text", async () => {
+  it("draws a reply without the instance's name beside it", async () => {
     const events = thread(
-      ["turn-1", started("List the repo")],
-      ["turn-1", { type: "tool.call", call_id: "c1", name: "bash", arguments: { command: "ls" } }],
-      ["turn-2", started("Say hi")],
-      ["turn-2", { type: "message.delta", text: "Hi." }],
+      ["turn-1", started("Say hi")],
+      ["turn-1", { type: "message.delta", text: "Hi." }],
     )
     const { subscription } = openThread()
     await act(async () => {
       subscription().subscribed(events.length)
       for (const event of events) subscription().deliver(event)
     })
-    // jsdom has no Tailwind, so compare the classes the two names are drawn with.
-    const [toolsOnly, withText] = screen.getAllByText("Ada")
 
-    expect(toolsOnly?.className).toBe(withText?.className)
-    expect(toolsOnly?.parentElement?.className).toBe(withText?.parentElement?.className)
+    expect(screen.getByText("Hi.")).toBeDefined()
+    expect(screen.queryByText("Ada")).toBeNull()
+  })
+
+  describe("a turn that has shown nothing yet", () => {
+    it("thinks until its first step", async () => {
+      const events = thread(
+        ["turn-1", started("Plan the trip")],
+        ["turn-1", { type: "message.delta", text: "Looking." }],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(1)
+        subscription().deliver(events[0] as Event)
+      })
+      expect(screen.getByText("Thinking")).toBeDefined()
+
+      await act(async () => subscription().deliver(events[1] as Event))
+
+      expect(screen.queryByText("Thinking")).toBeNull()
+      expect(screen.getByText("Looking.")).toBeDefined()
+    })
+
+    it("stops thinking when the turn ends", async () => {
+      const events = thread(
+        ["turn-1", started("Plan the trip")],
+        ["turn-1", { type: "turn.interrupted" }],
+      )
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+
+      expect(screen.queryByText("Thinking")).toBeNull()
+    })
+  })
+
+  describe("day dividers", () => {
+    beforeEach(() => {
+      vi.stubEnv("TZ", "America/Bogota")
+      vi.useFakeTimers({ toFake: ["Date"] })
+      vi.setSystemTime(new Date("2026-09-28T15:00:00Z"))
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+    })
+
+    /** Open a thread with one turn started at each of `timestamps`, asking "Ask 0", "Ask 1", … */
+    async function startedAt(...timestamps: string[]) {
+      const events = thread(
+        ...timestamps.map((_, index): [string, Payload] => [
+          `turn-${index}`,
+          started(`Ask ${index}`),
+        ]),
+      ).map((event, index) => ({ ...event, timestamp: timestamps[index] as string }))
+      const { subscription } = openThread()
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+    }
+
+    /** Each of `texts`, shown once, read top to bottom. */
+    function read(texts: string[]) {
+      const view = within(screen.getByRole("region", { name: "Messages" }))
+      return texts
+        .map((text) => view.getByText(text))
+        .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+        .map((node) => node.textContent)
+    }
+
+    it("marks each day the browser's zone places a turn on, once", async () => {
+      await startedAt(
+        "2026-09-25T15:00:00Z",
+        // Past midnight in UTC, still the evening before in Bogotá.
+        "2026-09-27T03:00:00Z",
+        "2026-09-27T15:00:00Z",
+        "2026-09-28T10:00:00Z",
+        "2026-09-28T14:00:00Z",
+      )
+      const days = [
+        "Fri, Sep 25, 2026",
+        "Ask 0",
+        "Sat, Sep 26, 2026",
+        "Ask 1",
+        "Yesterday",
+        "Ask 2",
+        "Today",
+        "Ask 3",
+        "Ask 4",
+      ]
+
+      expect(read(days)).toEqual(days)
+    })
   })
 
   describe("a reply", () => {
@@ -242,7 +360,7 @@ describe("a thread's panel", () => {
         subscription().subscribed(events.length)
         for (const event of events) subscription().deliver(event)
       })
-      return screen.getByText("Ada").parentElement as HTMLElement
+      return screen.getByRole("region", { name: "Messages" })
     }
 
     it("renders its Markdown", async () => {
