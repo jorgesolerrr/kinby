@@ -38,11 +38,21 @@ export function LiveBrowser({
 }) {
   const view = useLiveView(watch)
   const page = useRef<HTMLImageElement>(null)
+  const screen = useRef<HTMLDivElement>(null)
   // Input goes one call at a time, so a release never overtakes its press.
   const queue = useRef(Promise.resolve())
   const queued = useRef(0)
   const [failure, setFailure] = useState<string>()
   useImperativeHandle(ref, () => ({ drained: () => queue.current }), [])
+  // React listens to the wheel passively, so only a listener of the browser's own keeps the wheel
+  // that scrolls the page from also scrolling what holds the browser.
+  useEffect(() => {
+    const element = screen.current
+    if (element === null || disabled) return
+    const hold = (event: WheelEvent) => event.preventDefault()
+    element.addEventListener("wheel", hold, { passive: false })
+    return () => element.removeEventListener("wheel", hold)
+  }, [disabled])
 
   const pass = (input: TakeoverInput) => {
     if (disabled) return
@@ -77,6 +87,7 @@ export function LiveBrowser({
           included, and the mouse. */}
       {/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
       <div
+        ref={screen}
         role="application"
         aria-label="The browser"
         tabIndex={0}

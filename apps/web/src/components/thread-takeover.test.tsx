@@ -1,9 +1,9 @@
 import { stubCaller } from "@kinby/contract/testing"
-import { act, fireEvent, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
-import { hubClient, openThread, started, thread } from "@/components/thread-testing"
+import { hubClient, openThread, started, thread, traceLine } from "@/components/thread-testing"
 
 describe("a waiting takeover", () => {
   const reason = "Sign in to LinkedIn: it asks for a code from your phone."
@@ -17,6 +17,7 @@ describe("a waiting takeover", () => {
   )
   const turn = { instance_id: "hub-ada", turn_id: "turn-1" }
   const takeover = { ...turn, thread_id: "t1", takeover_id: "k1" }
+  const interrupted = () => ({ sequence: 4, thread_id: "t1", turn_id: "turn-1" })
 
   /**
    * Open the thread with its replay parked on takeover k1, and the live view's subscription on
@@ -27,7 +28,7 @@ describe("a waiting takeover", () => {
       "thread.takeover.input": () => ({}),
       "thread.takeover.finish": () => ({ sequence: 3, thread_id: "t1", turn_id: "turn-1" }),
     })
-    const opened = openThread({}, undefined, hub)
+    const opened = openThread({ "thread.turn.interrupt": interrupted }, undefined, hub)
     const events = opened.subscription()
     await act(async () => {
       events.subscribed(parked.length)
@@ -37,17 +38,30 @@ describe("a waiting takeover", () => {
       (subscription) => subscription.method === "thread.takeover.start",
     )
     if (view === undefined) throw new Error("The panel did not start the live view.")
-    const sent = () => hub.calls.filter((call) => call.method.startsWith("thread.takeover"))
-    return { ...opened, view, sent }
+    const toHub = () => hub.calls.filter((call) => call.method.startsWith("thread.takeover"))
+    return { ...opened, view, toHub }
   }
 
-  it("takes the composer's place with the reason, and starts the live view of the takeover", async () => {
-    const { view } = await openParked()
-    const panel = screen.getByRole("region", { name: "Take over the browser" })
+  const card = () => screen.getByRole("region", { name: "Take over the browser" })
 
-    expect(screen.queryByRole("textbox", { name: "Message Ada" })).toBeNull()
-    expect(panel.textContent).toContain(reason)
+  it("shows at the end of the parked turn with the reason, and starts the live view of the takeover", async () => {
+    const { view } = await openParked()
+
+    expect(
+      traceLine("Using the browser").compareDocumentPosition(card()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(card().textContent).toContain("Ada needs you in the browser")
+    expect(card().textContent).toContain(reason)
     expect(view.params).toEqual(turn)
+  })
+
+  it("leaves the composer in place, with Stop in place of Send", async () => {
+    await openParked()
+
+    expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDefined()
   })
 
   it("shows each frame of the screencast", async () => {
@@ -65,7 +79,7 @@ describe("a waiting takeover", () => {
   })
 
   it("sends a click at the page's own pixels, and the keys pressed on the live view", async () => {
-    const { view, sent } = await openParked()
+    const { view, toHub } = await openParked()
     await act(async () => {
       view.subscribed(0)
       view.deliver({ data: "/9j/frame" })
@@ -88,11 +102,26 @@ describe("a waiting takeover", () => {
     })
 
     await waitFor(() =>
-      expect(sent().map((call) => call.params)).toEqual([
+      expect(toHub().map((call) => call.params)).toEqual([
         { ...turn, input: { type: "pointer", action: "down", x: 200, y: 100 } },
         { ...turn, input: { type: "pointer", action: "up", x: 200, y: 100 } },
         { ...turn, input: { type: "key", key: "a" } },
         { ...turn, input: { type: "key", key: "Shift+Tab" } },
+      ]),
+    )
+  })
+
+  it("scrolls the page under the live view, and not the thread around it", async () => {
+    const { toHub } = await openParked()
+
+    const scrolled = fireEvent.wheel(screen.getByRole("application", { name: "The browser" }), {
+      deltaY: 120,
+    })
+
+    expect(scrolled).toBe(false)
+    await waitFor(() =>
+      expect(toHub().map((call) => call.params)).toEqual([
+        { ...turn, input: { type: "wheel", delta_x: 0, delta_y: 120 } },
       ]),
     )
   })
@@ -126,21 +155,29 @@ describe("a waiting takeover", () => {
   })
 
   it("finishes the takeover, which resumes the turn", async () => {
-    const { sent } = await openParked()
+    const { toHub } = await openParked()
 
     await userEvent.setup().click(screen.getByRole("button", { name: "Finish" }))
 
-    expect(sent()).toEqual([{ method: "thread.takeover.finish", params: takeover }])
+    expect(toHub()).toEqual([{ method: "thread.takeover.finish", params: takeover }])
+  })
+
+  it("stops the turn", async () => {
+    const { sent } = await openParked()
+
+    await userEvent.setup().click(within(card()).getByRole("button", { name: "Stop the turn" }))
+
+    expect(sent()).toEqual([{ method: "thread.turn.interrupt", params: { thread_id: "t1" } }])
   })
 
   it("saves the browser as a profile by the name given, when finishing", async () => {
-    const { sent } = await openParked()
+    const { toHub } = await openParked()
     const user = userEvent.setup()
 
     await user.type(screen.getByRole("textbox", { name: "Save as a profile" }), "LinkedIn")
     await user.click(screen.getByRole("button", { name: "Finish" }))
 
-    expect(sent()).toEqual([
+    expect(toHub()).toEqual([
       { method: "thread.takeover.finish", params: { ...takeover, profile: "LinkedIn" } },
     ])
   })

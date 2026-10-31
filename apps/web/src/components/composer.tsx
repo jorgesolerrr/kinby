@@ -51,8 +51,7 @@ export function Composer({
   const field = useRef<HTMLTextAreaElement>(null)
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement, [])
   const text = message.trim()
-  // The composer shows when the app opens on the home screen, when a thread opens, and when a
-  // finished takeover gives way to it.
+  // The composer shows when the app opens on the home screen, and when a thread opens.
   useEffect(() => takeFocus(field.current), [])
 
   const send = async () => {

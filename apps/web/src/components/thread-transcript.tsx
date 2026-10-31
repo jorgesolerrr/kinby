@@ -1,4 +1,4 @@
-import type { Avatar as AvatarChoice, InstanceClient } from "@kinby/contract"
+import type { InstanceClient } from "@kinby/contract"
 import { type ComponentProps, Fragment, type ReactNode, useEffect, useRef } from "react"
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
@@ -31,12 +31,6 @@ import {
 } from "@/lib/timeline"
 import { FactoryIcon, HouseIcon, RepeatIcon, type LucideIcon } from "lucide-react"
 
-/** The instance as the takeover panel shows it. */
-export interface Speaker {
-  name: string
-  avatar: AvatarChoice
-}
-
 export function Transcript({
   turns,
   notifications,
@@ -44,6 +38,7 @@ export function Transcript({
   threadId,
   instanceId,
   approvalCard,
+  takeoverCard,
 }: {
   turns: TurnBlock[]
   notifications: Notifications
@@ -52,6 +47,8 @@ export function Transcript({
   instanceId: string
   /** The card of the approval the latest turn is parked on, which shows under the call that asked. */
   approvalCard?: ReactNode
+  /** The card of the takeover the latest turn is parked on, which shows at the end of the turn. */
+  takeoverCard?: ReactNode
 }) {
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
@@ -75,6 +72,7 @@ export function Transcript({
                   threadId={threadId}
                   instanceId={instanceId}
                   approvalCard={index === turns.length - 1 ? approvalCard : undefined}
+                  takeoverCard={index === turns.length - 1 ? takeoverCard : undefined}
                 />
               </MessageScrollerItem>
             ))}
@@ -128,6 +126,7 @@ function Turn({
   threadId,
   instanceId,
   approvalCard,
+  takeoverCard,
 }: {
   turn: TurnBlock
   previous: TurnBlock | undefined
@@ -137,6 +136,7 @@ function Turn({
   threadId: string
   instanceId: string
   approvalCard: ReactNode
+  takeoverCard: ReactNode
 }) {
   const { startedBy } = turn
   const thinking = turn.end === undefined && turn.steps.length === 0
@@ -183,6 +183,7 @@ function Turn({
           </Fragment>
         ),
       )}
+      {takeoverCard}
       {thinking && <span className="shimmer text-sm text-muted-foreground">Thinking</span>}
       <TurnEnd
         turn={turn}
