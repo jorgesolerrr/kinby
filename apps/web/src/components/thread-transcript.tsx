@@ -112,8 +112,8 @@ const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, 
 /**
  * The day the turn starts on, when the turn before it started on another. Then the user's request
  * in a bubble on the right, or a line naming what started the turn on its own. Then the
- * instance's replies as prose across the column, and the tool calls between them as one rail of
- * steps. Then how the turn ended.
+ * instance's replies as prose across the column, and the tool calls between them as one line in
+ * words. Then how the turn ended.
  */
 function Turn({
   turn,
@@ -163,7 +163,7 @@ function Turn({
           <p className="pl-6 text-sm whitespace-pre-wrap text-muted-foreground">{turn.request}</p>
         </div>
       )}
-      {railed(turn.steps).map((run) =>
+      {grouped(turn.steps).map((run) =>
         run.kind === "text" ? (
           <Reply key={run.key} text={run.text} />
         ) : run.kind === "notification" ? (
@@ -195,10 +195,10 @@ type Run =
   | { kind: "text"; key: string; text: string }
   | { kind: "notification"; key: string; step: NotificationStep }
   | { kind: "view"; key: string; step: ViewStep }
-  | { kind: "rail"; key: string; steps: ToolStep[] }
+  | { kind: "tools"; key: string; steps: ToolStep[] }
 
-/** A turn's steps with each stretch of consecutive tool calls gathered into one rail. */
-function railed(steps: TurnBlock["steps"]): Run[] {
+/** A turn's steps with each stretch of consecutive tool calls gathered into one run. */
+function grouped(steps: TurnBlock["steps"]): Run[] {
   const runs: Run[] = []
   steps.forEach((step, index) => {
     const last = runs.at(-1)
@@ -206,8 +206,8 @@ function railed(steps: TurnBlock["steps"]): Run[] {
     else if (step.kind === "notification")
       runs.push({ kind: "notification", key: `notification-${step.raised}`, step })
     else if (step.kind === "view") runs.push({ kind: "view", key: `view-${index}`, step })
-    else if (last?.kind === "rail") last.steps.push(step)
-    else runs.push({ kind: "rail", key: step.callId, steps: [step] })
+    else if (last?.kind === "tools") last.steps.push(step)
+    else runs.push({ kind: "tools", key: step.callId, steps: [step] })
   })
   return runs
 }

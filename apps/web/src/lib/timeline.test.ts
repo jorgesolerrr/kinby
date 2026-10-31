@@ -84,7 +84,7 @@ describe("a thread's timeline", () => {
               name: "read",
               arguments: { path: "runtime.py" },
               gate: { action: "allow", decidedBy: "policy", rule: "reads are allowed" },
-              result: { durationMs: 38 },
+              result: { output: "…", error: false, durationMs: 38 },
             },
             { kind: "text", text: "Done." },
           ],
@@ -94,7 +94,7 @@ describe("a thread's timeline", () => {
     })
   })
 
-  it("marks a call whose result is an error, with its output, though the result has no duration", () => {
+  it("keeps a call's output and marks it failed when its result is an error, though the result has no duration", () => {
     const [turn] = replay([
       "turn-1",
       started("List the routines"),
@@ -115,7 +115,7 @@ describe("a thread's timeline", () => {
         callId: "c1",
         name: "hub_read",
         arguments: { path: "routine.list" },
-        result: { error: 'Tool "hub_read" is not available in this turn.' },
+        result: { output: 'Tool "hub_read" is not available in this turn.', error: true },
       },
     ])
   })
