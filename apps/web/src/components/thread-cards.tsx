@@ -5,46 +5,73 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldError } from "@/components/ui/field"
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Spinner } from "@/components/ui/spinner"
 import type { Notifications } from "@/hooks/use-notifications"
 import { reason } from "@/lib/operation"
 import { openView, viewPath } from "@/lib/selection"
 import type { NotificationStep, ViewStep } from "@/lib/timeline"
-import {
-  BanIcon,
-  BellIcon,
-  CheckIcon,
-  CircleStopIcon,
-  LayoutDashboardIcon,
-  type LucideIcon,
-} from "lucide-react"
+import { BellIcon, LayoutDashboardIcon } from "lucide-react"
 
 /**
- * A notification the turn raised: what it said, where it stands, and its options. The hub takes an
- * answer once it holds the notification, and the user's answer takes the options' place.
+ * A notification the turn raised. One still waiting on the user's answer is a card with its
+ * options; any other is a line with its title, where it stands, and how it was answered.
  */
-export function NotificationCard({
+export function RaisedNotification({
   step,
   notifications,
 }: {
   step: NotificationStep
   notifications: Notifications
 }) {
+  const notificationId = step.hub?.kind === "accepted" ? step.hub.notificationId : undefined
+  const kept = notificationId === undefined ? undefined : notifications.kept.get(notificationId)
+  const status = notificationStatus(step, kept)
+  const applied = kept?.replies.find((reply) => reply.option != null && reply.status === "applied")
+  const answered =
+    step.approval?.settled !== undefined
+      ? SETTLED_APPROVALS[step.approval.settled]
+      : applied && `Answered “${applied.option}”`
+  if (step.options.length > 0 && step.hub?.kind !== "refused" && !answered) {
+    return (
+      <NotificationCard step={step} kept={kept} status={status} notifications={notifications} />
+    )
+  }
+  return (
+    <Marker variant={status?.variant === "destructive" ? "destructive" : "default"}>
+      <MarkerIcon>
+        <BellIcon />
+      </MarkerIcon>
+      <MarkerContent>
+        {[step.title, status?.label, answered].filter(Boolean).join(" · ")}
+      </MarkerContent>
+    </Marker>
+  )
+}
+
+/**
+ * A notification waiting on the user's answer: what it said, where it stands, and its options. The
+ * hub takes an answer once it holds the notification.
+ */
+function NotificationCard({
+  step,
+  kept,
+  status,
+  notifications,
+}: {
+  step: NotificationStep
+  kept: Notification | undefined
+  status: NotificationStatus | undefined
+  notifications: Notifications
+}) {
   const titleId = useId()
   const [answering, setAnswering] = useState<string>()
   const [failure, setFailure] = useState<string>()
-  const notificationId = step.hub?.kind === "accepted" ? step.hub.notificationId : undefined
-  const kept = notificationId === undefined ? undefined : notifications.kept.get(notificationId)
-  const replies = kept?.replies.filter((reply) => reply.option != null) ?? []
-  const applied = replies.find((reply) => reply.status === "applied")
-  const latest = replies.at(-1)
+  const latest = kept?.replies.filter((reply) => reply.option != null).at(-1)
   // An answer the hub could not apply leaves the options to answer again.
   const unapplied =
     latest?.status === "failed" || latest?.status === "stale" ? latest.outcome : undefined
   const shown = failure ?? unapplied ?? undefined
-  const status = notificationStatus(step, kept)
-  const settled =
-    step.approval?.settled === undefined ? undefined : SETTLED_APPROVALS[step.approval.settled]
 
   const answer = async (id: string, option: string) => {
     setAnswering(option)
@@ -77,43 +104,31 @@ export function NotificationCard({
         <CardContent>
           <div className="flex flex-col gap-3">
             <p className="whitespace-pre-wrap">{step.text}</p>
-            {settled !== undefined ? (
-              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                <settled.icon aria-hidden className="size-3.5" />
-                {settled.label}
-              </p>
-            ) : applied !== undefined ? (
-              <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                <CheckIcon aria-hidden className="size-3.5" />
-                {`Answered “${applied.option}”`}
-              </p>
-            ) : latest?.status === "received" ? (
+            {latest?.status === "received" ? (
               <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                 <Spinner aria-hidden className="size-3.5" />
                 {`Answering “${latest.option}”`}
               </p>
             ) : (
-              step.options.length > 0 && (
-                <Field data-invalid={shown !== undefined || undefined}>
-                  <div className="flex flex-wrap gap-2">
-                    {step.options.map((option) => (
-                      <Button
-                        key={option}
-                        size="sm"
-                        variant="outline"
-                        disabled={kept === undefined || answering !== undefined}
-                        onClick={() => {
-                          if (kept !== undefined) void answer(kept.notification_id, option)
-                        }}
-                      >
-                        {answering === option && <Spinner data-icon="inline-start" />}
-                        {option}
-                      </Button>
-                    ))}
-                  </div>
-                  {shown !== undefined && <FieldError>{shown}</FieldError>}
-                </Field>
-              )
+              <Field data-invalid={shown !== undefined || undefined}>
+                <div className="flex flex-wrap gap-2">
+                  {step.options.map((option) => (
+                    <Button
+                      key={option}
+                      size="sm"
+                      variant="outline"
+                      disabled={kept === undefined || answering !== undefined}
+                      onClick={() => {
+                        if (kept !== undefined) void answer(kept.notification_id, option)
+                      }}
+                    >
+                      {answering === option && <Spinner data-icon="inline-start" />}
+                      {option}
+                    </Button>
+                  ))}
+                </div>
+                {shown !== undefined && <FieldError>{shown}</FieldError>}
+              </Field>
             )}
           </div>
         </CardContent>
@@ -122,12 +137,13 @@ export function NotificationCard({
   )
 }
 
-/** What an approval's notification shows in place of its options once the approval settled. */
-const SETTLED_APPROVALS = {
-  allow: { icon: CheckIcon, label: "Approved" },
-  deny: { icon: BanIcon, label: "Denied" },
-  ended: { icon: CircleStopIcon, label: "No longer waiting" },
-} satisfies Record<string, { icon: LucideIcon; label: string }>
+/** How an approval's notification was answered, once the approval settled. */
+const SETTLED_APPROVALS = { allow: "Approved", deny: "Denied", ended: "No longer waiting" }
+
+interface NotificationStatus {
+  label: string
+  variant: "outline" | "secondary" | "destructive"
+}
 
 /**
  * Where a notification stands: waiting for the hub, refused by it, or how its channels took it.
@@ -136,7 +152,7 @@ const SETTLED_APPROVALS = {
 function notificationStatus(
   step: NotificationStep,
   kept: Notification | undefined,
-): { label: string; variant: "outline" | "secondary" | "destructive" } | undefined {
+): NotificationStatus | undefined {
   if (step.hub === undefined) return { label: "Waiting for the hub", variant: "secondary" }
   if (step.hub.kind === "refused") {
     return { label: `Not sent: ${step.hub.reason}`, variant: "destructive" }
@@ -151,38 +167,39 @@ function notificationStatus(
 }
 
 /** A view the turn created or changed, linking to its page, or one it deleted, struck through. */
-export function ViewChangedCard({ step, instanceId }: { step: ViewStep; instanceId: string }) {
-  const titleId = useId()
+export function ViewLine({ step, instanceId }: { step: ViewStep; instanceId: string }) {
+  const icon = (
+    <MarkerIcon>
+      <LayoutDashboardIcon />
+    </MarkerIcon>
+  )
   if (step.change === "deleted") {
     return (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <LayoutDashboardIcon aria-hidden className="size-4 shrink-0" />
-        <del>{step.title}</del>
-      </p>
+      <Marker>
+        {icon}
+        <MarkerContent>
+          Deleted the view <del>{step.title}</del>
+        </MarkerContent>
+      </Marker>
     )
   }
   return (
-    <article aria-labelledby={titleId}>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle id={titleId}>
-            <a
-              className="flex items-center gap-2"
-              href={viewPath(instanceId, step.view)}
-              onClick={(event) => {
-                event.preventDefault()
-                openView(instanceId, step.view)
-              }}
-            >
-              <LayoutDashboardIcon aria-hidden className="size-4 shrink-0" />
-              {step.title}
-            </a>
-          </CardTitle>
-          <CardAction>
-            <Badge variant="outline">{step.change === "created" ? "Created" : "Changed"}</Badge>
-          </CardAction>
-        </CardHeader>
-      </Card>
-    </article>
+    <Marker
+      render={
+        <a
+          href={viewPath(instanceId, step.view)}
+          onClick={(event) => {
+            event.preventDefault()
+            openView(instanceId, step.view)
+          }}
+        >
+          {icon}
+          <MarkerContent>
+            {step.change === "created" ? "Created" : "Changed"} the view{" "}
+            <span className="text-foreground">{step.title}</span>
+          </MarkerContent>
+        </a>
+      }
+    />
   )
 }

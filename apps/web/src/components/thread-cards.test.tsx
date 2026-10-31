@@ -34,11 +34,15 @@ describe("a thread's panel", () => {
       }
     }
 
-    /** Open a thread whose one turn raised the notification, then `answers` for it. */
-    async function notified(answers: Payload[], hubAnswers: Answers = {}) {
+    /** Open a thread whose one turn raised `notification`, then `answers` for it. */
+    async function notified(
+      answers: Payload[],
+      hubAnswers: Answers = {},
+      notification: NotificationRaised = raised,
+    ) {
       const events = thread(
         ["turn-1", started("Sort my inbox")],
-        ["turn-1", raised],
+        ["turn-1", notification],
         ...answers.map((payload): [string, Payload] => ["turn-1", payload]),
       )
       const hub = hubClient(hubAnswers)
@@ -48,9 +52,10 @@ describe("a thread's panel", () => {
         subscription().subscribed(events.length)
         for (const event of events) subscription().deliver(event)
       })
-      const card = screen.getByRole("article", { name: "Inbox sorted" })
-      return { hub, clock, subscription, sequence: events.length, card }
+      return { hub, clock, subscription, sequence: events.length }
     }
+
+    const card = () => screen.getByRole("article", { name: "Inbox sorted" })
 
     /** The user's reply to the notification, as the hub records it. */
     const reply = (
@@ -67,14 +72,14 @@ describe("a thread's panel", () => {
     const accepted: Payload = { type: "notification.accepted", raised: 2, notification_id: "n1" }
 
     it("shows its title, text, options and that it was delivered", async () => {
-      const { hub, card } = await notified([accepted], {
+      const { hub } = await notified([accepted], {
         "notification.list": () => ({ notifications: [kept()] }),
       })
 
-      expect(within(card).getByText("Three emails need an answer.")).toBeDefined()
-      expect(within(card).getByRole("button", { name: "Archive them" })).toBeDefined()
-      expect(within(card).getByRole("button", { name: "Leave them" })).toBeDefined()
-      expect(await within(card).findByText("Delivered")).toBeDefined()
+      expect(within(card()).getByText("Three emails need an answer.")).toBeDefined()
+      expect(within(card()).getByRole("button", { name: "Archive them" })).toBeDefined()
+      expect(within(card()).getByRole("button", { name: "Leave them" })).toBeDefined()
+      expect(await within(card()).findByText("Delivered")).toBeDefined()
       expect(hub.calls).toEqual([{ method: "notification.list", params: { thread_id: "t1" } }])
     })
 
@@ -83,70 +88,82 @@ describe("a thread's panel", () => {
         { channel_id: "c1", status: "failed" as const },
         { channel_id: "c2", status: "failed" as const },
       ]
-      const { card } = await notified([accepted], {
+      await notified([accepted], {
         "notification.list": () => ({ notifications: [kept({ deliveries })] }),
       })
 
-      expect(await within(card).findByText("Not delivered")).toBeDefined()
+      expect(await within(card()).findByText("Not delivered")).toBeDefined()
     })
 
-    it("shows why the hub refused it, and offers its options to no answer", async () => {
-      const { hub, card } = await notified([
+    it("shows as a line with its title and delivery status when it has no options", async () => {
+      const told: NotificationRaised = { ...raised, options: [] }
+      await notified(
+        [accepted],
+        { "notification.list": () => ({ notifications: [kept(told)] }) },
+        told,
+      )
+
+      expect(await screen.findByText("Inbox sorted · Delivered")).toBeDefined()
+      expect(screen.queryByRole("article", { name: "Inbox sorted" })).toBeNull()
+    })
+
+    it("shows as a line saying why the hub refused it, with no options", async () => {
+      const { hub } = await notified([
         { type: "notification.refused", raised: 2, reason: "The daily cap is reached." },
       ])
 
-      expect(within(card).getByText("Not sent: The daily cap is reached.")).toBeDefined()
-      const option = within(card).getByRole("button", { name: "Archive them" })
-      expect((option as HTMLButtonElement).disabled).toBe(true)
+      expect(screen.getByText("Inbox sorted · Not sent: The daily cap is reached.")).toBeDefined()
+      expect(screen.queryByRole("button", { name: "Archive them" })).toBeNull()
       expect(hub.calls).toEqual([])
     })
 
     it("answers an option through the hub, and shows it answering until the hub applies it", async () => {
       let replies: Notification["replies"] = []
-      const { hub, clock, card } = await notified([accepted], {
+      const { hub, clock } = await notified([accepted], {
         "notification.list": () => ({ notifications: [kept({ replies })] }),
         "notification.reply": () => {
           replies = [reply("received")]
           return reply("received")
         },
       })
-      await within(card).findByText("Delivered")
+      await within(card()).findByText("Delivered")
 
-      await userEvent.click(within(card).getByRole("button", { name: "Archive them" }))
+      await userEvent.click(within(card()).getByRole("button", { name: "Archive them" }))
 
       expect(hub.calls).toContainEqual({
         method: "notification.reply",
         params: { notification_id: "n1", option: "Archive them" },
       })
-      expect(await within(card).findByText("Answering “Archive them”")).toBeDefined()
-      expect(within(card).queryByRole("button", { name: "Leave them" })).toBeNull()
+      expect(await within(card()).findByText("Answering “Archive them”")).toBeDefined()
+      expect(within(card()).queryByRole("button", { name: "Leave them" })).toBeNull()
 
       replies = [reply("applied", 'Answered "Archive them".')]
       await act(() => clock.advance(5_000))
 
-      expect(within(card).getByText("Answered “Archive them”")).toBeDefined()
+      expect(screen.getByText("Inbox sorted · Delivered · Answered “Archive them”")).toBeDefined()
+      expect(screen.queryByRole("article", { name: "Inbox sorted" })).toBeNull()
     })
 
     it("offers its options again, saying why, when the hub could not apply the answer", async () => {
       const outcome =
         "Not known whether the instance got this answer. Answer again from the web app."
-      const { card } = await notified([accepted], {
+      await notified([accepted], {
         "notification.list": () => ({
           notifications: [kept({ replies: [reply("failed", outcome)] })],
         }),
       })
 
-      expect(await within(card).findByText(outcome)).toBeDefined()
-      const option = within(card).getByRole("button", { name: "Archive them" })
+      expect(await within(card()).findByText(outcome)).toBeDefined()
+      const option = within(card()).getByRole("button", { name: "Archive them" })
       expect((option as HTMLButtonElement).disabled).toBe(false)
     })
 
     it("shows an answer sent through a channel once the turn it starts reaches the thread", async () => {
       let replies: Notification["replies"] = []
-      const { subscription, sequence, card } = await notified([accepted], {
+      const { subscription, sequence } = await notified([accepted], {
         "notification.list": () => ({ notifications: [kept({ replies })] }),
       })
-      await within(card).findByText("Delivered")
+      await within(card()).findByText("Delivered")
 
       replies = [reply("applied", 'Answered "Archive them".')]
       await act(async () =>
@@ -159,7 +176,9 @@ describe("a thread's panel", () => {
         }),
       )
 
-      expect(await within(card).findByText("Answered “Archive them”")).toBeDefined()
+      expect(
+        await screen.findByText("Inbox sorted · Delivered · Answered “Archive them”"),
+      ).toBeDefined()
     })
 
     describe("raised while a turn is parked on an approval", () => {
@@ -232,17 +251,25 @@ describe("a thread's panel", () => {
         return { hub, card, deliver }
       }
 
-      it("shows the answer given through the approval panel in place of its options", async () => {
-        const { card, deliver } = await opened(asks)
+      it("shows as a line with the answer given through the approval panel", async () => {
+        const { deliver } = await opened(asks)
         const panel = screen.getByRole("region", { name: "Approve bash make deploy?" })
 
         await userEvent.click(within(panel).getByRole("button", { name: "Approve" }))
         await deliver(approved)
 
-        expect(within(card).getByText("Approved")).toBeDefined()
-        expect(within(card).queryByRole("button", { name: "Approve" })).toBeNull()
-        expect(within(card).queryByRole("button", { name: "Deny" })).toBeNull()
+        expect(screen.getByText("Approval waiting · Delivered · Approved")).toBeDefined()
+        expect(screen.queryByRole("article", { name: "Approval waiting" })).toBeNull()
         expect(screen.getByText("bash make deploy · approved by you · running")).toBeDefined()
+      })
+
+      it("shows as a line once the turn ends before the approval is answered", async () => {
+        const { deliver } = await opened(asks)
+
+        await deliver({ type: "turn.interrupted" })
+
+        expect(screen.getByText("Approval waiting · Delivered · No longer waiting")).toBeDefined()
+        expect(screen.queryByRole("button", { name: "Deny" })).toBeNull()
       })
 
       it("answers an option through the hub while the turn waits", async () => {
@@ -278,7 +305,7 @@ describe("a thread's panel", () => {
       change,
     })
 
-    it("shows a card naming each view and whether it was created or changed", async () => {
+    it("shows a line linking to each view, saying whether it was created or changed", async () => {
       const events = thread(
         ["turn-1", started("Track my applications")],
         ["turn-1", changed("applications", "Job board", "created")],
@@ -291,10 +318,8 @@ describe("a thread's panel", () => {
         for (const event of events) subscription().deliver(event)
       })
 
-      const board = screen.getByRole("article", { name: "Job board" })
-      expect(within(board).getByText("Created")).toBeDefined()
-      const reading = screen.getByRole("article", { name: "Reading list" })
-      expect(within(reading).getByText("Changed")).toBeDefined()
+      expect(screen.getByRole("link", { name: "Created the view Job board" })).toBeDefined()
+      expect(screen.getByRole("link", { name: "Changed the view Reading list" })).toBeDefined()
     })
 
     it("strikes through a deleted view instead of linking to it", async () => {
@@ -310,10 +335,10 @@ describe("a thread's panel", () => {
       })
 
       expect(screen.getByText("Job board").tagName).toBe("DEL")
-      expect(screen.queryByRole("link", { name: "Job board" })).toBeNull()
+      expect(screen.queryByRole("link")).toBeNull()
     })
 
-    it("opens the view's page from its card, as a new history entry", async () => {
+    it("opens the view's page from its line, as a new history entry", async () => {
       window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
       const events = thread(
         ["turn-1", started("Track my applications")],
@@ -324,7 +349,7 @@ describe("a thread's panel", () => {
         subscription().subscribed(events.length)
         for (const event of events) subscription().deliver(event)
       })
-      const link = screen.getByRole("link", { name: "Job board" })
+      const link = screen.getByRole("link", { name: "Created the view Job board" })
       const entries = window.history.length
 
       await userEvent.click(link)
