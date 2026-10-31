@@ -1,5 +1,5 @@
 import type { Avatar as AvatarChoice } from "@kinby/contract"
-import { type ComponentProps, useEffect, useRef } from "react"
+import { type ComponentProps, Fragment, type ReactNode, useEffect, useRef } from "react"
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
@@ -25,7 +25,7 @@ import { navigate, useSelectedTurnId } from "@/lib/selection"
 import type { NotificationStep, ToolStep, TurnBlock, ViewStep } from "@/lib/timeline"
 import { FactoryIcon, HouseIcon, RepeatIcon, UserIcon, type LucideIcon } from "lucide-react"
 
-/** The instance as the transcript and the approval panel show it. */
+/** The instance as the transcript and the takeover panel show it. */
 export interface Speaker {
   name: string
   avatar: AvatarChoice
@@ -36,11 +36,14 @@ export function Transcript({
   notifications,
   instanceId,
   speaker,
+  approvalCard,
 }: {
   turns: TurnBlock[]
   notifications: Notifications
   instanceId: string
   speaker: Speaker
+  /** The card of the approval the latest turn is parked on, which shows under the call that asked. */
+  approvalCard?: ReactNode
 }) {
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
@@ -53,13 +56,14 @@ export function Transcript({
       <MessageScroller className="my-6 flex-1">
         <MessageScrollerViewport>
           <MessageScrollerContent className="mx-auto w-full max-w-3xl">
-            {turns.map((turn) => (
+            {turns.map((turn, index) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
                 <Turn
                   turn={turn}
                   notifications={notifications}
                   instanceId={instanceId}
                   speaker={speaker}
+                  approvalCard={index === turns.length - 1 ? approvalCard : undefined}
                 />
               </MessageScrollerItem>
             ))}
@@ -108,11 +112,13 @@ function Turn({
   notifications,
   instanceId,
   speaker,
+  approvalCard,
 }: {
   turn: TurnBlock
   notifications: Notifications
   instanceId: string
   speaker: Speaker
+  approvalCard: ReactNode
 }) {
   const { startedBy } = turn
   const started = (
@@ -161,7 +167,10 @@ function Turn({
             ) : run.kind === "view" ? (
               <ViewLine key={run.key} step={run.step} instanceId={instanceId} />
             ) : (
-              <ToolRun key={run.key} steps={run.steps} approval={turn.approval} end={turn.end} />
+              <Fragment key={run.key}>
+                <ToolRun steps={run.steps} approval={turn.approval} end={turn.end} />
+                {run.steps.some((step) => step.callId === turn.approval?.callId) && approvalCard}
+              </Fragment>
             ),
           )}
           <EndMarker turn={turn} />

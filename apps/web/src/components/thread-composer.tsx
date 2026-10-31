@@ -1,5 +1,5 @@
 import type { InstanceClient, PermissionMode } from "@kinby/contract"
-import { useState } from "react"
+import { type Ref, useState } from "react"
 
 import { Composer } from "@/components/composer"
 import {
@@ -28,11 +28,13 @@ const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
  * mode so the sidebar shows it too.
  */
 export function ThreadComposer({
+  ref,
   client,
   threadId,
   name,
   running,
 }: {
+  ref?: Ref<HTMLTextAreaElement>
   client: Pick<InstanceClient, "call">
   threadId: string
   name: string
@@ -52,6 +54,7 @@ export function ThreadComposer({
 
   return (
     <Composer
+      ref={ref}
       label={`Message ${name}`}
       placeholder={running ? `${name} is working…` : `Message ${name}`}
       name={name}

@@ -25,6 +25,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **avatar**: the `circle`, `squircle` and `square` shapes, and the colour variants blue, violet, green, amber, red and gray, drawn from the `--avatar-*` tokens.
 - **badge**: the `success` and `attention` variants. Attention fills with ember.
 - **button**: the `aria-disabled` state looks and acts like `disabled`.
+- **card**: the `attention` variant, ringed in ember, for a card that waits on the user.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
 - **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
 - **dialog**: the content's `lg` size, a wide and tall flex column with no padding or gap, for a dialog that lays out its own body, as Settings does.
