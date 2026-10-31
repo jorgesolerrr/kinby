@@ -39,7 +39,7 @@ describe("how a turn ends", () => {
       for (const name of ["Copy", "Good turn", "Bad turn"]) {
         expect(screen.getByRole("button", { name })).toBeDefined()
       }
-      expect(screen.getByText("1 step · 1,500 tokens · 1m 12s")).toBeDefined()
+      expect(screen.getByText("1 step · 1.5k tokens · 1m 12s")).toBeDefined()
     })
 
     it("has no row while it runs", async () => {

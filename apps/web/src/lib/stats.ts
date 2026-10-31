@@ -106,6 +106,13 @@ export function tokens(count: number): string {
   return count.toLocaleString("en")
 }
 
+const SHORT = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 })
+
+/** A token count in a quiet line, to one decimal of its thousands or millions: 9.1k, 1.2m. */
+export function shortTokens(count: number): string {
+  return SHORT.format(count).toLowerCase()
+}
+
 /** The middle of `values`, or the mean of the two middle ones. `values` holds at least one. */
 export function median(values: number[]): number {
   const sorted = values.toSorted((a, b) => a - b)

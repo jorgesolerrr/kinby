@@ -64,9 +64,22 @@ export function ThreadPanel({
   // opens on it or the turn parks on it. Once it is answered, focus goes back to the composer.
   useEffect(() => {
     if (!replayed) return
-    if (approvalId === undefined) takeFocus(composer.current)
-    else if (document.activeElement === composer.current) approvalCard.current?.focus()
-    else takeFocus(approvalCard.current)
+    if (approvalId === undefined) {
+      takeFocus(composer.current)
+      return
+    }
+    // The transcript stays hidden until it has scrolled to where the thread opens, and a hidden
+    // card cannot take focus, so the card waits up to a second for it to show.
+    let frame = 0
+    const focusCard = (waited: number) => {
+      const card = approvalCard.current
+      if (card?.checkVisibility?.() === false && waited < 60) {
+        frame = requestAnimationFrame(() => focusCard(waited + 1))
+      } else if (document.activeElement === composer.current) card?.focus()
+      else takeFocus(card)
+    }
+    focusCard(0)
+    return () => cancelAnimationFrame(frame)
   }, [replayed, approvalId])
 
   if (failure !== undefined) {

@@ -12,7 +12,7 @@ import { Toggle } from "@/components/ui/toggle"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
 import { nodePath, openNode } from "@/lib/selection"
-import { duration, tokens } from "@/lib/stats"
+import { duration, shortTokens } from "@/lib/stats"
 import type { Recap, TurnBlock, TurnEnd as End } from "@/lib/timeline"
 import {
   CheckIcon,
@@ -130,7 +130,7 @@ function EndRow({
       </Toggle>
       <BadTurn pressed={turn.rating === "bad"} onRate={(why) => rate("bad", why)} />
       <span className="ml-2 tabular-nums">
-        {calls} {calls === 1 ? "step" : "steps"} · {tokens(end.tokens)} tokens ·{" "}
+        {calls} {calls === 1 ? "step" : "steps"} · {shortTokens(end.tokens)} tokens ·{" "}
         {duration(end.durationMs)}
       </span>
       {children && <span className="ml-3">{children}</span>}
