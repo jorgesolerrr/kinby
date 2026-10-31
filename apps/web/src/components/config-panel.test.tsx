@@ -418,6 +418,17 @@ describe("ConfigPanel", () => {
     }
   })
 
+  it("opens on Skills when a link names it", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1/config/skills")
+    try {
+      openPanel({})
+
+      expect(await screen.findByRole("heading", { name: "Skills" })).toBeDefined()
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
   describe("Permissions", () => {
     const SHIPPED = ["rm -rf /instance", "git reset --hard", "git push --force"]
     const permissions: PermissionsResult = {

@@ -7,6 +7,7 @@ const TURNS = "turns"
 const CONFIG = "config"
 const ROUTINES = "routines"
 const CORE = "core"
+const SKILLS = "skills"
 const MEMORY = "memory"
 const STATS = "stats"
 const VIEWS = "views"
@@ -66,8 +67,11 @@ export function routinePath(instanceId: string, name: string): string {
   return `${tabPath(instanceId, ROUTINES)}/${encodeURIComponent(name)}`
 }
 
-function corePath(instanceId: string): string {
-  return `${configPath(instanceId)}/${CORE}`
+/** The config sections a link opens the config panel on, by their path segment. */
+export type ConfigLink = typeof CORE | typeof SKILLS
+
+function linkPath(instanceId: string, link: ConfigLink): string {
+  return `${configPath(instanceId)}/${link}`
 }
 
 function memoryPath(instanceId: string): string {
@@ -120,7 +124,12 @@ export function openRoutine(instanceId: string, name: string): void {
 
 /** Open an instance's config panel on "Core version" the same way. */
 export function openCore(instanceId: string): void {
-  navigate(corePath(instanceId))
+  navigate(linkPath(instanceId, CORE))
+}
+
+/** Open an instance's config panel on "Skills" the same way. */
+export function openSkills(instanceId: string): void {
+  navigate(linkPath(instanceId, SKILLS))
 }
 
 /** Drop the section a link named from the URL and keep the config panel, in the same history entry. */
@@ -320,10 +329,11 @@ export function linkedRoutine(): string | undefined {
     : undefined
 }
 
-/** Whether the URL opens its instance's config panel on "Core version". */
-export function linkedCore(): boolean {
+/** The section the URL opens its instance's config panel on, if it names one. */
+export function linkedSection(): ConfigLink | undefined {
   const [, section, instanceId, config, linked] = window.location.pathname.split("/")
-  return section === SECTION && Boolean(instanceId) && config === CONFIG && linked === CORE
+  if (section !== SECTION || !instanceId || config !== CONFIG) return undefined
+  return linked === CORE || linked === SKILLS ? linked : undefined
 }
 
 /** The node the URL opens on its instance's memory page, if it names one. */

@@ -1,4 +1,4 @@
-import type { Event, ThreadSummary } from "@kinby/contract"
+import type { Event, InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { render, screen } from "@testing-library/react"
 
@@ -23,15 +23,16 @@ export function hubClient(answers: Answers = {}) {
 
 /**
  * Open thread t1 of Ada's instance, from a client that answers from `answers`, with a hub that
- * answers from `hub`, on `clock`.
+ * answers from `hub`, on `clock`, while the hub reports `notices` about the instance.
  */
 export function openThread(
   answers: Answers = {},
   client = instanceClient(answers),
   hub = hubClient(),
   clock = fakeClock(),
+  notices: InstanceSummary["notices"] = [],
 ) {
-  const rendered = render(
+  const panel = (reported: InstanceSummary["notices"]) => (
     <ThreadPanel
       client={client}
       hub={hub}
@@ -39,8 +40,12 @@ export function openThread(
       instanceId="hub-ada"
       threadId="t1"
       name="Ada"
-    />,
+      notices={reported}
+    />
   )
+  const rendered = render(panel(notices))
+  /** List the instance again, now reporting `reported`. */
+  const relist = (reported: InstanceSummary["notices"]) => rendered.rerender(panel(reported))
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
     if (latest === undefined) throw new Error("The panel did not subscribe.")
@@ -48,7 +53,7 @@ export function openThread(
   }
   /** What the panel called besides the header listing the threads. */
   const sent = () => client.calls.filter((call) => call.method !== "thread.list")
-  return { client, sent, subscription, unmount: rendered.unmount }
+  return { client, relist, sent, subscription, unmount: rendered.unmount }
 }
 
 /** The thread's events, numbered from 1 in the order given. */
