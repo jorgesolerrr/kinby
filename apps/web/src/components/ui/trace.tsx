@@ -61,11 +61,19 @@ function TraceTitle({ className, ...props }: React.ComponentProps<"span">) {
   )
 }
 
-function TraceDescription({ className, ...props }: React.ComponentProps<"span">) {
+function TraceDescription({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<"span"> & { variant?: "default" | "destructive" }) {
   return (
     <span
       data-slot="trace-description"
-      className={cn("shrink-0 text-muted-foreground/70 tabular-nums", className)}
+      data-variant={variant}
+      className={cn(
+        "shrink-0 text-muted-foreground/70 tabular-nums data-[variant=destructive]:text-destructive",
+        className,
+      )}
       {...props}
     />
   )
