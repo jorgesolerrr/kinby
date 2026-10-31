@@ -39,7 +39,6 @@ export function openThread(
       instanceId="hub-ada"
       threadId="t1"
       name="Ada"
-      avatar={{ shape: "circle", color: "blue" }}
     />,
   )
   const subscription = () => {

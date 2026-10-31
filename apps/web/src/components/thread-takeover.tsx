@@ -1,32 +1,37 @@
 import type { Client, InstanceClient } from "@kinby/contract"
 import { useCallback, useId, useRef, useState } from "react"
 
-import { InstanceAvatar } from "@/components/instance-avatar"
 import { LiveBrowser, type LiveBrowserInput } from "@/components/live-browser"
-import type { Speaker } from "@/components/thread-transcript"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { reason } from "@/lib/operation"
 import type { ParkedTakeover } from "@/lib/timeline"
-import { CircleStopIcon, FlagIcon } from "lucide-react"
+import { CircleStopIcon, FlagIcon, MousePointerClickIcon } from "lucide-react"
 
 /**
- * The takeover a turn is parked on, in the composer's place: why the agent asks, and its browser's
- * page live, which takes the user's mouse and keyboard. The hub keeps the page, so the user drives
- * it there. Finish resumes the turn with the page as the user left it, saved first as a profile
- * when the user names one.
+ * The takeover a turn is parked on, as a card at the end of the turn: why the agent asks, and its
+ * browser's page live, which takes the user's mouse and keyboard. The hub keeps the page, so the
+ * user drives it there. Finish resumes the turn with the page as the user left it, saved first as
+ * a profile when the user names one.
  */
-export function TakeoverPanel({
+export function TakeoverCard({
   client,
   hub,
   instanceId,
   threadId,
   turnId,
   takeover,
-  speaker,
+  name,
 }: {
   client: Pick<InstanceClient, "call">
   hub: Pick<Client, "call" | "subscribe">
@@ -34,7 +39,8 @@ export function TakeoverPanel({
   threadId: string
   turnId: string
   takeover: ParkedTakeover
-  speaker: Speaker
+  /** What the instance is called. */
+  name: string
 }) {
   const page = { instance_id: instanceId, turn_id: turnId }
   const ids = { ...page, thread_id: threadId, takeover_id: takeover.takeoverId }
@@ -58,18 +64,22 @@ export function TakeoverPanel({
     }
   }
   const busy = answering !== undefined
-  const name = profile.trim()
+  const profileName = profile.trim()
 
   return (
-    <section aria-label="Take over the browser" className="flex gap-3">
-      <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
-      <Card className="min-w-0 flex-1">
+    <section aria-label="Take over the browser">
+      <Card size="sm" variant="attention">
+        <CardHeader>
+          <CardTitle>
+            <span className="flex items-center gap-2 wrap-anywhere">
+              <MousePointerClickIcon aria-hidden className="size-4 shrink-0 text-ember" />
+              {name} needs you in the browser
+            </span>
+          </CardTitle>
+          <CardDescription className="wrap-anywhere">{takeover.reason}</CardDescription>
+        </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-base font-semibold">Can you take over the browser?</h2>
-              <p className="text-sm text-muted-foreground">{takeover.reason}</p>
-            </div>
             <LiveBrowser
               ref={live}
               watch={watch}
@@ -92,52 +102,54 @@ export function TakeoverPanel({
                 onChange={(event) => setProfile(event.target.value)}
               />
               <FieldDescription>
-                Name the sign-in to let {speaker.name} open the site signed in later.
+                Name the sign-in to let {name} open the site signed in later.
               </FieldDescription>
             </Field>
-            <div className="flex w-full flex-wrap items-center gap-2">
-              <Button
-                size="lg"
-                className="max-md:h-11"
-                disabled={busy}
-                onClick={() =>
-                  void answer("finish", async () => {
-                    // What the user typed last reaches the page before the turn resumes.
-                    await live.current?.drained()
-                    return hub.call(
-                      "thread.takeover.finish",
-                      name === "" ? ids : { ...ids, profile: name },
-                    )
-                  })
-                }
-              >
-                {answering === "finish" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <FlagIcon data-icon="inline-start" />
-                )}
-                Finish
-              </Button>
-              <Button
-                variant="link"
-                className="ml-auto max-md:h-11"
-                disabled={busy}
-                onClick={() =>
-                  void answer("stop", () =>
-                    client.call("thread.turn.interrupt", { thread_id: threadId }),
-                  )
-                }
-              >
-                {answering === "stop" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <CircleStopIcon data-icon="inline-start" />
-                )}
-                Stop the turn
-              </Button>
-            </div>
           </div>
         </CardContent>
+        {/* Below md the buttons grow to a 44 px tap target. */}
+        <CardFooter>
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <Button
+              className="max-md:h-11"
+              disabled={busy}
+              onClick={() =>
+                void answer("finish", async () => {
+                  // What the user typed last reaches the page before the turn resumes.
+                  await live.current?.drained()
+                  return hub.call(
+                    "thread.takeover.finish",
+                    profileName === "" ? ids : { ...ids, profile: profileName },
+                  )
+                })
+              }
+            >
+              {answering === "finish" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <FlagIcon data-icon="inline-start" />
+              )}
+              Finish
+            </Button>
+            <Button
+              variant="ghost"
+              className="ml-auto max-md:h-11"
+              disabled={busy}
+              onClick={() =>
+                void answer("stop", () =>
+                  client.call("thread.turn.interrupt", { thread_id: threadId }),
+                )
+              }
+            >
+              {answering === "stop" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CircleStopIcon data-icon="inline-start" />
+              )}
+              Stop the turn
+            </Button>
+          </div>
+        </CardFooter>
       </Card>
     </section>
   )

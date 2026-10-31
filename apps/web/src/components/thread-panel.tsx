@@ -1,10 +1,10 @@
-import type { Avatar as AvatarChoice, Client, Clock, InstanceClient } from "@kinby/contract"
+import type { Client, Clock, InstanceClient } from "@kinby/contract"
 import { useEffect, useRef, useSyncExternalStore } from "react"
 
 import { ApprovalCard } from "@/components/thread-approval"
 import { ThreadComposer } from "@/components/thread-composer"
 import { ThreadHeader } from "@/components/thread-header"
-import { TakeoverPanel } from "@/components/thread-takeover"
+import { TakeoverCard } from "@/components/thread-takeover"
 import { Transcript, TranscriptSkeleton } from "@/components/thread-transcript"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -24,7 +24,6 @@ export function ThreadPanel({
   instanceId,
   threadId,
   name,
-  avatar,
 }: {
   client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
   hub: Pick<Client, "call" | "subscribe">
@@ -34,10 +33,7 @@ export function ThreadPanel({
   threadId: string
   /** What the instance is called. */
   name: string
-  /** The instance's avatar, beside what it says. */
-  avatar: AvatarChoice
 }) {
-  const speaker = { name, avatar }
   const store = threadStore(client, threadId)
   useEffect(() => store.follow(), [store])
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
@@ -100,28 +96,30 @@ export function ThreadPanel({
                 />
               )
             }
+            takeoverCard={
+              latest !== undefined &&
+              takeover !== undefined && (
+                <TakeoverCard
+                  key={takeover.takeoverId}
+                  client={client}
+                  hub={hub}
+                  instanceId={instanceId}
+                  threadId={threadId}
+                  turnId={latest.turnId}
+                  takeover={takeover}
+                  name={name}
+                />
+              )
+            }
           />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
-            {latest !== undefined && takeover !== undefined ? (
-              <TakeoverPanel
-                key={takeover.takeoverId}
-                client={client}
-                hub={hub}
-                instanceId={instanceId}
-                threadId={threadId}
-                turnId={latest.turnId}
-                takeover={takeover}
-                speaker={speaker}
-              />
-            ) : (
-              <ThreadComposer
-                ref={composer}
-                client={client}
-                threadId={threadId}
-                name={name}
-                running={latest !== undefined && latest.end === undefined}
-              />
-            )}
+            <ThreadComposer
+              ref={composer}
+              client={client}
+              threadId={threadId}
+              name={name}
+              running={latest !== undefined && latest.end === undefined}
+            />
           </div>
         </>
       ) : (
