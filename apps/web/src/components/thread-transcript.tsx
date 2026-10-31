@@ -3,12 +3,12 @@ import { type ComponentProps, useEffect, useRef } from "react"
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
-import { InstanceAvatar } from "@/components/instance-avatar"
 import { RaisedNotification, ViewLine } from "@/components/thread-cards"
 import { EndMarker, RecapMarker } from "@/components/thread-markers"
 import { ToolRun } from "@/components/thread-tool-run"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
+import { Message, MessageContent } from "@/components/ui/message"
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -22,10 +22,16 @@ import { Skeleton } from "@/components/ui/skeleton"
 import type { Notifications } from "@/hooks/use-notifications"
 import { originLabel } from "@/lib/origin"
 import { navigate, useSelectedTurnId } from "@/lib/selection"
-import type { NotificationStep, ToolStep, TurnBlock, ViewStep } from "@/lib/timeline"
-import { FactoryIcon, HouseIcon, RepeatIcon, UserIcon, type LucideIcon } from "lucide-react"
+import {
+  localDay,
+  type NotificationStep,
+  type ToolStep,
+  type TurnBlock,
+  type ViewStep,
+} from "@/lib/timeline"
+import { FactoryIcon, HouseIcon, RepeatIcon, type LucideIcon } from "lucide-react"
 
-/** The instance as the transcript and the approval panel show it. */
+/** The instance as the approval and takeover panels show it. */
 export interface Speaker {
   name: string
   avatar: AvatarChoice
@@ -35,12 +41,10 @@ export function Transcript({
   turns,
   notifications,
   instanceId,
-  speaker,
 }: {
   turns: TurnBlock[]
   notifications: Notifications
   instanceId: string
-  speaker: Speaker
 }) {
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
@@ -53,13 +57,13 @@ export function Transcript({
       <MessageScroller className="my-6 flex-1">
         <MessageScrollerViewport>
           <MessageScrollerContent className="mx-auto w-full max-w-3xl">
-            {turns.map((turn) => (
+            {turns.map((turn, index) => (
               <MessageScrollerItem key={turn.turnId} messageId={turn.turnId} scrollAnchor>
                 <Turn
                   turn={turn}
+                  previous={turns[index - 1]}
                   notifications={notifications}
                   instanceId={instanceId}
-                  speaker={speaker}
                 />
               </MessageScrollerItem>
             ))}
@@ -91,7 +95,7 @@ function LinkedTurn({ turns }: { turns: TurnBlock[] }) {
   return null
 }
 
-/** What started a turn the user did not: the instance acting on its own, so it wears ember. */
+/** What started a turn the user did not: the instance acting on its own. */
 const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, LucideIcon> = {
   routine: RepeatIcon,
   "factory-run": FactoryIcon,
@@ -99,89 +103,77 @@ const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, 
 }
 
 /**
- * The user's request in a bubble on the right, or what started the turn on its own. Then the
- * instance beside its avatar: each reply in a tinted bubble, and the tool calls between replies as
- * one rail of steps.
+ * The day the turn starts on, when the turn before it started on another. Then the user's request
+ * in a bubble on the right, or a line naming what started the turn on its own. Then the
+ * instance's replies as prose across the column, and the tool calls between them as one rail of
+ * steps.
  */
 function Turn({
   turn,
+  previous,
   notifications,
   instanceId,
-  speaker,
 }: {
   turn: TurnBlock
+  previous: TurnBlock | undefined
   notifications: Notifications
   instanceId: string
-  speaker: Speaker
 }) {
   const { startedBy } = turn
-  const started = (
-    <>
-      {originLabel(startedBy)} · <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
-    </>
-  )
+  const thinking = turn.end === undefined && turn.steps.length === 0
   return (
     <div className="flex flex-col gap-4 px-6">
+      {turn.startedOn !== previous?.startedOn && (
+        <Marker variant="separator">
+          <MarkerContent>{dayLabel(turn)}</MarkerContent>
+        </Marker>
+      )}
       {startedBy.kind === "user" ? (
-        <div className="flex items-end justify-end gap-3">
-          <div className="flex min-w-0 flex-col items-end gap-1">
-            <p className="font-mono text-xs text-muted-foreground">{started}</p>
+        <Message align="end">
+          <MessageContent>
             <Bubble align="end" variant="secondary">
               <BubbleContent className="whitespace-pre-wrap">{turn.request}</BubbleContent>
             </Bubble>
-          </div>
-          <Avatar size="sm" aria-hidden>
-            <AvatarFallback>
-              <UserIcon className="size-3.5" />
-            </AvatarFallback>
-          </Avatar>
-        </div>
+          </MessageContent>
+        </Message>
       ) : (
         <div className="flex flex-col gap-2">
-          <p className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <StartedByNode kind={startedBy.kind} />
-            <span>{started}</span>
-          </p>
-          <p className="pl-7 text-sm whitespace-pre-wrap text-muted-foreground">{turn.request}</p>
+          <Marker>
+            <MarkerIcon>
+              <StartedByIcon kind={startedBy.kind} />
+            </MarkerIcon>
+            <MarkerContent>
+              {originLabel(startedBy)} ·{" "}
+              <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
+            </MarkerContent>
+          </Marker>
+          <p className="pl-6 text-sm whitespace-pre-wrap text-muted-foreground">{turn.request}</p>
         </div>
       )}
-      <div className="flex gap-3">
-        <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <p className="font-mono text-xs text-muted-foreground">{speaker.name}</p>
-          {railed(turn.steps).map((run) =>
-            run.kind === "text" ? (
-              <Bubble key={run.key} variant="outline">
-                <BubbleContent>
-                  <Reply text={run.text} />
-                </BubbleContent>
-              </Bubble>
-            ) : run.kind === "notification" ? (
-              <RaisedNotification key={run.key} step={run.step} notifications={notifications} />
-            ) : run.kind === "view" ? (
-              <ViewLine key={run.key} step={run.step} instanceId={instanceId} />
-            ) : (
-              <ToolRun key={run.key} steps={run.steps} approval={turn.approval} end={turn.end} />
-            ),
-          )}
-          <EndMarker turn={turn} />
-          {turn.recap !== undefined && <RecapMarker recap={turn.recap} instanceId={instanceId} />}
-        </div>
-      </div>
+      {railed(turn.steps).map((run) =>
+        run.kind === "text" ? (
+          <Reply key={run.key} text={run.text} />
+        ) : run.kind === "notification" ? (
+          <RaisedNotification key={run.key} step={run.step} notifications={notifications} />
+        ) : run.kind === "view" ? (
+          <ViewLine key={run.key} step={run.step} instanceId={instanceId} />
+        ) : (
+          <ToolRun key={run.key} steps={run.steps} approval={turn.approval} end={turn.end} />
+        ),
+      )}
+      {thinking ? (
+        <span className="shimmer text-sm text-muted-foreground">Thinking</span>
+      ) : (
+        <EndMarker turn={turn} />
+      )}
+      {turn.recap !== undefined && <RecapMarker recap={turn.recap} instanceId={instanceId} />}
     </div>
   )
 }
 
-function StartedByNode({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
+function StartedByIcon({ kind }: { kind: keyof typeof STARTED_BY_ICONS }) {
   const Icon = STARTED_BY_ICONS[kind]
-  return (
-    <span
-      aria-hidden
-      className="grid size-5 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
-    >
-      <Icon className="size-3" />
-    </span>
-  )
+  return <Icon />
 }
 
 type Run =
@@ -260,11 +252,24 @@ function ReplyLink({ href, title, children }: ComponentProps<"a"> & ExtraProps) 
   )
 }
 
-function startedAt(timestamp: string): string {
-  return new Date(timestamp).toLocaleString("en", {
+/** The day a turn started on, as its divider names it. */
+function dayLabel({ startedAt, startedOn }: TurnBlock): string {
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (startedOn === localDay(today.toISOString())) return "Today"
+  if (startedOn === localDay(yesterday.toISOString())) return "Yesterday"
+  return new Date(startedAt).toLocaleDateString("en", {
+    weekday: "short",
     day: "numeric",
     month: "short",
     year: "numeric",
+  })
+}
+
+/** The time a turn started, under the divider that names its day. */
+function startedAt(timestamp: string): string {
+  return new Date(timestamp).toLocaleTimeString("en", {
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",

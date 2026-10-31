@@ -86,7 +86,6 @@ export function ThreadPanel({
             turns={timeline.turns}
             notifications={notifications}
             instanceId={instanceId}
-            speaker={speaker}
           />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
             {/* Nothing else is sent while the turn waits on the user. */}
