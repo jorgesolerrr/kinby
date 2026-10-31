@@ -1,7 +1,7 @@
 import type { Avatar as AvatarChoice, Client, Clock, InstanceClient } from "@kinby/contract"
 import { useEffect, useRef, useSyncExternalStore } from "react"
 
-import { ApprovalPanel } from "@/components/thread-approval"
+import { ApprovalCard } from "@/components/thread-approval"
 import { ThreadComposer } from "@/components/thread-composer"
 import { ThreadHeader } from "@/components/thread-header"
 import { TakeoverPanel } from "@/components/thread-takeover"
@@ -45,17 +45,17 @@ export function ThreadPanel({
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
   const takeover = latest?.takeover
-  const reasonField = useRef<HTMLInputElement>(null)
-  const approvalPanel = useRef<HTMLElement>(null)
-  // A thread that opens on a parked approval has no composer to take focus, so its reason does.
+  const approvalCard = useRef<HTMLElement>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const approvalId = approval?.approvalId
+  // The card takes focus from the composer, but not from the title being renamed, when the thread
+  // opens on it or the turn parks on it. Once it is answered, focus goes back to the composer.
   useEffect(() => {
-    if (replayed) takeFocus(reasonField.current)
-  }, [replayed])
-  // An approval that parks later takes the composer's place, and focus falls to the page. The panel
-  // itself catches it, not a field in it, so keys typed for the composer cannot deny it.
-  useEffect(() => {
-    if (document.activeElement === document.body) approvalPanel.current?.focus()
-  }, [approval?.approvalId])
+    if (!replayed) return
+    if (approvalId === undefined) takeFocus(composer.current)
+    else if (document.activeElement === composer.current) approvalCard.current?.focus()
+    else takeFocus(approvalCard.current)
+  }, [replayed, approvalId])
 
   if (failure !== undefined) {
     return (
@@ -88,21 +88,21 @@ export function ThreadPanel({
             client={client}
             threadId={threadId}
             instanceId={instanceId}
+            approvalCard={
+              approval !== undefined && (
+                <ApprovalCard
+                  key={approval.approvalId}
+                  ref={approvalCard}
+                  client={client}
+                  threadId={threadId}
+                  approval={approval}
+                  routine={latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined}
+                />
+              )
+            }
           />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
-            {/* Nothing else is sent while the turn waits on the user. */}
-            {approval !== undefined ? (
-              <ApprovalPanel
-                key={approval.approvalId}
-                ref={approvalPanel}
-                reasonField={reasonField}
-                client={client}
-                threadId={threadId}
-                approval={approval}
-                routine={latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined}
-                speaker={speaker}
-              />
-            ) : latest !== undefined && takeover !== undefined ? (
+            {latest !== undefined && takeover !== undefined ? (
               <TakeoverPanel
                 key={takeover.takeoverId}
                 client={client}
@@ -115,6 +115,7 @@ export function ThreadPanel({
               />
             ) : (
               <ThreadComposer
+                ref={composer}
                 client={client}
                 threadId={threadId}
                 name={name}

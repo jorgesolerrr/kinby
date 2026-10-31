@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from "react"
 
 import { Field, FieldDescription, FieldError } from "@/components/ui/field"
 import {
@@ -17,6 +17,7 @@ import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
  * stops it too. Under the box, a note names `name`, the instance the message goes to.
  */
 export function Composer({
+  ref,
   label,
   placeholder,
   name,
@@ -28,6 +29,8 @@ export function Composer({
   onStop,
   children,
 }: {
+  /** The text area, for a page that moves focus back to it. */
+  ref?: Ref<HTMLTextAreaElement>
   label: string
   placeholder: string
   name: string | undefined
@@ -46,9 +49,10 @@ export function Composer({
   const [sending, setSending] = useState(false)
   const [sendFailure, setSendFailure] = useState<string>()
   const field = useRef<HTMLTextAreaElement>(null)
+  useImperativeHandle(ref, () => field.current as HTMLTextAreaElement, [])
   const text = message.trim()
-  // The composer shows when the app opens on the home screen, when a thread opens, and when an
-  // answered approval gives way to it.
+  // The composer shows when the app opens on the home screen, when a thread opens, and when a
+  // finished takeover gives way to it.
   useEffect(() => takeFocus(field.current), [])
 
   const send = async () => {
