@@ -9,8 +9,6 @@ import type {
   ViewChange,
 } from "@kinby/contract"
 
-type Payload = Event["payload"]
-
 /** A thread's turns as the transcript shows them, projected from its events in order. */
 export interface Timeline {
   /** The sequence of the last event projected. A subscription asks for what comes after it. */
@@ -106,7 +104,7 @@ export interface ViewStep {
 }
 
 export type TurnEnd =
-  | { kind: "done"; tokens: number }
+  | { kind: "done"; tokens: number; durationMs: number }
   | { kind: "failed"; code: ErrorCode; message: string }
   | { kind: "stopped" }
 
@@ -132,12 +130,12 @@ export function project(timeline: Timeline, event: Event): Timeline {
   return {
     sequence: event.sequence,
     turns: timeline.turns.map((turn) =>
-      turn.turnId === event.turn_id ? projectTurn(turn, payload, event.sequence) : turn,
+      turn.turnId === event.turn_id ? projectTurn(turn, event) : turn,
     ),
   }
 }
 
-function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): TurnBlock {
+function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Event): TurnBlock {
   // Answering an approval or finishing a takeover appends nothing, so the turn's next event is
   // what ends the wait. The notifications recorded while it waits leave it standing.
   const turn = payload.type.startsWith("notification.")
@@ -237,7 +235,14 @@ function projectTurn(previous: TurnBlock, payload: Payload, sequence: number): T
     }
     case "turn.completed":
       return settleApprovals(
-        { ...turn, end: { kind: "done", tokens: payload.input_tokens + payload.output_tokens } },
+        {
+          ...turn,
+          end: {
+            kind: "done",
+            tokens: payload.input_tokens + payload.output_tokens,
+            durationMs: Date.parse(timestamp) - Date.parse(turn.startedAt),
+          },
+        },
         "ended",
       )
     case "turn.failed":

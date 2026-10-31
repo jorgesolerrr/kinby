@@ -1,10 +1,10 @@
-import type { Avatar as AvatarChoice } from "@kinby/contract"
+import type { Avatar as AvatarChoice, InstanceClient } from "@kinby/contract"
 import { type ComponentProps, useEffect, useRef } from "react"
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
 import { RaisedNotification, ViewLine } from "@/components/thread-cards"
-import { EndMarker, RecapMarker } from "@/components/thread-markers"
+import { TurnEnd } from "@/components/thread-end"
 import { ToolRun } from "@/components/thread-tool-run"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
@@ -40,10 +40,14 @@ export interface Speaker {
 export function Transcript({
   turns,
   notifications,
+  client,
+  threadId,
   instanceId,
 }: {
   turns: TurnBlock[]
   notifications: Notifications
+  client: Pick<InstanceClient, "call">
+  threadId: string
   instanceId: string
 }) {
   return (
@@ -62,7 +66,10 @@ export function Transcript({
                 <Turn
                   turn={turn}
                   previous={turns[index - 1]}
+                  last={index === turns.length - 1}
                   notifications={notifications}
+                  client={client}
+                  threadId={threadId}
                   instanceId={instanceId}
                 />
               </MessageScrollerItem>
@@ -106,23 +113,29 @@ const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, 
  * The day the turn starts on, when the turn before it started on another. Then the user's request
  * in a bubble on the right, or a line naming what started the turn on its own. Then the
  * instance's replies as prose across the column, and the tool calls between them as one rail of
- * steps.
+ * steps. Then how the turn ended.
  */
 function Turn({
   turn,
   previous,
+  last,
   notifications,
+  client,
+  threadId,
   instanceId,
 }: {
   turn: TurnBlock
   previous: TurnBlock | undefined
+  last: boolean
   notifications: Notifications
+  client: Pick<InstanceClient, "call">
+  threadId: string
   instanceId: string
 }) {
   const { startedBy } = turn
   const thinking = turn.end === undefined && turn.steps.length === 0
   return (
-    <div className="flex flex-col gap-4 px-6">
+    <div className="group/turn flex flex-col gap-4 px-6">
       {turn.startedOn !== previous?.startedOn && (
         <Marker variant="separator">
           <MarkerContent>{dayLabel(turn)}</MarkerContent>
@@ -161,12 +174,14 @@ function Turn({
           <ToolRun key={run.key} steps={run.steps} approval={turn.approval} end={turn.end} />
         ),
       )}
-      {thinking ? (
-        <span className="shimmer text-sm text-muted-foreground">Thinking</span>
-      ) : (
-        <EndMarker turn={turn} />
-      )}
-      {turn.recap !== undefined && <RecapMarker recap={turn.recap} instanceId={instanceId} />}
+      {thinking && <span className="shimmer text-sm text-muted-foreground">Thinking</span>}
+      <TurnEnd
+        turn={turn}
+        last={last}
+        client={client}
+        threadId={threadId}
+        instanceId={instanceId}
+      />
     </div>
   )
 }

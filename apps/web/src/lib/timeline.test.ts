@@ -33,7 +33,7 @@ describe("a thread's timeline", () => {
   beforeAll(() => vi.stubEnv("TZ", "America/New_York"))
   afterAll(() => vi.unstubAllEnvs())
 
-  it("shows a completed turn as its request, its text and tool steps in order, and done with its tokens", () => {
+  it("shows a completed turn as its request, its text and tool steps in order, and done with its tokens and how long it took", () => {
     const timeline = replay([
       "turn-1",
       started("Fix the runtime"),
@@ -88,7 +88,7 @@ describe("a thread's timeline", () => {
             },
             { kind: "text", text: "Done." },
           ],
-          end: { kind: "done", tokens: 1_500 },
+          end: { kind: "done", tokens: 1_500, durationMs: 8_000 },
         },
       ],
     })
@@ -334,7 +334,7 @@ describe("a thread's timeline", () => {
     it("is none on a completed turn until it reports", () => {
       const [turn] = replay(["turn-1", started("Fix the runtime"), completed]).turns
 
-      expect(turn?.end).toEqual({ kind: "done", tokens: 100 })
+      expect(turn?.end).toEqual({ kind: "done", tokens: 100, durationMs: 1_000 })
       expect(turn?.recap).toBeUndefined()
     })
 
