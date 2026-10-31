@@ -111,6 +111,21 @@ describe("a waiting takeover", () => {
     )
   })
 
+  it("scrolls the page under the live view, and not the thread around it", async () => {
+    const { toHub } = await openParked()
+
+    const scrolled = fireEvent.wheel(screen.getByRole("application", { name: "The browser" }), {
+      deltaY: 120,
+    })
+
+    expect(scrolled).toBe(false)
+    await waitFor(() =>
+      expect(toHub().map((call) => call.params)).toEqual([
+        { ...turn, input: { type: "wheel", delta_x: 0, delta_y: 120 } },
+      ]),
+    )
+  })
+
   it("finishes only once the input sent before Finish reached the browser", async () => {
     let delivered = () => {}
     const answers = stubCaller({
