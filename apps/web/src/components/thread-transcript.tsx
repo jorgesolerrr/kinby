@@ -4,7 +4,7 @@ import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
-import { NotificationCard, ViewChangedCard } from "@/components/thread-cards"
+import { RaisedNotification, ViewLine } from "@/components/thread-cards"
 import { EndMarker, RecapMarker } from "@/components/thread-markers"
 import { ToolRun } from "@/components/thread-tool-run"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -157,9 +157,9 @@ function Turn({
                 </BubbleContent>
               </Bubble>
             ) : run.kind === "notification" ? (
-              <NotificationCard key={run.key} step={run.step} notifications={notifications} />
+              <RaisedNotification key={run.key} step={run.step} notifications={notifications} />
             ) : run.kind === "view" ? (
-              <ViewChangedCard key={run.key} step={run.step} instanceId={instanceId} />
+              <ViewLine key={run.key} step={run.step} instanceId={instanceId} />
             ) : (
               <ToolRun key={run.key} steps={run.steps} approval={turn.approval} end={turn.end} />
             ),
