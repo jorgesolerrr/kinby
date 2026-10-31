@@ -4,7 +4,7 @@ import { act, fireEvent, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
-import { instanceClient, openThread, started, thread } from "@/components/thread-testing"
+import { instanceClient, openThread, started, thread, traceLine } from "@/components/thread-testing"
 import { threadList } from "@/lib/thread-list"
 
 describe("a thread's panel", () => {
@@ -364,7 +364,8 @@ describe("a thread's panel", () => {
       }
 
       await act(async () => subscription().deliver(stopped))
-      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+      await userEvent.click(traceLine("Used bash"))
+      expect(within(traceLine("bash make deploy")).getByText("not run")).toBeDefined()
 
       unmount()
       const reopened = openThread()
@@ -372,7 +373,8 @@ describe("a thread's panel", () => {
         reopened.subscription().subscribed(stopped.sequence)
         for (const event of [...parked, stopped]) reopened.subscription().deliver(event)
       })
-      expect(screen.getByText("bash make deploy · not run, turn stopped")).toBeDefined()
+      await userEvent.click(traceLine("Used bash"))
+      expect(within(traceLine("bash make deploy")).getByText("not run")).toBeDefined()
     })
 
     it("marks the call as not run when the turn fails", async () => {
@@ -388,7 +390,8 @@ describe("a thread's panel", () => {
         }),
       )
 
-      expect(screen.getByText("bash make deploy · not run, turn failed")).toBeDefined()
+      await userEvent.click(traceLine("Used bash"))
+      expect(within(traceLine("bash make deploy")).getByText("not run")).toBeDefined()
     })
 
     /** The event that moves the turn on once the user denied a1 for `reason`. */
@@ -415,9 +418,8 @@ describe("a thread's panel", () => {
 
       expect(screen.queryByRole("region", { name: "Approve bash make deploy?" })).toBeNull()
       expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
-      expect(
-        screen.getByText("bash make deploy · denied by you: Use staging instead"),
-      ).toBeDefined()
+      await userEvent.click(traceLine("Used bash"))
+      expect(within(traceLine("bash make deploy")).getByText("denied by you")).toBeDefined()
     })
 
     it("returns focus to the composer once the answered approval clears", async () => {

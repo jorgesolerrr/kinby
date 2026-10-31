@@ -1,8 +1,8 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
 
-import { openThread, type Payload, started, thread } from "@/components/thread-testing"
+import { openThread, type Payload, started, thread, traceLine } from "@/components/thread-testing"
 
 describe("a thread's panel", () => {
   it("marks who started each turn, each tool call's main argument and gate decision, and how the turn ended", async () => {
@@ -83,17 +83,23 @@ describe("a thread's panel", () => {
     })
 
     for (const marker of [
-      "read runtime.py · 38 ms",
-      "write notes.md · denied by policy: read-only mode denies writes",
-      "edit runtime.py · approved by you · running",
       "Done · 3 steps · 1,500 tokens",
       "Failed: The steps budget ran out. (BUDGET_EXCEEDED). Send a message to try again.",
       "Stopped",
-      "read deploy.log · running",
-      "bash make deploy · waiting for you",
       "Working",
     ]) {
       expect(screen.getByText(marker)).toBeDefined()
+    }
+    await userEvent.click(traceLine("Used 3 tools"))
+    await userEvent.click(traceLine("Waiting for you to approve bash"))
+    for (const [line, decision] of [
+      ["read runtime.py", "38 ms"],
+      ["write notes.md", "denied by policy"],
+      ["edit runtime.py", "approved by you · running"],
+      ["read deploy.log", "running"],
+      ["bash make deploy", "waiting for you"],
+    ]) {
+      expect(within(traceLine(line)).getByText(decision)).toBeDefined()
     }
     expect(screen.getAllByText(/^You ·/)).toHaveLength(3)
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()

@@ -1,6 +1,6 @@
 import type { Event, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
-import { render } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 
 import { ThreadPanel } from "@/components/thread-panel"
 
@@ -84,4 +84,9 @@ export function threadSummary(fields: Partial<ThreadSummary> = {}): ThreadSummar
     origin: { kind: "user" },
     ...fields,
   }
+}
+
+/** The line of a tool run, or of a call in an unfolded run, that starts with `words`. */
+export function traceLine(words: string): HTMLElement {
+  return screen.getByRole("button", { name: (name) => name.startsWith(words) })
 }

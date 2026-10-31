@@ -101,7 +101,7 @@ const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, 
 /**
  * The user's request in a bubble on the right, or what started the turn on its own. Then the
  * instance beside its avatar: each reply in a tinted bubble, and the tool calls between replies as
- * one rail of steps.
+ * one line in words.
  */
 function Turn({
   turn,
@@ -149,7 +149,7 @@ function Turn({
         <InstanceAvatar avatar={speaker.avatar} name={speaker.name} />
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <p className="font-mono text-xs text-muted-foreground">{speaker.name}</p>
-          {railed(turn.steps).map((run) =>
+          {grouped(turn.steps).map((run) =>
             run.kind === "text" ? (
               <Bubble key={run.key} variant="outline">
                 <BubbleContent>
@@ -188,10 +188,10 @@ type Run =
   | { kind: "text"; key: string; text: string }
   | { kind: "notification"; key: string; step: NotificationStep }
   | { kind: "view"; key: string; step: ViewStep }
-  | { kind: "rail"; key: string; steps: ToolStep[] }
+  | { kind: "tools"; key: string; steps: ToolStep[] }
 
-/** A turn's steps with each stretch of consecutive tool calls gathered into one rail. */
-function railed(steps: TurnBlock["steps"]): Run[] {
+/** A turn's steps with each stretch of consecutive tool calls gathered into one run. */
+function grouped(steps: TurnBlock["steps"]): Run[] {
   const runs: Run[] = []
   steps.forEach((step, index) => {
     const last = runs.at(-1)
@@ -199,8 +199,8 @@ function railed(steps: TurnBlock["steps"]): Run[] {
     else if (step.kind === "notification")
       runs.push({ kind: "notification", key: `notification-${step.raised}`, step })
     else if (step.kind === "view") runs.push({ kind: "view", key: `view-${index}`, step })
-    else if (last?.kind === "rail") last.steps.push(step)
-    else runs.push({ kind: "rail", key: step.callId, steps: [step] })
+    else if (last?.kind === "tools") last.steps.push(step)
+    else runs.push({ kind: "tools", key: step.callId, steps: [step] })
   })
   return runs
 }

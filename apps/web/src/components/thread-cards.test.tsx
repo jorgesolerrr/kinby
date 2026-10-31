@@ -4,7 +4,14 @@ import { act, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
-import { hubClient, openThread, type Payload, started, thread } from "@/components/thread-testing"
+import {
+  hubClient,
+  openThread,
+  type Payload,
+  started,
+  thread,
+  traceLine,
+} from "@/components/thread-testing"
 
 describe("a thread's panel", () => {
   describe("a notification", () => {
@@ -260,7 +267,10 @@ describe("a thread's panel", () => {
 
         expect(screen.getByText("Approval waiting · Delivered · Approved")).toBeDefined()
         expect(screen.queryByRole("article", { name: "Approval waiting" })).toBeNull()
-        expect(screen.getByText("bash make deploy · approved by you · running")).toBeDefined()
+        await userEvent.click(traceLine("Running bash make deploy"))
+        expect(
+          within(traceLine("bash make deploy")).getByText("approved by you · running"),
+        ).toBeDefined()
       })
 
       it("shows as a line once the turn ends before the approval is answered", async () => {
