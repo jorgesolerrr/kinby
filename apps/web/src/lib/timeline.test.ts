@@ -1,5 +1,5 @@
 import type { Event, NotificationRaised } from "@kinby/contract"
-import { describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
 import { EMPTY_TIMELINE, project, type Timeline } from "@/lib/timeline"
 
@@ -29,6 +29,10 @@ const started = (message: string): Payload => ({
 })
 
 describe("a thread's timeline", () => {
+  // The browser's time zone, four hours behind UTC in the autumn.
+  beforeAll(() => vi.stubEnv("TZ", "America/New_York"))
+  afterAll(() => vi.unstubAllEnvs())
+
   it("shows a completed turn as its request, its text and tool steps in order, and done with its tokens", () => {
     const timeline = replay([
       "turn-1",
@@ -70,6 +74,7 @@ describe("a thread's timeline", () => {
           turnId: "turn-1",
           startedBy: { kind: "user" },
           startedAt: "2026-09-28T10:00:00Z",
+          startedOn: "2026-09-28",
           request: "Fix the runtime",
           steps: [
             { kind: "text", text: "Let me look first." },
@@ -212,6 +217,63 @@ describe("a thread's timeline", () => {
     ]).turns
 
     expect(turn?.startedBy).toEqual({ kind: "factory-run", factory: "software", step: "review" })
+  })
+
+  it("starts each turn on its day in the browser's time zone, though both share a UTC date", () => {
+    const [before, after] = [
+      ["turn-1", "2026-09-29T03:59:00Z"],
+      ["turn-2", "2026-09-29T04:01:00Z"],
+    ]
+      .map(([turnId, timestamp], index): Event => ({
+        sequence: index + 1,
+        thread_id: "t1",
+        turn_id: turnId,
+        timestamp,
+        payload: started("Morning"),
+      }))
+      .reduce(project, EMPTY_TIMELINE).turns
+
+    expect(before?.startedOn).toBe("2026-09-28")
+    expect(after?.startedOn).toBe("2026-09-29")
+  })
+
+  describe("a turn's rating", () => {
+    const completed: Payload = { type: "turn.completed", input_tokens: 90, output_tokens: 10 }
+
+    it("is none while nobody rated the turn", () => {
+      const [turn] = replay(["turn-1", started("Fix the runtime"), completed]).turns
+
+      expect(turn?.rating).toBeUndefined()
+    })
+
+    it("is the latest verdict on the turn", () => {
+      const [turn] = replay([
+        "turn-1",
+        started("Fix the runtime"),
+        completed,
+        { type: "turn.rated", verdict: "good" },
+        { type: "turn.rated", verdict: "bad", reason: "It broke the build" },
+      ]).turns
+
+      expect(turn?.rating).toBe("bad")
+    })
+
+    it("lands on its own turn when it arrives after the next turn has started", () => {
+      const live = project(
+        replay(["turn-1", started("Fix the runtime"), completed], ["turn-2", started("Thanks")]),
+        {
+          sequence: 4,
+          thread_id: "t1",
+          turn_id: "turn-1",
+          timestamp: "2026-09-28T10:05:00Z",
+          payload: { type: "turn.rated", verdict: "good" },
+        },
+      )
+
+      const [first, second] = live.turns
+      expect(first?.rating).toBe("good")
+      expect(second?.rating).toBeUndefined()
+    })
   })
 
   describe("a turn's recap", () => {
