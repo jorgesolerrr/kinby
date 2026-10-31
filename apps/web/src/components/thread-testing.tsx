@@ -1,4 +1,4 @@
-import type { Event, ThreadSummary } from "@kinby/contract"
+import type { Event, InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { render, screen } from "@testing-library/react"
 
@@ -23,13 +23,14 @@ export function hubClient(answers: Answers = {}) {
 
 /**
  * Open thread t1 of Ada's instance, from a client that answers from `answers`, with a hub that
- * answers from `hub`, on `clock`.
+ * answers from `hub`, on `clock`, while the hub reports `notices` about the instance.
  */
 export function openThread(
   answers: Answers = {},
   client = instanceClient(answers),
   hub = hubClient(),
   clock = fakeClock(),
+  notices: InstanceSummary["notices"] = [],
 ) {
   const rendered = render(
     <ThreadPanel
@@ -39,6 +40,7 @@ export function openThread(
       instanceId="hub-ada"
       threadId="t1"
       name="Ada"
+      notices={notices}
     />,
   )
   const subscription = () => {

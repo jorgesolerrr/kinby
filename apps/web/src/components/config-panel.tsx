@@ -38,7 +38,7 @@ import { lastChanged } from "@/lib/config-changes"
 import { behind, OlderCore } from "@/lib/older-core"
 import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
-import { leaveLink, linkedCore } from "@/lib/selection"
+import { type ConfigLink, leaveLink, linkedSection } from "@/lib/selection"
 import {
   CpuIcon,
   FileTextIcon,
@@ -179,6 +179,9 @@ const GROUPS: { label: string; sections: Section[] }[] = [
 const SECTIONS = GROUPS.flatMap((group) => group.sections)
 const PERMISSIONS = "Permissions"
 
+/** The section each link opens, by its label. */
+const LINKED: Record<ConfigLink, string> = { core: CORE, skills: "Skills" }
+
 function available(label: string): boolean {
   return SECTIONS.some((section) => section.label === label && section.render !== undefined)
 }
@@ -211,7 +214,10 @@ export function ConfigPanel({
   instance: InstanceSummary
   onChanged: () => void
 }) {
-  const [selected, setSelected] = useState(() => (linkedCore() ? CORE : "Behavior prompt"))
+  const [selected, setSelected] = useState(() => {
+    const linked = linkedSection()
+    return linked === undefined ? "Behavior prompt" : LINKED[linked]
+  })
   const instanceId = instance.instance_id
   const open = (label: string) => {
     setSelected(label)

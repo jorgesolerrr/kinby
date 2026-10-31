@@ -11,6 +11,22 @@ export const INSTANCE_TABS: { id: InstanceTab; label: string }[] = [
   { id: "stats", label: "Stats" },
 ]
 
+export type InstanceNotice = InstanceSummary["notices"][number]
+
+const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
+  revision_behind: "Behind the hub",
+  template_behind: "Behind the factory",
+  hub_route_missing: "No hub route",
+  mcp_server_failed: "MCP server failed",
+}
+
+/** What a notice the hub reports about an instance is called. A failed MCP server is named. */
+export function noticeTitle(notice: InstanceNotice): string {
+  return notice.code === "mcp_server_failed"
+    ? `MCP server ${notice.server} failed`
+    : NOTICE_TITLES[notice.code]
+}
+
 /** The persona name the user gave the instance, or its manifest id when it has none. */
 export function instanceName(instance: InstanceSummary): string {
   return instance.persona_name ?? instance.manifest_id

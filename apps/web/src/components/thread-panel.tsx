@@ -1,4 +1,4 @@
-import type { Client, Clock, InstanceClient } from "@kinby/contract"
+import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/contract"
 import { useEffect, useRef, useSyncExternalStore } from "react"
 
 import { ApprovalCard } from "@/components/thread-approval"
@@ -10,12 +10,26 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { useNotifications } from "@/hooks/use-notifications"
 import { takeFocus } from "@/lib/focus"
+import { type InstanceNotice, noticeTitle } from "@/lib/instances"
+import { openCore, openSkills } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
-import { CircleAlertIcon } from "lucide-react"
+import { CircleAlertIcon, TriangleAlertIcon } from "lucide-react"
+
+/** Where each notice is answered: an update in Core version, or the MCP server's pick in Skills. */
+const ANSWERS: Record<
+  InstanceNotice["code"],
+  { label: string; open: (instanceId: string) => void }
+> = {
+  revision_behind: { label: "Update", open: openCore },
+  template_behind: { label: "Update", open: openCore },
+  hub_route_missing: { label: "Update", open: openCore },
+  mcp_server_failed: { label: "Skills", open: openSkills },
+}
 
 /**
  * A thread's turns as a timeline, followed live once its history has loaded. The hub tells how
  * each notification the thread raised was delivered, and takes the user's answer to its options.
+ * Each of the instance's `notices` shows above the composer.
  */
 export function ThreadPanel({
   client,
@@ -24,6 +38,7 @@ export function ThreadPanel({
   instanceId,
   threadId,
   name,
+  notices,
 }: {
   client: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange">
   hub: Pick<Client, "call" | "subscribe">
@@ -33,6 +48,7 @@ export function ThreadPanel({
   threadId: string
   /** What the instance is called. */
   name: string
+  notices: InstanceSummary["notices"]
 }) {
   const store = threadStore(client, threadId)
   useEffect(() => store.follow(), [store])
@@ -112,7 +128,14 @@ export function ThreadPanel({
               )
             }
           />
-          <div className="mx-auto w-full max-w-3xl px-6 pb-6">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6">
+            {notices.map((notice) => (
+              <Notice
+                key={`${notice.code} ${notice.message}`}
+                notice={notice}
+                instanceId={instanceId}
+              />
+            ))}
             <ThreadComposer
               ref={composer}
               client={client}
@@ -126,5 +149,21 @@ export function ThreadPanel({
         <TranscriptSkeleton />
       )}
     </div>
+  )
+}
+
+function Notice({ notice, instanceId }: { notice: InstanceNotice; instanceId: string }) {
+  const { label, open } = ANSWERS[notice.code]
+  return (
+    <Alert>
+      <TriangleAlertIcon />
+      <AlertTitle>{noticeTitle(notice)}</AlertTitle>
+      <AlertDescription className="wrap-anywhere">{notice.message}</AlertDescription>
+      <AlertAction>
+        <Button size="xs" variant="outline" onClick={() => open(instanceId)}>
+          {label}
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }

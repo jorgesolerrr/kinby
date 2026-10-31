@@ -10,6 +10,7 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/comp
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFollowing } from "@/hooks/use-following"
+import { type InstanceNotice, noticeTitle } from "@/lib/instances"
 import { followUpdate, type Updating } from "@/lib/update"
 import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
 
@@ -17,15 +18,6 @@ import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
 type Target = "hub" | "ref"
 
 const TARGETS: Record<Target, string> = { hub: "The hub's revision", ref: "Another ref" }
-
-type InstanceNotice = InstanceSummary["notices"][number]
-
-const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
-  revision_behind: "Behind the hub",
-  template_behind: "Behind the factory",
-  hub_route_missing: "No hub route",
-  mcp_server_failed: "MCP server failed",
-}
 
 /**
  * The kinby revision the instance runs, what the hub says about it, and "Update core".
@@ -60,7 +52,7 @@ function Notice({ notice }: { notice: InstanceNotice }) {
   return (
     <Alert aria-labelledby={titleId}>
       <TriangleAlertIcon />
-      <AlertTitle id={titleId}>{NOTICE_TITLES[notice.code]}</AlertTitle>
+      <AlertTitle id={titleId}>{noticeTitle(notice)}</AlertTitle>
       <AlertDescription>{notice.message}</AlertDescription>
     </Alert>
   )
