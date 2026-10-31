@@ -1,4 +1,4 @@
-import type { Event } from "@kinby/contract"
+import type { Event, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { render } from "@testing-library/react"
 
@@ -69,3 +69,19 @@ export const started = (message: string): Payload => ({
   model: "claude",
   origin: { kind: "user" },
 })
+
+/** Thread t1 as its instance lists it. */
+export function threadSummary(fields: Partial<ThreadSummary> = {}): ThreadSummary {
+  return {
+    id: "t1",
+    title: "Deploy notes",
+    created_at: "2026-09-27T10:00:00Z",
+    last_activity_at: "2026-09-27T10:00:00Z",
+    status: "idle",
+    mode: "ask",
+    mode_pinned: false,
+    archived: false,
+    origin: { kind: "user" },
+    ...fields,
+  }
+}

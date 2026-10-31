@@ -1,36 +1,20 @@
-import type { InstanceClient, PermissionMode, ThreadSummary } from "@kinby/contract"
+import type { InstanceClient, ThreadSummary } from "@kinby/contract"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import { ArchiveButton } from "@/components/archive-button"
 import { Button } from "@/components/ui/button"
 import { Field, FieldError } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { useListedThread } from "@/hooks/use-listed-thread"
 import { reason } from "@/lib/operation"
-import { threadList, threadTitle } from "@/lib/thread-list"
+import { threadTitle } from "@/lib/thread-list"
 import { PencilIcon } from "lucide-react"
 
-/** Every mode, from the least the instance may do to the most. */
-const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
-  { mode: "read-only", label: "Read-only", hint: "Writes are denied" },
-  { mode: "ask", label: "Ask", hint: "Writes wait for you" },
-  { mode: "auto", label: "Auto", hint: "Writes run, the denylist still applies" },
-  { mode: "full-access", label: "Full access", hint: "Everything runs" },
-]
-
 /**
- * The thread's title, which a click renames, the mode it runs in, and archive or unarchive. They
- * come from the sidebar's thread list, or from the instance's full list for a thread outside it, so
- * an archived thread keeps its header. Every kept list is read again after each change so the
- * sidebar shows it too.
+ * The thread's title, which a click renames, and archive or unarchive. They come from the sidebar's
+ * thread list, or from the instance's full list for a thread outside it, so an archived thread
+ * keeps its header. Every kept list is read again after each change so the sidebar shows it too.
  */
 export function ThreadHeader({
   client,
@@ -40,24 +24,18 @@ export function ThreadHeader({
   threadId: string
 }) {
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const sidebar = threadList(client, "sidebar")
-  const all = threadList(client, "all")
-  const inSidebar = useSyncExternalStore(sidebar.onChange, sidebar.view)
-  const inAll = useSyncExternalStore(all.onChange, all.view)
-  const outside =
-    inSidebar !== undefined && !inSidebar.threads.some((summary) => summary.id === threadId)
-  const [threads, listed] = outside ? [all, inAll] : [sidebar, inSidebar]
-  const thread = listed?.threads.find((summary) => summary.id === threadId)
+  const { threads, thread } = useListedThread(client, threadId)
   const missing = thread === undefined
   const [failure, setFailure] = useState<string>()
   // The sidebar lists the threads, but at phone width it is closed and nothing does. The client
   // refuses a call before its socket is up, so the header waits for it. A header that cannot list
-  // the threads stays empty, and the transcript under it does not depend on it.
+  // the threads stays empty, and the transcript under it does not depend on it. The composer's mode
+  // waits on the same list.
   useEffect(() => {
     if (connected && missing) threads.list().catch(() => {})
   }, [threads, threadId, connected, missing])
 
-  if (listed === undefined || thread === undefined) return null
+  if (thread === undefined) return null
   /** Make a change, then list the threads again. Resolves to whether the instance took it. */
   const change = async (call: () => Promise<unknown>) => {
     try {
@@ -84,13 +62,6 @@ export function ThreadHeader({
             invalid={failure !== undefined}
             onRename={(title) =>
               change(() => client.call("thread.rename", { thread_id: threadId, title }))
-            }
-          />
-          <ModePicker
-            mode={thread.mode}
-            ceiling={listed.ceiling}
-            onPick={(mode) =>
-              change(() => client.call("thread.mode.set", { thread_id: threadId, mode }))
             }
           />
           <ArchiveButton
@@ -190,53 +161,5 @@ function ThreadTitle({
       />
       {renaming && <Spinner aria-label="Renaming" />}
     </>
-  )
-}
-
-/** The instance refuses a mode above its ceiling, so the picker disables each one and says why. */
-function ModePicker({
-  mode,
-  ceiling,
-  onPick,
-}: {
-  mode: PermissionMode
-  ceiling: PermissionMode
-  onPick: (mode: PermissionMode) => Promise<boolean>
-}) {
-  const [changing, setChanging] = useState(false)
-  const allowed = MODES.findIndex((entry) => entry.mode === ceiling)
-  const pick = async (picked: PermissionMode) => {
-    setChanging(true)
-    await onPick(picked)
-    setChanging(false)
-  }
-  return (
-    <Select<PermissionMode>
-      value={mode}
-      // A disabled trigger drops focus, and a read-only one keeps it and refuses the next pick.
-      readOnly={changing}
-      onValueChange={(picked) => picked !== null && picked !== mode && void pick(picked)}
-    >
-      <SelectTrigger size="sm" aria-label="Mode" className="shrink-0">
-        <SelectValue>
-          {(value: PermissionMode) => MODES.find((entry) => entry.mode === value)?.label}
-        </SelectValue>
-        {changing && <Spinner aria-label="Changing the mode" />}
-      </SelectTrigger>
-      <SelectContent align="end" alignItemWithTrigger={false} className="w-auto">
-        <SelectGroup>
-          {MODES.map((entry, index) => (
-            <SelectItem key={entry.mode} value={entry.mode} disabled={index > allowed}>
-              <span className="flex flex-col">
-                {entry.label}
-                <span className="text-xs text-muted-foreground">
-                  {index > allowed ? "Above the ceiling. Raise it in Configure." : entry.hint}
-                </span>
-              </span>
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
   )
 }
