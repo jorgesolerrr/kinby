@@ -32,7 +32,7 @@ export function openThread(
   clock = fakeClock(),
   notices: InstanceSummary["notices"] = [],
 ) {
-  const rendered = render(
+  const panel = (reported: InstanceSummary["notices"]) => (
     <ThreadPanel
       client={client}
       hub={hub}
@@ -40,9 +40,12 @@ export function openThread(
       instanceId="hub-ada"
       threadId="t1"
       name="Ada"
-      notices={notices}
-    />,
+      notices={reported}
+    />
   )
+  const rendered = render(panel(notices))
+  /** List the instance again, now reporting `reported`. */
+  const relist = (reported: InstanceSummary["notices"]) => rendered.rerender(panel(reported))
   const subscription = () => {
     const latest = client.subscriptions.at(-1)
     if (latest === undefined) throw new Error("The panel did not subscribe.")
@@ -50,7 +53,7 @@ export function openThread(
   }
   /** What the panel called besides the header listing the threads. */
   const sent = () => client.calls.filter((call) => call.method !== "thread.list")
-  return { client, sent, subscription, unmount: rendered.unmount }
+  return { client, relist, sent, subscription, unmount: rendered.unmount }
 }
 
 /** The thread's events, numbered from 1 in the order given. */

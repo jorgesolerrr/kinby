@@ -27,6 +27,12 @@ export function noticeTitle(notice: InstanceNotice): string {
     : NOTICE_TITLES[notice.code]
 }
 
+/** What tells notices apart, as the hub does: a failed MCP server by its name as well. */
+export function noticeKey(notice: InstanceNotice): string {
+  const key = `${notice.code} ${notice.message}`
+  return notice.code === "mcp_server_failed" ? `${key} ${notice.server}` : key
+}
+
 /** The persona name the user gave the instance, or its manifest id when it has none. */
 export function instanceName(instance: InstanceSummary): string {
   return instance.persona_name ?? instance.manifest_id

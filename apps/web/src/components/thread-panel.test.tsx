@@ -79,6 +79,26 @@ describe("a thread's panel", () => {
       expect(window.location.pathname).toBe("/instances/hub-ada/config/skills")
     })
 
+    it("keeps one alert for each failed MCP server, even when two failed alike", async () => {
+      const failed = (server: string) => ({
+        code: "mcp_server_failed" as const,
+        message: "uvx exited with code 1.",
+        server,
+      })
+      const { relist, subscription } = openThread({}, undefined, undefined, undefined, [
+        { code: "hub_route_missing", message: "The instance cannot reach the hub." },
+        failed("github"),
+        failed("slack"),
+      ])
+      await act(async () => subscription().subscribed(0))
+
+      relist([failed("slack")])
+
+      expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
+        expect.stringContaining("MCP server slack failed"),
+      ])
+    })
+
     it("shows nothing above the composer when the instance has none", async () => {
       const { subscription } = openThread()
       await act(async () => subscription().subscribed(0))

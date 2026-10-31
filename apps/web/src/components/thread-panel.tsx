@@ -10,7 +10,7 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { useNotifications } from "@/hooks/use-notifications"
 import { takeFocus } from "@/lib/focus"
-import { type InstanceNotice, noticeTitle } from "@/lib/instances"
+import { type InstanceNotice, noticeKey, noticeTitle } from "@/lib/instances"
 import { openCore, openSkills } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
 import { CircleAlertIcon, TriangleAlertIcon } from "lucide-react"
@@ -130,11 +130,7 @@ export function ThreadPanel({
           />
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6">
             {notices.map((notice) => (
-              <Notice
-                key={`${notice.code} ${notice.message}`}
-                notice={notice}
-                instanceId={instanceId}
-              />
+              <Notice key={noticeKey(notice)} notice={notice} instanceId={instanceId} />
             ))}
             <ThreadComposer
               ref={composer}

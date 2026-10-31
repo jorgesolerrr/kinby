@@ -10,7 +10,7 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/comp
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFollowing } from "@/hooks/use-following"
-import { type InstanceNotice, noticeTitle } from "@/lib/instances"
+import { type InstanceNotice, noticeKey, noticeTitle } from "@/lib/instances"
 import { followUpdate, type Updating } from "@/lib/update"
 import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
 
@@ -37,7 +37,7 @@ export function CoreSection({
   return (
     <div className="flex max-w-2xl flex-col gap-6">
       {instance.notices.map((notice) => (
-        <Notice key={`${notice.code} ${notice.message}`} notice={notice} />
+        <Notice key={noticeKey(notice)} notice={notice} />
       ))}
       <ItemGroup aria-label="Core version">
         <Fact label="kinby">{instance.source_revision.slice(0, 7)}</Fact>
