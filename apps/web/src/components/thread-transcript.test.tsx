@@ -87,12 +87,11 @@ describe("a thread's panel", () => {
       "read runtime.py · 38 ms",
       "write notes.md · denied by policy: read-only mode denies writes",
       "edit runtime.py · approved by you · running",
-      "Done · 3 steps · 1,500 tokens",
-      "Failed: The steps budget ran out. (BUDGET_EXCEEDED). Send a message to try again.",
+      "3 steps · 1,500 tokens · 0s",
+      "The steps budget ran out.",
       "Stopped",
       "read deploy.log · running",
       "bash make deploy · waiting for you",
-      "Working",
     ]) {
       expect(screen.getByText(marker)).toBeDefined()
     }

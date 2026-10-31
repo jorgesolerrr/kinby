@@ -85,6 +85,8 @@ export function ThreadPanel({
           <Transcript
             turns={timeline.turns}
             notifications={notifications}
+            client={client}
+            threadId={threadId}
             instanceId={instanceId}
           />
           <div className="mx-auto w-full max-w-3xl px-6 pb-6">
