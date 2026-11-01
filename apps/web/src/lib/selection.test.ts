@@ -2,11 +2,13 @@ import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import {
+  closePane,
   closeSettings,
   homePath,
   landOn,
   linkedNode,
   linkedRoutine,
+  openPane,
   openSettings,
   openTab,
   replaceOldPath,
@@ -16,6 +18,7 @@ import {
   selectTurn,
   turnPath,
   useInstanceTab,
+  useOpenPane,
   useSelectedInstanceId,
   useSelectedThreadId,
   useSelectedTurnId,
@@ -186,6 +189,61 @@ describe("the open Settings section", () => {
 
     expect(window.location.pathname).toBe("/instances/hub-kinby/threads/t2")
     expect(settings().current).toBe("usage")
+  })
+})
+
+describe("the pane open beside a thread", () => {
+  const pane = () => renderHook(() => useOpenPane()).result
+  const thread = "/instances/hub-ada/threads/t1"
+
+  it("comes back from the URL, over the thread that is open", () => {
+    window.history.replaceState(null, "", `${thread}?pane=takeover`)
+
+    expect(pane().current).toBe("takeover")
+    expect(selection().current.threadId).toBe("t1")
+  })
+
+  it("is none when the URL names no pane, or one the thread does not have", () => {
+    window.history.replaceState(null, "", thread)
+    expect(pane().current).toBeUndefined()
+
+    window.history.replaceState(null, "", `${thread}?pane=canvas`)
+    expect(pane().current).toBeUndefined()
+  })
+
+  it("opens as one new history entry, keeping the thread and the Settings dialog", () => {
+    window.history.replaceState(null, "", `${thread}?settings=usage`)
+    const entries = window.history.length
+    const open = pane()
+
+    act(() => openPane("takeover"))
+
+    expect(window.history.length).toBe(entries + 1)
+    expect(open.current).toBe("takeover")
+    expect(window.location.pathname).toBe(thread)
+    expect(new URLSearchParams(window.location.search).get("settings")).toBe("usage")
+  })
+
+  it("closes by dropping the parameter and keeping the thread, in the same history entry", () => {
+    window.history.replaceState(null, "", `${thread}?pane=takeover`)
+    const entries = window.history.length
+    const open = pane()
+
+    act(() => closePane())
+
+    expect(window.history.length).toBe(entries)
+    expect(open.current).toBeUndefined()
+    expect(window.location.pathname).toBe(thread)
+    expect(window.location.search).toBe("")
+  })
+
+  it("closes when another thread opens", () => {
+    window.history.replaceState(null, "", `${thread}?pane=takeover`)
+    const open = pane()
+
+    act(() => selectThread("hub-ada", "t2"))
+
+    expect(open.current).toBeUndefined()
   })
 })
 

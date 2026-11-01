@@ -4,16 +4,17 @@ import { useEffect, useRef, useSyncExternalStore } from "react"
 import { ApprovalCard } from "@/components/thread-approval"
 import { ThreadComposer } from "@/components/thread-composer"
 import { ThreadHeader } from "@/components/thread-header"
-import { TakeoverCard } from "@/components/thread-takeover"
+import { ThreadSplit } from "@/components/thread-pane"
+import { TakeoverCard, TakeoverPane } from "@/components/thread-takeover"
 import { Transcript, TranscriptSkeleton } from "@/components/thread-transcript"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { useNotifications } from "@/hooks/use-notifications"
 import { takeFocus } from "@/lib/focus"
 import { type InstanceNotice, noticeKey, noticeTitle } from "@/lib/instances"
-import { openCore, openSkills } from "@/lib/selection"
+import { closePane, openCore, openPane, openSkills, useOpenPane } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
-import { CircleAlertIcon, TriangleAlertIcon } from "lucide-react"
+import { CircleAlertIcon, GlobeIcon, TriangleAlertIcon } from "lucide-react"
 
 /** Where each notice is answered: an update in Core version, or the MCP server's pick in Skills. */
 const ANSWERS: Record<
@@ -29,7 +30,8 @@ const ANSWERS: Record<
 /**
  * A thread's turns as a timeline, followed live once its history has loaded. The hub tells how
  * each notification the thread raised was delivered, and takes the user's answer to its options.
- * Each of the instance's `notices` shows above the composer.
+ * Each of the instance's `notices` shows above the composer. The pane the URL names opens beside
+ * the thread while what it holds lasts: the browser, while the turn is parked on a takeover.
  */
 export function ThreadPanel({
   client,
@@ -81,6 +83,11 @@ export function ThreadPanel({
     focusCard(0)
     return () => cancelAnimationFrame(frame)
   }, [replayed, approvalId])
+  const pane = useOpenPane()
+  const parkedOnTakeover = takeover !== undefined
+  useEffect(() => {
+    if (replayed && pane === "takeover" && !parkedOnTakeover) closePane()
+  }, [replayed, pane, parkedOnTakeover])
 
   if (failure !== undefined) {
     return (
@@ -102,33 +109,16 @@ export function ThreadPanel({
     )
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <ThreadHeader client={client} threadId={threadId} />
-      {/* Half a history must not pass for all of it. */}
-      {replayed ? (
-        <>
-          <Transcript
-            turns={timeline.turns}
-            notifications={notifications}
-            client={client}
-            threadId={threadId}
-            instanceId={instanceId}
-            approvalCard={
-              approval !== undefined && (
-                <ApprovalCard
-                  key={approval.approvalId}
-                  ref={approvalCard}
-                  client={client}
-                  threadId={threadId}
-                  approval={approval}
-                  routine={latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined}
-                />
-              )
-            }
-            takeoverCard={
-              latest !== undefined &&
-              takeover !== undefined && (
-                <TakeoverCard
+    <ThreadSplit
+      onClose={closePane}
+      pane={
+        replayed && pane === "takeover" && latest !== undefined && takeover !== undefined
+          ? {
+              icon: GlobeIcon,
+              title: takeover.site ?? "The browser",
+              status: `${name} is waiting on you`,
+              body: (
+                <TakeoverPane
                   key={takeover.takeoverId}
                   client={client}
                   hub={hub}
@@ -138,26 +128,72 @@ export function ThreadPanel({
                   takeover={takeover}
                   name={name}
                 />
-              )
+              ),
             }
-          />
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6">
-            {notices.map((notice) => (
-              <Notice key={noticeKey(notice)} notice={notice} instanceId={instanceId} />
-            ))}
-            <ThreadComposer
-              ref={composer}
-              client={client}
-              threadId={threadId}
-              name={name}
-              running={latest !== undefined && latest.end === undefined}
-            />
-          </div>
-        </>
-      ) : (
-        <TranscriptSkeleton />
-      )}
-    </div>
+          : undefined
+      }
+      thread={
+        <div className="flex min-h-0 flex-1 flex-col">
+          <ThreadHeader client={client} threadId={threadId} />
+          {/* Half a history must not pass for all of it. */}
+          {replayed ? (
+            <>
+              <Transcript
+                turns={timeline.turns}
+                notifications={notifications}
+                client={client}
+                threadId={threadId}
+                instanceId={instanceId}
+                approvalCard={
+                  approval !== undefined && (
+                    <ApprovalCard
+                      key={approval.approvalId}
+                      ref={approvalCard}
+                      client={client}
+                      threadId={threadId}
+                      approval={approval}
+                      routine={
+                        latest?.startedBy.kind === "routine" ? latest.startedBy.name : undefined
+                      }
+                    />
+                  )
+                }
+                takeoverCard={
+                  latest !== undefined &&
+                  takeover !== undefined && (
+                    <TakeoverCard
+                      key={takeover.takeoverId}
+                      client={client}
+                      threadId={threadId}
+                      takeover={takeover}
+                      name={name}
+                      paneOpen={pane === "takeover"}
+                      onOpen={() => {
+                        if (pane !== "takeover") openPane("takeover")
+                      }}
+                    />
+                  )
+                }
+              />
+              <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6">
+                {notices.map((notice) => (
+                  <Notice key={noticeKey(notice)} notice={notice} instanceId={instanceId} />
+                ))}
+                <ThreadComposer
+                  ref={composer}
+                  client={client}
+                  threadId={threadId}
+                  name={name}
+                  running={latest !== undefined && latest.end === undefined}
+                />
+              </div>
+            </>
+          ) : (
+            <TranscriptSkeleton />
+          )}
+        </div>
+      }
+    />
   )
 }
 
