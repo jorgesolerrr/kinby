@@ -1,6 +1,6 @@
 import type { Client, Clock, HubSecret, HubSecretLink, HubSecretSetCommand } from "@kinby/contract"
 import { CircleXIcon, KeyRoundIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
-import { type FormEvent, useCallback, useId, useState } from "react"
+import { type FormEvent, type ReactNode, useCallback, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { SectionFrame } from "@/components/section-frame"
@@ -51,13 +51,16 @@ function linkedTo(links: HubSecretLink[]): string {
   return links.map((link) => `${link.manifest_id} · ${link.field}`).join(", ")
 }
 
+/** What a form saves with: the section's one save, whether it is under way, and why it failed. */
+type Setting = Pick<ReturnType<typeof useSetSecret>, "save" | "saving" | "failed">
+
 /** A form's first field takes the focus when the form opens. */
 const focus = (input: HTMLInputElement | null) => input?.focus()
 
 /**
  * The hub secrets by name with the instances linked to them, one row each. Add secret opens a form
- * at the top of the list, and a row's Replace a form under it, one form at a time. No value is
- * ever read back.
+ * at the top of the list, and a row's Replace a form under it, one form at a time. The section
+ * follows the save, and opens no other form until it ends. No value is ever read back.
  */
 export function HubSecretsSection({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(async () => {
@@ -74,7 +77,15 @@ export function HubSecretsSection({ client, clock }: { client: Caller; clock: Cl
   }, [client])
   const { value: listed, failure, readAgain } = useRead(list, clock)
   const [open, setOpen] = useState<Open>()
-  const close = useCallback(() => setOpen(undefined), [])
+  const saved = useCallback(() => {
+    setOpen(undefined)
+    readAgain()
+  }, [readAgain])
+  const { forget, ...setting } = useSetSecret(client, clock, saved)
+  const show = (form?: Open) => {
+    forget()
+    setOpen(form)
+  }
   const adding = open?.form === "add"
   const replacing = open?.form === "replace" ? open.name : undefined
 
@@ -83,13 +94,13 @@ export function HubSecretsSection({ client, clock }: { client: Caller; clock: Cl
       title="Hub secrets"
       lead="Values the hub keeps so you set them once. It never shows one back."
       actions={
-        <Button size="sm" disabled={adding} onClick={() => setOpen({ form: "add" })}>
+        <Button size="sm" disabled={adding || setting.saving} onClick={() => show({ form: "add" })}>
           <PlusIcon data-icon="inline-start" />
           Add secret
         </Button>
       }
     >
-      {adding && <AddForm caller={client} clock={clock} onDone={close} onAdded={readAgain} />}
+      {adding && <AddForm {...setting} onCancel={() => show()} />}
       {failure !== undefined && <Failure error={failure} />}
       {listed === undefined ? (
         failure === undefined && <Skeleton className="h-48 w-full" />
@@ -114,14 +125,21 @@ export function HubSecretsSection({ client, clock }: { client: Caller; clock: Cl
             <SecretRow
               key={secret.name}
               caller={client}
-              clock={clock}
               secret={secret}
-              running={listed.running}
               replacing={replacing === secret.name}
-              onReplace={() => setOpen({ form: "replace", name: secret.name })}
-              onClose={close}
+              locked={setting.saving}
+              onReplace={() =>
+                show(replacing === secret.name ? undefined : { form: "replace", name: secret.name })
+              }
               onChanged={readAgain}
-            />
+            >
+              <ReplaceForm
+                {...setting}
+                secret={secret}
+                running={listed.running}
+                onCancel={() => show()}
+              />
+            </SecretRow>
           ))}
         </ul>
       )}
@@ -152,33 +170,20 @@ function useSetSecret(caller: Caller, clock: Clock, onSaved: () => void) {
     [caller, clock, onSaved],
   )
   const followed = useFollowing(request, follow)
+  const forget = useCallback(() => setRequest(undefined), [])
   return {
     save: setRequest,
     saving: request !== undefined && followed?.state !== "failed",
     failed: followed?.state === "failed" ? followed.detail : undefined,
+    forget,
   }
 }
 
 /** A new secret's name and value, at the top of the list. */
-function AddForm({
-  caller,
-  clock,
-  onDone,
-  onAdded,
-}: {
-  caller: Caller
-  clock: Clock
-  onDone: () => void
-  onAdded: () => void
-}) {
+function AddForm({ save, saving, failed, onCancel }: Setting & { onCancel: () => void }) {
   const id = useId()
   const [name, setName] = useState("")
   const [value, setValue] = useState("")
-  const added = useCallback(() => {
-    onDone()
-    onAdded()
-  }, [onDone, onAdded])
-  const { save, saving, failed } = useSetSecret(caller, clock, added)
 
   const add = (event: FormEvent) => {
     event.preventDefault()
@@ -220,7 +225,7 @@ function AddForm({
         </Field>
       </div>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" disabled={saving} onClick={onDone}>
+        <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
         <Button type="submit" disabled={saving || name.trim() === "" || value === ""}>
@@ -234,26 +239,25 @@ function AddForm({
 
 /**
  * A secret's row: its name, the instances linked to it with their fields, Replace, and a menu with
- * Delete. Replace unfolds its form under the row, and a failed delete says why there.
+ * Delete. Replace unfolds the row's form, `children`, under it, and a failed delete says why there.
+ * A locked row opens nothing.
  */
 function SecretRow({
   caller,
-  clock,
   secret,
-  running,
   replacing,
+  locked,
   onReplace,
-  onClose,
   onChanged,
+  children,
 }: {
   caller: Caller
-  clock: Clock
   secret: HubSecret
-  running: ReadonlySet<string>
   replacing: boolean
+  locked: boolean
   onReplace: () => void
-  onClose: () => void
   onChanged: () => void
+  children: ReactNode
 }) {
   const { name, links = [] } = secret
   const [asking, setAsking] = useState(false)
@@ -293,7 +297,8 @@ function SecretRow({
             variant="outline"
             size="sm"
             aria-expanded={replacing}
-            onClick={replacing ? onClose : onReplace}
+            disabled={locked}
+            onClick={onReplace}
           >
             Replace
           </Button>
@@ -317,18 +322,7 @@ function SecretRow({
             </DropdownMenuContent>
           </DropdownMenu>
         </ItemActions>
-        {replacing && (
-          <ItemFooter>
-            <ReplaceForm
-              caller={caller}
-              clock={clock}
-              secret={secret}
-              running={running}
-              onDone={onClose}
-              onSet={onChanged}
-            />
-          </ItemFooter>
-        )}
+        {replacing && <ItemFooter>{children}</ItemFooter>}
         {failure !== undefined && (
           <ItemFooter>
             <Alert variant="destructive">
@@ -372,29 +366,21 @@ function SecretRow({
  * name. The value leaves the page once the hub holds it.
  */
 function ReplaceForm({
-  caller,
-  clock,
+  save,
+  saving,
+  failed,
   secret,
   running,
-  onDone,
-  onSet,
-}: {
-  caller: Caller
-  clock: Clock
+  onCancel,
+}: Setting & {
   secret: HubSecret
   running: ReadonlySet<string>
-  onDone: () => void
-  onSet: () => void
+  onCancel: () => void
 }) {
   const id = useId()
   const { name, links = [] } = secret
   const [value, setValue] = useState("")
   const [recreating, setRecreating] = useState(true)
-  const saved = useCallback(() => {
-    onDone()
-    onSet()
-  }, [onDone, onSet])
-  const { save, saving, failed } = useSetSecret(caller, clock, saved)
   const runningLinked = new Map(
     links
       .filter((link) => running.has(link.instance_id))
@@ -440,7 +426,7 @@ function ReplaceForm({
         </Field>
       )}
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" disabled={saving} onClick={onDone}>
+        <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
         <Button type="submit" disabled={saving || value === ""}>

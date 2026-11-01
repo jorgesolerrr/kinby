@@ -27,9 +27,11 @@ const reviewer = instanceSummary({
 
 /**
  * A section over hub secrets the stub keeps by name, which sets and deletes change. The running
- * coder and the stopped reviewer link GITHUB_TOKEN.
+ * coder and the stopped reviewer link GITHUB_TOKEN. Each save ends as `outcome`, which `settle`
+ * changes.
  */
 function openPage(outcome: OperationGetResult = succeeded, answers: Answers = {}) {
+  let ending = outcome
   let names = ["GITHUB_TOKEN", "OPENAI_API_KEY"]
   const links = (name: string): HubSecretLink[] =>
     name === "GITHUB_TOKEN"
@@ -43,18 +45,22 @@ function openPage(outcome: OperationGetResult = succeeded, answers: Answers = {}
     "hub.secret.list": () => ({ secrets: names.map((name) => ({ name, links: links(name) })) }),
     "instance.list": () => ({ instances: [coder, reviewer] }),
     "hub.secret.set": ({ name }) => {
-      if (outcome.state === "succeeded" && !names.includes(name)) names = [...names, name].sort()
-      return { operation_id: outcome.operation_id }
+      if (ending.state !== "failed" && !names.includes(name)) names = [...names, name].sort()
+      return { operation_id: ending.operation_id }
     },
-    "operation.get": () => outcome,
+    "operation.get": () => ending,
     "hub.secret.delete": ({ name }) => {
       names = names.filter((each) => each !== name)
       return { unlinked: links(name) }
     },
     ...answers,
   })
-  render(<HubSecretsSection client={caller} clock={fakeClock()} />)
-  return { caller, user: userEvent.setup() }
+  const clock = fakeClock()
+  render(<HubSecretsSection client={caller} clock={clock} />)
+  const settle = (next: OperationGetResult) => {
+    ending = next
+  }
+  return { caller, clock, settle, user: userEvent.setup() }
 }
 
 type User = ReturnType<typeof userEvent.setup>
@@ -283,6 +289,50 @@ describe("HubSecretsSection", () => {
       ),
     )
     expect(writes(caller)).toHaveLength(1)
+  })
+
+  it("follows an add to its end, opening no other form meanwhile", async () => {
+    const { caller, clock, settle, user } = openPage({ ...succeeded, state: "running" })
+
+    const form = await adding(user)
+    await user.type(form.getByLabelText("Name"), "NEW_TOKEN")
+    await user.type(form.getByLabelText("Value"), "value")
+    await user.click(form.getByRole("button", { name: "Add secret" }))
+    await waitFor(() => expect(writes(caller)).toHaveLength(1))
+    for (const replace of screen.getAllByRole("button", { name: "Replace" })) {
+      expect(replace.hasAttribute("disabled")).toBe(true)
+    }
+    settle(succeeded)
+    await act(() => clock.advance(60_000))
+
+    await waitFor(() => expect(addForm()).toBeNull())
+    expect(await listedNames()).toEqual(["GITHUB_TOKEN", "NEW_TOKEN", "OPENAI_API_KEY"])
+  })
+
+  it("opens no other form while a replace saves", async () => {
+    const { caller, user } = openPage({ ...succeeded, state: "running" })
+
+    const form = await replacing(user, "GITHUB_TOKEN")
+    await user.click(form.getByRole("button", { name: "Save" }))
+    await waitFor(() => expect(writes(caller)).toHaveLength(1))
+
+    expect(headerAdd().hasAttribute("disabled")).toBe(true)
+    for (const replace of screen.getAllByRole("button", { name: "Replace" })) {
+      expect(replace.hasAttribute("disabled")).toBe(true)
+    }
+  })
+
+  it("leaves why a save failed with its form", async () => {
+    const { user } = openPage({ ...succeeded, state: "failed", detail: "no space left on device" })
+
+    const form = await adding(user)
+    await user.type(form.getByLabelText("Name"), "NEW_TOKEN")
+    await user.type(form.getByLabelText("Value"), "value")
+    await user.click(form.getByRole("button", { name: "Add secret" }))
+    await form.findByText("no space left on device")
+    await replacing(user, "GITHUB_TOKEN")
+
+    expect(screen.queryByText("no space left on device")).toBeNull()
   })
 
   it("keeps one form open at a time", async () => {
