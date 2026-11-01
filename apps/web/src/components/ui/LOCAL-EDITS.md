@@ -31,7 +31,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
 - **dialog**: the content's `lg` size, a wide and tall flex column with no padding or gap, for a dialog that lays out its own body, as Settings does.
 - **empty**: the title at `text-base`, on the section title scale.
-- **input-group**: the textarea's `prompt` variant, and an addon click focuses a textarea as well as an input.
+- **input-group**: the group's `raised` variant, a card with a shadow for the composer, and an addon click focuses a textarea as well as an input.
 - **item**: the description's `lines` variant.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).

@@ -1,6 +1,6 @@
 import { CallError, type Event } from "@kinby/contract"
 import type { Answers } from "@kinby/contract/testing"
-import { act, fireEvent, screen, within } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -127,6 +127,26 @@ describe("a thread's panel", () => {
       await reopenParked()
 
       expect(document.activeElement).toBe(card())
+    })
+
+    it("takes focus once the transcript shows, when the thread opens on it hidden", async () => {
+      // The message scroller hides the transcript until it has scrolled to where the thread opens.
+      let hidden = true
+      const own = Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility")
+      Object.defineProperty(Element.prototype, "checkVisibility", {
+        configurable: true,
+        value: () => !hidden,
+      })
+      try {
+        await reopenParked()
+        expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message Ada" }))
+
+        hidden = false
+        await waitFor(() => expect(document.activeElement).toBe(card()))
+      } finally {
+        if (own === undefined) Reflect.deleteProperty(Element.prototype, "checkVisibility")
+        else Object.defineProperty(Element.prototype, "checkVisibility", own)
+      }
     })
 
     /** The instance's thread list, so the header shows t1's title. */

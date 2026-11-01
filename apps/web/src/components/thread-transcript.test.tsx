@@ -83,7 +83,7 @@ describe("a thread's panel", () => {
       for (const event of events) subscription().deliver(event)
     })
 
-    for (const marker of ["3 steps · 1,500 tokens · 0s", "The steps budget ran out.", "Stopped"]) {
+    for (const marker of ["3 steps · 1.5k tokens · 0s", "The steps budget ran out.", "Stopped"]) {
       expect(screen.getByText(marker)).toBeDefined()
     }
     await userEvent.click(traceLine("Used 3 tools"))

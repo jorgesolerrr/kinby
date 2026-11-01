@@ -76,10 +76,9 @@ export function Composer({
   return (
     <Field data-invalid={sendFailure !== undefined || failure !== undefined || undefined}>
       {/* A long draft scrolls in the box instead of pushing the transcript away. */}
-      <InputGroup>
+      <InputGroup variant="raised">
         <InputGroupTextarea
           ref={field}
-          variant="prompt"
           className="max-h-48 min-h-14"
           aria-label={label}
           placeholder={placeholder}
