@@ -7,14 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import App from "@/App"
 
-// jsdom lays nothing out, so it has no ResizeObserver or scrollIntoView, and the search palette calls
-// both. The stubs stay in this file: with a ResizeObserver, the chart tests' charts never draw.
+// jsdom has no ResizeObserver, and the search palette calls it. The stub stays in this file: with a
+// ResizeObserver, the chart tests' charts never draw.
 window.ResizeObserver = class {
   observe() {}
   unobserve() {}
   disconnect() {}
 }
-Element.prototype.scrollIntoView = () => {}
 
 function openApp({
   signedIn,
