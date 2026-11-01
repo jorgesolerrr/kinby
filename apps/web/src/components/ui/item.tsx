@@ -140,6 +140,7 @@ const itemDescriptionVariants = cva(
   {
     variants: {
       lines: {
+        one: "truncate",
         two: "line-clamp-2",
         all: "",
       },

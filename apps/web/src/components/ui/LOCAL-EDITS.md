@@ -35,7 +35,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **empty**: the title at `text-base`, on the section title scale.
 - **input-group**: the group's `raised` variant, a card with a shadow for the composer, and an addon click focuses a textarea as well as an input.
 - **input**: the `mono` variant, in the mono font, for a hub secret's name and Discord's URL.
-- **item**: the description's `lines` variant.
+- **item**: the description's `lines` variant: `one` truncates to a line, as a hub secret's links, `two` clamps to two, `all` shows every line.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).
 - **progress**: as the registry has it, for Usage's plan meters.
