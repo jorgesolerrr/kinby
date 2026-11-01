@@ -219,6 +219,8 @@ export interface StubSubscription {
   deliver(item: Item<SubscriptionMethod>): void
   /** The hub ends the subscription with an error frame. */
   fail(error: CallError): void
+  /** The hub ends the subscription. */
+  end(): void
 }
 
 export interface StubSubscriber extends Pick<Client, "subscribe"> {
@@ -253,6 +255,7 @@ export function stubSubscriber(): StubSubscriber {
           wake()
         },
         fail: end,
+        end: () => end(),
       }
       subscriptions.push(subscription)
       async function* read(): AsyncGenerator<Item<typeof method>, void> {

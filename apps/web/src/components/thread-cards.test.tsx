@@ -1,8 +1,8 @@
-import type { Notification, NotificationRaised, ViewChange } from "@kinby/contract"
+import type { Notification, NotificationRaised, View, ViewChange } from "@kinby/contract"
 import { type Answers, fakeClock } from "@kinby/contract/testing"
 import { act, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 import {
   hubClient,
@@ -348,26 +348,105 @@ describe("a thread's panel", () => {
       expect(screen.queryByRole("link")).toBeNull()
     })
 
-    it("opens the view's page from its line, as a new history entry", async () => {
-      window.history.replaceState(null, "", "/instances/hub-ada/threads/t1")
-      const events = thread(
-        ["turn-1", started("Track my applications")],
-        ["turn-1", changed("applications", "Job board", "created")],
-      )
-      const { subscription } = openThread()
-      await act(async () => {
-        subscription().subscribed(events.length)
-        for (const event of events) subscription().deliver(event)
+    describe("its pane", () => {
+      afterEach(() => window.history.replaceState(null, "", "/"))
+
+      const threadPath = "/instances/hub-ada/threads/t1"
+      const viewPath = "/instances/hub-ada/views/applications"
+      const snapshot = (note: string, updated_at = "2026-10-25T09:30:00Z"): View => ({
+        id: "applications",
+        title: "Job board",
+        updated_at,
+        spec: { components: [{ id: "root", component: "Text", text: { path: "/note" } }] },
+        data: { note },
       })
-      const link = screen.getByRole("link", { name: "Created the view Job board" })
-      const entries = window.history.length
 
-      await userEvent.click(link)
+      /** Open the thread whose turn created the view, at `url`. */
+      async function openWritten(url = threadPath) {
+        window.history.replaceState(null, "", url)
+        const events = thread(
+          ["turn-1", started("Track my applications")],
+          ["turn-1", changed("applications", "Job board", "created")],
+        )
+        const panel = openThread()
+        // The thread's subscription comes first, and the view's once the pane opens.
+        const [turns] = panel.client.subscriptions
+        await act(async () => {
+          turns.subscribed(events.length)
+          for (const event of events) turns.deliver(event)
+        })
+        /** The pane's following of the view, once it opens. */
+        const following = () => {
+          const view = panel.client.subscriptions.find(({ method }) => method === "view.subscribe")
+          if (view === undefined) throw new Error("The pane is not following the view.")
+          return view
+        }
+        return { following }
+      }
 
-      const view = "/instances/hub-ada/views/applications"
-      expect(link.getAttribute("href")).toBe(view)
-      expect(window.location.pathname).toBe(view)
-      expect(window.history.length).toBe(entries + 1)
+      const marker = () => screen.getByRole("link", { name: "Created the view Job board" })
+      const pane = () => screen.getByRole("region", { name: "Job board" })
+
+      it("opens from the view's line, which still links to the view's page", async () => {
+        const { following } = await openWritten()
+        const entries = window.history.length
+
+        await userEvent.click(marker())
+        await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
+
+        expect(marker().getAttribute("href")).toBe(viewPath)
+        expect(window.location.pathname).toBe(threadPath)
+        expect(new URLSearchParams(window.location.search).get("pane")).toBe("view.applications")
+        expect(window.history.length).toBe(entries + 1)
+        expect(following().params).toEqual({ id: "applications" })
+        expect(pane().textContent).toContain("Changed Oct 25, 2026")
+        expect(pane().textContent).toContain("Acme: interview on Monday.")
+      })
+
+      it("follows the view: a new snapshot shows, and an ended subscription shows it deleted", async () => {
+        const { following } = await openWritten()
+        await userEvent.click(marker())
+        await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
+
+        await act(async () => following().deliver(snapshot("Acme: offer.", "2026-10-26T08:00:00Z")))
+        expect(pane().textContent).toContain("Acme: offer.")
+        expect(pane().textContent).toContain("Changed Oct 26, 2026")
+
+        await act(async () => following().end())
+        expect(await screen.findByText("This view was deleted")).toBeDefined()
+        expect(screen.queryByText("Acme: offer.")).toBeNull()
+      })
+
+      it("opens the view's page from its header", async () => {
+        const { following } = await openWritten()
+        await userEvent.click(marker())
+        await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
+
+        await userEvent.click(within(pane()).getByRole("button", { name: "Open as a page" }))
+
+        expect(window.location.pathname).toBe(viewPath)
+        expect(window.location.search).toBe("")
+      })
+
+      it("closes and stops following the view", async () => {
+        const { following } = await openWritten()
+        await userEvent.click(marker())
+        await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
+
+        await userEvent.click(within(pane()).getByRole("button", { name: "Close" }))
+
+        expect(screen.queryByRole("region", { name: "Job board" })).toBeNull()
+        expect(following().cancelled).toBe(true)
+        expect(window.location.search).toBe("")
+      })
+
+      it("shows when the thread opens with it in the URL", async () => {
+        const { following } = await openWritten(`${threadPath}?pane=view.applications`)
+
+        await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
+
+        expect(pane().textContent).toContain("Acme: interview on Monday.")
+      })
     })
   })
 })

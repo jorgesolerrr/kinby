@@ -22,15 +22,19 @@ describe("a waiting takeover", () => {
     name: "browser_open",
     arguments: { url: "https://www.linkedin.com/login" },
   }
-  const parked = thread(
-    ["turn-1", started("Check LinkedIn")],
-    ["turn-1", browserOpen],
-    [
-      "turn-1",
-      { type: "tool.call", call_id: "c1", name: "browser_takeover", arguments: { reason } },
-    ],
-    ["turn-1", { type: "takeover.requested", takeover_id: "k1", reason }],
-  )
+  /** Turn turn-1, parked on takeover k1 after doing `earlier`. */
+  const parkedAfter = (...earlier: Payload[]) =>
+    thread(
+      ["turn-1", started("Check LinkedIn")],
+      ...earlier.map((payload): [string, Payload] => ["turn-1", payload]),
+      ["turn-1", browserOpen],
+      [
+        "turn-1",
+        { type: "tool.call", call_id: "c1", name: "browser_takeover", arguments: { reason } },
+      ],
+      ["turn-1", { type: "takeover.requested", takeover_id: "k1", reason }],
+    )
+  const parked = parkedAfter()
   const turn = { instance_id: "hub-ada", turn_id: "turn-1" }
   const takeover = { ...turn, thread_id: "t1", takeover_id: "k1" }
   const interrupted = () => ({ sequence: 4, thread_id: "t1", turn_id: "turn-1" })
@@ -67,8 +71,8 @@ describe("a waiting takeover", () => {
    * Open the parked thread with its takeover's pane, and the live view's subscription on the hub,
    * which keeps the page.
    */
-  async function openInPane() {
-    const opened = await openParked()
+  async function openInPane(events = parked) {
+    const opened = await openParked(events)
     await userEvent.setup().click(within(card()).getByRole("button", { name: "Open linkedin.com" }))
     const view = opened.liveView()
     if (view === undefined) throw new Error("The pane did not start the live view.")
@@ -152,6 +156,24 @@ describe("a waiting takeover", () => {
 
     expect(pane()).toBeNull()
     expect(window.location.search).toBe("")
+  })
+
+  it("gives the pane to a view opened from the thread, and the takeover still waits", async () => {
+    const wrote: Payload = {
+      type: "view.changed",
+      view: "applications",
+      title: "Job board",
+      change: "changed",
+    }
+    const { view, toHub } = await openInPane(parkedAfter(wrote))
+
+    await userEvent.setup().click(screen.getByRole("link", { name: "Changed the view Job board" }))
+
+    expect(pane()).toBeNull()
+    expect(view.cancelled).toBe(true)
+    expect(toHub()).toEqual([])
+    expect(within(card()).getByRole("button", { name: "Open linkedin.com" })).toBeDefined()
+    expect(new URLSearchParams(window.location.search).get("pane")).toBe("view.applications")
   })
 
   it("hides the thread beside the pane, and the same button brings it back", async () => {

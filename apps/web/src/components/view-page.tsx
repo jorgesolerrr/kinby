@@ -1,6 +1,6 @@
-import { CallError, type InstanceClient, type View } from "@kinby/contract"
+import type { InstanceClient } from "@kinby/contract"
 import { EllipsisIcon, Trash2Icon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import {
@@ -22,6 +22,7 @@ import {
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ViewRenderer } from "@/components/view-renderer"
+import { type FollowedView, useView } from "@/hooks/use-view"
 import { when } from "@/lib/config-changes"
 import { landOn } from "@/lib/selection"
 
@@ -40,32 +41,7 @@ export function ViewPage({
   instanceId: string
   viewId: string
 }) {
-  const [{ view, failure, deleted }, setShown] = useState<{
-    view?: View
-    failure?: unknown
-    deleted?: boolean
-  }>({})
-  useEffect(() => {
-    const snapshots = client.subscribe("view.subscribe", { id: viewId })
-    let following = true
-    const read = async () => {
-      try {
-        for await (const snapshot of snapshots) {
-          if (following) setShown({ view: snapshot })
-        }
-        if (following) setShown({ deleted: true })
-      } catch (error) {
-        if (!following) return
-        if (error instanceof CallError && error.code === "NOT_FOUND") setShown({ deleted: true })
-        else setShown((last) => ({ view: last.view, failure: error }))
-      }
-    }
-    void read()
-    return () => {
-      following = false
-      snapshots.cancel()
-    }
-  }, [client, viewId])
+  const { view, failure, deleted } = useView(client, viewId)
   const [asking, setAsking] = useState(false)
   const [refusal, setRefusal] = useState<unknown>()
   const remove = async () => {
@@ -77,18 +53,7 @@ export function ViewPage({
     }
   }
 
-  if (deleted) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <Trash2Icon />
-          </EmptyMedia>
-          <EmptyTitle>This view was deleted</EmptyTitle>
-        </EmptyHeader>
-      </Empty>
-    )
-  }
+  if (deleted) return <Deleted />
   return (
     <div className="flex max-w-4xl flex-col gap-6 p-6">
       {failure !== undefined && <Failure error={failure} />}
@@ -138,5 +103,33 @@ export function ViewPage({
         </>
       )}
     </div>
+  )
+}
+
+/** A view followed in the pane beside a thread: the view, scrolling inside the pane. */
+export function ViewPane({ followed: { view, failure, deleted } }: { followed: FollowedView }) {
+  if (deleted) return <Deleted />
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+      {failure !== undefined && <Failure error={failure} />}
+      {view === undefined ? (
+        failure === undefined && <Skeleton className="h-72 w-full" />
+      ) : (
+        <ViewRenderer view={view} />
+      )}
+    </div>
+  )
+}
+
+function Deleted() {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Trash2Icon />
+        </EmptyMedia>
+        <EmptyTitle>This view was deleted</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   )
 }

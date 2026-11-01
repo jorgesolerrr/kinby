@@ -9,7 +9,7 @@ import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Spinner } from "@/components/ui/spinner"
 import type { Notifications } from "@/hooks/use-notifications"
 import { reason } from "@/lib/operation"
-import { openView, viewPath } from "@/lib/selection"
+import { openPane, viewPath } from "@/lib/selection"
 import type { NotificationStep, ViewStep } from "@/lib/timeline"
 import { BellIcon, LayoutDashboardIcon } from "lucide-react"
 
@@ -166,7 +166,10 @@ function notificationStatus(
   return { label: "No channel", variant: "outline" }
 }
 
-/** A view the turn created or changed, linking to its page, or one it deleted, struck through. */
+/**
+ * A view the turn created or changed, opening it in the pane beside the thread while it links to
+ * the view's page, or one it deleted, struck through.
+ */
 export function ViewLine({ step, instanceId }: { step: ViewStep; instanceId: string }) {
   const icon = (
     <MarkerIcon>
@@ -190,7 +193,7 @@ export function ViewLine({ step, instanceId }: { step: ViewStep; instanceId: str
           href={viewPath(instanceId, step.view)}
           onClick={(event) => {
             event.preventDefault()
-            openView(instanceId, step.view)
+            openPane({ kind: "view", viewId: step.view })
           }}
         >
           {icon}
