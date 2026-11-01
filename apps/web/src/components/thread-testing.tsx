@@ -4,6 +4,14 @@ import { render, screen } from "@testing-library/react"
 
 import { ThreadPanel } from "@/components/thread-panel"
 
+// jsdom lays nothing out, so it has no ResizeObserver, and the split beside the thread measures
+// with it. The stub stays out of the test setup: with a ResizeObserver, the charts never draw.
+window.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 export type Payload = Event["payload"]
 
 /** A client of an instance whose socket is up, answering from `answers`. */

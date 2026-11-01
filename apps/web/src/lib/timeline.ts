@@ -58,6 +58,8 @@ export interface ParkedApproval {
 export interface ParkedTakeover {
   takeoverId: string
   reason: string
+  /** The site of the page the turn last opened in the browser, when it opened one. */
+  site?: string
 }
 
 type Step = TextStep | ToolStep | NotificationStep | ViewStep
@@ -185,8 +187,15 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
       }
       return { ...turn, approval }
     }
-    case "takeover.requested":
-      return { ...turn, takeover: { takeoverId: payload.takeover_id, reason: payload.reason } }
+    case "takeover.requested": {
+      const site = openedSite(turn)
+      const takeover = {
+        takeoverId: payload.takeover_id,
+        reason: payload.reason,
+        ...(site !== undefined && { site }),
+      }
+      return { ...turn, takeover }
+    }
     case "tool.gated": {
       const gated = updateTool(turn, payload.call_id, (step) => ({
         ...step,
@@ -266,6 +275,20 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
         : turn
     default:
       return turn
+  }
+}
+
+/** The host of the page the turn last opened in the browser, without its `www.`. */
+function openedSite({ steps }: TurnBlock): string | undefined {
+  const opened = steps.findLast(
+    (step): step is ToolStep => step.kind === "tool" && step.name === "browser_open",
+  )
+  const url = opened?.arguments.url
+  if (typeof url !== "string") return undefined
+  try {
+    return new URL(url).hostname.replace(/^www\./, "")
+  } catch {
+    return undefined
   }
 }
 

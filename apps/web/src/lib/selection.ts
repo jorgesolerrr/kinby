@@ -26,6 +26,12 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
 // The home screen's "Send to" opens on the instance this search parameter names.
 const TO = "to"
 
+// A pane opens beside the thread it belongs to, so it is a search parameter on the thread's path.
+const PANE = "pane"
+const PANES = ["takeover"] as const
+/** What a pane beside a thread can hold: the browser of the takeover its turn is parked on. */
+export type Pane = (typeof PANES)[number]
+
 /** The hub pages that became sections of the Settings dialog, by their old paths. */
 const OLD_PATHS: Record<string, SettingsSection> = {
   "/usage": "usage",
@@ -193,19 +199,31 @@ export function openOnboarding(): void {
 
 /** Open the Settings dialog over the open page as a new history entry, so Back closes it. */
 export function openSettings(section: SettingsSection = "general"): void {
-  window.history.pushState(null, "", settingsUrl(section))
+  window.history.pushState(null, "", searchUrl(SETTINGS, section))
   changed()
 }
 
 /** Open another section of the Settings dialog in the same history entry. */
 export function switchSettings(section: SettingsSection): void {
-  window.history.replaceState(null, "", settingsUrl(section))
+  window.history.replaceState(null, "", searchUrl(SETTINGS, section))
   changed()
 }
 
 /** Close the Settings dialog, keeping the page under it, in the same history entry. */
 export function closeSettings(): void {
-  window.history.replaceState(null, "", settingsUrl(undefined))
+  window.history.replaceState(null, "", searchUrl(SETTINGS, undefined))
+  changed()
+}
+
+/** Open a pane beside the open thread as a new history entry, so Back closes it. */
+export function openPane(pane: Pane): void {
+  window.history.pushState(null, "", searchUrl(PANE, pane))
+  changed()
+}
+
+/** Close the pane, keeping the thread, in the same history entry. */
+export function closePane(): void {
+  window.history.replaceState(null, "", searchUrl(PANE, undefined))
   changed()
 }
 
@@ -258,6 +276,14 @@ export function useInstanceTab(): InstanceTab | undefined {
 /** The view the URL opens under its instance, if it names one. */
 export function useViewOpen(): string | undefined {
   return useSyncExternalStore(subscribe, openedView)
+}
+
+/** The pane the URL opens beside its thread, if it names one. */
+export function useOpenPane(): Pane | undefined {
+  return useSyncExternalStore(subscribe, () => {
+    const pane = new URLSearchParams(window.location.search).get(PANE)
+    return PANES.find((known) => known === pane)
+  })
 }
 
 /** Whether the URL opens the onboarding. */
@@ -354,11 +380,11 @@ function settingsOpen(): SettingsSection | undefined {
   return SETTINGS_SECTIONS.find((known) => known === section)
 }
 
-/** The current path and its search, with the Settings dialog open on `section`, or closed. */
-function settingsUrl(section: SettingsSection | undefined): string {
+/** The current path and its search, with the search parameter `name` set to `value`, or dropped. */
+function searchUrl(name: string, value: string | undefined): string {
   const search = new URLSearchParams(window.location.search)
-  if (section === undefined) search.delete(SETTINGS)
-  else search.set(SETTINGS, section)
+  if (value === undefined) search.delete(name)
+  else search.set(name, value)
   const query = search.toString()
   return query === "" ? window.location.pathname : `${window.location.pathname}?${query}`
 }
