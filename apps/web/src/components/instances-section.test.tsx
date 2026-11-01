@@ -96,9 +96,15 @@ function step(name: string, state: OperationState, detail: string): OperationSte
   return { name, state, detail }
 }
 
+/** Ask for the instance's permanent deletion from its row's menu. */
+async function askDeletion(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(within(rowOf(name)).getByRole("button", { name: `More for ${name}` }))
+  await user.click(await screen.findByRole("menuitem", { name: "Delete permanently…" }))
+}
+
 /** Open the instance's deletion dialog, wait for its preview, type the name, and confirm. */
 async function confirmDeletion(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.click(within(rowOf(name)).getByRole("button", { name: "Delete permanently" }))
+  await askDeletion(user, name)
   const dialog = within(
     await screen.findByRole("alertdialog", { name: `Delete ${name} permanently` }),
   )
@@ -194,7 +200,7 @@ describe("the Instances section", () => {
   it("previews a deletion and lists every directory and volume the hub would delete", async () => {
     const { caller, user } = openPage({ "instance.delete.preview": () => preview })
 
-    await user.click(within(rowOf("Grace")).getByRole("button", { name: "Delete permanently" }))
+    await askDeletion(user, "Grace")
 
     const dialog = within(
       await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
@@ -209,7 +215,7 @@ describe("the Instances section", () => {
   it("lists the binds the hub keeps before the user confirms, and says they stay on the Docker host", async () => {
     const { user } = openPage({ "instance.delete.preview": () => preview })
 
-    await user.click(within(rowOf("Grace")).getByRole("button", { name: "Delete permanently" }))
+    await askDeletion(user, "Grace")
 
     const dialog = within(
       await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
@@ -230,7 +236,7 @@ describe("the Instances section", () => {
       },
     })
 
-    await user.click(within(rowOf("Grace")).getByRole("button", { name: "Delete permanently" }))
+    await askDeletion(user, "Grace")
     const dialog = within(
       await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
     )
@@ -249,7 +255,7 @@ describe("the Instances section", () => {
       "instance.delete.preview": ({ instance_id }) => ({ ...preview, instance_id }),
     })
 
-    await user.click(within(rowOf("scratch")).getByRole("button", { name: "Delete permanently" }))
+    await askDeletion(user, "scratch")
 
     const dialog = within(
       await screen.findByRole("alertdialog", { name: "Delete scratch permanently" }),
@@ -400,7 +406,7 @@ describe("the Instances section", () => {
     expect(previews(caller)).toHaveLength(1)
 
     await user.click(dialog.getByRole("button", { name: "Cancel" }))
-    await user.click(within(rowOf("Grace")).getByRole("button", { name: "Delete permanently" }))
+    await askDeletion(user, "Grace")
 
     const again = within(
       await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
@@ -413,15 +419,13 @@ describe("the Instances section", () => {
     expect(previews(caller)).toHaveLength(2)
   })
 
-  it("shows an empty state with a link home when no instance is removed", async () => {
-    const { user } = openPage({}, [])
+  it("shows an empty state with no button when no instance is removed", () => {
+    openPage({}, [])
 
     expect(screen.getByText("No removed instances")).toBeDefined()
+    expect(screen.getByText(/An instance you remove shows here/)).toBeDefined()
     expect(screen.queryByRole("listitem")).toBeNull()
-    const home = screen.getByRole("link", { name: "Go home" })
-    expect(home.getAttribute("href")).toBe("/")
-    await user.click(home)
-
-    expect(window.location.pathname).toBe("/")
+    expect(screen.queryByRole("button")).toBeNull()
+    expect(screen.queryByRole("link")).toBeNull()
   })
 })
