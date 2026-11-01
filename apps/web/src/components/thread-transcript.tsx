@@ -1,5 +1,5 @@
 import type { InstanceClient } from "@kinby/contract"
-import { type ComponentProps, Fragment, type ReactNode, useEffect, useRef } from "react"
+import { type ComponentProps, Fragment, type ReactNode, useEffect, useRef, useState } from "react"
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
@@ -50,13 +50,14 @@ export function Transcript({
   /** The card of the takeover the latest turn is parked on, which shows at the end of the turn. */
   takeoverCard?: ReactNode
 }) {
+  // A thread parked on a card opens at its end, so the card's buttons show above the composer. Any
+  // other opens at the start of its last turn. Answering the card leaves the reader where they are.
+  const [opensAt] = useState<"end" | "last-anchor">(
+    approvalCard || takeoverCard ? "end" : "last-anchor",
+  )
   return (
     // A turn opens from its first marker, without a peek at the turn before it.
-    <MessageScrollerProvider
-      autoScroll
-      defaultScrollPosition="last-anchor"
-      scrollPreviousItemPeek={0}
-    >
+    <MessageScrollerProvider autoScroll defaultScrollPosition={opensAt} scrollPreviousItemPeek={0}>
       {/* The scroller leaves its content's margin out when it decides where a thread opens. */}
       <MessageScroller className="my-6 flex-1">
         <MessageScrollerViewport>

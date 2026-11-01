@@ -75,14 +75,8 @@ export function ThreadPanel({
       const card = approvalCard.current
       if (card?.checkVisibility?.({ visibilityProperty: true }) === false && waited < 60) {
         frame = requestAnimationFrame(() => focusCard(waited + 1))
-      } else {
-        if (document.activeElement === composer.current) card?.focus()
-        else takeFocus(card)
-        // Focus scrolls nothing when part of the card already shows, which can leave its buttons
-        // below the fold on a phone, so the card comes to the middle of the transcript.
-        if (card !== null && document.activeElement === card)
-          card.scrollIntoView({ block: "center" })
-      }
+      } else if (document.activeElement === composer.current) card?.focus()
+      else takeFocus(card)
     }
     focusCard(0)
     return () => cancelAnimationFrame(frame)

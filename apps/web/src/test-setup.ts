@@ -11,7 +11,4 @@ window.matchMedia = (query) =>
     removeListener: () => {},
   })
 
-// jsdom lays nothing out, so it has no scrollIntoView. The search palette and the approval card call it.
-Element.prototype.scrollIntoView = () => {}
-
 afterEach(cleanup)

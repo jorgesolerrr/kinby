@@ -2,7 +2,7 @@ import { CallError, type Event } from "@kinby/contract"
 import type { Answers } from "@kinby/contract/testing"
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 
 import { instanceClient, openThread, started, thread, traceLine } from "@/components/thread-testing"
 import { threadList } from "@/lib/thread-list"
@@ -127,18 +127,6 @@ describe("a thread's panel", () => {
       await reopenParked()
 
       expect(document.activeElement).toBe(card())
-    })
-
-    it("comes to the middle of the transcript when it takes focus", async () => {
-      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView")
-      try {
-        await reopenParked()
-
-        expect(scrolled.mock.contexts).toContain(card())
-        expect(scrolled).toHaveBeenCalledWith({ block: "center" })
-      } finally {
-        scrolled.mockRestore()
-      }
     })
 
     it("takes focus once the transcript shows, when the thread opens on it hidden", async () => {
