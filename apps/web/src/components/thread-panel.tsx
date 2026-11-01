@@ -7,14 +7,17 @@ import { ThreadHeader } from "@/components/thread-header"
 import { ThreadSplit } from "@/components/thread-pane"
 import { TakeoverCard, TakeoverPane } from "@/components/thread-takeover"
 import { Transcript, TranscriptSkeleton } from "@/components/thread-transcript"
+import { ViewPane } from "@/components/view-page"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { useNotifications } from "@/hooks/use-notifications"
+import { useView } from "@/hooks/use-view"
+import { when } from "@/lib/config-changes"
 import { takeFocus } from "@/lib/focus"
 import { type InstanceNotice, noticeKey, noticeTitle } from "@/lib/instances"
-import { closePane, openCore, openPane, openSkills, useOpenPane } from "@/lib/selection"
+import { closePane, openCore, openPane, openSkills, openView, useOpenPane } from "@/lib/selection"
 import { threadStore } from "@/lib/thread-store"
-import { CircleAlertIcon, GlobeIcon, TriangleAlertIcon } from "lucide-react"
+import { CircleAlertIcon, GlobeIcon, LayoutDashboardIcon, TriangleAlertIcon } from "lucide-react"
 
 /** Where each notice is answered: an update in Core version, or the MCP server's pick in Skills. */
 const ANSWERS: Record<
@@ -31,7 +34,8 @@ const ANSWERS: Record<
  * A thread's turns as a timeline, followed live once its history has loaded. The hub tells how
  * each notification the thread raised was delivered, and takes the user's answer to its options.
  * Each of the instance's `notices` shows above the composer. The pane the URL names opens beside
- * the thread while what it holds lasts: the browser, while the turn is parked on a takeover.
+ * the thread while what it holds lasts: the browser, while the turn is parked on a takeover, or one
+ * of the instance's views, followed live.
  */
 export function ThreadPanel({
   client,
@@ -84,10 +88,13 @@ export function ThreadPanel({
     return () => cancelAnimationFrame(frame)
   }, [replayed, approvalId])
   const pane = useOpenPane()
+  const takeoverOpen = pane?.kind === "takeover"
   const parkedOnTakeover = takeover !== undefined
   useEffect(() => {
-    if (replayed && pane === "takeover" && !parkedOnTakeover) closePane()
-  }, [replayed, pane, parkedOnTakeover])
+    if (replayed && takeoverOpen && !parkedOnTakeover) closePane()
+  }, [replayed, takeoverOpen, parkedOnTakeover])
+  const viewId = pane?.kind === "view" ? pane.viewId : undefined
+  const followed = useView(client, viewId)
 
   if (failure !== undefined) {
     return (
@@ -112,25 +119,34 @@ export function ThreadPanel({
     <ThreadSplit
       onClose={closePane}
       pane={
-        replayed && pane === "takeover" && latest !== undefined && takeover !== undefined
+        viewId !== undefined
           ? {
-              icon: GlobeIcon,
-              title: takeover.site ?? "The browser",
-              status: `${name} is waiting on you`,
-              body: (
-                <TakeoverPane
-                  key={takeover.takeoverId}
-                  client={client}
-                  hub={hub}
-                  instanceId={instanceId}
-                  threadId={threadId}
-                  turnId={latest.turnId}
-                  takeover={takeover}
-                  name={name}
-                />
-              ),
+              icon: LayoutDashboardIcon,
+              title: followed.view?.title ?? "The view",
+              status:
+                followed.view === undefined ? "" : `Changed ${when(followed.view.updated_at)}`,
+              openAsPage: () => openView(instanceId, viewId),
+              body: <ViewPane key={viewId} followed={followed} />,
             }
-          : undefined
+          : replayed && takeoverOpen && latest !== undefined && takeover !== undefined
+            ? {
+                icon: GlobeIcon,
+                title: takeover.site ?? "The browser",
+                status: `${name} is waiting on you`,
+                body: (
+                  <TakeoverPane
+                    key={takeover.takeoverId}
+                    client={client}
+                    hub={hub}
+                    instanceId={instanceId}
+                    threadId={threadId}
+                    turnId={latest.turnId}
+                    takeover={takeover}
+                    name={name}
+                  />
+                ),
+              }
+            : undefined
       }
       thread={
         <div className="flex min-h-0 flex-1 flex-col">
@@ -167,10 +183,8 @@ export function ThreadPanel({
                       threadId={threadId}
                       takeover={takeover}
                       name={name}
-                      paneOpen={pane === "takeover"}
-                      onOpen={() => {
-                        if (pane !== "takeover") openPane("takeover")
-                      }}
+                      paneOpen={takeoverOpen}
+                      onOpen={() => openPane({ kind: "takeover" })}
                     />
                   )
                 }

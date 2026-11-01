@@ -199,8 +199,14 @@ describe("the pane open beside a thread", () => {
   it("comes back from the URL, over the thread that is open", () => {
     window.history.replaceState(null, "", `${thread}?pane=takeover`)
 
-    expect(pane().current).toBe("takeover")
+    expect(pane().current).toEqual({ kind: "takeover" })
     expect(selection().current.threadId).toBe("t1")
+  })
+
+  it("comes back from the URL naming one of the instance's views", () => {
+    window.history.replaceState(null, "", `${thread}?pane=view.applications`)
+
+    expect(pane().current).toEqual({ kind: "view", viewId: "applications" })
   })
 
   it("is none when the URL names no pane, or one the thread does not have", () => {
@@ -209,6 +215,9 @@ describe("the pane open beside a thread", () => {
 
     window.history.replaceState(null, "", `${thread}?pane=canvas`)
     expect(pane().current).toBeUndefined()
+
+    window.history.replaceState(null, "", `${thread}?pane=view.`)
+    expect(pane().current).toBeUndefined()
   })
 
   it("opens as one new history entry, keeping the thread and the Settings dialog", () => {
@@ -216,12 +225,33 @@ describe("the pane open beside a thread", () => {
     const entries = window.history.length
     const open = pane()
 
-    act(() => openPane("takeover"))
+    act(() => openPane({ kind: "takeover" }))
 
     expect(window.history.length).toBe(entries + 1)
-    expect(open.current).toBe("takeover")
+    expect(open.current).toEqual({ kind: "takeover" })
     expect(window.location.pathname).toBe(thread)
     expect(new URLSearchParams(window.location.search).get("settings")).toBe("usage")
+  })
+
+  it("opens a view in place of the pane that is open, as a new history entry", () => {
+    window.history.replaceState(null, "", `${thread}?pane=takeover`)
+    const entries = window.history.length
+    const open = pane()
+
+    act(() => openPane({ kind: "view", viewId: "applications" }))
+
+    expect(window.history.length).toBe(entries + 1)
+    expect(open.current).toEqual({ kind: "view", viewId: "applications" })
+    expect(window.location.search).toBe("?pane=view.applications")
+  })
+
+  it("adds no history entry when the pane is already open", () => {
+    window.history.replaceState(null, "", `${thread}?pane=view.applications`)
+    const entries = window.history.length
+
+    act(() => openPane({ kind: "view", viewId: "applications" }))
+
+    expect(window.history.length).toBe(entries)
   })
 
   it("closes by dropping the parameter and keeping the thread, in the same history entry", () => {

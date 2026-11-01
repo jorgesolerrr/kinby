@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react"
+import { useMemo, useSyncExternalStore } from "react"
 
 // What the page shows lives in the URL, so a reload or an opened link lands on it.
 const SECTION = "instances"
@@ -28,9 +28,14 @@ const TO = "to"
 
 // A pane opens beside the thread it belongs to, so it is a search parameter on the thread's path.
 const PANE = "pane"
-const PANES = ["takeover"] as const
-/** What a pane beside a thread can hold: the browser of the takeover its turn is parked on. */
-export type Pane = (typeof PANES)[number]
+const TAKEOVER = "takeover"
+// A view's ID holds no dot, so the dot ends the prefix.
+const VIEW_PANE = "view."
+/**
+ * What a pane beside a thread can hold: the browser of the takeover its turn is parked on, or one
+ * of the instance's views.
+ */
+export type Pane = { kind: "takeover" } | { kind: "view"; viewId: string }
 
 /** The hub pages that became sections of the Settings dialog, by their old paths. */
 const OLD_PATHS: Record<string, SettingsSection> = {
@@ -215,9 +220,14 @@ export function closeSettings(): void {
   changed()
 }
 
-/** Open a pane beside the open thread as a new history entry, so Back closes it. */
+/**
+ * Open a pane beside the open thread, in place of any pane open there, as a new history entry, so
+ * Back goes back to what was open before.
+ */
 export function openPane(pane: Pane): void {
-  window.history.pushState(null, "", searchUrl(PANE, pane))
+  const value = pane.kind === "takeover" ? TAKEOVER : VIEW_PANE + pane.viewId
+  if (new URLSearchParams(window.location.search).get(PANE) === value) return
+  window.history.pushState(null, "", searchUrl(PANE, value))
   changed()
 }
 
@@ -280,10 +290,14 @@ export function useViewOpen(): string | undefined {
 
 /** The pane the URL opens beside its thread, if it names one. */
 export function useOpenPane(): Pane | undefined {
-  return useSyncExternalStore(subscribe, () => {
-    const pane = new URLSearchParams(window.location.search).get(PANE)
-    return PANES.find((known) => known === pane)
-  })
+  const pane = useSyncExternalStore(subscribe, () =>
+    new URLSearchParams(window.location.search).get(PANE),
+  )
+  return useMemo(() => {
+    if (pane === TAKEOVER) return { kind: "takeover" }
+    const viewId = pane?.startsWith(VIEW_PANE) ? pane.slice(VIEW_PANE.length) : ""
+    return viewId === "" ? undefined : { kind: "view", viewId }
+  }, [pane])
 }
 
 /** Whether the URL opens the onboarding. */

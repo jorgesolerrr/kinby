@@ -13,7 +13,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { SidebarContext } from "@/components/ui/sidebar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react"
+import { ExternalLinkIcon, Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react"
 
 /** What a pane open beside a thread shows: its heading, then what it holds. */
 export interface OpenPane {
@@ -21,6 +21,8 @@ export interface OpenPane {
   title: string
   /** The line under the title, saying where what the pane holds stands. */
   status: string
+  /** Open what the pane holds on its own page, when it has one. */
+  openAsPage?: () => void
   body: ReactNode
 }
 
@@ -75,6 +77,18 @@ export function ThreadSplit({
                     <span className="truncate text-sm font-medium">{pane.title}</span>
                     <span className="truncate text-xs text-muted-foreground">{pane.status}</span>
                   </div>
+                  {pane.openAsPage !== undefined && (
+                    <Hint label="Open as a page">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Open as a page"
+                        onClick={pane.openAsPage}
+                      >
+                        <ExternalLinkIcon />
+                      </Button>
+                    </Hint>
+                  )}
                   <Hint label={hidden ? "Show the thread" : "Hide the thread"}>
                     <Button
                       variant="ghost"
