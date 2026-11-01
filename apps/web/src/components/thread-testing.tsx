@@ -1,6 +1,7 @@
 import type { Event, InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { render, screen } from "@testing-library/react"
+import { afterEach, beforeEach } from "vitest"
 
 import { ThreadPanel } from "@/components/thread-panel"
 
@@ -10,6 +11,18 @@ window.ResizeObserver = class {
   observe() {}
   unobserve() {}
   disconnect() {}
+}
+
+/** Run the tests of the block that calls this under the app's mobile breakpoint. */
+export function onAPhone() {
+  const wide = window.matchMedia
+  beforeEach(() => {
+    window.matchMedia = (query) =>
+      Object.assign(wide(query), { matches: query === "(max-width: 767px)" })
+  })
+  afterEach(() => {
+    window.matchMedia = wide
+  })
 }
 
 export type Payload = Event["payload"]

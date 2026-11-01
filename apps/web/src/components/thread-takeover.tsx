@@ -156,8 +156,8 @@ export function TakeoverPane({
           </p>
         )}
       </div>
-      <div className="flex flex-wrap items-end justify-between gap-3 border-t p-4">
-        <Field className="max-w-64">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-t p-4 max-md:flex-col max-md:items-stretch">
+        <Field className="md:max-w-64">
           <FieldLabel htmlFor={profileId}>Save as a profile</FieldLabel>
           <Input
             id={profileId}

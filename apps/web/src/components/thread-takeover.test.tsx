@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   hubClient,
+  onAPhone,
   openThread,
   type Payload,
   started,
@@ -185,6 +186,38 @@ describe("a waiting takeover", () => {
 
     await user.click(within(openPane()).getByRole("button", { name: "Show the thread" }))
     expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
+  })
+
+  describe("on a phone", () => {
+    onAPhone()
+
+    const drawer = () => screen.queryByRole("dialog", { name: "linkedin.com" })
+
+    it("opens the browser in a drawer over the thread, with the pane's heading", async () => {
+      await openInPane()
+
+      const opened = drawer()
+      if (opened === null) throw new Error("The drawer is not open.")
+      expect(opened.textContent).toContain("Ada is waiting on you")
+      expect(opened.textContent).toContain(reason)
+      expect(within(opened).getByRole("application", { name: "The browser" })).toBeDefined()
+      expect(within(opened).queryByRole("button", { name: "Hide the thread" })).toBeNull()
+      expect(pane()).toBeNull()
+    })
+
+    it("closes the drawer and leaves the takeover waiting", async () => {
+      const { view, toHub } = await openInPane()
+      const opened = drawer()
+      if (opened === null) throw new Error("The drawer is not open.")
+
+      await userEvent.setup().click(within(opened).getByRole("button", { name: "Close" }))
+
+      await waitFor(() => expect(drawer()).toBeNull())
+      expect(view.cancelled).toBe(true)
+      expect(toHub()).toEqual([])
+      expect(within(card()).getByRole("button", { name: "Open linkedin.com" })).toBeDefined()
+      expect(window.location.search).toBe("")
+    })
   })
 
   it("leaves the composer in place, with Stop in place of Send", async () => {
