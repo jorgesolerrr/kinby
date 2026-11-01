@@ -1,6 +1,6 @@
 import type { Client, Clock, HubSecret, HubSecretLink, HubSecretSetCommand } from "@kinby/contract"
-import { CircleXIcon, KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react"
-import { type FormEvent, Fragment, useCallback, useId, useState } from "react"
+import { CircleXIcon, KeyRoundIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
+import { type FormEvent, useCallback, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { SectionFrame } from "@/components/section-frame"
@@ -14,37 +14,50 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemFooter,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { useFollowing } from "@/hooks/use-following"
 import { useRead } from "@/hooks/use-read"
 import { type Followed, followOperation, reason } from "@/lib/operation"
 
 type Caller = Pick<Client, "call">
 
+/** The one form open in the section: the add form, or Replace under the named secret. */
+type Open = { form: "add" } | { form: "replace"; name: string }
+
 /** The instances linked to a hub secret, each with the field it links. */
-function linkedNames(links: HubSecretLink[]): string {
-  return links.map((link) => `${link.manifest_id} (${link.field})`).join(", ")
+function linkedTo(links: HubSecretLink[]): string {
+  return links.map((link) => `${link.manifest_id} · ${link.field}`).join(", ")
 }
 
+/** A form's first field takes the focus when the form opens. */
+const focus = (input: HTMLInputElement | null) => input?.focus()
+
 /**
- * The hub secrets by name with the instances linked to them, in one table whose first row adds a
- * secret. A row replaces its value in place, or deletes it. No value is ever read back.
+ * The hub secrets by name with the instances linked to them, one row each. Add secret opens a form
+ * at the top of the list, and a row's Replace a form under it, one form at a time. No value is
+ * ever read back.
  */
 export function HubSecretsSection({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(async () => {
@@ -60,61 +73,57 @@ export function HubSecretsSection({ client, clock }: { client: Caller; clock: Cl
     return { secrets, running }
   }, [client])
   const { value: listed, failure, readAgain } = useRead(list, clock)
-  const [replacing, setReplacing] = useState<string>()
+  const [open, setOpen] = useState<Open>()
+  const close = useCallback(() => setOpen(undefined), [])
+  const adding = open?.form === "add"
+  const replacing = open?.form === "replace" ? open.name : undefined
 
   return (
     <SectionFrame
       title="Hub secrets"
       lead="Values the hub keeps so you set them once. It never shows one back."
+      actions={
+        <Button size="sm" disabled={adding} onClick={() => setOpen({ form: "add" })}>
+          <PlusIcon data-icon="inline-start" />
+          Add secret
+        </Button>
+      }
     >
+      {adding && <AddForm caller={client} clock={clock} onDone={close} onAdded={readAgain} />}
       {failure !== undefined && <Failure error={failure} />}
       {listed === undefined ? (
         failure === undefined && <Skeleton className="h-48 w-full" />
+      ) : listed.secrets.length === 0 ? (
+        !adding && (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <KeyRoundIcon />
+              </EmptyMedia>
+              <EmptyTitle>No hub secrets yet</EmptyTitle>
+              <EmptyDescription>
+                Add an API key or token once with Add secret, then link it to any instance that
+                needs it.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )
       ) : (
-        <div className="rounded-lg border">
-          <Table aria-label="Hub secrets">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="md:w-72">Name</TableHead>
-                <TableHead>Linked to</TableHead>
-                <TableHead>
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <AddRow caller={client} clock={clock} onAdded={readAgain} />
-              {listed.secrets.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={3} className="text-center">
-                    <span className="text-muted-foreground">The hub keeps no secrets yet.</span>
-                  </TableCell>
-                </TableRow>
-              )}
-              {listed.secrets.map((secret) => (
-                <Fragment key={secret.name}>
-                  <SecretRow
-                    caller={client}
-                    secret={secret}
-                    replacing={replacing === secret.name}
-                    onReplace={(open) => setReplacing(open ? secret.name : undefined)}
-                    onChanged={readAgain}
-                  />
-                  {replacing === secret.name && (
-                    <ReplaceRow
-                      caller={client}
-                      clock={clock}
-                      secret={secret}
-                      running={listed.running}
-                      onDone={() => setReplacing(undefined)}
-                      onSet={readAgain}
-                    />
-                  )}
-                </Fragment>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <ul aria-label="Hub secrets" className="flex flex-col divide-y">
+          {listed.secrets.map((secret) => (
+            <SecretRow
+              key={secret.name}
+              caller={client}
+              clock={clock}
+              secret={secret}
+              running={listed.running}
+              replacing={replacing === secret.name}
+              onReplace={() => setOpen({ form: "replace", name: secret.name })}
+              onClose={close}
+              onChanged={readAgain}
+            />
+          ))}
+        </ul>
       )}
     </SectionFrame>
   )
@@ -122,7 +131,7 @@ export function HubSecretsSection({ client, clock }: { client: Caller; clock: Cl
 
 /**
  * Save a hub secret and follow the operation that saves it. `onSaved` runs once the hub holds the
- * value, and must keep its identity.
+ * value, and must keep its identity, or the save is sent again.
  */
 function useSetSecret(caller: Caller, clock: Clock, onSaved: () => void) {
   // A new object for each save, so saving again follows a new operation.
@@ -150,16 +159,25 @@ function useSetSecret(caller: Caller, clock: Clock, onSaved: () => void) {
   }
 }
 
-/** The table's first row: a new secret's name and value, and Add secret. */
-function AddRow({ caller, clock, onAdded }: { caller: Caller; clock: Clock; onAdded: () => void }) {
+/** A new secret's name and value, at the top of the list. */
+function AddForm({
+  caller,
+  clock,
+  onDone,
+  onAdded,
+}: {
+  caller: Caller
+  clock: Clock
+  onDone: () => void
+  onAdded: () => void
+}) {
   const id = useId()
   const [name, setName] = useState("")
   const [value, setValue] = useState("")
   const added = useCallback(() => {
-    setName("")
-    setValue("")
+    onDone()
     onAdded()
-  }, [onAdded])
+  }, [onDone, onAdded])
   const { save, saving, failed } = useSetSecret(caller, clock, added)
 
   const add = (event: FormEvent) => {
@@ -168,27 +186,30 @@ function AddRow({ caller, clock, onAdded }: { caller: Caller; clock: Clock; onAd
   }
 
   return (
-    <TableRow>
-      <TableCell className="align-top">
-        {/* A form cannot sit in a table row, so the row's fields name the form beside the table. */}
-        <form id={`${id}-form`} onSubmit={add} />
-        <Input
-          form={`${id}-form`}
-          aria-label="Name"
-          placeholder="NEW_SECRET_NAME"
-          autoComplete="off"
-          value={name}
-          readOnly={saving}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </TableCell>
-      <TableCell className="align-top">
-        <Field data-invalid={failed !== undefined || undefined}>
+    <form
+      aria-label="Add a secret"
+      className="flex flex-col gap-3 rounded-xl border bg-muted/30 p-4"
+      onSubmit={add}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor={`${id}-name`}>Name</FieldLabel>
           <Input
-            form={`${id}-form`}
+            id={`${id}-name`}
+            variant="mono"
+            placeholder="NEW_SECRET_NAME"
+            autoComplete="off"
+            ref={focus}
+            value={name}
+            readOnly={saving}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <Field data-invalid={failed !== undefined || undefined}>
+          <FieldLabel htmlFor={`${id}-value`}>Value</FieldLabel>
+          <Input
+            id={`${id}-value`}
             type="password"
-            aria-label="Value"
-            placeholder="Value"
             autoComplete="new-password"
             value={value}
             readOnly={saving}
@@ -197,38 +218,48 @@ function AddRow({ caller, clock, onAdded }: { caller: Caller; clock: Clock; onAd
           />
           {failed !== undefined && <FieldError errors={[{ message: failed }]} />}
         </Field>
-      </TableCell>
-      <TableCell className="text-right align-top">
-        <Button
-          type="submit"
-          form={`${id}-form`}
-          disabled={saving || name.trim() === "" || value === ""}
-        >
-          {saving ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" disabled={saving} onClick={onDone}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={saving || name.trim() === "" || value === ""}>
+          {saving && <Spinner data-icon="inline-start" />}
           Add secret
         </Button>
-      </TableCell>
-    </TableRow>
+      </div>
+    </form>
   )
 }
 
-/** A secret's row: its name, the instances linked to it with their fields, Replace and Delete. */
+/**
+ * A secret's row: its name, the instances linked to it with their fields, Replace, and a menu with
+ * Delete. Replace unfolds its form under the row, and a failed delete says why there.
+ */
 function SecretRow({
   caller,
+  clock,
   secret,
+  running,
   replacing,
   onReplace,
+  onClose,
   onChanged,
 }: {
   caller: Caller
+  clock: Clock
   secret: HubSecret
+  running: ReadonlySet<string>
   replacing: boolean
-  onReplace: (open: boolean) => void
+  onReplace: () => void
+  onClose: () => void
   onChanged: () => void
 }) {
   const { name, links = [] } = secret
+  const [asking, setAsking] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [failure, setFailure] = useState<unknown>()
+  const linked = links.length === 0 ? "Not linked" : linkedTo(links)
 
   const remove = async () => {
     setDeleting(true)
@@ -244,85 +275,103 @@ function SecretRow({
   }
 
   return (
-    <TableRow aria-label={name}>
-      <TableCell>
-        <span className="flex items-center gap-2 font-mono font-medium">
-          <KeyRoundIcon aria-hidden className="size-4 text-muted-foreground" />
-          {name}
-        </span>
-      </TableCell>
-      <TableCell className="whitespace-normal">
-        {links.length === 0 ? (
-          <span className="text-muted-foreground">Not linked</span>
-        ) : (
-          <span className="flex flex-wrap gap-1.5">
-            {links.map((link) => (
-              <Badge key={`${link.instance_id} ${link.field}`} variant="outline">
-                {link.manifest_id}
-                <span className="font-mono font-normal text-muted-foreground">{link.field}</span>
-              </Badge>
-            ))}
-          </span>
-        )}
-        {failure !== undefined && (
-          <Alert variant="destructive" className="mt-2">
-            <CircleXIcon />
-            <AlertTitle>Could not delete {name}</AlertTitle>
-            <AlertDescription>{reason(failure)}</AlertDescription>
-          </Alert>
-        )}
-      </TableCell>
-      <TableCell>
-        <span className="flex justify-end gap-1">
+    <li aria-label={name}>
+      <Item size="sm">
+        <ItemMedia variant="icon">
+          <KeyRoundIcon aria-hidden className="text-muted-foreground" />
+        </ItemMedia>
+        <ItemContent className="min-w-0">
+          <ItemTitle>
+            <code className="break-all">{name}</code>
+          </ItemTitle>
+          <ItemDescription lines="one" title={linked}>
+            {linked}
+          </ItemDescription>
+        </ItemContent>
+        <ItemActions>
           <Button
             variant="outline"
             size="sm"
             aria-expanded={replacing}
-            onClick={() => onReplace(!replacing)}
+            onClick={replacing ? onClose : onReplace}
           >
             Replace
           </Button>
-          <AlertDialog>
-            <AlertDialogTrigger
+          <DropdownMenu>
+            <DropdownMenuTrigger
               render={
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={`Delete ${name}`}
+                  aria-label={`More for ${name}`}
                   disabled={deleting}
                 />
               }
             >
-              {deleting ? <Spinner /> : <Trash2Icon />}
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  The hub deletes its copy. A token stays valid at its provider.
-                  {links.length > 0 &&
-                    ` It unlinks ${linkedNames(links)}, which keep the value they hold.`}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={() => void remove()}>
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </span>
-      </TableCell>
-    </TableRow>
+              {deleting ? <Spinner /> : <MoreHorizontalIcon />}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onClick={() => setAsking(true)}>
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ItemActions>
+        {replacing && (
+          <ItemFooter>
+            <ReplaceForm
+              caller={caller}
+              clock={clock}
+              secret={secret}
+              running={running}
+              onDone={onClose}
+              onSet={onChanged}
+            />
+          </ItemFooter>
+        )}
+        {failure !== undefined && (
+          <ItemFooter>
+            <Alert variant="destructive">
+              <CircleXIcon />
+              <AlertTitle>Could not delete {name}</AlertTitle>
+              <AlertDescription>{reason(failure)}</AlertDescription>
+            </Alert>
+          </ItemFooter>
+        )}
+        <AlertDialog open={asking} onOpenChange={setAsking}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The hub deletes its copy. A token stays valid at its provider.
+                {links.length > 0 &&
+                  ` It unlinks ${linkedTo(links)}, which keep the value they hold.`}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  setAsking(false)
+                  void remove()
+                }}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </Item>
+    </li>
   )
 }
 
 /**
- * Replace a secret's value, in a row under its own. It offers to recreate the running linked
- * instances. The value leaves the page once the hub holds it.
+ * Replace a secret's value, under its row. It offers to recreate the running linked instances, by
+ * name. The value leaves the page once the hub holds it.
  */
-function ReplaceRow({
+function ReplaceForm({
   caller,
   clock,
   secret,
@@ -346,64 +395,59 @@ function ReplaceRow({
     onSet()
   }, [onDone, onSet])
   const { save, saving, failed } = useSetSecret(caller, clock, saved)
-  // Replace opens with its value field focused, as the row the user asked to change.
-  const focused = useCallback((input: HTMLInputElement | null) => input?.focus(), [])
-  const runningLinked = [...new Set(links.map((link) => link.instance_id))].filter((instanceId) =>
-    running.has(instanceId),
+  const runningLinked = new Map(
+    links
+      .filter((link) => running.has(link.instance_id))
+      .map((link) => [link.instance_id, link.manifest_id]),
   )
 
   const replace = (event: FormEvent) => {
     event.preventDefault()
-    save({ name, value, recreate: recreating ? runningLinked : [] })
+    save({ name, value, recreate: recreating ? [...runningLinked.keys()] : [] })
   }
 
   return (
-    <TableRow>
-      <TableCell colSpan={3} className="whitespace-normal">
-        <form
-          aria-label={`Replace ${name}`}
-          className="flex flex-wrap items-start gap-3 py-1.5"
-          onSubmit={replace}
-        >
-          <Field className="max-w-sm" data-invalid={failed !== undefined || undefined}>
-            <FieldLabel htmlFor={`${id}-value`} className="sr-only">
-              New value
-            </FieldLabel>
-            <Input
-              id={`${id}-value`}
-              type="password"
-              placeholder="New value"
-              autoComplete="new-password"
-              ref={focused}
-              value={value}
-              readOnly={saving}
-              aria-invalid={failed !== undefined || undefined}
-              onChange={(event) => setValue(event.target.value)}
-            />
-            {failed !== undefined && <FieldError errors={[{ message: failed }]} />}
-          </Field>
-          {runningLinked.length > 0 && (
-            <Field orientation="horizontal" className="w-auto self-center">
-              <Checkbox
-                id={`${id}-recreate`}
-                checked={recreating}
-                disabled={saving}
-                onCheckedChange={setRecreating}
-              />
-              <FieldLabel htmlFor={`${id}-recreate`}>Recreate the running ones now</FieldLabel>
-            </Field>
-          )}
-          <span className="ml-auto flex gap-2">
-            <Button type="button" variant="ghost" disabled={saving} onClick={onDone}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving || value === ""}>
-              {saving && <Spinner data-icon="inline-start" />}
-              Save
-            </Button>
-          </span>
-        </form>
-      </TableCell>
-    </TableRow>
+    <form
+      aria-label={`Replace ${name}`}
+      className="flex flex-1 flex-col gap-3 rounded-xl border bg-muted/30 p-4"
+      onSubmit={replace}
+    >
+      <Field data-invalid={failed !== undefined || undefined}>
+        <FieldLabel htmlFor={`${id}-value`}>New value</FieldLabel>
+        <Input
+          id={`${id}-value`}
+          type="password"
+          autoComplete="new-password"
+          ref={focus}
+          value={value}
+          readOnly={saving}
+          aria-invalid={failed !== undefined || undefined}
+          onChange={(event) => setValue(event.target.value)}
+        />
+        {failed !== undefined && <FieldError errors={[{ message: failed }]} />}
+      </Field>
+      {runningLinked.size > 0 && (
+        <Field orientation="horizontal">
+          <Checkbox
+            id={`${id}-recreate`}
+            checked={recreating}
+            disabled={saving}
+            onCheckedChange={setRecreating}
+          />
+          <FieldLabel htmlFor={`${id}-recreate`}>
+            Recreate {[...runningLinked.values()].join(", ")} now
+          </FieldLabel>
+        </Field>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" disabled={saving} onClick={onDone}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={saving || value === ""}>
+          {saving && <Spinner data-icon="inline-start" />}
+          Save
+        </Button>
+      </div>
+    </form>
   )
 }
