@@ -6,7 +6,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
-import { ChannelsPage } from "@/components/channels-page"
+import { ChannelsSection } from "@/components/channels-section"
 
 const telegram: ChannelKindDescription = {
   kind: "telegram",
@@ -104,7 +104,7 @@ function openPage(kept: Channel[] = [], answers: Answers = {}) {
       })),
     ...answers,
   })
-  render(<ChannelsPage client={caller} clock={clock} />)
+  render(<ChannelsSection client={caller} clock={clock} />)
   return {
     caller,
     clock,
@@ -145,7 +145,7 @@ async function addTelegram(user: Opened["user"]) {
   return card("Phone")
 }
 
-describe("ChannelsPage", () => {
+describe("ChannelsSection", () => {
   it("asks for the fields the picked kind describes, its secrets as passwords", async () => {
     const { user } = openPage()
 

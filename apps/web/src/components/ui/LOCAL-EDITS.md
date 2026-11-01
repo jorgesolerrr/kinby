@@ -26,17 +26,19 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 
 - **avatar**: the `circle`, `squircle` and `square` shapes, and the colour variants blue, violet, green, amber, red and gray, drawn from the `--avatar-*` tokens.
 - **badge**: the `success` and `attention` variants. Attention fills with ember.
-- **button**: the `aria-disabled` state looks and acts like `disabled`.
+- **button**: the `aria-disabled` state looks and acts like `disabled`, and the `nav` variant, start-aligned and quiet, filled while it is `aria-current="page"`, for the Settings section list.
 - **card**: the `attention` variant, ringed in ember, for a card that waits on the user.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
 - **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
-- **dialog**: the content's `lg` size, a wide and tall flex column with no padding or gap, for a dialog that lays out its own body, as Settings does.
+- **dialog**: the content's `lg` size, with no padding or gap, for a dialog that lays out its own body, as Settings does. Below `md` it fills the screen as a column with square corners; from `md` it is a wide, tall row.
 - **drawer**: the content's `tall` size, 92% of the screen's height, for the side pane on a phone.
 - **empty**: the title at `text-base`, on the section title scale.
 - **input-group**: the group's `raised` variant, a card with a shadow for the composer, and an addon click focuses a textarea as well as an input.
+- **input**: the `mono` variant, in the mono font, for a hub secret's name and Discord's URL.
 - **item**: the description's `lines` variant.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).
+- **progress**: as the registry has it, for Usage's plan meters.
 - **resizable**: the handle's `ghost` variant, whose line shows only under the pointer, for the split between a thread and the pane beside it.
 - **sidebar**: the softer hover on menu buttons, the selected row's icon in the sidebar primary (kin), the action and badge centred on the lg menu button at `top-4.5`, and `SidebarContext` exported, so a component that may render outside the provider reads the sidebar without `useSidebar` throwing.
 - **tabs**: the root passes `orientation` on to Base UI, so a vertical tab list reads and moves with the arrow keys as vertical. The list and its triggers take their orientation styles from their own `data-orientation` rather than from a `group/tabs` ancestor, so horizontal tabs inside a vertical tabs panel, as the Usage charts in Settings, stay horizontal.

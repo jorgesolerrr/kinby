@@ -16,7 +16,7 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { RemovedInstancesPage } from "@/components/removed-instances-page"
+import { InstancesSection } from "@/components/instances-section"
 
 const grace = instanceSummary({
   instance_id: "hub-grace",
@@ -37,7 +37,7 @@ function openPage(answers: Answers = {}, removed: InstanceSummary[] = [grace, un
   const clock = fakeClock()
   const onChanged = vi.fn(() => Promise.resolve())
   const page = (listed: InstanceSummary[]) => (
-    <RemovedInstancesPage caller={caller} clock={clock} removed={listed} onChanged={onChanged} />
+    <InstancesSection caller={caller} clock={clock} removed={listed} onChanged={onChanged} />
   )
   const { rerender } = render(page(removed))
   // What the page shows once the removed instances are listed again as `listed`.
@@ -114,7 +114,7 @@ function rowOf(name: string) {
   return row
 }
 
-describe("the Removed instances page", () => {
+describe("the Instances section", () => {
   beforeEach(() => window.history.replaceState(null, "", "/removed"))
 
   it("lists each removed instance with its avatar and its persona name", () => {

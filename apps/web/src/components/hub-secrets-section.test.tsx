@@ -4,7 +4,7 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
-import { HubSecretsPage } from "@/components/hub-secrets-page"
+import { HubSecretsSection } from "@/components/hub-secrets-section"
 
 const succeeded: OperationGetResult = {
   operation_id: "operation-1",
@@ -50,7 +50,7 @@ function openPage(outcome: OperationGetResult = succeeded) {
       return { unlinked: links(name) }
     },
   })
-  render(<HubSecretsPage client={caller} clock={fakeClock()} />)
+  render(<HubSecretsSection client={caller} clock={fakeClock()} />)
   return { caller, user: userEvent.setup() }
 }
 
@@ -78,7 +78,7 @@ const nameField = async () =>
   (await screen.findByRole("textbox", { name: "Name" })) as HTMLInputElement
 const valueField = () => screen.getByLabelText("Value") as HTMLInputElement
 
-describe("HubSecretsPage", () => {
+describe("HubSecretsSection", () => {
   it("lists the hub secrets by name", async () => {
     openPage()
 
@@ -90,7 +90,7 @@ describe("HubSecretsPage", () => {
       "hub.secret.list": () => ({ secrets: [] }),
       "instance.list": () => ({ instances: [] }),
     })
-    render(<HubSecretsPage client={caller} clock={fakeClock()} />)
+    render(<HubSecretsSection client={caller} clock={fakeClock()} />)
 
     expect(await screen.findByText("The hub keeps no secrets yet.")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Add secret" })).toBeTruthy()

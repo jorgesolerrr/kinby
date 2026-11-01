@@ -13,7 +13,8 @@ import { Bar, BarChart } from "recharts"
 import { BucketAxes } from "@/components/bucket-axes"
 import { Failure } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
-import { RangeHeader } from "@/components/range-header"
+import { RangeControls } from "@/components/range-header"
+import { SectionFrame } from "@/components/section-frame"
 import { Tile, TileStrip } from "@/components/tile"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -68,7 +69,7 @@ type Caller = Pick<Client, "call">
  * The hub's usage across its instances over the last 7, 30, or 90 UTC days. It reads when it
  * opens, when the range changes, when the window regains focus, and on Refresh, and never polls.
  */
-export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
+export function UsageSection({ client, clock }: { client: Caller; clock: Clock }) {
   const [range, setRange] = useState<Range>(7)
   // The instances are listed with every summary, so the names and the counts show the same moment.
   // The charts' buckets come from the moment the read asked about, so midnight never splits them.
@@ -85,8 +86,11 @@ export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
   const by = bucketSize(range)
 
   return (
-    <div className="flex flex-col gap-4 p-6">
-      <RangeHeader title="Usage" range={range} onRange={setRange} onRefresh={readAgain} />
+    <SectionFrame
+      title="Usage"
+      lead="What your instances used, counted by the hub."
+      actions={<RangeControls range={range} onRange={setRange} onRefresh={readAgain} />}
+    >
       {value !== undefined && (
         <PlansStrip planUse={value.usage.plan_use} limits={value.usage.limits} />
       )}
@@ -101,7 +105,7 @@ export function UsagePage({ client, clock }: { client: Caller; clock: Clock }) {
           starts={value.starts}
         />
       )}
-    </div>
+    </SectionFrame>
   )
 }
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { axisTicks, bucketTooltips, legend, rows } from "@/components/stats-testing"
-import { UsagePage } from "@/components/usage-page"
+import { UsageSection } from "@/components/usage-section"
 
 const ada = instanceSummary({ instance_id: "hub-ada", persona_name: "Ada" })
 const research = instanceSummary({ instance_id: "hub-research", manifest_id: "research" })
@@ -126,7 +126,7 @@ function openUsage(
   },
 ) {
   const client = stubCaller(answers)
-  render(<UsagePage client={client} clock={fakeClock()} />)
+  render(<UsageSection client={client} clock={fakeClock()} />)
   return client
 }
 
@@ -144,7 +144,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe("the usage page", () => {
+describe("the Usage section", () => {
   it("reads the last 7 days by day and the instances on open", async () => {
     const client = openUsage()
 
@@ -173,7 +173,7 @@ describe("the usage page", () => {
       "instance.list": () => ({ instances: [ada] }),
     })
     const clock = fakeClock()
-    render(<UsagePage client={client} clock={clock} />)
+    render(<UsageSection client={client} clock={clock} />)
     const user = userEvent.setup()
     await act(() => clock.advance(10 * 60_000))
     expect(summaryReads(client)).toHaveLength(1)

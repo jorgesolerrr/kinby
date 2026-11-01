@@ -202,15 +202,18 @@ export function openOnboarding(): void {
   navigate(CREATE_PATH)
 }
 
-/** Open the Settings dialog over the open page as a new history entry, so Back closes it. */
-export function openSettings(section: SettingsSection = "general"): void {
-  window.history.pushState(null, "", searchUrl(SETTINGS, section))
+/**
+ * Open the Settings dialog over the open page on no section, as a new history entry, so Back
+ * closes it.
+ */
+export function openSettings(): void {
+  window.history.pushState(null, "", searchUrl(SETTINGS, ""))
   changed()
 }
 
-/** Open another section of the Settings dialog in the same history entry. */
-export function switchSettings(section: SettingsSection): void {
-  window.history.replaceState(null, "", searchUrl(SETTINGS, section))
+/** Open another section of the Settings dialog, or none, in the same history entry. */
+export function switchSettings(section: SettingsSection | undefined): void {
+  window.history.replaceState(null, "", searchUrl(SETTINGS, section ?? ""))
   changed()
 }
 
@@ -310,9 +313,16 @@ export function useLibraryOpen(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === LIBRARY_PATH)
 }
 
-/** The section the URL opens the Settings dialog on, if it opens the dialog. */
-export function useSettingsOpen(): SettingsSection | undefined {
-  return useSyncExternalStore(subscribe, settingsOpen)
+/** Whether the URL opens the Settings dialog, on a section or none. */
+export function useSettingsOpen(): boolean {
+  return useSyncExternalStore(subscribe, () =>
+    new URLSearchParams(window.location.search).has(SETTINGS),
+  )
+}
+
+/** The section the URL opens the Settings dialog on, if it names one. */
+export function useSettingsSection(): SettingsSection | undefined {
+  return useSyncExternalStore(subscribe, settingsSection)
 }
 
 /** The instance the URL presets the home screen's "Send to" with, if it names one. */
@@ -389,7 +399,7 @@ function openedView(): string | undefined {
     : undefined
 }
 
-function settingsOpen(): SettingsSection | undefined {
+function settingsSection(): SettingsSection | undefined {
   const section = new URLSearchParams(window.location.search).get(SETTINGS)
   return SETTINGS_SECTIONS.find((known) => known === section)
 }
