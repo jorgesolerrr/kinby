@@ -26,6 +26,15 @@ if (window.location.pathname.startsWith("/proto/shell")) {
       </StrictMode>,
     )
   })
+} else if (window.location.pathname.startsWith("/proto/panes")) {
+  // PROTOTYPE: /proto/panes renders the throwaway side-panes prototype beside the thread.
+  void import("./proto/panes").then(({ PanesPrototype }) => {
+    createRoot(root).render(
+      <StrictMode>
+        <PanesPrototype />
+      </StrictMode>,
+    )
+  })
 } else {
   const client = createClient(window.location.origin, browserTransport)
   createRoot(root).render(

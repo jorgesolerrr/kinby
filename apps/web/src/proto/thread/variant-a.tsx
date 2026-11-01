@@ -86,6 +86,7 @@ import {
   TraceTitle,
 } from "@/components/ui/trace"
 
+import { usePanes } from "../panes/slot"
 import { INSTANCES, type MockInstance, instanceById } from "../shell/mock"
 import { type Attachment as File, MODES, NOTICE, type Step, type Tool, type Turn } from "./mock"
 import { Reply, doing, seconds, summarize, toolIcon } from "./shared"
@@ -221,6 +222,7 @@ function StepA({
   live: boolean
   approval: Turn["approval"]
 }) {
+  const panes = usePanes()
   switch (step.kind) {
     case "text":
       return <Reply text={step.text} streaming={live} />
@@ -233,7 +235,17 @@ function StepA({
       )
     case "view":
       return (
-        <Marker render={<a href="#view" />}>
+        <Marker
+          render={
+            <a
+              href="#view"
+              onClick={(e) => {
+                e.preventDefault()
+                panes.open({ kind: "view", id: "trips", title: step.title })
+              }}
+            />
+          }
+        >
           <MarkerIcon>
             <LayoutDashboardIcon />
           </MarkerIcon>
@@ -377,6 +389,7 @@ function TakeoverA({
   instance: MockInstance
   takeover: NonNullable<Turn["takeover"]>
 }) {
+  const panes = usePanes()
   return (
     <Card size="sm" className="ring-ember/60">
       <CardHeader>
@@ -387,9 +400,20 @@ function TakeoverA({
         <CardDescription>{takeover.reason}</CardDescription>
       </CardHeader>
       <CardFooter className="gap-2">
-        <Button size="sm">
+        <Button
+          size="sm"
+          variant={panes.isOpen("takeover") ? "outline" : "default"}
+          onClick={() =>
+            panes.open({
+              kind: "takeover",
+              id: "takeover",
+              site: takeover.site,
+              reason: takeover.reason,
+            })
+          }
+        >
           <GlobeIcon data-icon="inline-start" />
-          Open {takeover.site}
+          {panes.isOpen("takeover") ? "Show the browser" : `Open ${takeover.site}`}
         </Button>
         <Button size="sm" variant="ghost">
           Stop the turn
