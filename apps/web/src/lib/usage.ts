@@ -1,10 +1,4 @@
-import type {
-  InstanceSummary,
-  RunTotals,
-  StatsBucket,
-  StatsSummaryResult,
-  UsageSource,
-} from "@kinby/contract"
+import type { InstanceSummary, RunTotals, StatsBucket, StatsSummaryResult } from "@kinby/contract"
 
 import { turnCount } from "@/lib/stats"
 
@@ -75,11 +69,12 @@ export function costIn(buckets: StatsBucket[]): number | null {
   return priced.length === 0 ? null : priced.reduce((cost, next) => cost + next)
 }
 
-/** A plan's runs in `buckets`. */
-export function runsIn(buckets: StatsBucket[], source: UsageSource): number {
-  return buckets.reduce(
-    (runs, bucket) =>
-      runs + (bucket.subscriptions.find((use) => use.usage_source === source)?.runs ?? 0),
-    0,
-  )
+/** Every plan's runs in `bucket`. */
+export function planRuns(bucket: StatsBucket): number {
+  return bucket.subscriptions.reduce((runs, use) => runs + (use.runs ?? 0), 0)
+}
+
+/** Every plan's runs in `buckets`. */
+export function planRunsIn(buckets: StatsBucket[]): number {
+  return buckets.reduce((runs, bucket) => runs + planRuns(bucket), 0)
 }
