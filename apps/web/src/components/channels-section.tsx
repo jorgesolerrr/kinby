@@ -331,12 +331,16 @@ function shownAt(instant: string): string {
   })
 }
 
-/** A channel's status: the first that holds of disabled, waiting for its code, failed and sent. */
+/**
+ * A channel's status: the first that holds of disabled, waiting for its code, failed and sent. The
+ * hub keeps the last failure after a later delivery, so only a failure since then counts.
+ */
 function status(channel: Channel): { text: string; failed: boolean } {
   const { enabled, pairing_code: code, last_failure: failure, last_sent_at: sent } = channel
   if (!enabled) return { text: "Disabled", failed: false }
   if (code != null) return { text: `Waiting for ${code}`, failed: false }
-  if (failure != null) return { text: `Failed ${shownAt(failure.at)}`, failed: true }
+  if (failure != null && (sent == null || Date.parse(failure.at) > Date.parse(sent)))
+    return { text: `Failed ${shownAt(failure.at)}`, failed: true }
   return { text: sent != null ? `Sent ${shownAt(sent)}` : "Nothing sent yet", failed: false }
 }
 

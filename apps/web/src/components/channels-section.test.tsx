@@ -168,7 +168,7 @@ describe("ChannelsSection", () => {
     expect(screen.getByText(/notifications to you .* Add one with Add channel\./)).toBeTruthy()
   })
 
-  it("shows each channel's kind and the first status that holds", async () => {
+  it("shows each channel's kind and the first status that holds, a failure only until a delivery", async () => {
     openPage([
       channel({
         channel_id: "off-id",
@@ -192,6 +192,13 @@ describe("ChannelsSection", () => {
         last_failure: { at: "2026-10-24T12:00:00Z", error: "401 Unauthorized" },
       }),
       channel({
+        channel_id: "recovered-id",
+        name: "Recovered",
+        kind: "email",
+        last_sent_at: "2026-10-24T13:00:00Z",
+        last_failure: { at: "2026-10-24T12:00:00Z", error: "401 Unauthorized" },
+      }),
+      channel({
         channel_id: "mail-id",
         name: "Inbox",
         kind: "email",
@@ -203,6 +210,7 @@ describe("ChannelsSection", () => {
     expect((await row("Off")).getByText("telegram · Disabled")).toBeTruthy()
     expect((await row("Phone")).getByText("telegram · Waiting for 123456")).toBeTruthy()
     expect((await row("Broken")).getByText(/^email · Failed \w+ \d+/)).toBeTruthy()
+    expect((await row("Recovered")).getByText(/^email · Sent \w+ \d+/)).toBeTruthy()
     expect((await row("Inbox")).getByText(/^email · Sent \w+ \d+/)).toBeTruthy()
     expect((await row("New")).getByText("email · Nothing sent yet")).toBeTruthy()
   })
