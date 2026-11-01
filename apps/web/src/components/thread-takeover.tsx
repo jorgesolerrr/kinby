@@ -140,7 +140,8 @@ export function TakeoverPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+      {/* Nothing in the body shrinks, so a page taller than the pane scrolls rather than clips. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 *:shrink-0">
         <p className="text-sm wrap-anywhere text-muted-foreground">{takeover.reason}</p>
         <LiveBrowser
           ref={live}
