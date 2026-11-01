@@ -220,6 +220,32 @@ describe("a waiting takeover", () => {
     })
   })
 
+  it("keeps the composer's draft when the screen narrows to a phone's", async () => {
+    const wide = window.matchMedia
+    const phone = Object.assign(wide("(max-width: 767px)"), { matches: false })
+    window.matchMedia = (query) => (query === phone.media ? phone : wide(query))
+    try {
+      await openInPane()
+      fireEvent.change(screen.getByRole("textbox", { name: "Message Ada" }), {
+        target: { value: "Half a thought" },
+      })
+
+      act(() => {
+        phone.matches = true
+        phone.dispatchEvent(new Event("change"))
+      })
+
+      expect(screen.getByRole("dialog", { name: "linkedin.com" })).toBeDefined()
+      // The drawer is modal, so the thread behind it is hidden from the accessibility tree.
+      expect(
+        screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada", hidden: true })
+          .value,
+      ).toBe("Half a thought")
+    } finally {
+      window.matchMedia = wide
+    }
+  })
+
   it("leaves the composer in place, with Stop in place of Send", async () => {
     await openParked()
 
