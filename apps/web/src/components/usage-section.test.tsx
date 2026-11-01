@@ -189,40 +189,58 @@ describe("the Usage section", () => {
     expect(client.calls.filter((call) => call.method === "instance.list")).toHaveLength(3)
   })
 
-  it("shows each plan's recent runs across the hub, and when a limited one resets", async () => {
+  it("lists each plan's runs in its windows first, and when a limited one resets", async () => {
     openUsage({
       "stats.summary": () =>
         usage({
+          ...hubUsage,
           plan_use: [
             { usage_source: "claude-subscription", duration_seconds: 18_000, runs: 4 },
             { usage_source: "claude-subscription", duration_seconds: 604_800, runs: 21 },
             { usage_source: "chatgpt-subscription", duration_seconds: 18_000, runs: 1 },
             { usage_source: "chatgpt-subscription", duration_seconds: 604_800, runs: 6 },
           ],
-          limits: [{ usage_source: "chatgpt-subscription", resets_at: "2026-09-30T18:40:00Z" }],
+          limits: [
+            {
+              usage_source: "chatgpt-subscription",
+              resets_at: new Date(2026, 8, 30, 18, 40).toISOString(),
+            },
+          ],
         }),
-      "instance.list": () => ({ instances: [ada] }),
+      "instance.list": () => ({ instances: [ada, research, idle, far, old] }),
     })
 
-    expect(await screen.findByText("Claude runs: 4 in 5h · 21 in 7d")).toBeDefined()
-    expect(screen.getByText(/ChatGPT runs: 1 in 5h · 6 in 7d · limited until/)).toBeDefined()
+    const plans = await screen.findByRole("region", { name: "Plans" })
+
+    expect(
+      within(plans)
+        .getAllByRole("listitem")
+        .map((plan) => plan.textContent),
+    ).toEqual(["Claude4 in 5h · 21 in 7d", "ChatGPT1 in 5h · 6 in 7d · limited until 18:40"])
+    const order = ["Plans", "Totals", "Per instance"].map((name) =>
+      screen.getByRole("region", { name }),
+    )
+    order.push(screen.getByRole("table", { name: "Instances" }))
+    order.slice(1).forEach((later, index) => {
+      expect(order[index].compareDocumentPosition(later)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
   })
 
-  it("lists each instance's turns, API cost, plan runs, and factory runs, and why one is not counted", async () => {
+  it("lists each instance's turns, API cost, every plan's runs summed, and factory runs, and why one is not counted", async () => {
     openUsage(hubAnswers)
 
     const table = await screen.findByRole("table", { name: "Instances" })
 
     expect(rows(table)).toEqual([
-      ["Ada", "7", "$0.50", "3", "1", "2"],
-      ["research", "0", "not priced", "0", "0", "0"],
+      ["Ada", "7", "$0.50", "4", "2"],
+      ["research", "0", "not priced", "0", "0"],
       ["Idle", "Not counted: not running"],
       ["Far", "Not counted: didn't answer"],
       ["Old", "Not counted: runs an older kinby, update core"],
     ])
   })
 
-  it("adds up the counted instances below the table, and says how many were counted", async () => {
+  it("adds up the counted instances, and says how many were counted", async () => {
     openUsage(hubAnswers)
 
     const totals = await screen.findByRole("region", { name: "Totals" })
@@ -233,8 +251,6 @@ describe("the Usage section", () => {
     expect(tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
     expect(tile("Factory runs")).toBe("Factory runs21,376 tokens · $0.75")
     expect(within(totals).getByText("2 of 5 instances counted.")).toBeDefined()
-    const table = screen.getByRole("table", { name: "Instances" })
-    expect(table.compareDocumentPosition(totals)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
   it("charts each counted instance on every day, on API cost, plan runs, and turns tabs", async () => {
@@ -313,7 +329,7 @@ describe("the Usage section", () => {
       within(table)
         .getAllByRole("columnheader")
         .map((header) => header.textContent),
-    ).toEqual(["Instance", "Turns", "API cost", "Claude runs", "ChatGPT runs", "Factory runs"])
+    ).toEqual(["Instance", "Turns", "API cost", "Plan runs", "Factory runs"])
     expect(screen.queryByText(/inbox/)).toBeNull()
     expect(screen.queryByRole("tab", { name: "Origin" })).toBeNull()
     expect(screen.queryByRole("tab", { name: "Quality" })).toBeNull()
