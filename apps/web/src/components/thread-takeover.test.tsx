@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   hubClient,
+  onAPhone,
   openThread,
   type Payload,
   started,
@@ -185,6 +186,64 @@ describe("a waiting takeover", () => {
 
     await user.click(within(openPane()).getByRole("button", { name: "Show the thread" }))
     expect(screen.getByRole("textbox", { name: "Message Ada" })).toBeDefined()
+  })
+
+  describe("on a phone", () => {
+    onAPhone()
+
+    const drawer = () => screen.queryByRole("dialog", { name: "linkedin.com" })
+
+    it("opens the browser in a drawer over the thread, with the pane's heading", async () => {
+      await openInPane()
+
+      const opened = drawer()
+      if (opened === null) throw new Error("The drawer is not open.")
+      expect(opened.textContent).toContain("Ada is waiting on you")
+      expect(opened.textContent).toContain(reason)
+      expect(within(opened).getByRole("application", { name: "The browser" })).toBeDefined()
+      expect(within(opened).queryByRole("button", { name: "Hide the thread" })).toBeNull()
+      expect(pane()).toBeNull()
+    })
+
+    it("closes the drawer and leaves the takeover waiting", async () => {
+      const { view, toHub } = await openInPane()
+      const opened = drawer()
+      if (opened === null) throw new Error("The drawer is not open.")
+
+      await userEvent.setup().click(within(opened).getByRole("button", { name: "Close" }))
+
+      await waitFor(() => expect(drawer()).toBeNull())
+      expect(view.cancelled).toBe(true)
+      expect(toHub()).toEqual([])
+      expect(within(card()).getByRole("button", { name: "Open linkedin.com" })).toBeDefined()
+      expect(window.location.search).toBe("")
+    })
+  })
+
+  it("keeps the composer's draft when the screen narrows to a phone's", async () => {
+    const wide = window.matchMedia
+    const phone = Object.assign(wide("(max-width: 767px)"), { matches: false })
+    window.matchMedia = (query) => (query === phone.media ? phone : wide(query))
+    try {
+      await openInPane()
+      fireEvent.change(screen.getByRole("textbox", { name: "Message Ada" }), {
+        target: { value: "Half a thought" },
+      })
+
+      act(() => {
+        phone.matches = true
+        phone.dispatchEvent(new Event("change"))
+      })
+
+      expect(screen.getByRole("dialog", { name: "linkedin.com" })).toBeDefined()
+      // The drawer is modal, so the thread behind it is hidden from the accessibility tree.
+      expect(
+        screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada", hidden: true })
+          .value,
+      ).toBe("Half a thought")
+    } finally {
+      window.matchMedia = wide
+    }
   })
 
   it("leaves the composer in place, with Stop in place of Send", async () => {

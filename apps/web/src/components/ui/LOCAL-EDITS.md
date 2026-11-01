@@ -31,6 +31,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
 - **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
 - **dialog**: the content's `lg` size, a wide and tall flex column with no padding or gap, for a dialog that lays out its own body, as Settings does.
+- **drawer**: the content's `tall` size, 92% of the screen's height, for the side pane on a phone.
 - **empty**: the title at `text-base`, on the section title scale.
 - **input-group**: the group's `raised` variant, a card with a shadow for the composer, and an addon click focuses a textarea as well as an input.
 - **item**: the description's `lines` variant.

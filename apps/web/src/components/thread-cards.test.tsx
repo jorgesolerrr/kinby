@@ -1,11 +1,12 @@
 import type { Notification, NotificationRaised, View, ViewChange } from "@kinby/contract"
 import { type Answers, fakeClock } from "@kinby/contract/testing"
-import { act, screen, within } from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 
 import {
   hubClient,
+  onAPhone,
   openThread,
   type Payload,
   started,
@@ -446,6 +447,29 @@ describe("a thread's panel", () => {
         await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
 
         expect(pane().textContent).toContain("Acme: interview on Monday.")
+      })
+
+      describe("on a phone", () => {
+        onAPhone()
+
+        const drawer = () => screen.queryByRole("dialog", { name: "Job board" })
+
+        it("opens in a drawer over the thread, and closes from it", async () => {
+          const { following } = await openWritten()
+          await userEvent.click(marker())
+          await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
+
+          const opened = drawer()
+          if (opened === null) throw new Error("The drawer is not open.")
+          expect(opened.textContent).toContain("Changed Oct 25, 2026")
+          expect(opened.textContent).toContain("Acme: interview on Monday.")
+
+          await userEvent.click(within(opened).getByRole("button", { name: "Close" }))
+
+          await waitFor(() => expect(drawer()).toBeNull())
+          expect(following().cancelled).toBe(true)
+          expect(window.location.search).toBe("")
+        })
       })
     })
   })

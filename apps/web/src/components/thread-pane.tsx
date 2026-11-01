@@ -9,6 +9,13 @@ import {
 } from "react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { SidebarContext } from "@/components/ui/sidebar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -28,8 +35,10 @@ export interface OpenPane {
 
 /**
  * A thread and, when one is open, the pane beside it, split by a handle that resizes them. Each
- * open starts from the same split. The pane's header can hide the thread and close the pane. The
- * thread stays mounted throughout, so its scroll and the composer's draft survive the pane.
+ * open starts from the same split. The pane's header can hide the thread and close the pane. On a
+ * phone the pane rises as a drawer over the thread instead, and swiping it down closes it. The
+ * thread stays mounted throughout, across the phone's breakpoint too, so its scroll and the
+ * composer's draft survive the pane.
  */
 export function ThreadSplit({
   thread,
@@ -57,12 +66,13 @@ export function ThreadSplit({
         id="thread"
         defaultSize="44%"
         minSize="360px"
-        hidden={hidden}
+        hidden={hidden && !isMobile}
         className="flex flex-col"
       >
         {thread}
       </ResizablePanel>
-      {pane !== undefined && (
+      {isMobile && <PaneDrawer pane={pane} onClose={onClose} />}
+      {!isMobile && pane !== undefined && (
         <>
           <ResizableHandle withHandle hidden={hidden} className="mx-1" />
           <ResizablePanel id="pane" defaultSize="56%" minSize="380px">
@@ -112,6 +122,35 @@ export function ThreadSplit({
         </>
       )}
     </ResizablePanelGroup>
+  )
+}
+
+/** The open pane as a drawer over the thread, for a phone. */
+function PaneDrawer({ pane, onClose }: { pane: OpenPane | undefined; onClose: () => void }) {
+  return (
+    <Drawer open={pane !== undefined} onOpenChange={(opened) => !opened && onClose()}>
+      <DrawerContent size="tall">
+        {pane !== undefined && (
+          <>
+            <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+              <pane.icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <DrawerTitle>
+                  <span className="block truncate">{pane.title}</span>
+                </DrawerTitle>
+                <DrawerDescription>
+                  <span className="block truncate">{pane.status}</span>
+                </DrawerDescription>
+              </div>
+              <DrawerClose render={<Button variant="ghost" size="icon-sm" aria-label="Close" />}>
+                <XIcon />
+              </DrawerClose>
+            </header>
+            {pane.body}
+          </>
+        )}
+      </DrawerContent>
+    </Drawer>
   )
 }
 
