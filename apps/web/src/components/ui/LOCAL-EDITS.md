@@ -37,6 +37,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **item**: the description's `lines` variant.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).
+- **resizable**: the handle's `ghost` variant, whose line shows only under the pointer, for the split between a thread and the pane beside it.
 - **sidebar**: the softer hover on menu buttons, the selected row's icon in the sidebar primary (kin), the action and badge centred on the lg menu button at `top-4.5`, and `SidebarContext` exported, so a component that may render outside the provider reads the sidebar without `useSidebar` throwing.
 - **tabs**: the root passes `orientation` on to Base UI, so a vertical tab list reads and moves with the arrow keys as vertical. The list and its triggers take their orientation styles from their own `data-orientation` rather than from a `group/tabs` ancestor, so horizontal tabs inside a vertical tabs panel, as the Usage charts in Settings, stay horizontal.
 - **trace**: the description's `destructive` variant.

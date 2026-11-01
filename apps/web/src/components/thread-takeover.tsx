@@ -65,7 +65,11 @@ export function TakeoverCard({
               </p>
             )}
             <div className="flex w-full flex-wrap items-center gap-2">
-              <Button className="max-md:h-11" onClick={onOpen}>
+              <Button
+                variant={paneOpen ? "outline" : "default"}
+                className="max-md:h-11"
+                onClick={onOpen}
+              >
                 <GlobeIcon data-icon="inline-start" />
                 {paneOpen ? "Show the browser" : `Open ${takeover.site ?? "the browser"}`}
               </Button>
@@ -141,10 +145,11 @@ export function TakeoverPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Nothing in the body shrinks, so a page taller than the pane scrolls rather than clips. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 *:shrink-0">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 pt-3 pb-4 *:shrink-0">
         <p className="text-sm wrap-anywhere text-muted-foreground">{takeover.reason}</p>
         <LiveBrowser
           ref={live}
+          className="min-h-72 flex-1"
           watch={watch}
           send={(input) => hub.call("thread.takeover.input", { ...page, input })}
           // Input after Finish or Stop would reach a turn that already moved on.
@@ -166,7 +171,7 @@ export function TakeoverPane({
             readOnly={busy}
             onChange={(event) => setProfile(event.target.value)}
           />
-          <FieldDescription>
+          <FieldDescription className="max-md:hidden">
             Name the sign-in to let {name} open the site signed in later.
           </FieldDescription>
         </Field>
