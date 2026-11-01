@@ -36,7 +36,7 @@ Syncs `apps/web`'s shadcn components (Base UI, preset `base-nova`) to the Claude
 
 - **Pseudo-package drift.** `build-ds.mjs` derives the entry from whatever `.tsx` files sit in `src/components/ui`. A new ui component appears automatically. A file that stops being a component (a hook, a helper) shows up as a card: exclude it with `componentSrcMap`.
 - **Tailwind CLI pin.** The CSS compiles with `@tailwindcss/cli@4.3.3` via `bunx` (network fetch on first run). Bump it with the app's `tailwindcss`; a mismatch can drop or change utilities.
-- **Previews tied to app code.** Several previews port compositions from `thread-panel.tsx`, `new-skill.tsx`, `hub-secrets-page.tsx`, `nav-user.tsx`, `library-page.tsx` and `stats-*.tsx`. They don't import those files, so a redesign there won't break a card, but the cards can go stale against the real UI.
+- **Previews tied to app code.** Several previews port compositions from `thread-panel.tsx`, `new-skill.tsx`, `hub-secrets-section.tsx`, `nav-user.tsx`, `library-page.tsx` and `stats-*.tsx`. They don't import those files, so a redesign there won't break a card, but the cards can go stale against the real UI.
 - **Sidebar positioning hack.** The Sidebar preview overrides `fixed h-svh` with `absolute h-full`. If `sidebar.tsx` changes its container classes, recheck that card.
 - **Only the 35 family roots are authored.** The other 162 sub-part cards are floor cards by design.
 - **Playwright pin.** `playwright@1.63.0` matches the cached Chromium 1243. A new machine or cleared cache needs a matching pair.

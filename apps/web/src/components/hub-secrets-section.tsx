@@ -3,6 +3,7 @@ import { CircleXIcon, KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { type FormEvent, Fragment, useCallback, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
+import { SectionFrame } from "@/components/section-frame"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -45,7 +46,7 @@ function linkedNames(links: HubSecretLink[]): string {
  * The hub secrets by name with the instances linked to them, in one table whose first row adds a
  * secret. A row replaces its value in place, or deletes it. No value is ever read back.
  */
-export function HubSecretsPage({ client, clock }: { client: Caller; clock: Clock }) {
+export function HubSecretsSection({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(async () => {
     const [{ secrets }, { instances }] = await Promise.all([
       client.call("hub.secret.list", {}),
@@ -62,13 +63,10 @@ export function HubSecretsPage({ client, clock }: { client: Caller; clock: Clock
   const [replacing, setReplacing] = useState<string>()
 
   return (
-    <div className="flex flex-col gap-4 p-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-heading text-xl font-semibold">Secrets</h1>
-        <p className="text-sm text-muted-foreground">
-          Values the hub keeps so you set them once. The hub never shows one back.
-        </p>
-      </header>
+    <SectionFrame
+      title="Hub secrets"
+      lead="Values the hub keeps so you set them once. It never shows one back."
+    >
       {failure !== undefined && <Failure error={failure} />}
       {listed === undefined ? (
         failure === undefined && <Skeleton className="h-48 w-full" />
@@ -118,7 +116,7 @@ export function HubSecretsPage({ client, clock }: { client: Caller; clock: Clock
           </Table>
         </div>
       )}
-    </div>
+    </SectionFrame>
   )
 }
 

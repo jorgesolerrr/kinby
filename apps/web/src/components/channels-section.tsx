@@ -4,6 +4,7 @@ import { BellOffIcon, CircleXIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-re
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
+import { SectionFrame } from "@/components/section-frame"
 import { SetupInput } from "@/components/onboarding"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -56,7 +57,7 @@ const PAIRING_READ_MS = 5_000
  * The hub's channels, each with its pairing, deliveries and mutes, under a form that adds one of
  * the kinds the hub found. No secret setting is ever read back.
  */
-export function ChannelsPage({ client, clock }: { client: Caller; clock: Clock }) {
+export function ChannelsSection({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(async () => {
     const [{ kinds }, { channels }, { instances }] = await Promise.all([
       client.call("channel.kinds", {}),
@@ -77,13 +78,10 @@ export function ChannelsPage({ client, clock }: { client: Caller; clock: Clock }
   )
 
   return (
-    <div className="flex flex-col gap-4 p-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-heading text-xl font-semibold">Channels</h1>
-        <p className="text-sm text-muted-foreground">
-          Where the hub sends notifications. Every enabled channel gets each one.
-        </p>
-      </header>
+    <SectionFrame
+      title="Channels"
+      lead="Where the hub sends notifications. Every enabled channel gets each one."
+    >
       {failure !== undefined && <Failure error={failure} />}
       {listed === undefined ? (
         failure === undefined && <Skeleton className="h-48 w-full" />
@@ -113,7 +111,7 @@ export function ChannelsPage({ client, clock }: { client: Caller; clock: Clock }
           )}
         </>
       )}
-    </div>
+    </SectionFrame>
   )
 }
 

@@ -28,6 +28,7 @@ import {
   useSelectedThreadId,
   useSendTo,
   useSettingsOpen,
+  useSettingsSection,
   useThreadsOpen,
   useViewOpen,
 } from "@/lib/selection"
@@ -58,6 +59,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const viewId = useViewOpen()
   const libraryOpen = useLibraryOpen()
   const settingsOpen = useSettingsOpen()
+  const settingsSection = useSettingsSection()
   const threadsOpen = useThreadsOpen()
   const sendTo = useSendTo()
   const path = usePath()
@@ -123,7 +125,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           </div>
         </SidebarInset>
         <SettingsDialog
-          section={settingsOpen}
+          open={settingsOpen}
+          section={settingsSection}
           client={client}
           clock={clock}
           removed={listed?.removed}

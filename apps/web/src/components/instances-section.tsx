@@ -9,6 +9,7 @@ import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { OperationSteps } from "@/components/operation-steps"
+import { SectionFrame } from "@/components/section-frame"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -56,7 +57,7 @@ import { ArchiveRestoreIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react
  * identity. A row being restored stays until its restoration ends, though the lists may drop it
  * first.
  */
-export function RemovedInstancesPage({
+export function InstancesSection({
   caller,
   clock,
   removed,
@@ -77,32 +78,34 @@ export function RemovedInstancesPage({
       setRestoring((held) => held.filter((instance) => instance.instance_id !== instanceId)),
     [],
   )
-  if (removed === undefined) return null
-  const rows = [
+  const rows = removed && [
     ...removed,
     ...restoring.filter((held) => !removed.some((r) => r.instance_id === held.instance_id)),
   ]
   return (
-    <div className="flex flex-col gap-4 p-6">
-      <h1 className="text-xl font-semibold">Removed instances</h1>
-      {rows.length === 0 ? (
-        <NothingRemoved />
-      ) : (
-        <ItemGroup className="max-w-2xl">
-          {rows.map((instance) => (
-            <RemovedRow
-              key={instance.instance_id}
-              caller={caller}
-              clock={clock}
-              instance={instance}
-              onRestoring={hold}
-              onFailed={release}
-              onChanged={onChanged}
-            />
-          ))}
-        </ItemGroup>
-      )}
-    </div>
+    <SectionFrame
+      title="Instances"
+      lead="Removed instances wait here until you restore them or delete them for good."
+    >
+      {rows !== undefined &&
+        (rows.length === 0 ? (
+          <NothingRemoved />
+        ) : (
+          <ItemGroup className="max-w-2xl">
+            {rows.map((instance) => (
+              <RemovedRow
+                key={instance.instance_id}
+                caller={caller}
+                clock={clock}
+                instance={instance}
+                onRestoring={hold}
+                onFailed={release}
+                onChanged={onChanged}
+              />
+            ))}
+          </ItemGroup>
+        ))}
+    </SectionFrame>
   )
 }
 

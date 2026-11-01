@@ -24,6 +24,7 @@ import {
   useSelectedTurnId,
   useSendTo,
   useSettingsOpen,
+  useSettingsSection,
 } from "@/lib/selection"
 
 function selection() {
@@ -130,24 +131,31 @@ describe("a linked routine", () => {
 })
 
 describe("the open Settings section", () => {
-  const settings = () => renderHook(() => useSettingsOpen()).result
+  const settings = () =>
+    renderHook(() => ({ open: useSettingsOpen(), section: useSettingsSection() })).result
 
   it("comes back from the URL, over the path that is open", () => {
     window.history.replaceState(null, "", "/instances/hub-ada?settings=channels")
 
-    expect(settings().current).toBe("channels")
+    expect(settings().current).toEqual({ open: true, section: "channels" })
     expect(selection().current.instanceId).toBe("hub-ada")
   })
 
-  it("is none when the URL names no section, or one Settings does not have", () => {
+  it("is closed when the URL has no settings parameter", () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
-    expect(settings().current).toBeUndefined()
 
-    window.history.replaceState(null, "", "/?settings=billing")
-    expect(settings().current).toBeUndefined()
+    expect(settings().current).toEqual({ open: false, section: undefined })
   })
 
-  it("opens as one new history entry, on General unless one is named", () => {
+  it("is open on no section when the URL names none, or one Settings does not have", () => {
+    window.history.replaceState(null, "", "/?settings")
+    expect(settings().current).toEqual({ open: true, section: undefined })
+
+    window.history.replaceState(null, "", "/?settings=billing")
+    expect(settings().current).toEqual({ open: true, section: undefined })
+  })
+
+  it("opens on no section as one new history entry", () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     const entries = window.history.length
     const open = settings()
@@ -155,7 +163,7 @@ describe("the open Settings section", () => {
     act(() => openSettings())
 
     expect(window.history.length).toBe(entries + 1)
-    expect(open.current).toBe("general")
+    expect(open.current).toEqual({ open: true, section: undefined })
     expect(window.location.pathname).toBe("/instances/hub-ada")
   })
 
@@ -167,8 +175,19 @@ describe("the open Settings section", () => {
     act(() => switchSettings("usage"))
 
     expect(window.history.length).toBe(entries)
-    expect(open.current).toBe("usage")
+    expect(open.current).toEqual({ open: true, section: "usage" })
     expect(window.location.pathname).toBe("/instances/hub-ada")
+  })
+
+  it("switches back to no section in place of the current history entry", () => {
+    window.history.replaceState(null, "", "/instances/hub-ada?settings=usage")
+    const entries = window.history.length
+    const open = settings()
+
+    act(() => switchSettings(undefined))
+
+    expect(window.history.length).toBe(entries)
+    expect(open.current).toEqual({ open: true, section: undefined })
   })
 
   it("closes by dropping the parameter and keeping the path", () => {
@@ -177,7 +196,7 @@ describe("the open Settings section", () => {
 
     act(() => closeSettings())
 
-    expect(open.current).toBeUndefined()
+    expect(open.current).toEqual({ open: false, section: undefined })
     expect(window.location.pathname).toBe("/instances/hub-ada")
     expect(window.location.search).toBe("")
   })
@@ -188,7 +207,7 @@ describe("the open Settings section", () => {
     act(() => landOn("hub-kinby", "t2"))
 
     expect(window.location.pathname).toBe("/instances/hub-kinby/threads/t2")
-    expect(settings().current).toBe("usage")
+    expect(settings().current).toEqual({ open: true, section: "usage" })
   })
 })
 
@@ -315,7 +334,7 @@ describe("an old path", () => {
 
     expect(window.history.length).toBe(entries)
     expect(window.location.pathname).toBe("/")
-    expect(renderHook(() => useSettingsOpen()).result.current).toBe(section)
+    expect(renderHook(() => useSettingsSection()).result.current).toBe(section)
   })
 
   it("gives way to the Routines tab when it links a routine in the config panel", () => {

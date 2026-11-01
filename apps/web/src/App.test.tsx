@@ -954,6 +954,17 @@ async function openSettings() {
   return within(await settingsDialog())
 }
 
+const LEADS = {
+  general: "How kinby looks on this device.",
+  usage: "What your instances used, counted by the hub.",
+  secrets: "Values the hub keeps so you set them once. It never shows one back.",
+  channels: "Where the hub sends notifications. Every enabled channel gets each one.",
+  instances: "Removed instances wait here until you restore them or delete them for good.",
+}
+
+const sectionList = (dialog: ReturnType<typeof within>) =>
+  within(dialog.getByRole("navigation", { name: "Sections" }))
+
 describe("the Settings dialog", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/")
@@ -971,22 +982,24 @@ describe("the Settings dialog", () => {
     expect(screen.queryByRole("menuitemradio")).toBeNull()
   })
 
-  it("opens on General over the open page, and puts it in the URL", async () => {
+  it("opens on General over the open page, with every section in its list", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     openApp({ signedIn: true, instances: [ada] })
 
     const dialog = await openSettings()
 
-    expect(dialog.getByRole("tab", { name: "General", selected: true })).toBeDefined()
-    expect(dialog.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+    const sections = sectionList(dialog)
+    expect(sections.getAllByRole("button").map((button) => button.textContent)).toEqual([
       "General",
       "Usage",
       "Hub secrets",
       "Channels",
       "Instances",
     ])
+    expect(sections.getByRole("button", { current: "page" }).textContent).toBe("General")
+    expect(dialog.getByRole("region", { name: "General" })).toBeDefined()
     expect(window.location.pathname).toBe("/instances/hub-ada")
-    expect(window.location.search).toBe("?settings=general")
+    expect(new URLSearchParams(window.location.search).get("settings")).toBe("")
   })
 
   it("sets the theme from General", async () => {
@@ -1009,9 +1022,10 @@ describe("the Settings dialog", () => {
     const entries = window.history.length
     const dialog = await openSettings()
 
-    await user.click(dialog.getByRole("tab", { name: "Usage" }))
+    await user.click(sectionList(dialog).getByRole("button", { name: "Usage" }))
 
-    expect(await dialog.findByRole("heading", { name: "Usage" })).toBeDefined()
+    expect(await dialog.findByRole("region", { name: "Usage" })).toBeDefined()
+    expect(sectionList(dialog).getByRole("button", { current: "page" }).textContent).toBe("Usage")
     expect(window.location.search).toBe("?settings=usage")
     expect(window.history.length).toBe(entries + 1)
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
@@ -1041,32 +1055,48 @@ describe("the Settings dialog", () => {
   })
 
   it.each([
+    ["general", "General"],
     ["usage", "Usage"],
-    ["secrets", "Secrets"],
+    ["secrets", "Hub secrets"],
     ["channels", "Channels"],
-    ["instances", "Removed instances"],
-  ])("restores ?settings=%s over the page from the URL", async (section, heading) => {
+    ["instances", "Instances"],
+  ] as const)("restores ?settings=%s over the page from the URL", async (section, title) => {
     window.history.replaceState(null, "", `/instances/hub-ada?settings=${section}`)
 
     openApp({ signedIn: true, instances: [ada], removed: [grace] })
 
     const dialog = within(await settingsDialog())
-    expect(await dialog.findByRole("heading", { name: heading })).toBeDefined()
+    const shown = await dialog.findByRole("region", { name: title, description: LEADS[section] })
+    expect(within(shown).getByRole("heading", { name: title })).toBeDefined()
+    expect(sectionList(dialog).getByRole("button", { current: "page" }).textContent).toBe(title)
     expect(window.location.pathname).toBe("/instances/hub-ada")
+  })
+
+  it("holds the range and Refresh in the Usage section's header", async () => {
+    window.history.replaceState(null, "", "/?settings=usage")
+    openApp({ signedIn: true, instances: [ada] })
+
+    const usage = within(
+      await within(await settingsDialog()).findByRole("region", { name: "Usage" }),
+    )
+
+    const header = usage.getByRole("heading", { name: "Usage" }).closest("header")
+    expect(header?.contains(usage.getByRole("group", { name: "Range" }))).toBe(true)
+    expect(header?.contains(usage.getByRole("button", { name: "Refresh" }))).toBe(true)
   })
 
   it.each([
     ["/usage", "usage", "Usage"],
-    ["/secrets", "secrets", "Secrets"],
+    ["/secrets", "secrets", "Hub secrets"],
     ["/channels", "channels", "Channels"],
-    ["/removed", "instances", "Removed instances"],
-  ])("lands %s on the home route with its section open", async (path, section, heading) => {
+    ["/removed", "instances", "Instances"],
+  ])("lands %s on the home route with its section open", async (path, section, title) => {
     window.history.replaceState(null, "", path)
 
     openApp({ signedIn: true, instances: [ada], removed: [grace] })
 
     const dialog = within(await settingsDialog())
-    expect(await dialog.findByRole("heading", { name: heading })).toBeDefined()
+    expect(await dialog.findByRole("region", { name: title })).toBeDefined()
     expect(window.location.pathname).toBe("/")
     expect(window.location.search).toBe(`?settings=${section}`)
   })
@@ -1080,23 +1110,64 @@ describe("the Settings dialog", () => {
     }
   })
 
-  it("lists its sections down the side, and across the top on a narrow screen", async () => {
-    window.history.replaceState(null, "", "/?settings=general")
-    const wide = window.matchMedia
-    const sectionList = async () => within(await settingsDialog()).getByRole("tablist")
-
-    const shown = openApp({ signedIn: true, instances: [ada] })
-    expect((await sectionList()).getAttribute("aria-orientation")).toBe("vertical")
-    shown.unmount()
-
-    window.matchMedia = (query) =>
-      Object.assign(wide(query), { matches: query === "(max-width: 767px)" })
-    try {
-      openApp({ signedIn: true, instances: [ada] })
-      expect((await sectionList()).getAttribute("aria-orientation")).not.toBe("vertical")
-    } finally {
+  describe("on a phone", () => {
+    let wide: typeof window.matchMedia
+    beforeEach(() => {
+      wide = window.matchMedia
+      window.matchMedia = (query) =>
+        Object.assign(wide(query), { matches: query === "(max-width: 767px)" })
+    })
+    afterEach(() => {
       window.matchMedia = wide
-    }
+    })
+
+    it("opens from the account menu on the section list", async () => {
+      openApp({ signedIn: true, instances: [ada] })
+      const user = userEvent.setup()
+      await user.click(await screen.findByRole("button", { name: "Toggle Sidebar" }))
+
+      const dialog = await openSettings()
+
+      expect(
+        sectionList(dialog)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["General", "Usage", "Hub secrets", "Channels", "Instances"])
+      expect(dialog.queryByRole("region")).toBeNull()
+      expect(new URLSearchParams(window.location.search).get("settings")).toBe("")
+    })
+
+    it("opens a section with Back, and Back returns to the list in place", async () => {
+      window.history.replaceState(null, "", "/?settings")
+      openApp({ signedIn: true, instances: [ada] })
+      const user = userEvent.setup()
+      const entries = window.history.length
+      const dialog = within(await settingsDialog())
+
+      await user.click(sectionList(dialog).getByRole("button", { name: "Channels" }))
+
+      expect(await dialog.findByRole("region", { name: "Channels" })).toBeDefined()
+      expect(dialog.queryByRole("navigation", { name: "Sections" })).toBeNull()
+      expect(window.location.search).toBe("?settings=channels")
+
+      await user.click(dialog.getByRole("button", { name: "Back" }))
+
+      expect(sectionList(dialog).getByRole("button", { name: "Channels" })).toBeDefined()
+      expect(dialog.queryByRole("region")).toBeNull()
+      expect(new URLSearchParams(window.location.search).get("settings")).toBe("")
+      expect(window.history.length).toBe(entries)
+    })
+
+    it("opens a linked section with Back", async () => {
+      window.history.replaceState(null, "", "/?settings=secrets")
+      openApp({ signedIn: true, instances: [ada] })
+
+      const dialog = within(await settingsDialog())
+
+      expect(await dialog.findByRole("region", { name: "Hub secrets" })).toBeDefined()
+      expect(dialog.getByRole("button", { name: "Back" })).toBeDefined()
+      expect(dialog.queryByRole("navigation", { name: "Sections" })).toBeNull()
+    })
   })
 })
 
@@ -1111,7 +1182,7 @@ describe("the Instances section", () => {
     const user = userEvent.setup()
     const dialog = await openSettings()
 
-    await user.click(dialog.getByRole("tab", { name: "Instances" }))
+    await user.click(sectionList(dialog).getByRole("button", { name: "Instances" }))
 
     expect(await dialog.findByText("No removed instances")).toBeDefined()
   })
@@ -1130,7 +1201,7 @@ describe("the Instances section", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: /^Ada/ })).toBeNull())
 
     const dialog = await openSettings()
-    await user.click(dialog.getByRole("tab", { name: "Instances" }))
+    await user.click(sectionList(dialog).getByRole("button", { name: "Instances" }))
     expect(await dialog.findByText("Ada")).toBeDefined()
   })
 
