@@ -1045,6 +1045,27 @@ def test_needs_human_pushes_nothing_without_commits_ahead_of_the_base(
     asyncio.run(scenario())
 
 
+def test_needs_human_pushes_a_branch_whose_merged_base_is_gone_from_origin(tmp_path, monkeypatch):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    stacked_on_a_merged_blocker(instance, github)
+    answer_blocked_behind(github)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
+        result = await reported(dispatcher, origin("implement"), "Checks failed.", stacked)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        [stopped] = stop_comments(github)
+        assert "Pushing" not in stopped
+        pushed = git(workspace, "ls-remote", "origin", BRANCH["branch"]).split()
+        assert pushed == [git(workspace, "rev-parse", "HEAD"), f"refs/heads/{BRANCH['branch']}"]
+
+    asyncio.run(scenario())
+
+
 def test_needs_human_reports_a_push_that_failed_in_its_comment(tmp_path, monkeypatch):
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
@@ -1289,6 +1310,43 @@ def test_the_implement_hook_passes_only_committed_work_and_records_the_words_the
         if reason is not None:
             assert result.summary.endswith(
                 f'Hook "check_implementation" failed: UncommittedWork: {reason}'
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("moved", "ending"),
+    [(False, StepEnding.CLEAN), (True, StepEnding.FAILED)],
+    ids=["commit-past-the-blocker", "moved-onto-main-with-no-commit"],
+)
+def test_the_implement_hook_counts_commits_past_a_merged_base_gone_from_origin(
+    tmp_path, monkeypatch, moved, ending
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    stacked_on_a_merged_blocker(instance, github)
+    if moved:
+        git(workspace, "reset", "--hard", "origin/main")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        result = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=CommandStepRun(run=["true"]),
+                hook="check_implementation",
+                origin=origin("implement"),
+                work_item={"issue": 7},
+                results={"branch": BRANCH["branch"], "base": "agent/6-step"},
+            ),
+        )
+
+        assert result.ending is ending, result.summary
+        if moved:
+            assert result.summary.endswith(
+                f"UncommittedWork: Branch {BRANCH['branch']} has no commits ahead of agent/6-step."
             )
 
     asyncio.run(scenario())
@@ -2510,6 +2568,34 @@ def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_lan
         assert git(worktree, "status", "--porcelain") == ""
         assert git(worktree, "rev-parse", "HEAD^") != git(worktree, "rev-parse", "origin/main")
         assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
+
+    asyncio.run(scenario())
+
+
+def test_publish_replays_only_the_runs_commits_of_a_branch_moved_onto_where_its_base_landed(
+    tmp_path, monkeypatch
+):
+    instance = coder_at(tmp_path)
+    workspace = instance.manifest.workspace.path
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    # Main writes theme.py twice, so replaying main's own commits on main would conflict.
+    stacked_on_a_merged_blocker(instance, github, "LIGHT = True\n", "LIGHT = False\n")
+    git(workspace, "reset", "--hard", "origin/main")
+    commit(workspace, "report.py", "REPORT = True\n")
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
+        result = await opened(dispatcher, 7, stacked | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert created_pull_request(github)[4:6] == ["--base", "main"]
+        origin = tmp_path / "origin.git"
+        assert git(origin, "rev-parse", f"{BRANCH['branch']}^") == git(origin, "rev-parse", "main")
 
     asyncio.run(scenario())
 
