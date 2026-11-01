@@ -8,10 +8,20 @@ import App from "./App.tsx"
 const root = document.getElementById("root")
 if (root === null) throw new Error("index.html has no #root element")
 
-const client = createClient(window.location.origin, browserTransport)
-
-createRoot(root).render(
-  <StrictMode>
-    <App client={client} />
-  </StrictMode>,
-)
+// PROTOTYPE: /proto/settings renders the throwaway Settings dialog prototype on mock data, no hub.
+if (window.location.pathname.startsWith("/proto/settings")) {
+  void import("./proto/settings").then(({ SettingsPrototype }) => {
+    createRoot(root).render(
+      <StrictMode>
+        <SettingsPrototype />
+      </StrictMode>,
+    )
+  })
+} else {
+  const client = createClient(window.location.origin, browserTransport)
+  createRoot(root).render(
+    <StrictMode>
+      <App client={client} />
+    </StrictMode>,
+  )
+}
