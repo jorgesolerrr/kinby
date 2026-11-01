@@ -73,7 +73,7 @@ export function ThreadPanel({
     let frame = 0
     const focusCard = (waited: number) => {
       const card = approvalCard.current
-      if (card?.checkVisibility?.() === false && waited < 60) {
+      if (card?.checkVisibility?.({ visibilityProperty: true }) === false && waited < 60) {
         frame = requestAnimationFrame(() => focusCard(waited + 1))
       } else if (document.activeElement === composer.current) card?.focus()
       else takeFocus(card)

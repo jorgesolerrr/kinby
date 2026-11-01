@@ -130,12 +130,13 @@ describe("a thread's panel", () => {
     })
 
     it("takes focus once the transcript shows, when the thread opens on it hidden", async () => {
-      // The message scroller hides the transcript until it has scrolled to where the thread opens.
+      // The message scroller hides the transcript with `visibility: hidden` until it has scrolled to
+      // where the thread opens. As in a browser, checkVisibility sees that only when asked to.
       let hidden = true
       const own = Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility")
       Object.defineProperty(Element.prototype, "checkVisibility", {
         configurable: true,
-        value: () => !hidden,
+        value: (options?: CheckVisibilityOptions) => !(hidden && options?.visibilityProperty),
       })
       try {
         await reopenParked()
