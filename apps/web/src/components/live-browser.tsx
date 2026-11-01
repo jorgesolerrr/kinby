@@ -1,4 +1,5 @@
 import type { TakeoverFrame, TakeoverPointer, ThreadTakeoverInputCommand } from "@kinby/contract"
+import { cn } from "cn"
 import { type MouseEvent, type Ref, useEffect, useImperativeHandle, useRef, useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
@@ -24,17 +25,20 @@ export interface LiveBrowserInput {
 /**
  * A browser's page live, which takes the user's mouse and keyboard. `watch` starts its frames and
  * must keep its identity; `send` passes the page one input. A `disabled` browser takes no input.
+ * The page keeps its viewport's shape and fits the screen, which `className` can size.
  */
 export function LiveBrowser({
   ref,
   watch,
   send,
   disabled = false,
+  className,
 }: {
   ref?: Ref<LiveBrowserInput>
   watch: () => Frames
   send: (input: TakeoverInput) => Promise<unknown>
   disabled?: boolean
+  className?: string
 }) {
   const view = useLiveView(watch)
   const page = useRef<HTMLImageElement>(null)
@@ -91,7 +95,10 @@ export function LiveBrowser({
         role="application"
         aria-label="The browser"
         tabIndex={0}
-        className="overflow-hidden rounded-lg border outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className={cn(
+          "flex items-center justify-center overflow-hidden rounded-lg border bg-muted outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+          className,
+        )}
         onMouseDown={pointer("down")}
         onMouseUp={pointer("up")}
         onMouseMove={pointer("move")}
@@ -118,7 +125,7 @@ export function LiveBrowser({
             src={`data:image/jpeg;base64,${view.frame}`}
             alt="The browser's page"
             draggable={false}
-            className="w-full select-none"
+            className="max-h-full max-w-full min-w-0 select-none"
           />
         )}
       </div>

@@ -74,7 +74,7 @@ export function ThreadSplit({
       {isMobile && <PaneDrawer pane={pane} onClose={onClose} />}
       {!isMobile && pane !== undefined && (
         <>
-          <ResizableHandle withHandle hidden={hidden} className="mx-1" />
+          <ResizableHandle withHandle variant="ghost" hidden={hidden} className="mx-1" />
           <ResizablePanel id="pane" defaultSize="56%" minSize="380px">
             <div className={hidden ? "flex h-full flex-col p-2" : "flex h-full flex-col p-2 pl-0"}>
               <section
