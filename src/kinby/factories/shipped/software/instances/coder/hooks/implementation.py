@@ -28,6 +28,10 @@ class UncommittedWork(RuntimeError):
     """The step's work is not committed on the run's branch."""
 
 
+class LostBase(RuntimeError):
+    """The run's base is gone from origin, and no pull request of it merged."""
+
+
 class ChangeAndNoChange(RuntimeError):
     """The coding client says the ticket needs no change, and committed a change."""
 
@@ -50,7 +54,7 @@ def check_implementation(end: StepEnd) -> HookResult | None:
     reason = _taken(end.workspace / NO_CHANGE)
     branch, base = str(end.results["branch"]), str(end.results["base"])
     _check_committed(end.workspace, branch)
-    ahead = _git(end.workspace, "rev-list", "--count", f"origin/{base}..{branch}") != "0"
+    ahead = bool(_ahead(end.workspace, branch, base))
     if reason and ahead:
         raise ChangeAndNoChange(
             f"{NO_CHANGE} says the ticket needs no change, but branch {branch} has commits "
@@ -103,7 +107,7 @@ def check_answers(end: StepEnd) -> HookResult | None:
                 "fixed."
             )
     _check_committed(end.workspace, branch)
-    ahead = _git(end.workspace, "rev-list", f"origin/{base}..{branch}").split()
+    ahead = _ahead(end.workspace, branch, base)
     for thread, reply in replies.items():
         if reply["fixed"]:
             named = reply["commit"]
@@ -150,6 +154,40 @@ def _check_committed(workspace: Path, branch: str) -> None:
         )
 
 
+def _ahead(workspace: Path, branch: str, base: str) -> list[str]:
+    """The commits of *branch* past its base, or, once the base merged and left origin, past both
+    its last head and the branch it landed on.
+
+    The coder's github tools count them the same way. A plugin file loads alone, so each keeps
+    its own copy.
+    """
+    merged = _merged_base(workspace, base)
+    past = (f"origin/{base}",) if merged is None else (merged[0], f"origin/{merged[1]}")
+    return _git(workspace, "rev-list", branch, *(f"^{ref}" for ref in past)).split()
+
+
+def _merged_base(workspace: Path, base: str) -> tuple[str, str] | None:
+    """The last head of *base*'s merged pull request and the branch it landed on, both fetched,
+    once *base* is gone from origin. None while origin has *base*."""
+    head = None
+    while not _git(workspace, "ls-remote", "--heads", "origin", f"refs/heads/{base}"):
+        merged = json.loads(
+            _run(
+                workspace,
+                *("gh", "pr", "list", "--state", "merged", "--head", base),
+                *("--json", "headRefOid,baseRefName", "--limit", "1"),
+            )
+        )
+        if not merged:
+            raise LostBase(f"Branch {base} is gone from origin, and no pull request of it merged.")
+        head = head or merged[0]["headRefOid"]
+        base = merged[0]["baseRefName"]
+    if head is None:
+        return None
+    _git(workspace, "fetch", "origin", head, base)
+    return head, base
+
+
 def _resolved(workspace: Path, named: str) -> str:
     """The full SHA of the commit *named*, or empty when it names none."""
     return subprocess.run(
@@ -161,6 +199,10 @@ def _resolved(workspace: Path, named: str) -> str:
 
 
 def _git(workspace: Path, *arguments: str) -> str:
+    return _run(workspace, "git", *arguments)
+
+
+def _run(workspace: Path, *command: str) -> str:
     return subprocess.run(
-        ("git", *arguments), cwd=workspace, capture_output=True, text=True, check=True
+        command, cwd=workspace, capture_output=True, text=True, check=True
     ).stdout.strip()

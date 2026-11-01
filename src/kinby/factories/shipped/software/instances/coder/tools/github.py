@@ -404,9 +404,9 @@ def report_needs_human(
     ]
     if branch is not None and base is not None:
         try:
-            if _git(workspace, "rev-list", "--count", f"origin/{base}..{branch}").strip() != "0":
+            if _ahead(workspace, branch, base):
                 _push(workspace, branch)
-        except CommandFailed as failed:
+        except (CommandFailed, LostBase) as failed:
             body.append(f"Pushing `{branch}` failed: {failed}")
     if blocked := _blocked_behind(workspace, issue):
         body.append(
@@ -499,11 +499,36 @@ def _landed_base(context: ToolContext, branch: str, base: str, run_id: str) -> s
     """*base*, or the branch it landed on when its pull request merged and took it from origin.
 
     A blocker's pull request can merge while the run stacked on it is still coding. The run's
-    own commits, those past the blocker's last head, then move onto the branch it merged into, as
-    GitHub retargets a pull request already open. A base gone unmerged needs a human, and so do
-    commits that conflict there.
+    own commits, those past the blocker's last head and not already on the branch it merged
+    into, then move onto that branch, as GitHub retargets a pull request already open. A base
+    gone unmerged needs a human, and so do commits that conflict there.
     """
-    workspace = context.workspace
+    merged = _merged_base(context.workspace, base)
+    if merged is None:
+        return base
+    head, landed = merged
+    worktree = run_worktree(context.instance, branch, run_id)
+    past = (branch, f"^{head}", f"^origin/{landed}")
+    own = _git(worktree, "rev-list", "--reverse", "--no-merges", *past).split()
+    start = _git(worktree, "rev-parse", "HEAD").strip()
+    _git(worktree, "reset", "--hard", f"origin/{landed}")
+    try:
+        if own:
+            _git(worktree, "cherry-pick", *own)
+    except CommandFailed as failed:
+        _git(worktree, "cherry-pick", "--abort")
+        _git(worktree, "reset", "--hard", start)
+        raise LostBase(f"Branch {branch} does not rebase onto {landed}: {failed}") from failed
+    return landed
+
+
+def _merged_base(workspace: Path, base: str) -> tuple[str, str] | None:
+    """The last head of *base*'s merged pull request and the branch it landed on, both fetched,
+    once *base* is gone from origin. None while origin has *base*.
+
+    A pull request can merge into a branch whose own pull request merged in turn, so the landing
+    follows them to a branch origin still has.
+    """
     head = None
     while not _git(workspace, "ls-remote", "--heads", "origin", f"refs/heads/{base}").strip():
         merged = json.loads(
@@ -518,15 +543,17 @@ def _landed_base(context: ToolContext, branch: str, base: str, run_id: str) -> s
         head = head or merged[0]["headRefOid"]
         base = merged[0]["baseRefName"]
     if head is None:
-        return base
-    worktree = run_worktree(context.instance, branch, run_id)
-    _git(worktree, "fetch", "origin", head, base)
-    try:
-        _git(worktree, "rebase", "--onto", f"origin/{base}", head, branch)
-    except CommandFailed as failed:
-        _git(worktree, "rebase", "--abort")
-        raise LostBase(f"Branch {branch} does not rebase onto {base}: {failed}") from failed
-    return base
+        return None
+    _git(workspace, "fetch", "origin", head, base)
+    return head, base
+
+
+def _ahead(workspace: Path, branch: str, base: str) -> list[str]:
+    """The commits of *branch* past its base, or, once the base merged and left origin, past both
+    its last head and the branch it landed on."""
+    merged = _merged_base(workspace, base)
+    past = (f"origin/{base}",) if merged is None else (merged[0], f"origin/{merged[1]}")
+    return _git(workspace, "rev-list", branch, *(f"^{ref}" for ref in past)).split()
 
 
 def _push_fix_round(
