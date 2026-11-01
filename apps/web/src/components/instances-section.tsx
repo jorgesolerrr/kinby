@@ -20,24 +20,22 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
 import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty"
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Item,
   ItemActions,
   ItemContent,
-  ItemGroup,
+  ItemFooter,
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
@@ -46,12 +44,17 @@ import { useFollowing } from "@/hooks/use-following"
 import { type Deleting, followDeletion } from "@/lib/deletion"
 import { instanceName } from "@/lib/instances"
 import { type Followed, followOperation, reason } from "@/lib/operation"
-import { openHome, selectInstance } from "@/lib/selection"
-import { ArchiveRestoreIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
+import { selectInstance } from "@/lib/selection"
+import {
+  ArchiveRestoreIcon,
+  CircleXIcon,
+  MoreHorizontalIcon,
+  TriangleAlertIcon,
+} from "lucide-react"
 
 /**
- * The hub's removed instances, each with Restore and Delete permanently, or an empty state with a
- * link home. A failed restoration says why on its row. One that succeeds lists the instances again
+ * The hub's removed instances, each a row with Restore and a menu with Delete permanently, or an
+ * empty state. A failed restoration says why on its row. One that succeeds lists the instances again
  * with `onChanged`, waits for the lists, and opens the instance, which comes back stopped. A
  * deletion that succeeds lists them again too, and the row leaves. `onChanged` must keep its
  * identity. A row being restored stays until its restoration ends, though the lists may drop it
@@ -91,7 +94,7 @@ export function InstancesSection({
         (rows.length === 0 ? (
           <NothingRemoved />
         ) : (
-          <ItemGroup className="max-w-2xl">
+          <ul aria-label="Removed instances" className="flex flex-col divide-y">
             {rows.map((instance) => (
               <RemovedRow
                 key={instance.instance_id}
@@ -103,7 +106,7 @@ export function InstancesSection({
                 onChanged={onChanged}
               />
             ))}
-          </ItemGroup>
+          </ul>
         ))}
     </SectionFrame>
   )
@@ -121,18 +124,6 @@ function NothingRemoved() {
           An instance you remove shows here, and you can restore it.
         </EmptyDescription>
       </EmptyHeader>
-      <EmptyContent>
-        <a
-          className={buttonVariants({ variant: "outline" })}
-          href="/"
-          onClick={(event) => {
-            event.preventDefault()
-            openHome()
-          }}
-        >
-          Go home
-        </a>
-      </EmptyContent>
     </Empty>
   )
 }
@@ -177,29 +168,50 @@ function RemovedRow({
   // The dialog follows the deletion, so it stays open until the deletion ends.
   const [deleting, setDeleting] = useState(false)
   return (
-    <Item render={<li />} variant="outline">
-      <ItemMedia>
-        <InstanceAvatar avatar={instance.avatar} name={name} />
-      </ItemMedia>
-      <ItemContent>
-        <ItemTitle>{name}</ItemTitle>
-      </ItemContent>
-      <ItemActions>
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => {
-            onRestoring(instance)
-            setRequest({ instanceId: instance.instance_id })
-          }}
-        >
-          {busy && <Spinner data-icon="inline-start" />}
-          Restore
-        </Button>
+    <li aria-label={name}>
+      <Item size="sm">
+        <ItemMedia>
+          <InstanceAvatar avatar={instance.avatar} name={name} />
+        </ItemMedia>
+        <ItemContent className="min-w-0">
+          <ItemTitle>{name}</ItemTitle>
+        </ItemContent>
+        <ItemActions>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              onRestoring(instance)
+              setRequest({ instanceId: instance.instance_id })
+            }}
+          >
+            {busy && <Spinner data-icon="inline-start" />}
+            Restore
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label={`More for ${name}`} />}
+            >
+              <MoreHorizontalIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onClick={() => setAsking(true)}>
+                Delete permanently…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ItemActions>
+        {followed?.state === "failed" && (
+          <ItemFooter>
+            <Alert variant="destructive">
+              <CircleXIcon />
+              <AlertTitle>The restoration failed</AlertTitle>
+              <AlertDescription>{followed.detail}</AlertDescription>
+            </Alert>
+          </ItemFooter>
+        )}
         <AlertDialog open={asking} onOpenChange={(open) => setAsking(open || deleting)}>
-          <AlertDialogTrigger render={<Button variant="destructive" />}>
-            Delete permanently
-          </AlertDialogTrigger>
           <AlertDialogContent className="max-h-dvh overflow-y-auto sm:max-w-lg">
             <Deletion
               caller={caller}
@@ -211,15 +223,8 @@ function RemovedRow({
             />
           </AlertDialogContent>
         </AlertDialog>
-      </ItemActions>
-      {followed?.state === "failed" && (
-        <Alert variant="destructive" className="basis-full">
-          <CircleXIcon />
-          <AlertTitle>The restoration failed</AlertTitle>
-          <AlertDescription>{followed.detail}</AlertDescription>
-        </Alert>
-      )}
-    </Item>
+      </Item>
+    </li>
   )
 }
 

@@ -1226,7 +1226,8 @@ describe("the Instances section", () => {
     const { clock } = openApp({ signedIn: true, instances: [ada], removed: [grace] })
     const user = userEvent.setup()
 
-    await user.click(await screen.findByRole("button", { name: "Delete permanently" }))
+    await user.click(await screen.findByRole("button", { name: "More for Grace" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Delete permanently…" }))
     const confirm = within(
       await screen.findByRole("alertdialog", { name: "Delete Grace permanently" }),
     )
