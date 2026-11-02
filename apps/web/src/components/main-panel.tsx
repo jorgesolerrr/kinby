@@ -251,7 +251,7 @@ function TabBody({
           caller={caller}
           clock={clock}
           instance={instance}
-          onChanged={onChanged}
+          update={lifecycle.update}
         />
       )
     case "routines":

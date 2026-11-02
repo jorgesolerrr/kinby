@@ -1,10 +1,17 @@
-import type { InstanceSummary, OperationGetResult, OperationStep } from "@kinby/contract"
+import type {
+  Client,
+  Clock,
+  InstanceSummary,
+  OperationGetResult,
+  OperationStep,
+} from "@kinby/contract"
 import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { CoreSection } from "@/components/core-section"
+import { useUpdate } from "@/hooks/use-update"
 
 const HUB = "b".repeat(40)
 const ROUTE_MISSING =
@@ -38,6 +45,22 @@ function operation(
   return { operation_id: "op-1", instance_id: "hub-ada", kind: "update", state, detail, steps }
 }
 
+/** The section on the update an instance header lends it. */
+function Section({
+  caller,
+  clock,
+  instance,
+  onChanged,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+  onChanged: () => void
+}) {
+  const update = useUpdate(caller, clock, instance.instance_id, onChanged)
+  return <CoreSection instance={instance} update={update} />
+}
+
 function openSection(instance: InstanceSummary, answers: Answers = {}) {
   const caller = stubCaller({
     "instance.update": ({ instance_id }) => ({ operation_id: "op-1", instance_id }),
@@ -45,7 +68,7 @@ function openSection(instance: InstanceSummary, answers: Answers = {}) {
   })
   const clock = fakeClock()
   const onChanged = vi.fn()
-  render(<CoreSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />)
+  render(<Section caller={caller} clock={clock} instance={instance} onChanged={onChanged} />)
   return { caller, clock, onChanged, user: userEvent.setup() }
 }
 

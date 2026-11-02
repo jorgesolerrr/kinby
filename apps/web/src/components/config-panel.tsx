@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePace } from "@/hooks/use-pace"
 import { usePolled } from "@/hooks/use-polled"
+import type { Update } from "@/hooks/use-update"
 import { lastChanged } from "@/lib/config-changes"
 import { behind, OlderCore } from "@/lib/older-core"
 import { type Pace, pace, retried } from "@/lib/operation"
@@ -45,8 +46,8 @@ import { type ConfigLink, leaveLink, linkedSection } from "@/lib/selection"
 type Caller = Pick<InstanceClient, "call">
 
 /**
- * What a section may use: the instance and its status, the hub, a way to list the instances again,
- * and the other sections.
+ * What a section may use: the instance and its status, the hub, the instance's update, and the
+ * other sections.
  */
 interface Panel {
   client: Caller
@@ -57,8 +58,8 @@ interface Panel {
   status: InstanceStatusResult | undefined
   /** Read the status again, after a change that may add a recreate reason. */
   statusChanged: () => void
-  /** List the instances again. */
-  onChanged: () => void
+  /** The instance's one update, lent by its header. */
+  update: Update
   /** Open another section by its label. */
   open: (label: string) => void
 }
@@ -150,9 +151,7 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: CORE,
         hint: "the kinby it runs, update",
-        render: ({ caller, clock, instance, onChanged }) => (
-          <CoreSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
-        ),
+        render: ({ instance, update }) => <CoreSection instance={instance} update={update} />,
       },
     ],
   },
@@ -181,20 +180,20 @@ const STATUS_INTERVAL_MS = 30_000
  * The instance's config: its sections grouped in a left column, or a select on a phone, the
  * selected one beside it, and above it one notice for every change that waits on a recreate. A dot
  * marks a section that needs a look. `client` reaches the instance and `caller` the hub, and
- * `onChanged` lists the instances again.
+ * `update` is the one the instance header lends.
  */
 export function ConfigPanel({
   client,
   caller,
   clock,
   instance,
-  onChanged,
+  update,
 }: {
   client: Caller
   caller: Pick<Client, "call">
   clock: Clock
   instance: InstanceSummary
-  onChanged: () => void
+  update: Update
 }) {
   const [selected, setSelected] = useState(() => {
     const linked = linkedSection()
@@ -222,7 +221,7 @@ export function ConfigPanel({
     instance,
     status,
     statusChanged,
-    onChanged,
+    update,
     open,
   }
   return (
