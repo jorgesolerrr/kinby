@@ -14,6 +14,7 @@ import { CoreSection } from "@/components/core-section"
 import { ManifestSection } from "@/components/manifest-section"
 import { PermissionsSection } from "@/components/permissions-section"
 import { RecreateNotice } from "@/components/recreate-notice"
+import { SectionFrame } from "@/components/section-frame"
 import { SecretsSection } from "@/components/secrets-section"
 import { SkillsSection } from "@/components/skills-section"
 import { ToolsSection } from "@/components/tools-section"
@@ -21,17 +22,18 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item"
-import { Separator } from "@/components/ui/separator"
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { usePace } from "@/hooks/use-pace"
 import { usePolled } from "@/hooks/use-polled"
 import { lastChanged } from "@/lib/config-changes"
@@ -39,17 +41,6 @@ import { behind, OlderCore } from "@/lib/older-core"
 import { type Pace, pace, retried } from "@/lib/operation"
 import { type OpenedPrompt, openPrompt, PROMPT_FILES, savePrompt } from "@/lib/prompts"
 import { type ConfigLink, leaveLink, linkedSection } from "@/lib/selection"
-import {
-  CpuIcon,
-  FileTextIcon,
-  KeyRoundIcon,
-  type LucideIcon,
-  NotebookPenIcon,
-  ShieldIcon,
-  SparklesIcon,
-  TagIcon,
-  WrenchIcon,
-} from "lucide-react"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -76,7 +67,6 @@ interface Panel {
 interface Section {
   label: string
   hint: string
-  icon: LucideIcon
   render?: (panel: Panel) => ReactNode
   /** The recreate reason a change in this section leaves. */
   reason?: RecreateReason
@@ -91,7 +81,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: "Behavior prompt",
         hint: "SYSTEM.md, how the agent acts",
-        icon: FileTextIcon,
         render: ({ client, clock }) => (
           <PromptSection client={client} clock={clock} name="behavior" />
         ),
@@ -99,19 +88,16 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: "Recap prompt",
         hint: "RECAP.md, what a recap looks at",
-        icon: NotebookPenIcon,
         render: ({ client, clock }) => <PromptSection client={client} clock={clock} name="recap" />,
       },
       {
         label: "Permissions",
         hint: "ceiling, mode, tool rules, shell patterns",
-        icon: ShieldIcon,
         render: ({ client, clock }) => <PermissionsSection client={client} clock={clock} />,
       },
       {
         label: "Manifest",
         hint: "models, budgets, timezone",
-        icon: CpuIcon,
         render: ({ client, clock }) => <ManifestSection client={client} clock={clock} />,
       },
     ],
@@ -122,7 +108,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: "Skills",
         hint: "library picks, instance, kinby, workspace",
-        icon: SparklesIcon,
         render: ({ client, caller, clock, instance }) => (
           <SkillsSection
             client={client}
@@ -135,7 +120,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: "Tools",
         hint: "what the instance can do",
-        icon: WrenchIcon,
         render: ({ client, clock, open }) => (
           <ToolsSection
             client={client}
@@ -152,7 +136,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: "Secrets and login",
         hint: "write-only values, sign-in",
-        icon: KeyRoundIcon,
         reason: "secrets",
         render: ({ caller, clock, instance, status, statusChanged }) => (
           <SecretsSection
@@ -167,7 +150,6 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: CORE,
         hint: "the kinby it runs, update",
-        icon: TagIcon,
         render: ({ caller, clock, instance, onChanged }) => (
           <CoreSection caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
         ),
@@ -196,9 +178,9 @@ const APPLIES: Record<PromptName, string> = {
 const STATUS_INTERVAL_MS = 30_000
 
 /**
- * The instance's config: its sections grouped in a left column, the selected one on the right,
- * and above it one notice for every change that waits on a recreate. A section that needs the user
- * says why in place of its hint. `client` reaches the instance and `caller` the hub, and
+ * The instance's config: its sections grouped in a left column, or a select on a phone, the
+ * selected one beside it, and above it one notice for every change that waits on a recreate. A dot
+ * marks a section that needs a look. `client` reaches the instance and `caller` the hub, and
  * `onChanged` lists the instances again.
  */
 export function ConfigPanel({
@@ -230,6 +212,7 @@ export function ConfigPanel({
   )
   const [status, readAgain] = usePolled(read, clock, true, STATUS_INTERVAL_MS)
   const statusChanged = useCallback(() => void readAgain(), [readAgain])
+  const isMobile = useIsMobile()
   const reasons = status?.recreate_reasons ?? []
   const needs = needsOf(instance, reasons)
   const panel: Panel = {
@@ -243,23 +226,24 @@ export function ConfigPanel({
     open,
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <nav
-        aria-label="Config sections"
-        className="flex shrink-0 flex-col gap-4 overflow-y-auto border-b p-3 md:w-72 md:border-r md:border-b-0"
-      >
-        {GROUPS.map((group) => (
-          <SectionGroup
-            key={group.label}
-            label={group.label}
-            sections={group.sections}
-            needs={needs}
-            selected={selected}
-            onSelect={open}
-          />
-        ))}
-      </nav>
-      <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-6">
+    <div className="flex flex-col gap-6 p-6 max-md:p-4 md:flex-row md:gap-8">
+      {isMobile ? (
+        <SectionPicker needs={needs} selected={selected} onSelect={open} />
+      ) : (
+        <nav aria-label="Config sections" className="flex w-52 shrink-0 flex-col gap-4">
+          {GROUPS.map((group) => (
+            <SectionGroup
+              key={group.label}
+              label={group.label}
+              sections={group.sections}
+              needs={needs}
+              selected={selected}
+              onSelect={open}
+            />
+          ))}
+        </nav>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
         <RecreateNotice
           caller={caller}
           clock={clock}
@@ -267,15 +251,14 @@ export function ConfigPanel({
           reasons={reasons}
           onRecreated={statusChanged}
         />
-        <div>
-          <h1 className="text-xl font-semibold">{section?.label}</h1>
-          <p className="text-sm text-muted-foreground">{section?.hint}</p>
-        </div>
-        <Separator />
-        <OlderCore value={behind(instance) ? () => open(CORE) : undefined}>
-          <Fragment key={selected}>{section?.render?.(panel)}</Fragment>
-        </OlderCore>
-      </main>
+        {section !== undefined && (
+          <SectionFrame variant="page" title={section.label} lead={section.hint}>
+            <OlderCore value={behind(instance) ? () => open(CORE) : undefined}>
+              <Fragment key={selected}>{section.render?.(panel)}</Fragment>
+            </OlderCore>
+          </SectionFrame>
+        )}
+      </div>
     </div>
   )
 }
@@ -299,7 +282,7 @@ function needsOf(
   return needs
 }
 
-/** One group of the left column, as a list named for the group. A need replaces a hint. */
+/** One group of the left column, its sections as buttons. A dot marks a section that needs a look. */
 function SectionGroup({
   label,
   sections,
@@ -313,43 +296,95 @@ function SectionGroup({
   selected: string
   onSelect: (label: string) => void
 }) {
-  const labelId = useId()
   return (
-    <div className="flex flex-col gap-1">
-      <span id={labelId} className="px-3 text-xs font-medium text-muted-foreground">
-        {label}
-      </span>
-      <ItemGroup aria-labelledby={labelId}>
-        {sections.map(({ label, hint, icon: Icon, render }) => (
-          <li key={label} className="list-none">
-            <Item
-              size="xs"
-              variant={label === selected ? "muted" : "default"}
-              className="text-left"
-              render={
-                <button
-                  type="button"
-                  aria-label={label}
-                  aria-current={label === selected || undefined}
-                  disabled={render === undefined}
-                  onClick={() => onSelect(label)}
-                />
-              }
-            >
-              <ItemMedia variant="icon">
-                <Icon />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle>{label}</ItemTitle>
-                <ItemDescription>
-                  {render === undefined ? "Not available yet" : (needs[label] ?? hint)}
-                </ItemDescription>
-              </ItemContent>
-            </Item>
-          </li>
+    <fieldset className="flex flex-col gap-1">
+      <legend className="mb-1 px-3 text-xs font-medium text-muted-foreground">{label}</legend>
+      {sections.map(({ label, render }) => (
+        <SectionButton
+          key={label}
+          label={label}
+          need={needs[label]}
+          current={label === selected}
+          disabled={render === undefined}
+          onClick={() => onSelect(label)}
+        />
+      ))}
+    </fieldset>
+  )
+}
+
+function SectionButton({
+  label,
+  need,
+  current,
+  disabled,
+  onClick,
+}: {
+  label: string
+  need: string | undefined
+  current: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  const needId = useId()
+  return (
+    <Button
+      variant="nav"
+      aria-label={label}
+      aria-describedby={need === undefined ? undefined : needId}
+      aria-current={current ? "page" : undefined}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {label}
+      {need !== undefined && <NeedDot id={needId} need={need} />}
+    </Button>
+  )
+}
+
+function NeedDot({ id, need }: { id?: string; need: string }) {
+  return (
+    <span id={id} className="ml-auto size-2 shrink-0 self-center rounded-full bg-ember">
+      <span className="sr-only">{need}</span>
+    </span>
+  )
+}
+
+/** The sections as a select, which takes the column's place on a phone. */
+function SectionPicker({
+  needs,
+  selected,
+  onSelect,
+}: {
+  needs: Partial<Record<string, string>>
+  selected: string
+  onSelect: (label: string) => void
+}) {
+  return (
+    <Select
+      items={SECTIONS.map(({ label }) => ({ value: label, label }))}
+      value={selected}
+      onValueChange={(picked) => {
+        if (typeof picked === "string") onSelect(picked)
+      }}
+    >
+      <SelectTrigger aria-label="Config section" className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {GROUPS.map((group) => (
+          <SelectGroup key={group.label}>
+            <SelectLabel>{group.label}</SelectLabel>
+            {group.sections.map(({ label, render }) => (
+              <SelectItem key={label} value={label} disabled={render === undefined}>
+                {label}
+                {needs[label] !== undefined && <NeedDot need={needs[label]} />}
+              </SelectItem>
+            ))}
+          </SelectGroup>
         ))}
-      </ItemGroup>
-    </div>
+      </SelectContent>
+    </Select>
   )
 }
 
