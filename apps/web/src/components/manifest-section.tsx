@@ -29,6 +29,7 @@ import {
   FieldLabel,
   FieldLegend,
   FieldSet,
+  FieldTitle,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -94,6 +95,7 @@ const TIMEZONES = [...new Set(["UTC", ...Intl.supportedValuesOf("timeZone")])]
  * so a save over a change made since is refused, and "Load theirs" reads the file again.
  */
 export function ManifestSection({ client, clock }: { client: Caller; clock: Clock }) {
+  const recapId = useId()
   const pacing = usePace(clock)
   const [opened, setOpened] = useState<OpenedManifest>()
   const [draft, setDraft] = useState<ManifestDraft>()
@@ -222,13 +224,15 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
       </FieldSet>
       <FieldSet>
         <FieldLegend>Routines</FieldLegend>
-        <TimezonePicker
-          value={draft.values.routines.timezone}
-          error={refused["routines.timezone"]}
-          onChange={(timezone) =>
-            edit({ ...draft, values: { ...draft.values, routines: { timezone } } })
-          }
-        />
+        <FieldGroup>
+          <TimezonePicker
+            value={draft.values.routines.timezone}
+            error={refused["routines.timezone"]}
+            onChange={(timezone) =>
+              edit({ ...draft, values: { ...draft.values, routines: { timezone } } })
+            }
+          />
+        </FieldGroup>
       </FieldSet>
       <FieldSet>
         <FieldLegend>Tools, memory, and feedback</FieldLegend>
@@ -254,9 +258,13 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
               edit({ ...draft, numbers: { ...draft.numbers, bash_timeout_seconds: text } })
             }
           />
-          <FieldSet>
-            <FieldLegend variant="label">Recap</FieldLegend>
+          <Field orientation="responsive">
+            <FieldContent>
+              <FieldTitle id={recapId}>Recap</FieldTitle>
+              <FieldDescription>Off keeps the trace but writes no model recap.</FieldDescription>
+            </FieldContent>
             <ToggleGroup
+              aria-labelledby={recapId}
               value={[draft.values.memory.recap]}
               onValueChange={([recap]) => {
                 if (recap === "every-turn" || recap === "off") {
@@ -270,8 +278,7 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <FieldDescription>Off keeps the trace but writes no model recap.</FieldDescription>
-          </FieldSet>
+          </Field>
           <SwitchField
             label="Ask for a rating"
             description="Ask to rate each finished turn."
@@ -353,8 +360,11 @@ function ModelPicker({
     })),
   ]
   return (
-    <Field data-invalid={invalid}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    <Field orientation="responsive" data-invalid={invalid}>
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <FieldError>{error}</FieldError>
+      </FieldContent>
       <Select
         items={items}
         value={value ?? NONE}
@@ -383,7 +393,6 @@ function ModelPicker({
           </SelectGroup>
         </SelectContent>
       </Select>
-      <FieldError>{error}</FieldError>
     </Field>
   )
 }
@@ -471,8 +480,12 @@ function TimezonePicker({
   const id = useId()
   const invalid = error !== undefined || undefined
   return (
-    <Field data-invalid={invalid}>
-      <FieldLabel htmlFor={id}>Routines timezone</FieldLabel>
+    <Field orientation="responsive" data-invalid={invalid}>
+      <FieldContent>
+        <FieldLabel htmlFor={id}>Routines timezone</FieldLabel>
+        <FieldDescription>Routine schedules read in this zone.</FieldDescription>
+        <FieldError>{error}</FieldError>
+      </FieldContent>
       <Combobox
         items={TIMEZONES}
         value={value}
@@ -492,8 +505,6 @@ function TimezonePicker({
           </ComboboxList>
         </ComboboxContent>
       </Combobox>
-      <FieldDescription>Routine schedules read in this zone.</FieldDescription>
-      <FieldError>{error}</FieldError>
     </Field>
   )
 }
@@ -516,8 +527,12 @@ function NumberField({
   const id = useId()
   const invalid = error !== undefined || undefined
   return (
-    <Field data-invalid={invalid}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    <Field orientation="responsive" data-invalid={invalid}>
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <FieldDescription>{description}</FieldDescription>
+        <FieldError>{error}</FieldError>
+      </FieldContent>
       <Input
         id={id}
         type="number"
@@ -527,8 +542,6 @@ function NumberField({
         aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
       />
-      <FieldDescription>{description}</FieldDescription>
-      <FieldError>{error}</FieldError>
     </Field>
   )
 }
@@ -549,16 +562,18 @@ function TextField({
   const id = useId()
   const invalid = error !== undefined || undefined
   return (
-    <Field data-invalid={invalid}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    <Field orientation="responsive" data-invalid={invalid}>
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <FieldDescription>{description}</FieldDescription>
+        <FieldError>{error}</FieldError>
+      </FieldContent>
       <Input
         id={id}
         value={value}
         aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
       />
-      <FieldDescription>{description}</FieldDescription>
-      <FieldError>{error}</FieldError>
     </Field>
   )
 }
@@ -577,11 +592,11 @@ function SwitchField({
   const id = useId()
   return (
     <Field orientation="horizontal">
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
       <FieldContent>
         <FieldLabel htmlFor={id}>{label}</FieldLabel>
         <FieldDescription>{description}</FieldDescription>
       </FieldContent>
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </Field>
   )
 }

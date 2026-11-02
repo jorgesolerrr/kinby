@@ -10,11 +10,12 @@ import type {
   PromptResult,
 } from "@kinby/contract"
 import { type Answers, fakeClock, instanceSummary, stubCaller } from "@kinby/contract/testing"
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { ConfigPanel } from "@/components/config-panel"
+import { onAPhone } from "@/components/thread-testing"
 
 const behavior: PromptResult = { content: "Be brief.\n", hash: "hash-1", default: false }
 
@@ -167,29 +168,23 @@ const section = (name: string) =>
 const marked = (item: HTMLElement) =>
   !item.classList.contains("flex") && !item.classList.contains("list-none")
 
+const dotted = () =>
+  within(screen.getByRole("navigation", { name: "Config sections" }))
+    .getAllByRole("button")
+    .filter((button) => button.hasAttribute("aria-describedby"))
+    .map((button) => button.getAttribute("aria-label"))
+
 describe("ConfigPanel", () => {
-  it("left-aligns every line of a section row, since a button centers its text", () => {
+  it("lists every section in its group", async () => {
     openPanel({})
 
     const sections = screen.getByRole("navigation", { name: "Config sections" })
-    // jsdom applies no Tailwind, so the class stands in for the computed alignment.
-    expect(
-      within(sections)
-        .getAllByRole("button")
-        .every((button) => button.classList.contains("text-left")),
-    ).toBe(true)
-  })
-
-  it("lists every section in its group, and the ones not built yet as unavailable", async () => {
-    openPanel({})
-
-    const sections = screen.getByRole("navigation", { name: "Config sections" })
-    const group = (name: string) => within(sections).getByRole("list", { name })
+    const group = (name: string) => within(sections).getByRole("group", { name })
     const labels = (name: string) =>
       within(group(name))
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label"))
-    expect(within(sections).getAllByRole("list")).toEqual(
+    expect(within(sections).getAllByRole("group")).toEqual(
       ["Behavior", "Capabilities", "Instance"].map(group),
     )
     expect(labels("Behavior")).toEqual([
@@ -200,56 +195,79 @@ describe("ConfigPanel", () => {
     ])
     expect(labels("Capabilities")).toEqual(["Skills", "Tools"])
     expect(labels("Instance")).toEqual(["Secrets and login", "Core version"])
-    expect(screen.getByRole("button", { name: "Behavior prompt" })).toHaveProperty(
-      "disabled",
-      false,
-    )
-    expect(screen.getByRole("button", { name: "Recap prompt" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Skills" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Tools" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Permissions" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Manifest" })).toHaveProperty("disabled", false)
-    expect(screen.getByRole("button", { name: "Core version" })).toHaveProperty("disabled", false)
     expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
   })
 
-  it("shows no list marker beside a section", async () => {
+  it("switches sections from the list and marks the open one", async () => {
+    const { user } = openPanel({})
+
+    expect(section("Behavior prompt").getAttribute("aria-current")).toBe("page")
+    await user.click(section("Recap prompt"))
+
+    expect(await screen.findByRole("heading", { name: "Recap prompt" })).toBeDefined()
+    expect(section("Recap prompt").getAttribute("aria-current")).toBe("page")
+    expect(section("Behavior prompt").hasAttribute("aria-current")).toBe(false)
+  })
+
+  it("shows the open section's title and hint above it", async () => {
     openPanel({})
 
-    const sections = screen.getByRole("navigation", { name: "Config sections" })
-    expect(within(sections).getAllByRole("listitem").filter(marked)).toEqual([])
-    expect(await screen.findByRole("heading", { name: "Behavior prompt" })).toBeDefined()
+    const frame = await screen.findByRole("region", { name: "Behavior prompt" })
+    expect(within(frame).getByText("SYSTEM.md, how the agent acts")).toBeDefined()
+    expect(within(frame).getByRole("textbox", { name: "SYSTEM.md" })).toBeDefined()
   })
 
-  it("says the core section is behind the hub in place of its hint", async () => {
-    const section = () => screen.getByRole("button", { name: "Core version" })
+  it("marks no section when none needs a look", async () => {
+    const { clock } = openPanel({}, ada)
+    await act(() => clock.advance(0))
 
-    openPanel({}, ada)
-    expect(section().textContent).toContain("the kinby it runs, update")
-    cleanup()
+    expect(dotted()).toEqual([])
+  })
+
+  it("marks the core section behind the hub, and opens it", async () => {
     const { user } = openPanel({}, behind)
 
-    expect(section().textContent).toContain("behind the hub")
-    expect(section().textContent).not.toContain("the kinby it runs, update")
-    await user.click(section())
+    expect(dotted()).toEqual(["Core version"])
+    await user.click(
+      screen.getByRole("button", { name: "Core version", description: "behind the hub" }),
+    )
     expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
   })
 
-  it("says the core section is behind the factory in place of its hint", () => {
+  it("marks the core section behind the factory", () => {
     openPanel({}, templateBehind)
 
-    const section = screen.getByRole("button", { name: "Core version" })
-    expect(section.textContent).toContain("behind the factory")
-    expect(section.textContent).not.toContain("the kinby it runs, update")
+    expect(dotted()).toEqual(["Core version"])
+    expect(
+      screen.getByRole("button", { name: "Core version", description: "behind the factory" }),
+    ).toBeDefined()
   })
 
-  it("says the core section has no hub route in place of its hint", () => {
+  it("marks the core section with no hub route", () => {
     openPanel({}, routeMissing)
 
-    const section = screen.getByRole("button", { name: "Core version" })
-    expect(section.textContent).toContain("no hub route")
-    expect(section.textContent).not.toContain("the kinby it runs, update")
+    expect(dotted()).toEqual(["Core version"])
+    expect(
+      screen.getByRole("button", { name: "Core version", description: "no hub route" }),
+    ).toBeDefined()
+  })
+
+  describe("on a phone", () => {
+    onAPhone()
+
+    it("switches sections from a select in place of the list", async () => {
+      const { user } = openPanel({})
+
+      expect(screen.queryByRole("navigation", { name: "Config sections" })).toBeNull()
+      await user.click(screen.getByRole("combobox", { name: "Config section" }))
+      await user.click(await screen.findByRole("option", { name: "Manifest" }))
+
+      expect(await screen.findByRole("heading", { name: "Manifest" })).toBeDefined()
+      expect(screen.getByRole("combobox", { name: "Config section" }).textContent).toMatch(
+        /^Manifest/,
+      )
+    })
   })
 
   it("reads the first section again once the socket connects, with no error in between", async () => {
@@ -797,8 +815,10 @@ describe("ConfigPanel", () => {
       expect(notice.getAllByRole("button").map((button) => button.textContent)).toEqual([
         "Recreate",
       ])
-      expect(within(section("Secrets and login")).getByText("Recreate to apply")).toBeDefined()
-      expect(within(section("Permissions")).queryByText("Recreate to apply")).toBeNull()
+      expect(dotted()).toEqual(["Secrets and login"])
+      expect(
+        screen.getByRole("button", { name: "Secrets and login", description: "Recreate to apply" }),
+      ).toBeDefined()
     })
 
     it("recreates with one button, shows its steps, and goes once nothing waits", async () => {
