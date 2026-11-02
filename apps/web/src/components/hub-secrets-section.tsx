@@ -280,13 +280,15 @@ function SecretRow({
 
   return (
     <li aria-label={name}>
-      <Item size="sm">
+      <Item size="row">
         <ItemMedia variant="icon">
           <KeyRoundIcon aria-hidden className="text-muted-foreground" />
         </ItemMedia>
         <ItemContent className="min-w-0">
-          <ItemTitle>
-            <code className="break-all">{name}</code>
+          <ItemTitle className="max-w-full">
+            <code className="min-w-0 truncate" title={name}>
+              {name}
+            </code>
           </ItemTitle>
           <ItemDescription lines="one" title={linked}>
             {linked}

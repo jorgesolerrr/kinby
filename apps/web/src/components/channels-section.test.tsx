@@ -153,7 +153,7 @@ async function pickKind(user: Opened["user"], kind: string) {
 
 async function addTelegram(user: Opened["user"]) {
   const form = await openAdd(user)
-  await pickKind(user, "telegram")
+  await pickKind(user, "Telegram")
   await user.type(form.getByLabelText("Name"), "Phone")
   await user.type(form.getByLabelText(/^Bot token/), "bot-token")
   await user.click(form.getByRole("button", { name: "Add channel" }))
@@ -207,12 +207,12 @@ describe("ChannelsSection", () => {
       channel({ channel_id: "new-id", name: "New", kind: "email" }),
     ])
 
-    expect((await row("Off")).getByText("telegram · Disabled")).toBeTruthy()
-    expect((await row("Phone")).getByText("telegram · Waiting for 123456")).toBeTruthy()
-    expect((await row("Broken")).getByText(/^email · Failed \w+ \d+/)).toBeTruthy()
-    expect((await row("Recovered")).getByText(/^email · Sent \w+ \d+/)).toBeTruthy()
-    expect((await row("Inbox")).getByText(/^email · Sent \w+ \d+/)).toBeTruthy()
-    expect((await row("New")).getByText("email · Nothing sent yet")).toBeTruthy()
+    expect((await row("Off")).getByText("Telegram · Disabled")).toBeTruthy()
+    expect((await row("Phone")).getByText("Telegram · Waiting for 123456")).toBeTruthy()
+    expect((await row("Broken")).getByText(/^Email · Failed \w+ \d+/)).toBeTruthy()
+    expect((await row("Recovered")).getByText(/^Email · Sent \w+ \d+/)).toBeTruthy()
+    expect((await row("Inbox")).getByText(/^Email · Sent \w+ \d+/)).toBeTruthy()
+    expect((await row("New")).getByText("Email · Nothing sent yet")).toBeTruthy()
   })
 
   it("disables a channel and enables it again from its row", async () => {
@@ -224,7 +224,7 @@ describe("ChannelsSection", () => {
     const enabled = inbox.getByRole("switch", { name: "Enabled" })
     await user.click(enabled)
     await waitFor(() => expect(enabled.getAttribute("aria-checked")).toBe("false"))
-    expect(inbox.getByText("email · Disabled")).toBeTruthy()
+    expect(inbox.getByText("Email · Disabled")).toBeTruthy()
     await user.click(enabled)
     await waitFor(() => expect(enabled.getAttribute("aria-checked")).toBe("true"))
 
@@ -288,8 +288,8 @@ describe("ChannelsSection", () => {
     const inbox = await unfold(user, "Inbox")
     await user.click(inbox.getByRole("button", { name: "Send test" }))
 
-    await waitFor(() => expect(inbox.queryByText("email · Nothing sent yet")).toBeNull())
-    expect(inbox.getByText(/^email · Sent /)).toBeTruthy()
+    await waitFor(() => expect(inbox.queryByText("Email · Nothing sent yet")).toBeNull())
+    expect(inbox.getByText(/^Email · Sent /)).toBeTruthy()
     expect(writes(caller)).toEqual([{ method: "channel.test", params: { channel_id: "mail-id" } }])
   })
 
@@ -371,7 +371,7 @@ describe("ChannelsSection", () => {
     const { user } = openPage()
 
     const form = await openAdd(user)
-    await pickKind(user, "email")
+    await pickKind(user, "Email")
 
     expect(form.getByLabelText(/^To/).getAttribute("type")).toBe("email")
     expect(form.getByLabelText(/^API key/).getAttribute("type")).toBe("password")
@@ -382,7 +382,7 @@ describe("ChannelsSection", () => {
     const { caller, user } = openPage()
 
     const form = await openAdd(user)
-    await pickKind(user, "email")
+    await pickKind(user, "Email")
     await user.type(form.getByLabelText("Name"), "Inbox")
     await user.type(form.getByLabelText(/^To/), "me@example.com")
     await user.type(form.getByLabelText(/^API key/), "re_secret")
@@ -417,7 +417,7 @@ describe("ChannelsSection", () => {
     })
 
     const form = await openAdd(user)
-    await pickKind(user, "email")
+    await pickKind(user, "Email")
     await user.type(form.getByLabelText("Name"), "Inbox")
     await user.type(form.getByLabelText(/^To/), "me@example")
     await user.click(form.getByRole("button", { name: "Add channel" }))
@@ -438,7 +438,7 @@ describe("ChannelsSection", () => {
     await act(() => clock.advance(5_000))
 
     await waitFor(() => expect(phone.queryByText("123456")).toBeNull())
-    expect(phone.getByText("telegram · Nothing sent yet")).toBeTruthy()
+    expect(phone.getByText("Telegram · Nothing sent yet")).toBeTruthy()
     expect(phone.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false)
   })
 

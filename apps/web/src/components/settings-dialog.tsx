@@ -54,9 +54,11 @@ export function SettingsDialog({
         ) : (
           <nav
             aria-label="Sections"
-            className="flex shrink-0 flex-col gap-1 p-3 max-md:flex-1 md:w-52 md:border-r"
+            className="flex shrink-0 flex-col gap-1 p-3 max-md:flex-1 max-md:pt-4 md:w-52 md:border-r md:bg-muted/30"
           >
-            <DialogTitle className="mx-2 mt-2 mb-3">Settings</DialogTitle>
+            <DialogTitle size="lg" className="mx-2 mt-2 mb-3">
+              Settings
+            </DialogTitle>
             {SECTIONS.map(({ id, label }) => (
               <Button
                 key={id}
@@ -128,10 +130,15 @@ function General() {
   const labelId = useId()
   return (
     <SectionFrame title="General" lead="How kinby looks on this device.">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span id={labelId} className="font-medium">
-          Theme
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span id={labelId} className="font-medium">
+            Theme
+          </span>
+          <span className="text-sm text-muted-foreground">
+            System follows your device's setting.
+          </span>
+        </div>
         <ToggleGroup
           aria-labelledby={labelId}
           size="sm"
