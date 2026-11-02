@@ -4,13 +4,20 @@ import type {
   InstanceClient,
   InstanceStatusResult,
   InstanceSummary,
-  LoginSetup,
+  McpServerFailed,
   RepositoryCommandList,
-  ViewSummary,
 } from "@kinby/contract"
-import { useEffect, useId, useState } from "react"
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { BrowserProfiles } from "@/components/browser-profiles"
+import { SectionFrame } from "@/components/section-frame"
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Toolset } from "@/components/toolset"
@@ -19,35 +26,29 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from "@/components/ui/item"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { instanceName, observedState } from "@/lib/instances"
-import { reason } from "@/lib/operation"
-import { openConfig, openMemory, openStats, openView } from "@/lib/selection"
-import {
-  BotIcon,
-  BrainIcon,
-  ChartColumnIcon,
-  CirclePauseIcon,
-  LayoutDashboardIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react"
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item"
+import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
+import { instanceName, noticeKey, noticeTitle, observedState } from "@/lib/instances"
+import { openSkills, openView } from "@/lib/selection"
+import { BotIcon, ChevronRightIcon, CirclePauseIcon, LayoutDashboardIcon } from "lucide-react"
 
 /**
  * An instance's Overview, under its header, which holds its name and lifecycle. A stopped instance
  * with setup pending opens on its setup card, and keeps it until it runs. Any other stopped one
- * says it is stopped. A running one opens its config panel, its memory, its stats, and through
- * `client`, its own connection, its views, and lists its logins, asking to sign in to those that
- * are not signed in, or to sign in again once all are. Running or stopped, it shows its toolset,
- * and one the hub opens browsers for lists its browser profiles and its vault. Outside the setup
- * card, an instance whose factory role needs repository commands shows them.
- * `onChanged` hears a sign-in or a secret end, so the instances are listed again. While a stop
- * asked from the header drains, `stopping` keeps the running view.
+ * says it is stopped. A running one opens on what needs the user: its logins not signed in, each
+ * to sign in to, and its MCP servers that failed. Through `client`, its own connection, it lists
+ * its views. Running or stopped, it shows its toolset, and one the hub opens browsers for lists its
+ * browser profiles and its vault. Outside the setup card, an instance whose factory role needs
+ * repository commands shows them. `onChanged` hears a sign-in or a secret end, so the instances
+ * are listed again. While a stop asked from the header drains, `stopping` keeps the running view.
  */
 export function InstancePage({
   caller,
@@ -58,7 +59,7 @@ export function InstancePage({
   onChanged,
 }: {
   caller: Pick<Client, "call" | "subscribe">
-  client?: Pick<InstanceClient, "call">
+  client?: Pick<InstanceClient, "call" | "state" | "onStateChange">
   clock: Clock
   instance: InstanceSummary
   stopping?: boolean
@@ -77,117 +78,150 @@ export function InstancePage({
       <SetupCard caller={caller} clock={clock} name={name} status={status} onChanged={onChanged} />
     )
   }
-  const commands = status !== undefined && hasCommands(status) && (
-    <RepositoryCommands name={name} status={status} />
+  const failed = instance.notices.filter(
+    (notice): notice is McpServerFailed => notice.code === "mcp_server_failed",
   )
-  const toolset = (
-    <Toolset caller={caller} client={client} clock={clock} instanceId={instance.instance_id} />
-  )
-  const profiles = status?.browser === true && (
+  const sections = (
     <>
-      <BrowserProfiles caller={caller} clock={clock} instanceId={instance.instance_id} />
-      <Vault caller={caller} clock={clock} instanceId={instance.instance_id} />
+      {status?.browser === true && (
+        <>
+          <BrowserProfiles caller={caller} clock={clock} instanceId={instance.instance_id} />
+          <Vault caller={caller} clock={clock} instanceId={instance.instance_id} />
+        </>
+      )}
+      <Toolset
+        caller={caller}
+        client={client}
+        clock={clock}
+        instanceId={instance.instance_id}
+        failed={failed.map((notice) => notice.server)}
+      />
+      {status !== undefined && hasCommands(status) && (
+        <RepositoryCommands name={name} status={status} />
+      )}
     </>
   )
   if (intended === "stopped") {
     return (
       <>
         <Stopped instance={instance} name={name} />
-        {toolset}
-        {profiles}
-        {commands}
+        <Sections>{sections}</Sections>
       </>
     )
   }
   // The empty state waits until the status is read. A read that failed has nothing to sign in to.
   if (intended === "running") {
     if (waiting && status === undefined) return null
-    const logins = status?.setup.logins ?? []
+    const logins = (status?.setup.logins ?? []).filter((login) => login.state !== "signed_in")
+    const needsYou = logins.length > 0 || failed.length > 0
     return (
-      <>
-        <div className="flex flex-wrap items-center gap-2 px-6 pt-6">
-          <Button variant="outline" onClick={() => openConfig(instance.instance_id)}>
-            <SlidersHorizontalIcon data-icon="inline-start" />
-            Configure
-          </Button>
-          <Button variant="outline" onClick={() => openMemory(instance.instance_id)}>
-            <BrainIcon data-icon="inline-start" />
-            Memory
-          </Button>
-          <Button variant="outline" onClick={() => openStats(instance.instance_id)}>
-            <ChartColumnIcon data-icon="inline-start" />
-            Stats
-          </Button>
-          {client !== undefined && <ViewsMenu client={client} instanceId={instance.instance_id} />}
-        </div>
-        {logins.length > 0 && (
-          <section className="flex max-w-2xl flex-col gap-3 p-6">
-            <h2 className="text-base font-semibold">Subscription logins</h2>
-            <p className="text-sm text-muted-foreground">
-              {loginsNote(logins)} The instance keeps running.
-            </p>
-            <SubscriptionLogins
-              caller={caller}
-              clock={clock}
-              instanceId={instance.instance_id}
-              logins={logins}
-              onEnded={onChanged}
-            />
-          </section>
+      <Sections>
+        {needsYou && (
+          <SectionFrame
+            title="Needs you"
+            lead={`What keeps ${name} from doing everything it could.`}
+            variant="page"
+          >
+            {logins.length > 0 && (
+              <SubscriptionLogins
+                caller={caller}
+                clock={clock}
+                instanceId={instance.instance_id}
+                logins={logins}
+                onEnded={onChanged}
+              />
+            )}
+            {failed.length > 0 && (
+              <ItemGroup aria-label="MCP servers">
+                {failed.map((notice) => (
+                  <Item
+                    key={noticeKey(notice)}
+                    render={<li />}
+                    aria-label={noticeTitle(notice)}
+                    variant="outline"
+                  >
+                    <ItemContent>
+                      <ItemTitle>{noticeTitle(notice)}</ItemTitle>
+                      <ItemDescription lines="all">{notice.message}</ItemDescription>
+                    </ItemContent>
+                    <ItemActions>
+                      <Button variant="outline" onClick={() => openSkills(instance.instance_id)}>
+                        Open Skills
+                      </Button>
+                    </ItemActions>
+                  </Item>
+                ))}
+              </ItemGroup>
+            )}
+          </SectionFrame>
         )}
-        {toolset}
-        {profiles}
-        {commands}
-        {logins.length === 0 && !commands && observedState(instance) === "running" && (
-          <ReadyForWork name={name} />
+        {client !== undefined && (
+          <Views client={client} clock={clock} instanceId={instance.instance_id} name={name} />
         )}
-      </>
+        {sections}
+        {/* An instance missing a list of repository commands takes no work. */}
+        {!needsYou &&
+          (status?.setup.missing_commands.length ?? 0) === 0 &&
+          observedState(instance) === "running" && <ReadyForWork name={name} />}
+      </Sections>
     )
   }
   return null
 }
 
-/** The instance's views, read each time the menu opens. Picking one opens its page. */
-function ViewsMenu({
+/** Overview's sections, one under the other. */
+function Sections({ children }: { children: ReactNode }) {
+  return <div className="flex max-w-2xl flex-col gap-8 p-6">{children}</div>
+}
+
+/** The instance's views as rows, read again as the sidebar reads them. Picking one opens its page. */
+function Views({
   client,
+  clock,
   instanceId,
+  name,
 }: {
-  client: Pick<InstanceClient, "call">
+  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
+  clock: Clock
   instanceId: string
+  name: string
 }) {
-  const [views, setViews] = useState<ViewSummary[]>()
-  const [failure, setFailure] = useState<string>()
-  const list = () => {
-    setFailure(undefined)
-    client.call("view.list", {}).then(
-      (listed) => setViews(listed.views),
-      (error: unknown) => setFailure(reason(error)),
-    )
-  }
+  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
+  const list = useCallback(() => client.call("view.list", {}), [client])
+  const [value] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
   return (
-    <DropdownMenu onOpenChange={(open) => open && list()}>
-      <DropdownMenuTrigger render={<Button variant="outline" />}>
-        <LayoutDashboardIcon data-icon="inline-start" />
-        Views
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        {failure !== undefined || views === undefined || views.length === 0 ? (
-          <DropdownMenuItem disabled>
-            {failure ?? (views === undefined ? "Reading…" : "No views yet")}
-          </DropdownMenuItem>
+    <SectionFrame title="Views" lead={`Pages ${name} keeps current.`} variant="page">
+      {value !== undefined &&
+        (value.views.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No views yet.</p>
         ) : (
-          views.map((view) => (
-            <DropdownMenuItem key={view.id} onClick={() => openView(instanceId, view.id)}>
-              {view.title}
-            </DropdownMenuItem>
-          ))
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <ul aria-label="Views" className="flex flex-col divide-y">
+            {value.views.map((view) => (
+              <li key={view.id}>
+                <Item
+                  size="row"
+                  render={<button type="button" aria-label={view.title} />}
+                  onClick={() => openView(instanceId, view.id)}
+                >
+                  <ItemMedia variant="icon">
+                    <LayoutDashboardIcon />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle>{view.title}</ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    <ChevronRightIcon className="text-muted-foreground" />
+                  </ItemActions>
+                </Item>
+              </li>
+            ))}
+          </ul>
+        ))}
+    </SectionFrame>
   )
 }
 
-/** A running instance with nothing to set up, pointing to where its work happens. */
+/** A running instance with nothing that needs the user, pointing to where its work happens. */
 function ReadyForWork({ name }: { name: string }) {
   return (
     <Empty>
@@ -195,24 +229,14 @@ function ReadyForWork({ name }: { name: string }) {
         <EmptyMedia variant="icon">
           <BotIcon />
         </EmptyMedia>
-        <EmptyTitle>{name} is running</EmptyTitle>
+        <EmptyTitle>Nothing needs you</EmptyTitle>
         <EmptyDescription>
-          Start a thread with New thread above {name}&apos;s threads, or open Configure to change
-          what it does.
+          Start a thread with New thread above {name}&apos;s threads, or open Config to change what
+          it does.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
   )
-}
-
-/** Names the logins not signed in, pending or failed, or offers signing in again once none is. */
-function loginsNote(logins: LoginSetup[]): string {
-  const notSignedIn = logins.filter((login) => login.state !== "signed_in")
-  if (notSignedIn.length === 0) return "Sign in again when a subscription stops working."
-  const names = new Intl.ListFormat("en").format(notSignedIn.map((login) => login.label))
-  return notSignedIn.length === 1
-    ? `${names} is not signed in yet. Sign in to let the instance use it.`
-    : `${names} are not signed in yet. Sign in to let the instance use them.`
 }
 
 /**
@@ -323,26 +347,23 @@ function hasCommands(status: InstanceStatusResult): boolean {
  * They are read-only here: the instance records them.
  */
 function RepositoryCommands({ name, status }: { name: string; status: InstanceStatusResult }) {
-  const titleId = useId()
   return (
-    <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
-      <h2 id={titleId} className="text-base font-semibold">
-        Repository commands
-      </h2>
-      <p className="text-sm text-muted-foreground">
-        What {name} runs for the repository it works in. To change them, ask {name} in a thread.
-      </p>
+    <SectionFrame
+      title="Repository commands"
+      lead={`What ${name} runs for the repository it works in. To change them, ask ${name} in a thread.`}
+      variant="page"
+    >
       <CommandLists held={status.repository_commands} missing={status.setup.missing_commands} />
-    </section>
+    </SectionFrame>
   )
 }
 
 /** Each list held, by name with its commands in the order they run, then each missing one. */
 function CommandLists({ held, missing }: { held: RepositoryCommandList[]; missing: string[] }) {
   return (
-    <ItemGroup aria-label="Repository commands">
+    <ul aria-label="Repository commands" className="flex flex-col divide-y">
       {held.map(({ name, commands }) => (
-        <Item key={name} render={<li />} aria-label={name} variant="outline" size="sm">
+        <Item key={name} render={<li />} aria-label={name} size="row">
           <ItemContent>
             <ItemTitle>
               <code className="font-mono">{name}</code>
@@ -366,7 +387,7 @@ function CommandLists({ held, missing }: { held: RepositoryCommandList[]; missin
         </Item>
       ))}
       {missing.map((list) => (
-        <Item key={list} render={<li />} aria-label={list} variant="outline" size="sm">
+        <Item key={list} render={<li />} aria-label={list} size="row">
           <ItemContent>
             <ItemTitle>
               <code className="font-mono">{list}</code>
@@ -377,7 +398,7 @@ function CommandLists({ held, missing }: { held: RepositoryCommandList[]; missin
           </ItemActions>
         </Item>
       ))}
-    </ItemGroup>
+    </ul>
   )
 }
 

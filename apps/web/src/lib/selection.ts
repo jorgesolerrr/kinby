@@ -151,11 +151,6 @@ export function leaveLink(instanceId: string): void {
   changed()
 }
 
-/** Open an instance's memory page the same way. */
-export function openMemory(instanceId: string): void {
-  navigate(memoryPath(instanceId))
-}
-
 /** Open a node on an instance's memory page the same way. */
 export function openNode(instanceId: string, node: string): void {
   navigate(nodePath(instanceId, node))

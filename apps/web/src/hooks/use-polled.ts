@@ -1,6 +1,9 @@
 import type { Clock } from "@kinby/contract"
 import { useCallback, useEffect, useRef, useState } from "react"
 
+/** How often a page reads again what it shows of an instance while it is visible. */
+export const POLL_INTERVAL_MS = 5_000
+
 /**
  * What `read` last returned. It reads again each time the connection comes back, the window
  * regains focus, `intervalMs` passes while the page is visible, or when asked to. The value shown

@@ -52,7 +52,8 @@ describe("the instance's browser profiles", () => {
     const caller = renderProfiles([linkedIn])
     const user = userEvent.setup()
 
-    await user.click(within(await listed()).getByRole("button", { name: "Rename LinkedIn" }))
+    await user.click(within(await listed()).getByRole("button", { name: "More for LinkedIn" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }))
     await user.type(screen.getByRole("textbox", { name: "New name" }), "Work")
     await user.click(screen.getByRole("button", { name: "Rename" }))
 
@@ -67,8 +68,9 @@ describe("the instance's browser profiles", () => {
     const caller = renderProfiles([linkedIn])
     const user = userEvent.setup()
 
-    await user.click(within(await listed()).getByRole("button", { name: "Delete LinkedIn" }))
-    await user.click(screen.getByRole("button", { name: "Delete" }))
+    await user.click(within(await listed()).getByRole("button", { name: "More for LinkedIn" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
+    await user.click(await screen.findByRole("button", { name: "Delete" }))
 
     expect(caller.calls).toContainEqual({
       method: "browser.profile.delete",
@@ -85,6 +87,7 @@ describe("the instance's browser profiles", () => {
     const user = userEvent.setup()
 
     await user.click(await screen.findByRole("button", { name: "New profile" }))
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Sign-in page" }))
     await user.type(screen.getByRole("textbox", { name: "Sign-in page" }), "https://linkedin.com")
     await user.click(screen.getByRole("button", { name: "Open" }))
     const [view] = caller.subscriptions
