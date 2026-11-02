@@ -7,9 +7,16 @@ import type {
   McpServerFailed,
   RepositoryCommandList,
 } from "@kinby/contract"
-import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
-import { BrowserProfiles, Refusal } from "@/components/browser-profiles"
+import { BrowserProfiles } from "@/components/browser-profiles"
 import { SectionFrame } from "@/components/section-frame"
 import { Secrets } from "@/components/secrets-section"
 import { SubscriptionLogins } from "@/components/subscription-logins"
@@ -28,7 +35,7 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
-import { useRead } from "@/hooks/use-read"
+import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
 import { instanceName, noticeKey, noticeTitle, observedState } from "@/lib/instances"
 import { openSkills, openView } from "@/lib/selection"
 import { BotIcon, ChevronRightIcon, CirclePauseIcon, LayoutDashboardIcon } from "lucide-react"
@@ -52,7 +59,7 @@ export function InstancePage({
   onChanged,
 }: {
   caller: Pick<Client, "call" | "subscribe">
-  client?: Pick<InstanceClient, "call">
+  client?: Pick<InstanceClient, "call" | "state" | "onStateChange">
   clock: Clock
   instance: InstanceSummary
   stopping?: boolean
@@ -167,23 +174,23 @@ function Sections({ children }: { children: ReactNode }) {
   return <div className="flex max-w-2xl flex-col gap-8 p-6">{children}</div>
 }
 
-/** The instance's views as rows. Picking one opens its page. */
+/** The instance's views as rows, read again as the sidebar reads them. Picking one opens its page. */
 function Views({
   client,
   clock,
   instanceId,
   name,
 }: {
-  client: Pick<InstanceClient, "call">
+  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
   clock: Clock
   instanceId: string
   name: string
 }) {
+  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
   const list = useCallback(() => client.call("view.list", {}), [client])
-  const { value, failure } = useRead(list, clock)
+  const [value] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
   return (
     <SectionFrame title="Views" lead={`Pages ${name} keeps current.`} variant="page">
-      {failure !== undefined && <Refusal title="Could not read the views" error={failure} />}
       {value !== undefined &&
         (value.views.length === 0 ? (
           <p className="text-sm text-muted-foreground">No views yet.</p>

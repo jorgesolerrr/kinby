@@ -140,6 +140,15 @@ async function openPage(answers: Answers, instance = stopped, stopping = false) 
   return { caller, clock, onChanged, relist, user: userEvent.setup() }
 }
 
+/** The instance's own connection, connected, answering `answers`. */
+function reached(answers: Answers) {
+  return {
+    ...stubCaller(answers),
+    state: () => "connected" as const,
+    onStateChange: () => () => {},
+  }
+}
+
 const card = () => within(screen.getByRole("region", { name: "Finish setting up Ada" }))
 const login = (name: string) =>
   within(
@@ -563,7 +572,7 @@ describe("the views of a running instance", () => {
       }),
       ...stubSubscriber(),
     }
-    const client = stubCaller({ "view.list": () => ({ views }) })
+    const client = reached({ "view.list": () => ({ views }) })
     const clock = fakeClock()
     render(
       <InstancePage
@@ -576,6 +585,7 @@ describe("the views of a running instance", () => {
     )
     await act(() => clock.advance(0))
     return {
+      clock,
       section: within(screen.getByRole("region", { name: "Views" })),
       user: userEvent.setup(),
     }
@@ -599,6 +609,16 @@ describe("the views of a running instance", () => {
     const { section } = await openWithViews([])
 
     expect(section.getByText("No views yet.")).toBeDefined()
+  })
+
+  it("lists a view the instance makes while Overview is open", async () => {
+    const views: ViewSummary[] = []
+    const { clock, section } = await openWithViews(views)
+
+    views.push({ id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" })
+    await act(() => clock.advance(5_000))
+
+    expect(section.getByRole("button", { name: "Job board" })).toBeDefined()
   })
 })
 
@@ -704,7 +724,7 @@ describe("the browser profiles and the vault of an instance", () => {
     render(
       <InstancePage
         caller={caller}
-        client={stubCaller({})}
+        client={reached({})}
         clock={fakeClock()}
         instance={instance}
         onChanged={vi.fn()}
@@ -760,7 +780,7 @@ describe("the toolset of an instance", () => {
     render(
       <InstancePage
         caller={caller}
-        client={stubCaller({})}
+        client={reached({})}
         clock={fakeClock()}
         instance={instance}
         onChanged={vi.fn()}

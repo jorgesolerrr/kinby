@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/sidebar"
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
-import { usePolled } from "@/hooks/use-polled"
+import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
 import { INSTANCE_TABS, instanceName, shownState } from "@/lib/instances"
 import {
   CREATE_PATH,
@@ -59,9 +59,6 @@ type Reached = Pick<InstanceClient, "call" | "state" | "onStateChange">
 
 /** How many of an instance's most recent threads its group lists. */
 const RECENT = 4
-
-/** How often a group reads again what it shows of an instance while the page is visible. */
-const POLL_INTERVAL_MS = 5_000
 
 /** What a thread's status shows. An idle thread needs no look, so it shows nothing. */
 const STATUS: Record<
