@@ -1,6 +1,6 @@
 import type { InstanceToolsetResult } from "@kinby/contract"
 import { fakeClock, stubCaller } from "@kinby/contract/testing"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -23,7 +23,10 @@ const toolset: InstanceToolsetResult = {
 }
 
 /** Ada's toolset on a hub that reads `toolset`, and, while she runs, her own contract. */
-function renderToolset({ running = true }: { running?: boolean } = {}) {
+function renderToolset({
+  running = true,
+  failed = [],
+}: { running?: boolean; failed?: string[] } = {}) {
   let marked = new Set(["lookup"])
   const hub = stubCaller({
     "instance.toolset.get": () => ({
@@ -46,6 +49,7 @@ function renderToolset({ running = true }: { running?: boolean } = {}) {
       client={running ? instance : undefined}
       clock={fakeClock()}
       instanceId="ada"
+      failed={failed}
     />,
   )
   return { hub, instance }
@@ -70,16 +74,25 @@ describe("the instance's toolset", () => {
   it("shows each picked MCP server with whether its read-only hints are trusted", async () => {
     renderToolset()
 
-    expect((await item("MCP servers", "fetch")).getByText("Read-only hints trusted.")).toBeDefined()
+    expect((await item("Toolset", "fetch")).getByText("Read-only hints trusted.")).toBeDefined()
+  })
+
+  it("shows a picked MCP server ready, or failed when it failed at the last turn", async () => {
+    renderToolset()
+    expect((await item("Toolset", "fetch")).getByText("Ready")).toBeDefined()
+    cleanup()
+
+    renderToolset({ failed: ["fetch"] })
+    expect((await item("Toolset", "fetch")).getByText("Failed")).toBeDefined()
   })
 
   it("shows each authored tool with its read-only mark", async () => {
     renderToolset()
 
-    const lookup = (await item("Authored tools", "lookup")).getByRole("switch", {
+    const lookup = (await item("Toolset", "lookup")).getByRole("switch", {
       name: "Read-only",
     })
-    const post = (await item("Authored tools", "post")).getByRole("switch", { name: "Read-only" })
+    const post = (await item("Toolset", "post")).getByRole("switch", { name: "Read-only" })
     expect([lookup.ariaChecked, post.ariaChecked]).toEqual(["true", "false"])
   })
 
@@ -87,7 +100,7 @@ describe("the instance's toolset", () => {
     const { hub, instance } = renderToolset()
     const user = userEvent.setup()
 
-    const post = (await item("Authored tools", "post")).getByRole("switch", { name: "Read-only" })
+    const post = (await item("Toolset", "post")).getByRole("switch", { name: "Read-only" })
     await user.click(post)
 
     expect(instance.calls).toEqual([
@@ -101,7 +114,7 @@ describe("the instance's toolset", () => {
     const { instance } = renderToolset({ running: false })
     const user = userEvent.setup()
 
-    const post = (await item("Authored tools", "post")).getByRole("switch", { name: "Read-only" })
+    const post = (await item("Toolset", "post")).getByRole("switch", { name: "Read-only" })
     await user.click(post)
 
     expect(post.hasAttribute("data-disabled")).toBe(true)

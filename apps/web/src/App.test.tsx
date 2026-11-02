@@ -245,7 +245,7 @@ describe("the instances", () => {
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
 
-    await user.click(await screen.findByRole("button", { name: "Configure" }))
+    await user.click(await screen.findByRole("tab", { name: "Config" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/config")
     expect(screen.getByRole("navigation", { name: "Config sections" })).toBeDefined()
@@ -263,7 +263,7 @@ describe("the instances", () => {
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
 
-    await user.click(await screen.findByRole("button", { name: "Memory" }))
+    await user.click(await screen.findByRole("tab", { name: "Memory" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/memory")
     expect(screen.getByRole("tab", { name: "Knowledge graph" })).toBeDefined()
@@ -313,7 +313,7 @@ describe("the instances", () => {
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
 
-    await user.click(await screen.findByRole("button", { name: "Stats" }))
+    await user.click(await screen.findByRole("tab", { name: "Stats" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/stats")
     // The stats page's own Overview, not the instance's.
@@ -1295,7 +1295,7 @@ describe("the Instances section", () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     const { clock } = openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
-    expect(await screen.findByRole("button", { name: "Configure" })).toBeDefined()
+    expect(await screen.findByRole("button", { name: "More actions" })).toBeDefined()
 
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Remove" }))
@@ -1354,7 +1354,7 @@ describe("a page that breaks", () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     const { hub } = openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
-    await user.click(await screen.findByRole("button", { name: "Memory" }))
+    await user.click(await screen.findByRole("tab", { name: "Memory" }))
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
     const relayed = hub.sockets.find(
       (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",

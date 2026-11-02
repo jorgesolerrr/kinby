@@ -2,6 +2,7 @@ import type { Client, Clock, VaultEntry } from "@kinby/contract"
 import { useCallback, useId, useState } from "react"
 
 import { Refusal } from "@/components/browser-profiles"
+import { SectionFrame } from "@/components/section-frame"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,14 +27,7 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useRead } from "@/hooks/use-read"
 import { PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
@@ -62,7 +56,6 @@ export function Vault({
   clock: Clock
   instanceId: string
 }) {
-  const titleId = useId()
   const list = useCallback(
     () => caller.call("browser.vault.list", { instance_id: instanceId }),
     [caller, instanceId],
@@ -81,28 +74,25 @@ export function Vault({
       .then(readAgain)
 
   return (
-    <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
-      <div className="flex items-center gap-2">
-        <h2 id={titleId} className="text-base font-semibold">
-          Vault
-        </h2>
+    <SectionFrame
+      title="Vault"
+      lead="Sign-ins the instance's browser fills, each on its own site only. The hub keeps their values, which the instance never reads."
+      variant="page"
+      actions={
         <EntryDialog
           onSave={add}
           trigger={
-            <Button variant="outline" size="sm" className="ml-auto">
+            <Button variant="outline" size="sm">
               <PlusIcon data-icon="inline-start" />
               Add sign-in
             </Button>
           }
         />
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Sign-ins the instance&apos;s browser fills, each on its own site only. The hub keeps their
-        values, which the instance never reads.
-      </p>
+      }
+    >
       {failure !== undefined && <Refusal title="Could not read the vault" error={failure} />}
       {entries.length > 0 && (
-        <ItemGroup aria-label="Vault">
+        <ul aria-label="Vault" className="flex flex-col divide-y">
           {entries.map((entry) => (
             <EntryItem
               key={entry.name}
@@ -112,9 +102,9 @@ export function Vault({
               onChanged={readAgain}
             />
           ))}
-        </ItemGroup>
+        </ul>
       )}
-    </section>
+    </SectionFrame>
   )
 }
 
@@ -141,7 +131,7 @@ function EntryItem({
     )
 
   return (
-    <Item render={<li />} aria-label={name} variant="outline" size="sm">
+    <Item render={<li />} aria-label={name} size="row">
       <ItemContent>
         <ItemTitle>{name}</ItemTitle>
         <ItemDescription>{site}</ItemDescription>

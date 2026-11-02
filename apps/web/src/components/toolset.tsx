@@ -4,21 +4,17 @@ import type {
   Clock,
   DefaultTool,
   InstanceClient,
+  McpServerName,
   SearchBackend,
   SearchSetup,
 } from "@kinby/contract"
 import { type ReactNode, useCallback, useId, useState } from "react"
 
 import { Refusal } from "@/components/browser-profiles"
+import { SectionFrame } from "@/components/section-frame"
+import { Badge } from "@/components/ui/badge"
 import { Field, FieldLabel } from "@/components/ui/field"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
 import { Switch } from "@/components/ui/switch"
 import { useRead } from "@/hooks/use-read"
 
@@ -31,21 +27,23 @@ const BACKENDS: Record<SearchBackend, string> = {
 
 /**
  * What the instance can do beyond its workspace. `caller` reaches the hub, which reads it from the
- * instance's files, so it shows while the instance is stopped. An authored tool's read-only mark
- * changes through `client`, the instance's own contract, so only while it runs.
+ * instance's files, so it shows while the instance is stopped. An MCP server in `failed` failed
+ * at the instance's last turn. An authored tool's read-only mark changes through `client`, the
+ * instance's own contract, so only while it runs.
  */
 export function Toolset({
   caller,
   client,
   clock,
   instanceId,
+  failed,
 }: {
   caller: Pick<Client, "call">
   client?: Pick<InstanceClient, "call">
   clock: Clock
   instanceId: string
+  failed: McpServerName[]
 }) {
-  const titleId = useId()
   const read = useCallback(
     () => caller.call("instance.toolset.get", { instance_id: instanceId }),
     [caller, instanceId],
@@ -53,75 +51,69 @@ export function Toolset({
   const { value, failure, readAgain } = useRead(read, clock)
 
   return (
-    <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
-      <h2 id={titleId} className="text-base font-semibold">
-        Toolset
-      </h2>
-      <p className="text-sm text-muted-foreground">
-        What the instance can do beyond its workspace.
-      </p>
+    <SectionFrame
+      title="Toolset"
+      lead="What the instance can do beyond its workspace."
+      variant="page"
+    >
       {failure !== undefined && <Refusal title="Could not read the toolset" error={failure} />}
       {value !== undefined && (
-        <>
-          <ItemGroup aria-label="Toolset">
-            <Row title="Default tools">
-              <ItemDescription>{named("On", value.default_tools, true)}</ItemDescription>
-              <ItemDescription>{named("Off", value.default_tools, false)}</ItemDescription>
+        <ul aria-label="Toolset" className="flex flex-col divide-y">
+          <Row title="Default tools">
+            <ItemDescription>{named("On", value.default_tools, true)}</ItemDescription>
+            <ItemDescription>{named("Off", value.default_tools, false)}</ItemDescription>
+          </Row>
+          {value.mcp_servers.map((server) => (
+            <Row
+              key={server.name}
+              title={server.name}
+              actions={
+                failed.includes(server.name) ? (
+                  <Badge variant="destructive">Failed</Badge>
+                ) : (
+                  <Badge variant="secondary">Ready</Badge>
+                )
+              }
+            >
+              <ItemDescription>
+                {server.trust_hints ? "Read-only hints trusted." : "Every call to its tools asks."}
+              </ItemDescription>
             </Row>
-            <Row title="Web search">
-              <ItemDescription>{search(value.search)}</ItemDescription>
-            </Row>
-            <Row title="Packages">
-              <ItemDescription>{value.packages.join(", ") || "None."}</ItemDescription>
-            </Row>
-            <Row title="Browser">
-              <ItemDescription>{value.browser ? "On" : "Off"}</ItemDescription>
-            </Row>
-          </ItemGroup>
-          <h3 className="text-sm font-medium">MCP servers</h3>
-          {value.mcp_servers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">None picked.</p>
-          ) : (
-            <ItemGroup aria-label="MCP servers">
-              {value.mcp_servers.map((server) => (
-                <Row key={server.name} title={server.name}>
-                  <ItemDescription>
-                    {server.trust_hints
-                      ? "Read-only hints trusted."
-                      : "Every call to its tools asks."}
-                  </ItemDescription>
-                </Row>
-              ))}
-            </ItemGroup>
-          )}
-          <h3 className="text-sm font-medium">Authored tools</h3>
-          {value.authored_tools.length === 0 ? (
-            <p className="text-sm text-muted-foreground">None yet.</p>
-          ) : (
-            <ItemGroup aria-label="Authored tools">
-              {value.authored_tools.map((tool) => (
-                <AuthoredToolItem
-                  key={tool.name}
-                  client={client}
-                  tool={tool}
-                  onChanged={readAgain}
-                />
-              ))}
-            </ItemGroup>
-          )}
-        </>
+          ))}
+          {value.authored_tools.map((tool) => (
+            <AuthoredToolItem key={tool.name} client={client} tool={tool} onChanged={readAgain} />
+          ))}
+          <Row title="Web search">
+            <ItemDescription>{search(value.search)}</ItemDescription>
+          </Row>
+          <Row title="Packages">
+            <ItemDescription>{value.packages.join(", ") || "None."}</ItemDescription>
+          </Row>
+          <Row title="Browser">
+            <ItemDescription>{value.browser ? "On" : "Off"}</ItemDescription>
+          </Row>
+        </ul>
       )}
-    </section>
+    </SectionFrame>
   )
 }
 
-function Row({ title, children }: { title: string; children: ReactNode }) {
+function Row({
+  title,
+  actions,
+  children,
+}: {
+  title: string
+  actions?: ReactNode
+  children: ReactNode
+}) {
   return (
-    <Item render={<li />} aria-label={title} variant="outline" size="sm">
+    <Item render={<li />} aria-label={title} size="row">
       <ItemContent>
         <ItemTitle>{title}</ItemTitle>
         {children}
       </ItemContent>
+      {actions !== undefined && <ItemActions>{actions}</ItemActions>}
     </Item>
   )
 }
@@ -150,7 +142,7 @@ function AuthoredToolItem({
   }
 
   return (
-    <Item render={<li />} aria-label={tool.name} variant="outline" size="sm">
+    <Item render={<li />} aria-label={tool.name} size="row">
       <ItemContent>
         <ItemTitle>{tool.name}</ItemTitle>
         <ItemDescription>

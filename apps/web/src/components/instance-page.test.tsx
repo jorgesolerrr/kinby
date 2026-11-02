@@ -420,22 +420,53 @@ describe("a stopped instance with setup complete", () => {
   })
 })
 
-describe("a running instance", () => {
-  const running = { ...stopped, intended_state: "running" } as const
+describe("what needs the user on a running instance", () => {
+  const running = { ...stopped, intended_state: "running", process: "running" } as const
+  const needsYou = () => within(screen.getByRole("region", { name: "Needs you" }))
 
-  it("offers signing in again, without the setup card", async () => {
-    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
+  it("lists the logins not signed in or failed with Sign in, without the setup card", async () => {
+    const logins: InstanceSetup["logins"] = [
+      { ...setup.logins[0]!, state: "pending" },
+      { ...setup.logins[1]!, state: "failed" },
+      { id: "claude", label: "Claude", description: "Signs Claude in.", state: "signed_in" },
+    ]
+    await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
 
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
-    expect(login("Editor account").getByRole("button", { name: "Sign in again" })).toBeDefined()
+    expect(login("Codex").getByText("Not signed in")).toBeDefined()
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
+    expect(login("Editor account").getByText("Failed")).toBeDefined()
+    expect(needsYou().queryByRole("listitem", { name: "Claude" })).toBeNull()
     expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("signs in from its row, and lists the instances again once it ends", async () => {
+    const polls = [waitingForCode, operation({ state: "succeeded", detail: "Signed in." })]
+    const { user, clock, caller, onChanged } = await openPage(
+      {
+        "instance.status": () => status({ process: "running" }),
+        "instance.login.start": () => ({ operation_id: "op-1", instance_id: "instance-1" }),
+        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
+      },
+      running,
+    )
+
+    await user.click(login("Codex").getByRole("button", { name: "Sign in" }))
+    await act(() => clock.advance(0))
+    expect(login("Codex").getByText("ABCD-12345")).toBeDefined()
+    await act(() => clock.advance(1_000))
+
+    expect(caller.calls.find((call) => call.method === "instance.login.start")?.params).toEqual({
+      instance_id: "instance-1",
+      login_id: "codex",
+    })
+    expect(onChanged).toHaveBeenCalledOnce()
   })
 
   it("follows a sign-in that runs when the page loads", async () => {
     const signingIn: InstanceSetup = {
       ...setup,
-      logins: [setup.logins[0]!, { ...setup.logins[1]!, operation_id: "op-1" }],
+      logins: [{ ...setup.logins[0]!, operation_id: "op-1" }, setup.logins[1]!],
     }
     await openPage(
       {
@@ -445,46 +476,33 @@ describe("a running instance", () => {
       running,
     )
 
-    expect(login("Editor account").getByText("ABCD-12345")).toBeDefined()
-    expect(login("Editor account").getByText("Waiting")).toBeDefined()
-    expect(login("Codex").getByText("Not signed in")).toBeDefined()
+    expect(login("Codex").getByText("ABCD-12345")).toBeDefined()
+    expect(login("Codex").getByText("Waiting")).toBeDefined()
   })
 
-  it("asks to sign in to a login that is not signed in yet", async () => {
-    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
+  it("lists each MCP server that failed, and opens Config on Skills for it", async () => {
+    window.history.replaceState(null, "", "/instances/instance-1")
+    const failed: InstanceSummary = {
+      ...running,
+      notices: [
+        { code: "mcp_server_failed", server: "fetch", message: "fetch exited with code 1." },
+        { code: "template_behind", message: "The template changed." },
+      ],
+    }
+    const { user } = await openPage(
+      {
+        "instance.status": () => status({ process: "running", setup: { ...setup, logins: [] } }),
+      },
+      failed,
+    )
 
-    expect(
-      screen.getByText(
-        "Codex is not signed in yet. Sign in to let the instance use it. The instance keeps running.",
-      ),
-    ).toBeDefined()
-    expect(screen.queryByText(/Sign in again when/)).toBeNull()
-  })
+    const server = within(needsYou().getByRole("listitem", { name: "MCP server fetch failed" }))
+    expect(server.getByText("fetch exited with code 1.")).toBeDefined()
+    expect(needsYou().queryByText("The template changed.")).toBeNull()
+    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
+    await user.click(server.getByRole("button", { name: "Open Skills" }))
 
-  it("names every login not signed in, a failed one too", async () => {
-    const logins: InstanceSetup["logins"] = [
-      { ...setup.logins[0]!, state: "pending" },
-      { ...setup.logins[1]!, state: "failed" },
-      { id: "claude", label: "Claude", description: "Signs Claude in.", state: "signed_in" },
-    ]
-    await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
-
-    expect(
-      screen.getByText(
-        "Codex and Editor account are not signed in yet. Sign in to let the instance use them. The instance keeps running.",
-      ),
-    ).toBeDefined()
-  })
-
-  it("offers signing in again once every login is signed in", async () => {
-    const logins = setup.logins.map((login) => ({ ...login, state: "signed_in" as const }))
-    await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
-
-    expect(
-      screen.getByText(
-        "Sign in again when a subscription stops working. The instance keeps running.",
-      ),
-    ).toBeDefined()
+    expect(window.location.pathname).toBe("/instances/instance-1/config/skills")
   })
 
   // jsdom lays nothing out, so the layout shows only in the classes.
@@ -497,17 +515,17 @@ describe("a running instance", () => {
     expect(text?.contains("basis-full") && text.contains("sm:basis-0")).toBe(true)
   })
 
-  it("shows no sign-in rows when it declares no login", async () => {
-    await openPage(
-      { "instance.status": () => status({ setup: { ...setup, logins: [] } }) },
-      running,
-    )
+  it("is absent when every login is signed in, and says nothing needs the user", async () => {
+    const logins = setup.logins.map((login) => ({ ...login, state: "signed_in" as const }))
+    await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
 
+    expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
     expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
-    expect(screen.getByText(/^Start a thread with/)).toBeDefined()
+    expect(screen.getByText("Nothing needs you")).toBeDefined()
+    expect(screen.getByText(/^Start a thread with New thread above Ada's threads/)).toBeDefined()
   })
 
-  it("says there is nothing here when the status cannot be read", async () => {
+  it("says nothing needs the user when the status cannot be read", async () => {
     const caller: Pick<Client, "call" | "subscribe"> = {
       call: () => Promise.reject(new Error("gone")),
       ...stubSubscriber(),
@@ -517,10 +535,10 @@ describe("a running instance", () => {
     await act(() => clock.advance(0))
 
     expect(screen.getByText(/^Start a thread with/)).toBeDefined()
-    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+    expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
   })
 
-  it("does not say there is nothing here before the status is read", () => {
+  it("does not say nothing needs the user before the status is read", () => {
     const caller: Pick<Client, "call" | "subscribe"> = {
       call: () => new Promise<never>(() => {}),
       ...stubSubscriber(),
@@ -530,14 +548,14 @@ describe("a running instance", () => {
     )
 
     expect(screen.queryByText(/^Start a thread with/)).toBeNull()
-    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
+    expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
   })
 })
 
 describe("the views of a running instance", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
-  function openWithViews(views: ViewSummary[]) {
+  async function openWithViews(views: ViewSummary[]) {
     const caller = {
       ...stubCaller({
         "instance.status": () => status({ process: "running" }),
@@ -546,39 +564,41 @@ describe("the views of a running instance", () => {
       ...stubSubscriber(),
     }
     const client = stubCaller({ "view.list": () => ({ views }) })
+    const clock = fakeClock()
     render(
       <InstancePage
         caller={caller}
         client={client}
-        clock={fakeClock()}
+        clock={clock}
         instance={running}
         onChanged={vi.fn()}
       />,
     )
-    return userEvent.setup()
+    await act(() => clock.advance(0))
+    return {
+      section: within(screen.getByRole("region", { name: "Views" })),
+      user: userEvent.setup(),
+    }
   }
 
-  it("lists the instance's views under Views, and opens the one picked", async () => {
+  it("lists the instance's views as rows, and opens the one picked", async () => {
     window.history.replaceState(null, "", "/instances/instance-1")
-    const user = openWithViews([
+    const { section, user } = await openWithViews([
       { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" },
       { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" },
     ])
 
-    await user.click(await screen.findByRole("button", { name: "Views" }))
-    const items = await screen.findAllByRole("menuitem")
-    expect(items.map((item) => item.textContent)).toEqual(["Job board", "Reading list"])
-    await user.click(items[0]!)
+    const rows = within(section.getByRole("list", { name: "Views" })).getAllByRole("listitem")
+    expect(rows.map((row) => row.textContent)).toEqual(["Job board", "Reading list"])
+    await user.click(section.getByRole("button", { name: "Job board" }))
 
     expect(window.location.pathname).toBe("/instances/instance-1/views/applications")
   })
 
   it("says when the instance has no views yet", async () => {
-    const user = openWithViews([])
+    const { section } = await openWithViews([])
 
-    await user.click(await screen.findByRole("button", { name: "Views" }))
-
-    expect(await screen.findByText("No views yet")).toBeDefined()
+    expect(section.getByText("No views yet.")).toBeDefined()
   })
 })
 
@@ -642,6 +662,14 @@ describe("what the header holds", () => {
     expect(screen.queryByRole("heading", { name: "Ada" })).toBeNull()
     expect(screen.queryByRole("button", { name: /^(Start|Stop)$/ })).toBeNull()
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull()
+  })
+
+  it("has no Configure, Memory, Stats or Views button of its own", async () => {
+    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
+
+    for (const name of ["Configure", "Memory", "Stats", "Views"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull()
+    }
   })
 
   it("keeps the running view while a stop asked from the header drains", async () => {

@@ -2,6 +2,7 @@ import type { BrowserProfile, Client, Clock } from "@kinby/contract"
 import { type FormEvent, useCallback, useId, useState } from "react"
 
 import { LiveBrowser } from "@/components/live-browser"
+import { SectionFrame } from "@/components/section-frame"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -12,7 +13,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -24,25 +24,26 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useRead } from "@/hooks/use-read"
 import { reason } from "@/lib/operation"
-import { CircleXIcon, PlusIcon, TextCursorInputIcon, Trash2Icon } from "lucide-react"
+import { CircleXIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
 
 type Caller = Pick<Client, "call">
 type Driver = Pick<Client, "call" | "subscribe">
+
+/** A form's first field takes the focus when the form opens. */
+const focus = (input: HTMLInputElement | null) => input?.focus()
 
 /**
  * The instance's browser profiles, by name and site, each renamed or deleted here. New profile
@@ -59,7 +60,6 @@ export function BrowserProfiles({
   clock: Clock
   instanceId: string
 }) {
-  const titleId = useId()
   const list = useCallback(
     () => caller.call("browser.profile.list", { instance_id: instanceId }),
     [caller, instanceId],
@@ -69,22 +69,19 @@ export function BrowserProfiles({
   const profiles = value?.profiles ?? []
 
   return (
-    <section aria-labelledby={titleId} className="flex max-w-2xl flex-col gap-3 p-6">
-      <div className="flex items-center gap-2">
-        <h2 id={titleId} className="text-base font-semibold">
-          Browser profiles
-        </h2>
-        {!creating && (
-          <Button variant="outline" size="sm" className="ml-auto" onClick={() => setCreating(true)}>
+    <SectionFrame
+      title="Browser profiles"
+      lead="Sites the instance opens signed in. The hub keeps their cookies, which the instance never reads."
+      variant="page"
+      actions={
+        !creating && (
+          <Button variant="outline" size="sm" onClick={() => setCreating(true)}>
             <PlusIcon data-icon="inline-start" />
             New profile
           </Button>
-        )}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Sites the instance opens signed in. The hub keeps their cookies, which the instance never
-        reads.
-      </p>
+        )
+      }
+    >
       {failure !== undefined && <Refusal title="Could not read the profiles" error={failure} />}
       {creating && (
         <NewProfile
@@ -98,7 +95,7 @@ export function BrowserProfiles({
         />
       )}
       {profiles.length > 0 && (
-        <ItemGroup aria-label="Browser profiles">
+        <ul aria-label="Browser profiles" className="flex flex-col divide-y">
           {profiles.map((profile) => (
             <ProfileItem
               key={profile.name}
@@ -108,9 +105,9 @@ export function BrowserProfiles({
               onChanged={readAgain}
             />
           ))}
-        </ItemGroup>
+        </ul>
       )}
-    </section>
+    </SectionFrame>
   )
 }
 
@@ -128,6 +125,7 @@ function ProfileItem({
 }) {
   const { name, site } = profile
   const [failure, setFailure] = useState<unknown>()
+  const [asking, setAsking] = useState<"rename" | "delete">()
   const remove = () =>
     caller.call("browser.profile.delete", { instance_id: instanceId, name }).then(
       () => onChanged(),
@@ -135,27 +133,40 @@ function ProfileItem({
     )
 
   return (
-    <Item render={<li />} aria-label={name} variant="outline" size="sm">
+    <Item render={<li />} aria-label={name} size="row">
       <ItemContent>
         <ItemTitle>{name}</ItemTitle>
         <ItemDescription>{site}</ItemDescription>
         {failure !== undefined && <Refusal title={`Could not delete ${name}`} error={failure} />}
       </ItemContent>
       <ItemActions>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<Button variant="ghost" size="icon-sm" aria-label={`More for ${name}`} />}
+          >
+            <MoreHorizontalIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setAsking("rename")}>Rename</DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onClick={() => setAsking("delete")}>
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <RenameDialog
           name={name}
+          open={asking === "rename"}
+          onOpenChange={(open) => setAsking(open ? "rename" : undefined)}
           onRename={(newName) =>
             caller
               .call("browser.profile.rename", { instance_id: instanceId, name, new_name: newName })
               .then(onChanged)
           }
         />
-        <AlertDialog>
-          <AlertDialogTrigger
-            render={<Button variant="ghost" size="icon-sm" aria-label={`Delete ${name}`} />}
-          >
-            <Trash2Icon />
-          </AlertDialogTrigger>
+        <AlertDialog
+          open={asking === "delete"}
+          onOpenChange={(open) => setAsking(open ? "delete" : undefined)}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
@@ -179,13 +190,16 @@ function ProfileItem({
 /** Asks for a profile's new name. A refusal, such as a name taken, shows in the dialog. */
 function RenameDialog({
   name,
+  open,
+  onOpenChange,
   onRename,
 }: {
   name: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
   onRename: (newName: string) => Promise<unknown>
 }) {
   const id = useId()
-  const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState("")
   const [renaming, setRenaming] = useState(false)
   const [failure, setFailure] = useState<unknown>()
@@ -195,7 +209,7 @@ function RenameDialog({
     setFailure(undefined)
     try {
       await onRename(newName.trim())
-      setOpen(false)
+      onOpenChange(false)
     } catch (error) {
       setFailure(error)
     } finally {
@@ -204,11 +218,7 @@ function RenameDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button size="sm" variant="outline" aria-label={`Rename ${name}`} />}>
-        <TextCursorInputIcon data-icon="inline-start" />
-        Rename
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Rename {name}</DialogTitle>
@@ -275,6 +285,7 @@ function NewProfile({
             <FieldLabel htmlFor={id}>Sign-in page</FieldLabel>
             <Input
               id={id}
+              ref={focus}
               type="url"
               value={url}
               placeholder="https://www.linkedin.com/login"
