@@ -3,6 +3,7 @@ import type { Client, Clock, InstanceClient, InstanceSummary } from "@kinby/cont
 import type * as React from "react"
 
 import { ConfigPanel } from "@/components/config-panel"
+import { InstanceHeader, type Lifecycle } from "@/components/instance-header"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
 import { HomeScreen } from "@/components/home-screen"
@@ -21,6 +22,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INSTANCE_TABS, instanceName } from "@/lib/instances"
 import { behind, OlderCore } from "@/lib/older-core"
@@ -32,7 +34,7 @@ import {
   openTab,
   selectInstance,
 } from "@/lib/selection"
-import { CirclePauseIcon, ServerIcon } from "lucide-react"
+import { CirclePauseIcon, PlayIcon, ServerIcon } from "lucide-react"
 
 /**
  * The selected thread's panel, the selected instance's thread list, one of its views, or its page
@@ -111,16 +113,29 @@ export function MainPanel({
   }
   if (selected !== undefined) {
     return (
-      <InstanceTabs instance={selected} tab={tab}>
-        <TabBody
+      <div className="flex flex-col md:min-h-0 md:flex-1">
+        <InstanceHeader
+          key={selected.instance_id}
           caller={caller}
           clock={clock}
           instance={selected}
-          tab={tab}
-          instanceClient={instanceClient}
           onChanged={onChanged}
-        />
-      </InstanceTabs>
+        >
+          {(lifecycle) => (
+            <InstanceTabs instance={selected} tab={tab}>
+              <TabBody
+                caller={caller}
+                clock={clock}
+                instance={selected}
+                tab={tab}
+                lifecycle={lifecycle}
+                instanceClient={instanceClient}
+                onChanged={onChanged}
+              />
+            </InstanceTabs>
+          )}
+        </InstanceHeader>
+      </div>
     )
   }
   if (instances.length === 0) {
@@ -137,7 +152,11 @@ export function MainPanel({
   return <HomeScreen key={to} caller={caller} instances={instances} to={to} />
 }
 
-/** The instance's tab strip, named for the instance, over the open tab. */
+/**
+ * The instance's tab strip, named for the instance, over the open tab. The strip stays put while
+ * the tab scrolls, under the header on a wide screen and alone on a phone, where the header
+ * scrolls away.
+ */
 function InstanceTabs({
   instance,
   tab,
@@ -151,9 +170,9 @@ function InstanceTabs({
     <Tabs
       value={tab}
       onValueChange={(picked: InstanceTab) => openTab(instance.instance_id, picked)}
-      className="min-h-0 flex-1"
+      className="md:min-h-0 md:flex-1"
     >
-      <div className="shrink-0 border-b px-4">
+      <div className="sticky top-0 z-10 shrink-0 border-b bg-background px-4 pt-2">
         <TabsList
           variant="line"
           aria-label={instanceName(instance)}
@@ -166,7 +185,7 @@ function InstanceTabs({
           ))}
         </TabsList>
       </div>
-      <TabsContent value={tab} className="flex min-h-0 min-w-0 flex-col">
+      <TabsContent value={tab} className="flex min-w-0 flex-col md:min-h-0 md:overflow-y-auto">
         {/* The tab panel sets small text, and the pages keep the base size they had before. */}
         <div className="flex min-h-0 flex-1 flex-col text-base">{children}</div>
       </TabsContent>
@@ -178,12 +197,14 @@ function InstanceTabs({
  * What the open tab holds. Config, Routines, Memory and Stats open once `instanceClient` reaches the
  * instance. Config opens only on an instance meant to run, which is the one the hub relays to, and
  * stays open while an update restarts the container. Routines, Memory and Stats need a running one.
+ * In their place a stopped instance offers the header's start.
  */
 function TabBody({
   caller,
   clock,
   instance,
   tab,
+  lifecycle,
   instanceClient,
   onChanged,
 }: {
@@ -191,6 +212,7 @@ function TabBody({
   clock: Clock
   instance: InstanceSummary
   tab: InstanceTab
+  lifecycle: Lifecycle
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
 }) {
@@ -203,12 +225,22 @@ function TabBody({
         client={instanceClient}
         clock={clock}
         instance={instance}
+        stopping={lifecycle.stopping}
         onChanged={onChanged}
       />
     )
   }
   const state = tab === "config" ? instance.intended_state : instance.process
-  if (state !== "running") return <NotRunning instance={instance} what={tab} />
+  if (state !== "running") {
+    const name = instanceName(instance)
+    return instance.intended_state === "stopped" ? (
+      <StoppedTab name={name} what={tab} lifecycle={lifecycle} />
+    ) : (
+      <EmptyState icon={<CirclePauseIcon />} title={`${name} is not running`}>
+        It shows its {tab} once it runs.
+      </EmptyState>
+    )
+  }
   if (instanceClient === undefined) return null
   switch (tab) {
     case "config":
@@ -260,6 +292,36 @@ function TabBody({
         />
       )
   }
+}
+
+/** A tab that needs the instance to run, starting it with the header's start. */
+function StoppedTab({
+  name,
+  what,
+  lifecycle,
+}: {
+  name: string
+  what: string
+  lifecycle: Lifecycle
+}) {
+  return (
+    <EmptyState
+      icon={<CirclePauseIcon />}
+      title={`${name} is stopped`}
+      action={
+        <Button disabled={lifecycle.starting || lifecycle.stopping} onClick={lifecycle.start}>
+          {lifecycle.starting ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <PlayIcon data-icon="inline-start" />
+          )}
+          Start {name}
+        </Button>
+      }
+    >
+      Start it to see its {what}.
+    </EmptyState>
+  )
 }
 
 /** A page that needs a running instance, sending the user to the instance's page, which has Start. */

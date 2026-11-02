@@ -1,3 +1,4 @@
+import { cn } from "cn"
 import { ChevronLeftIcon } from "lucide-react"
 import { type ReactNode, useId } from "react"
 
@@ -6,33 +7,43 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { switchSettings } from "@/lib/selection"
 
 /**
- * A Settings section: its title, lead and actions in a header that stays put, over its body, which
- * scrolls. On a phone the header leads with Back to the section list.
+ * A section: its title, lead and actions over its body. In the Settings dialog the header stays
+ * put over the body, which scrolls, and on a phone it leads with Back to the section list. On a
+ * page the section scrolls with the page.
  */
 export function SectionFrame({
   title,
   lead,
   actions,
+  variant = "dialog",
   children,
 }: {
   title: string
   lead: string
   actions?: ReactNode
+  variant?: "dialog" | "page"
   children: ReactNode
 }) {
   const isMobile = useIsMobile()
   const titleId = useId()
   const leadId = useId()
+  const dialog = variant === "dialog"
+  const body = <div className="flex flex-col gap-4">{children}</div>
   return (
     <section
       aria-labelledby={titleId}
       aria-describedby={leadId}
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      className={cn("flex min-w-0 flex-col", dialog ? "min-h-0 flex-1" : "gap-3")}
     >
-      {/* The right padding clears the dialog's Close button. */}
-      <header className="flex shrink-0 flex-col gap-1 px-6 pt-5 pr-16 pb-3 max-md:px-4 max-md:pr-14">
+      <header
+        className={cn(
+          "flex shrink-0 flex-col gap-1",
+          // The right padding clears the dialog's Close button.
+          dialog && "px-6 pt-5 pr-16 pb-3 max-md:px-4 max-md:pr-14",
+        )}
+      >
         <div className="flex min-h-8 flex-wrap items-center gap-2">
-          {isMobile && (
+          {dialog && isMobile && (
             <Button
               variant="ghost"
               size="icon-sm"
@@ -42,7 +53,10 @@ export function SectionFrame({
               <ChevronLeftIcon />
             </Button>
           )}
-          <h2 id={titleId} className="font-heading text-lg font-semibold">
+          <h2
+            id={titleId}
+            className={cn("font-heading font-semibold", dialog ? "text-lg" : "text-base")}
+          >
             {title}
           </h2>
           {actions !== undefined && (
@@ -53,9 +67,11 @@ export function SectionFrame({
           {lead}
         </p>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-2 pb-6 max-md:px-4">
-        <div className="flex flex-col gap-4">{children}</div>
-      </div>
+      {dialog ? (
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-2 pb-6 max-md:px-4">{body}</div>
+      ) : (
+        body
+      )}
     </section>
   )
 }

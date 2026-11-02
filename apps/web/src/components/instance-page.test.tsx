@@ -1,4 +1,3 @@
-import { CallError } from "@kinby/contract"
 import type {
   Client,
   InstanceSetup,
@@ -12,11 +11,10 @@ import {
   type Answers,
   fakeClock,
   instanceSummary,
-  type StubCaller,
   stubCaller,
   stubSubscriber,
 } from "@kinby/contract/testing"
-import { act, render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
@@ -115,7 +113,7 @@ const waitingForCode = operation({
   ],
 })
 
-async function openPage(answers: Answers, instance = stopped) {
+async function openPage(answers: Answers, instance = stopped, stopping = false) {
   const caller = {
     ...stubCaller({
       "instance.status": () => status(),
@@ -127,7 +125,13 @@ async function openPage(answers: Answers, instance = stopped) {
   const clock = fakeClock()
   const onChanged = vi.fn()
   const page = (shown: InstanceSummary) => (
-    <InstancePage caller={caller} clock={clock} instance={shown} onChanged={onChanged} />
+    <InstancePage
+      caller={caller}
+      clock={clock}
+      instance={shown}
+      stopping={stopping}
+      onChanged={onChanged}
+    />
   )
   const { rerender } = render(page(instance))
   await act(() => clock.advance(0))
@@ -147,10 +151,10 @@ const secret = (name: string) =>
   within(within(screen.getByRole("list", { name: "Secrets" })).getByRole("listitem", { name }))
 
 describe("the setup card", () => {
-  it("opens a stopped instance with pending setup on each login and secret, and Start", async () => {
+  it("opens a stopped instance with pending setup on each login and secret", async () => {
     await openPage({})
 
-    expect(card().getByRole("button", { name: "Start" })).toBeDefined()
+    expect(card().queryByRole("button", { name: "Start" })).toBeNull()
     expect(login("Codex").getByText("Not signed in")).toBeDefined()
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
     expect(login("Editor account").getByText("Signed in").getAttribute("data-variant")).toBe(
@@ -379,45 +383,17 @@ describe("the setup card", () => {
     )
     expect(onChanged).not.toHaveBeenCalled()
   })
-
-  it("starts the instance anyway, and lists the instances again once it runs", async () => {
-    const { user, clock, caller, onChanged } = await openPage({
-      "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
-      "operation.get": () => operation({ kind: "start", state: "succeeded" }),
-    })
-
-    await user.click(card().getByRole("button", { name: "Start" }))
-    await act(() => clock.advance(0))
-
-    expect(caller.calls.find((call) => call.method === "instance.start")?.params).toEqual({
-      instance_id: "instance-1",
-    })
-    expect(onChanged).toHaveBeenCalledOnce()
-  })
-
-  it("says why a start failed", async () => {
-    const { user, clock } = await openPage({
-      "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
-      "operation.get": () =>
-        operation({ kind: "start", state: "failed", detail: "The image is gone." }),
-    })
-
-    await user.click(card().getByRole("button", { name: "Start" }))
-    await act(() => clock.advance(0))
-
-    expect(card().getByText("The image is gone.")).toBeDefined()
-    expect(card().getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(false)
-  })
 })
 
 describe("a stopped instance with setup complete", () => {
   const complete = { ...stopped, setup_pending: false }
   const stoppedView = () => within(screen.getByRole("region", { name: "Ada is stopped" }))
 
-  it("offers Start instead of the setup card", async () => {
+  it("shows it stopped instead of the setup card, with no Start of its own", async () => {
     await openPage({}, complete)
 
-    expect(stoppedView().getByRole("button", { name: "Start" })).toBeDefined()
+    expect(stoppedView().getByText("It does nothing until it starts.")).toBeDefined()
+    expect(stoppedView().queryByRole("button", { name: "Start" })).toBeNull()
     expect(screen.queryByRole("region", { name: "Finish setting up Ada" })).toBeNull()
   })
 
@@ -434,53 +410,13 @@ describe("a stopped instance with setup complete", () => {
     expect(stoppedView().queryByText(/The last run ended with an error/)).toBeNull()
   })
 
-  it("starts it, and leaves the stopped view once it runs", async () => {
-    const polls = [
-      operation({ kind: "start", state: "running" }),
-      operation({ kind: "start", state: "succeeded" }),
-    ]
-    const { user, clock, caller, onChanged, relist } = await openPage(
-      {
-        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      complete,
-    )
+  it("leaves the stopped view once it is listed again running", async () => {
+    const { clock, relist } = await openPage({}, complete)
 
-    await user.click(stoppedView().getByRole("button", { name: "Start" }))
-    await act(() => clock.advance(0))
-    expect(stoppedView().getByRole("status", { name: "Loading" })).toBeDefined()
-    expect(stoppedView().getByRole("button", { name: /Start/ }).hasAttribute("disabled")).toBe(true)
-    expect(onChanged).not.toHaveBeenCalled()
-    await act(() => clock.advance(1_000))
-
-    expect(caller.calls.find((call) => call.method === "instance.start")?.params).toEqual({
-      instance_id: "instance-1",
-    })
-    expect(onChanged).toHaveBeenCalledOnce()
     relist({ ...complete, intended_state: "running" })
     await act(() => clock.advance(0))
+
     expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
-  })
-
-  it("says why a start failed", async () => {
-    const { user, clock, onChanged } = await openPage(
-      {
-        "instance.start": () => ({ operation_id: "op-start", instance_id: "instance-1" }),
-        "operation.get": () =>
-          operation({ kind: "start", state: "failed", detail: "The image is gone." }),
-      },
-      complete,
-    )
-
-    await user.click(stoppedView().getByRole("button", { name: "Start" }))
-    await act(() => clock.advance(0))
-
-    expect(stoppedView().getByText("The image is gone.")).toBeDefined()
-    expect(stoppedView().getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(
-      false,
-    )
-    expect(onChanged).not.toHaveBeenCalled()
   })
 })
 
@@ -494,24 +430,6 @@ describe("a running instance", () => {
     expect(login("Editor account").getByRole("button", { name: "Sign in again" })).toBeDefined()
     expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
     expect(screen.queryByRole("alert")).toBeNull()
-  })
-
-  it("says it is restarting when its container restarts in a loop", async () => {
-    await openPage({}, { ...running, process: "starting", detail: "restarting" })
-
-    expect(within(screen.getByRole("alert")).getByText("Ada is restarting")).toBeDefined()
-    expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
-  })
-
-  it("says it failed, with what the runtime saw", async () => {
-    const failed = { ...running, process: "failed", detail: "exited (1)" } as const
-    await openPage({ "instance.status": () => status({ setup: { ...setup, logins: [] } }) }, failed)
-
-    const alert = within(screen.getByRole("alert"))
-    expect(alert.getByText("Ada failed")).toBeDefined()
-    expect(alert.getByText("exited (1)")).toBeDefined()
-    expect(alert.getByText(/^Check its settings in Configure before you stop it/)).toBeDefined()
-    expect(screen.queryByText(/is running$/)).toBeNull()
   })
 
   it("follows a sign-in that runs when the page loads", async () => {
@@ -711,401 +629,32 @@ describe("the repository commands", () => {
   })
 })
 
-describe("stopping a running instance", () => {
+describe("what the header holds", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
   it.each([
     ["running", running],
-    ["restarting", { ...running, process: "starting", detail: "restarting" }],
-    ["failed", { ...running, process: "failed", detail: "exited (1)" }],
-  ] as const)("offers Stop when its process is %s", async (_process, instance) => {
+    ["stopped", { ...stopped, setup_pending: false }],
+    ["stopped with setup pending", stopped],
+  ] as const)("draws no name, Start, Stop or ⋯ menu when it is %s", async (_state, instance) => {
     await openPage({}, instance)
 
-    expect(screen.getByRole("button", { name: "Stop" })).toBeDefined()
-  })
-
-  it("asks first, and makes no call when the stop is cancelled", async () => {
-    const { user, caller } = await openPage({}, running)
-
-    await user.click(screen.getByRole("button", { name: "Stop" }))
-    const dialog = await screen.findByRole("alertdialog", { name: "Stop Ada?" })
-    expect(dialog.textContent).toContain(
-      "Ada finishes the work it has accepted, then does nothing until it starts again.",
-    )
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
-
-    expect(caller.calls.some((call) => call.method === "instance.stop")).toBe(false)
-  })
-
-  it("stops it once confirmed, busy until the stop ends", async () => {
-    const { user, clock, caller, onChanged } = await openPage(
-      {
-        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
-        "operation.get": () => operation({ kind: "stop", state: "running" }),
-      },
-      running,
-    )
-
-    await confirmStop(user)
-    await act(() => clock.advance(0))
-
-    expect(stops(caller)).toEqual([{ instance_id: "instance-1" }])
-    const stop = screen.getByRole("button", { name: /Stop/ })
-    expect(stop.hasAttribute("disabled")).toBe(true)
-    expect(within(stop).getByRole("status", { name: "Loading" })).toBeDefined()
-    expect(onChanged).not.toHaveBeenCalled()
-  })
-
-  it("lists the instances again once it stops, and shows it stopped", async () => {
-    const polls = [
-      operation({ kind: "stop", state: "running" }),
-      operation({ kind: "stop", state: "succeeded" }),
-    ]
-    const { user, clock, onChanged, relist } = await openPage(
-      {
-        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      running,
-    )
-
-    await confirmStop(user)
-    await act(() => clock.advance(0))
-    expect(onChanged).not.toHaveBeenCalled()
-    await act(() => clock.advance(1_000))
-
-    expect(onChanged).toHaveBeenCalledOnce()
-    relist({ ...running, intended_state: "stopped", setup_pending: false })
-    await act(() => clock.advance(0))
-    expect(screen.getByRole("region", { name: "Ada is stopped" })).toBeDefined()
-  })
-
-  it("says why a stop failed, and offers to force it", async () => {
-    const unreachable = "Its lifecycle endpoint did not answer. Force stop it."
-    const polls = [
-      operation({ kind: "stop", state: "failed", detail: unreachable }),
-      operation({ kind: "stop", state: "succeeded" }),
-    ]
-    const { user, clock, caller, onChanged } = await openPage(
-      {
-        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      running,
-    )
-
-    expect(screen.queryByRole("button", { name: "Force stop" })).toBeNull()
-    await confirmStop(user)
-    await act(() => clock.advance(0))
-    expect(within(screen.getByRole("alert")).getByText(unreachable)).toBeDefined()
-    expect(onChanged).not.toHaveBeenCalled()
-    await user.click(screen.getByRole("button", { name: "Force stop" }))
-    await act(() => clock.advance(0))
-
-    expect(stops(caller)).toEqual([
-      { instance_id: "instance-1" },
-      { instance_id: "instance-1", force: true },
-    ])
-    expect(onChanged).toHaveBeenCalledOnce()
-  })
-
-  it("keeps the stop and Force stop when a relist marks it stopped mid-drain", async () => {
-    const { user, clock, relist } = await openPage(
-      {
-        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
-        "operation.get": () => operation({ kind: "stop", state: "running" }),
-      },
-      running,
-    )
-
-    await confirmStop(user)
-    await act(() => clock.advance(0))
-    relist({ ...running, intended_state: "stopped", setup_pending: false })
-    await act(() => clock.advance(0))
-
-    expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Force stop" })).toBeDefined()
-  })
-
-  it("forces a stop that is still draining, and keeps following it", async () => {
-    const polls = [
-      operation({ operation_id: "op-stop", kind: "stop", state: "running" }),
-      operation({ operation_id: "op-stop", kind: "stop", state: "running" }),
-      operation({ operation_id: "op-stop", kind: "stop", state: "succeeded" }),
-    ]
-    const { user, clock, caller, onChanged } = await openPage(
-      {
-        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      running,
-    )
-
-    await confirmStop(user)
-    await act(() => clock.advance(0))
-    await user.click(screen.getByRole("button", { name: "Force stop" }))
-    await act(() => clock.advance(0))
-    expect(screen.getByRole("button", { name: "Force stop" }).hasAttribute("disabled")).toBe(true)
-    expect(screen.getByRole("button", { name: /Stop/ }).hasAttribute("disabled")).toBe(true)
-    expect(onChanged).not.toHaveBeenCalled()
-    await act(() => clock.advance(1_000))
-
-    expect(stops(caller)).toEqual([
-      { instance_id: "instance-1" },
-      { instance_id: "instance-1", force: true },
-    ])
-    const followed = caller.calls
-      .filter((call) => call.method === "operation.get")
-      .map((call) => (call.params as { operation_id: string }).operation_id)
-    expect(new Set(followed)).toEqual(new Set(["op-stop"]))
-    expect(onChanged).toHaveBeenCalledOnce()
-  })
-})
-
-describe("removing an instance", () => {
-  const running = { ...stopped, intended_state: "running", process: "running" } as const
-  const complete = { ...stopped, setup_pending: false }
-
-  it.each([
-    ["running", running],
-    ["stopped", complete],
-    ["stopped with setup pending", stopped],
-  ] as const)("offers Remove in the ⋯ menu when it is %s", async (_state, instance) => {
-    const { user } = await openPage({}, instance)
-
-    await user.click(screen.getByRole("button", { name: "More actions" }))
-
-    expect(await screen.findByRole("menuitem", { name: "Remove" })).toBeDefined()
-  })
-
-  it.each([
-    ["running", running],
-    ["stopped", complete],
-    ["stopped with setup pending", stopped],
-  ] as const)("offers no Remove for the home instance when it is %s", async (_state, instance) => {
-    await openPage({}, { ...instance, home: true })
-
-    expect(screen.getByRole("button", { name: /Start|Stop/ })).toBeDefined()
+    expect(screen.queryByRole("heading", { name: "Ada" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /^(Start|Stop)$/ })).toBeNull()
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull()
   })
 
-  it("asks first, and makes no call when the removal is cancelled", async () => {
-    const { user, caller } = await openPage({}, running)
-
-    const dialog = await askToRemove(user)
-    expect(dialog.textContent).toContain(
-      "Ada stops and leaves the sidebar. Its data stays, and you can restore it from Removed instances.",
-    )
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
-
-    expect(removals(caller)).toEqual([])
-  })
-
-  it("removes it once confirmed", async () => {
-    const { user, clock, caller } = await openPage(
-      {
-        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        "operation.get": () => operation({ kind: "remove", state: "running" }),
-      },
-      complete,
+  it("keeps the running view while a stop asked from the header drains", async () => {
+    await openPage(
+      { "instance.status": () => status({ process: "running" }) },
+      { ...running, intended_state: "stopped" },
+      true,
     )
 
-    await confirmRemoval(user)
-    await act(() => clock.advance(0))
-
-    expect(removals(caller)).toEqual([{ instance_id: "instance-1" }])
-  })
-
-  it("lists the instances again once it is removed, and goes home", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1")
-    const polls = [
-      operation({ kind: "remove", state: "running" }),
-      operation({ kind: "remove", state: "succeeded" }),
-    ]
-    const { user, clock, onChanged } = await openPage(
-      {
-        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      running,
-    )
-
-    await confirmRemoval(user)
-    await act(() => clock.advance(0))
-    expect(onChanged).not.toHaveBeenCalled()
-    expect(window.location.pathname).toBe("/instances/instance-1")
-    await act(() => clock.advance(1_000))
-
-    expect(onChanged).toHaveBeenCalledOnce()
-    expect(window.location.pathname).toBe("/")
-  })
-
-  it("says it is removing while the removal drains, and keeps following it once forced", async () => {
-    const polls = [
-      operation({ operation_id: "op-remove", kind: "remove", state: "running" }),
-      operation({ operation_id: "op-remove", kind: "remove", state: "succeeded" }),
-    ]
-    const { user, clock, caller, onChanged } = await openPage(
-      {
-        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        // A force stop escalates the pending removal, and the hub answers with its operation.
-        "instance.stop": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      running,
-    )
-
-    expect(screen.queryByText("Removing…")).toBeNull()
-    await confirmRemoval(user)
-    await act(() => clock.advance(0))
-    expect(screen.getByText("Removing…")).toBeDefined()
-    expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true)
-    await user.click(screen.getByRole("button", { name: "Force stop" }))
-    await act(() => clock.advance(0))
-    expect(screen.getByRole("button", { name: "Force stop" }).hasAttribute("disabled")).toBe(true)
-    expect(onChanged).not.toHaveBeenCalled()
-    await act(() => clock.advance(1_000))
-
-    expect(stops(caller)).toEqual([{ instance_id: "instance-1", force: true }])
-    const followed = caller.calls
-      .filter((call) => call.method === "operation.get")
-      .map((call) => (call.params as { operation_id: string }).operation_id)
-    expect(new Set(followed)).toEqual(new Set(["op-remove"]))
-    expect(onChanged).toHaveBeenCalledOnce()
-  })
-
-  it("goes home when the removal ends before its Force stop lands", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1")
-    const polls = [
-      operation({ operation_id: "op-remove", kind: "remove", state: "running" }),
-      operation({ operation_id: "op-remove", kind: "remove", state: "succeeded" }),
-    ]
-    const { user, clock, onChanged } = await openPage(
-      {
-        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        "instance.stop": () => {
-          throw new CallError({ code: "NOT_FOUND", message: "no such instance", retryable: false })
-        },
-        "operation.get": () => (polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult,
-      },
-      running,
-    )
-
-    await confirmRemoval(user)
-    await act(() => clock.advance(0))
-    await user.click(screen.getByRole("button", { name: "Force stop" }))
-    await act(() => clock.advance(1_000))
-
-    expect(screen.queryByText("The removal failed")).toBeNull()
-    expect(onChanged).toHaveBeenCalledOnce()
-    expect(window.location.pathname).toBe("/")
-  })
-
-  it("reports a removal that failed before its Force stop landed, whatever the stop does", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1")
-    const detail = "The container could not be removed: permission denied."
-    const polls = [
-      operation({ operation_id: "op-remove", kind: "remove", state: "running" }),
-      operation({ operation_id: "op-remove", kind: "remove", state: "failed", detail }),
-    ]
-    const { user, clock, caller, onChanged } = await openPage(
-      {
-        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        // With the removal over, the hub starts a stop of its own.
-        "instance.stop": () => ({ operation_id: "op-stop", instance_id: "instance-1" }),
-        "operation.get": (params) =>
-          (params as { operation_id: string }).operation_id === "op-stop"
-            ? operation({ operation_id: "op-stop", kind: "stop", state: "succeeded" })
-            : ((polls.length > 1 ? polls.shift() : polls[0]) as OperationGetResult),
-      },
-      running,
-    )
-
-    await confirmRemoval(user)
-    await act(() => clock.advance(0))
-    await user.click(screen.getByRole("button", { name: "Force stop" }))
-    await act(() => clock.advance(1_000))
-
-    expect(within(screen.getByRole("alert")).getByText(detail)).toBeDefined()
-    const followed = caller.calls
-      .filter((call) => call.method === "operation.get")
-      .map((call) => (call.params as { operation_id: string }).operation_id)
-    expect(new Set(followed)).toEqual(new Set(["op-remove"]))
-    expect(onChanged).not.toHaveBeenCalled()
-    expect(window.location.pathname).toBe("/instances/instance-1")
-  })
-
-  it("shows the hub's message in the dialog when the hub refuses the removal", async () => {
-    const refusal =
-      "The Codex sign-in is still running for this instance. Finish the sign-in or let its code expire first."
-    const { user, clock, onChanged } = await openPage(
-      {
-        "instance.remove": () => {
-          throw new CallError({ code: "INSTANCE_BUSY", message: refusal, retryable: false })
-        },
-      },
-      running,
-    )
-
-    const dialog = await askToRemove(user)
-    await user.click(within(dialog).getByRole("button", { name: "Remove" }))
-    await act(() => clock.advance(0))
-
-    expect(within(screen.getByRole("alertdialog")).getByText(refusal)).toBeDefined()
-    expect(screen.queryByText("Removing…")).toBeNull()
-    expect(onChanged).not.toHaveBeenCalled()
-  })
-
-  it("says why a removal failed, and offers Remove again", async () => {
-    const detail = "The container could not be removed: permission denied."
-    const { user, clock, onChanged } = await openPage(
-      {
-        "instance.remove": () => ({ operation_id: "op-remove", instance_id: "instance-1" }),
-        "operation.get": () => operation({ kind: "remove", state: "failed", detail }),
-      },
-      complete,
-    )
-
-    await confirmRemoval(user)
-    await act(() => clock.advance(0))
-
-    const alert = within(screen.getByRole("alert"))
-    expect(alert.getByText("The removal failed")).toBeDefined()
-    expect(alert.getByText(detail)).toBeDefined()
-    expect(screen.queryByText("Removing…")).toBeNull()
-    expect(screen.queryByRole("button", { name: "Force stop" })).toBeNull()
-    expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(
-      false,
-    )
-    expect(onChanged).not.toHaveBeenCalled()
+    expect(screen.queryByRole("region", { name: "Ada is stopped" })).toBeNull()
+    expect(login("Codex").getByRole("button", { name: "Sign in" })).toBeDefined()
   })
 })
-
-async function askToRemove(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "More actions" }))
-  await user.click(await screen.findByRole("menuitem", { name: "Remove" }))
-  return screen.findByRole("alertdialog", { name: "Remove Ada?" })
-}
-
-async function confirmRemoval(user: ReturnType<typeof userEvent.setup>) {
-  const dialog = await askToRemove(user)
-  await user.click(within(dialog).getByRole("button", { name: "Remove" }))
-  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
-}
-
-const removals = (caller: StubCaller) =>
-  caller.calls.filter((call) => call.method === "instance.remove").map((call) => call.params)
-
-async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Stop" }))
-  const dialog = await screen.findByRole("alertdialog", { name: "Stop Ada?" })
-  await user.click(within(dialog).getByRole("button", { name: "Stop" }))
-  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
-}
-
-const stops = (caller: StubCaller) =>
-  caller.calls.filter((call) => call.method === "instance.stop").map((call) => call.params)
 
 describe("the browser profiles and the vault of an instance", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
@@ -1162,7 +711,7 @@ describe("the browser profiles and the vault of an instance", () => {
   it("leaves them out on an instance with the browser off", async () => {
     openWithBrowser(false)
 
-    await screen.findByRole("button", { name: "Stop" })
+    await screen.findByRole("list", { name: "Toolset" })
 
     expect(screen.queryByRole("heading", { name: "Browser profiles" })).toBeNull()
     expect(screen.queryByRole("heading", { name: "Vault" })).toBeNull()

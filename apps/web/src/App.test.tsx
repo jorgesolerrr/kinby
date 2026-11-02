@@ -301,7 +301,7 @@ describe("the instances", () => {
 
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByText("Start it from its page to see its memory.")).toBeDefined()
+    expect(await screen.findByText("Start it to see its memory.")).toBeDefined()
     expect(screen.queryByRole("tab", { name: "Knowledge graph" })).toBeNull()
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
@@ -365,7 +365,7 @@ describe("the instances", () => {
 
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByText("Start it from its page to see its stats.")).toBeDefined()
+    expect(await screen.findByText("Start it to see its stats.")).toBeDefined()
     expect(screen.queryByRole("tab", { name: "Overview", selected: true })).toBeNull()
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
@@ -765,6 +765,21 @@ describe("the search palette", () => {
 
 const tabs = (name: string) => within(screen.getByRole("tablist", { name }))
 
+/** The header the instance's name heads. */
+function instanceHeader(name: HTMLElement) {
+  const header = name.closest("header")
+  if (header === null) throw new Error("The instance's name heads no header")
+  return header
+}
+
+/** The params of each call to `method` the app sent the hub itself. */
+function hubCalls(hub: ReturnType<typeof fakeHub>, method: string) {
+  return hub.sockets
+    .find((socket) => socket.url === "ws://hub.test/ws")
+    ?.sent.filter((frame) => (frame as { method?: string }).method === method)
+    .map((frame) => (frame as { params?: unknown }).params)
+}
+
 async function relayedCall(hub: ReturnType<typeof fakeHub>, instanceId: string, method: string) {
   await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
   const relayed = hub.sockets.find(
@@ -910,23 +925,82 @@ describe("an instance's tabs", () => {
     expect(tabs("Ada").getByRole("tab", { name: "Routines", selected: true })).toBeDefined()
   })
 
+  it.each(["", "/config", "/routines", "/memory", "/stats"])(
+    "shows the instance's header on %s, the home instance marked",
+    async (path) => {
+      window.history.replaceState(null, "", `/instances/hub-ada${path}`)
+
+      openApp({ signedIn: true, instances: [{ ...ada, home: true }, unnamed] })
+
+      const header = within(
+        instanceHeader(await screen.findByRole("heading", { level: 1, name: "Ada" })),
+      )
+      expect(header.getByText("Home")).toBeDefined()
+      expect(header.getByText("Running · core revisio")).toBeDefined()
+      expect(header.getByRole("button", { name: "Stop" })).toBeDefined()
+      expect(header.getByRole("button", { name: "More actions" })).toBeDefined()
+    },
+  )
+
   it.each(["routines", "memory", "stats", "config"])(
-    "asks to start a stopped instance on its %s tab, from Overview",
+    "says a stopped instance is stopped on its %s tab, and starts it there",
     async (path) => {
       window.history.replaceState(null, "", `/instances/hub-unnamed/${path}`)
 
       const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-      expect(await screen.findByText(`Start it from its page to see its ${path}.`)).toBeDefined()
+      expect(await screen.findByText(`Start it to see its ${path}.`)).toBeDefined()
+      expect(screen.getByText("research is stopped")).toBeDefined()
       expect(tabs("research").getByRole("tab", { selected: true }).textContent).not.toBe("Overview")
       expect(hub.sockets.map((socket) => socket.url)).not.toContain(
         "ws://hub.test/instances/hub-unnamed/ws",
       )
-      await userEvent.setup().click(screen.getByRole("button", { name: "Open research" }))
-      expect(window.location.pathname).toBe("/instances/hub-unnamed")
-      expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
+      await userEvent.setup().click(screen.getByRole("button", { name: "Start research" }))
+      expect(window.location.pathname).toBe(`/instances/hub-unnamed/${path}`)
+      expect(hubCalls(hub, "instance.start")).toEqual([{ instance_id: "hub-unnamed" }])
+      expect(screen.getByRole("button", { name: /Start$/ }).hasAttribute("disabled")).toBe(true)
     },
   )
+
+  it.each(["", "/config", "/routines", "/memory", "/stats"])(
+    "says on %s that the instance is restarting, and opens Config",
+    async (path) => {
+      window.history.replaceState(null, "", `/instances/hub-ada${path}`)
+      const restarting = { ...ada, process: "starting", detail: "restarting" } as const
+
+      openApp({ signedIn: true, instances: [restarting, unnamed] })
+
+      const alert = within(await screen.findByRole("alert"))
+      expect(alert.getByText("Ada is restarting")).toBeDefined()
+      await userEvent.setup().click(alert.getByRole("button", { name: "Open Config" }))
+      expect(window.location.pathname).toBe("/instances/hub-ada/config")
+      expect(tabs("Ada").getByRole("tab", { name: "Config", selected: true })).toBeDefined()
+    },
+  )
+
+  it("says a tab that needs a running instance waits while it restarts", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/routines")
+    const restarting = { ...ada, process: "starting", detail: "restarting" } as const
+
+    openApp({ signedIn: true, instances: [restarting, unnamed] })
+
+    expect(await screen.findByText("Ada is not running")).toBeDefined()
+    expect(screen.getByText("It shows its routines once it runs.")).toBeDefined()
+    expect(screen.queryByRole("button", { name: "Start Ada" })).toBeNull()
+  })
+
+  it("opens Config on Core version from Update core in the header's ⋯ menu", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/routines")
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole("button", { name: "More actions" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Update core" }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/config/core")
+    expect(tabs("Ada").getByRole("tab", { name: "Config", selected: true })).toBeDefined()
+    expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
+  })
 
   it("keeps the threads and views outside the tabs", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/threads")
