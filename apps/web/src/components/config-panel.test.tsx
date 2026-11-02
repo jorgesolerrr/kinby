@@ -151,7 +151,7 @@ function openPanel(answers: Answers, instance: InstanceSummary = ada) {
       caller={caller}
       clock={clock}
       instance={instance}
-      onChanged={() => {}}
+      update={{ updating: undefined, busy: false, ask: () => {} }}
     />,
   )
   return { caller, clock, user: userEvent.setup() }

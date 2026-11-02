@@ -525,6 +525,162 @@ describe("the header's ⋯ menu", () => {
   })
 })
 
+describe("the update alert", () => {
+  const HUB = "b".repeat(40)
+  const behind: InstanceSummary = {
+    ...running,
+    notices: [
+      {
+        code: "revision_behind",
+        message: "The instance runs kinby abc1234, and the hub is at bbbbbbb.",
+        instance_revision: "abc1234def5678",
+        hub_revision: HUB,
+      },
+    ],
+  }
+  const updating = (fields: Partial<OperationGetResult>) =>
+    operation({ operation_id: "op-update", kind: "update", ...fields })
+  const answers = (polls: OperationGetResult[]): Answers => ({
+    "instance.update": () => ({ operation_id: "op-update", instance_id: "instance-1" }),
+    "operation.get": inTurn(polls),
+  })
+
+  it("names the hub's core by its short form, with Update", async () => {
+    await openHeader({}, behind)
+
+    const alert = within(screen.getByRole("alert"))
+    expect(alert.getByText("Core bbbbbbb is available")).toBeDefined()
+    expect(
+      alert.getByText("The instance runs kinby abc1234, and the hub is at bbbbbbb."),
+    ).toBeDefined()
+    expect(alert.getByRole("button", { name: "Update" })).toBeDefined()
+  })
+
+  it.each([
+    ["template_behind", "Behind the factory"],
+    ["hub_route_missing", "No hub route"],
+  ] as const)("names a %s notice, with Update", async (code, title) => {
+    await openHeader({}, { ...running, notices: [{ code, message: "An update answers it." }] })
+
+    const alert = within(screen.getByRole("alert"))
+    expect(alert.getByText(title)).toBeDefined()
+    expect(alert.getByText("An update answers it.")).toBeDefined()
+    expect(alert.getByRole("button", { name: "Update" })).toBeDefined()
+  })
+
+  it("leaves a failed MCP server out of the header", async () => {
+    await openHeader(
+      {},
+      {
+        ...running,
+        notices: [{ code: "mcp_server_failed", message: "It exited.", server: "notion" }],
+      },
+    )
+
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("updates to the hub's revision, shows its steps, and goes once the instance relists updated", async () => {
+    const { user, clock, caller, onChanged, relist } = await openHeader(
+      answers([
+        updating({ steps: [{ name: "image", state: "running", detail: "Preparing the image." }] }),
+        updating({
+          state: "succeeded",
+          steps: [{ name: "ready", state: "succeeded", detail: "" }],
+        }),
+      ]),
+      behind,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await act(() => clock.advance(0))
+
+    const alert = within(screen.getByRole("alert"))
+    const steps = alert.getByRole("list", { name: "Update steps" })
+    expect(within(steps).getByRole("listitem", { name: "image" }).textContent).toContain(
+      "Preparing the image.",
+    )
+    expect(alert.getByRole("button", { name: /Update$/ }).hasAttribute("disabled")).toBe(true)
+    expect(onChanged).not.toHaveBeenCalled()
+    await act(() => clock.advance(1_000))
+
+    expect(updates(caller)).toEqual([{ instance_id: "instance-1", revision: HUB }])
+    expect(onChanged).toHaveBeenCalledOnce()
+    relist({ ...running, source_revision: HUB })
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("says why an update failed in the alert", async () => {
+    const { user, clock } = await openHeader(
+      answers([
+        updating({
+          state: "failed",
+          detail: "The new container never became ready.",
+          steps: [{ name: "replace", state: "failed", detail: "" }],
+        }),
+      ]),
+      behind,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await act(() => clock.advance(0))
+
+    const alert = within(screen.getByRole("alert"))
+    expect(
+      alert.getByText("The update failed: The new container never became ready."),
+    ).toBeDefined()
+    expect(alert.getByRole("button", { name: "Update" }).hasAttribute("disabled")).toBe(false)
+  })
+
+  it("lists what stopped an update before it began, and says the instance keeps running", async () => {
+    const found = "The image did not build.\nerror: uv.lock needs to be updated"
+    const { user, clock } = await openHeader(
+      answers([
+        updating({
+          state: "failed",
+          detail: found,
+          steps: [{ name: "image", state: "failed", detail: found }],
+        }),
+      ]),
+      behind,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await act(() => clock.advance(0))
+
+    const alert = within(screen.getByRole("alert"))
+    expect(
+      alert.getByText(
+        "The update stopped before it began. The instance keeps running on its current core.",
+      ),
+    ).toBeDefined()
+    expect(
+      within(alert.getByRole("list", { name: "Problems" }))
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["The image did not build.", "error: uv.lock needs to be updated"])
+  })
+
+  it("lends its update to the page under it", async () => {
+    const { user, clock, lent } = await openHeader(
+      answers([updating({ steps: [{ name: "image", state: "running", detail: "" }] })]),
+      behind,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await act(() => clock.advance(0))
+
+    expect(lent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          busy: true,
+          updating: { state: "updating", steps: [{ name: "image", state: "running", detail: "" }] },
+        }),
+      }),
+    )
+  })
+})
+
 describe("the process alert", () => {
   it("says it is restarting when its container restarts in a loop, and opens Config", async () => {
     window.history.replaceState(null, "", "/instances/instance-1/routines")
@@ -580,6 +736,9 @@ async function confirmStop(user: ReturnType<typeof userEvent.setup>) {
 
 const removals = (caller: StubCaller) =>
   caller.calls.filter((call) => call.method === "instance.remove").map((call) => call.params)
+
+const updates = (caller: StubCaller) =>
+  caller.calls.filter((call) => call.method === "instance.update").map((call) => call.params)
 
 const stops = (caller: StubCaller) =>
   caller.calls.filter((call) => call.method === "instance.stop").map((call) => call.params)

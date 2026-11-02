@@ -942,6 +942,36 @@ describe("an instance's tabs", () => {
     },
   )
 
+  it.each(["", "/config", "/routines", "/memory", "/stats"])(
+    "says on %s that the hub's core is available, and updates to it from the header",
+    async (path) => {
+      window.history.replaceState(null, "", `/instances/hub-ada${path}`)
+      const behind = {
+        ...ada,
+        notices: [
+          {
+            code: "revision_behind",
+            message: "The instance runs kinby aaaaaaa, and the hub is at bbbbbbb.",
+            instance_revision: "a".repeat(40),
+            hub_revision: "b".repeat(40),
+          },
+        ],
+      } satisfies InstanceSummary
+
+      const { hub } = openApp({ signedIn: true, instances: [behind, unnamed] })
+
+      const header = within(
+        instanceHeader(await screen.findByRole("heading", { level: 1, name: "Ada" })),
+      )
+      const alert = within(header.getByRole("alert"))
+      expect(alert.getByText("Core bbbbbbb is available")).toBeDefined()
+      await userEvent.setup().click(alert.getByRole("button", { name: "Update" }))
+      expect(hubCalls(hub, "instance.update")).toEqual([
+        { instance_id: "hub-ada", revision: "b".repeat(40) },
+      ])
+    },
+  )
+
   it.each(["routines", "memory", "stats", "config"])(
     "says a stopped instance is stopped on its %s tab, and starts it there",
     async (path) => {
