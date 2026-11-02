@@ -91,6 +91,9 @@ export function RoutinesSection({
   )
   const creating = open !== undefined && "form" in open
   const unfolded = open !== undefined && "details" in open ? open.details : undefined
+  // The list leaves out a routine the instance could not load, and only its editor repairs it.
+  const unlisted =
+    routines?.some((listed) => listed.summary.name === unfolded) === false ? unfolded : undefined
 
   const load = useCallback(
     (pacing: Pace) =>
@@ -128,10 +131,8 @@ export function RoutinesSection({
       .call("routine.rename", { name, new_name: newName, hash })
       .finally(() => load(pacing))
       .then(() => setOpen({ details: newName }))
-  const saved = (name: string) => {
-    setOpen({ details: name })
-    void load(pacing)
-  }
+  // Opened once listed, so a new routine does not show as one the list left out.
+  const saved = (name: string) => void load(pacing).then(() => setOpen({ details: name }))
   const closed = () => {
     setOpen(undefined)
     void load(pacing)
@@ -159,6 +160,25 @@ export function RoutinesSection({
             client={client}
             clock={clock}
             name={null}
+            onSaved={saved}
+            onClose={closed}
+          />
+        </section>
+      )}
+      {unlisted !== undefined && (
+        <section
+          aria-label={unlisted}
+          className="flex flex-col gap-3 rounded-xl border bg-muted/30 p-4"
+        >
+          <p className="text-sm text-muted-foreground">
+            <span className="font-mono text-foreground">{unlisted}</span> is not in the list: the
+            instance could not load it.
+          </p>
+          <RoutineEditor
+            key={unlisted}
+            client={client}
+            clock={clock}
+            name={unlisted}
             onSaved={saved}
             onClose={closed}
           />

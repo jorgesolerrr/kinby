@@ -137,6 +137,35 @@ describe("RoutinesSection", () => {
     expect(await within(row).findByRole("textbox", { name: "ROUTINE.md" })).toBeDefined()
   })
 
+  it("opens the editor of a linked routine the list leaves out, so it can be repaired", async () => {
+    let routines = [issues, news]
+    const { caller, user } = openSection(
+      {
+        "routine.list": () => ({ routines, warnings: [] }),
+        "routine.write": ({ name, content }) => {
+          routines = [...routines, { ...news, name }]
+          return { name, content, hash: "hash-fixed" }
+        },
+      },
+      "broken",
+    )
+
+    const editor = await screen.findByRole("region", { name: "broken" })
+    const field = await within(editor).findByRole("textbox", { name: "ROUTINE.md" })
+    expect(field).toHaveProperty("value", NEWS)
+    await user.type(field, "Fixed.")
+    await user.click(within(editor).getByRole("button", { name: "Save" }))
+
+    const row = await screen.findByRole("listitem", { name: "broken" })
+    expect(within(row).getByRole("button", { name: "Details" }).ariaExpanded).toBe("true")
+    expect(screen.queryByRole("region", { name: "broken" })).toBeNull()
+    expect(caller.calls.filter((call) => call.method === "routine.write").at(-1)?.params).toEqual({
+      name: "broken",
+      content: `${NEWS}Fixed.`,
+      hash: "hash-broken",
+    })
+  })
+
   it("says a routine changed outside kinby when its directory differs from the last change", async () => {
     const { user } = openSection({
       "routine.read": ({ name }) => ({ name, content: NEWS, hash: "hash-by-hand" }),
