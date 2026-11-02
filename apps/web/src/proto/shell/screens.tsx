@@ -75,6 +75,9 @@ export const InstanceSlot = createContext<
   ((instanceId: string, tab: InstanceTab, go: Go) => React.ReactNode) | undefined
 >(undefined)
 
+/** Lets /proto/library draw the Library page inside this shell. */
+export const LibrarySlot = createContext<((go: Go) => React.ReactNode) | undefined>(undefined)
+
 /** Lets /proto/thread draw the thread and the composer inside this shell. */
 export const ThreadSlot = createContext<{
   thread?: (instanceId: string) => React.ReactNode
@@ -437,9 +440,11 @@ export function MainScreen({
   pick?: boolean
 }) {
   const instancePage = useContext(InstanceSlot)
+  const libraryPage = useContext(LibrarySlot)
   if (screen.kind === "instance" && instancePage !== undefined) {
     return instancePage(screen.instanceId, screen.tab, go)
   }
+  if (screen.kind === "library" && libraryPage !== undefined) return libraryPage(go)
   switch (screen.kind) {
     case "home":
       return <HomeScreen instanceId={homeId} pick={pick} />
