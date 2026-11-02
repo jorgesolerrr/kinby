@@ -72,6 +72,35 @@ export function trigger({ schedule, signal }: RoutineSummary): string {
   return "Runs only when started by hand"
 }
 
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+/** What starts the routine, in words. A schedule of no shape named here reads as written. */
+export function triggerInWords({ schedule, signal }: RoutineSummary): string {
+  if (schedule !== null) return scheduleInWords(schedule)
+  if (signal) return `When a signal arrives at ${signal.path}`
+  return "Only when started by hand"
+}
+
+function scheduleInWords(schedule: string): string {
+  const [minute = "", hour = "", day = "", month = "", weekday = "", ...rest] = schedule
+    .trim()
+    .split(/\s+/)
+  const number = /^\d+$/
+  if (rest.length > 0 || !number.test(minute) || day !== "*" || month !== "*") return schedule
+  const every = /^\*(?:\/(\d+))?$/.exec(hour)
+  if (every !== null && weekday === "*") {
+    const hours = every[1] ?? "1"
+    return hours === "1" ? "Every hour" : `Every ${hours} hours`
+  }
+  if (!number.test(hour)) return schedule
+  const at = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`
+  if (weekday === "*") return `Daily at ${at}`
+  if (weekday === "1-5") return `Weekdays at ${at}`
+  // Cron counts Sunday as both 0 and 7.
+  if (/^[0-7]$/.test(weekday)) return `Weekly on ${DAYS[Number(weekday) % 7]} at ${at}`
+  return schedule
+}
+
 export function nextFiring({ next_run }: RoutineSummary): string {
   return next_run === null ? "No next firing" : `Next firing ${when(next_run)}`
 }
