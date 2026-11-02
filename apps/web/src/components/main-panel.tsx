@@ -21,7 +21,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INSTANCE_TABS, instanceName } from "@/lib/instances"
@@ -256,12 +255,7 @@ function TabBody({
       )
     case "routines":
       return (
-        <div className="flex flex-col gap-4 p-6">
-          <div>
-            <h1 className="text-xl font-semibold">Routines</h1>
-            <p className="text-sm text-muted-foreground">schedules, signals, next firing</p>
-          </div>
-          <Separator />
+        <div className="p-6">
           <OlderCore value={behind(instance) ? () => openCore(instanceId) : undefined}>
             <RoutinesSection
               key={instanceId}

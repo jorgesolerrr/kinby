@@ -788,6 +788,23 @@ async function relayedCall(hub: ReturnType<typeof fakeHub>, instanceId: string, 
   return relayed?.sent.find((frame) => (frame as { method?: string }).method === method)
 }
 
+/** Answer the last `method` call relayed to the instance with `result`. */
+async function answerRelayed(
+  hub: ReturnType<typeof fakeHub>,
+  instanceId: string,
+  method: string,
+  result: unknown,
+) {
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+  const relayed = hub.sockets.find(
+    (socket) => socket.url === `ws://hub.test/instances/${instanceId}/ws`,
+  )
+  const frame = relayed?.sent.findLast(
+    (frame) => (frame as { method?: string }).method === method,
+  ) as { id: string } | undefined
+  act(() => relayed?.receive({ type: "result", id: frame?.id, result }))
+}
+
 describe("an instance's tabs", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/")
@@ -856,16 +873,37 @@ describe("an instance's tabs", () => {
     expect(within(sections).queryByRole("button", { name: "Routines" })).toBeNull()
   })
 
-  it("opens the routine a link names on the Routines tab", async () => {
+  it("opens the routine a link names on the Routines tab, unfolded", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada/routines/inbox")
 
     const { hub, clock } = openApp({ signedIn: true, instances: [ada, unnamed] })
-
-    expect(await screen.findByRole("button", { name: "Back to routines" })).toBeDefined()
-    // The editor reads before the relayed socket is up, and asks again a second later.
+    await screen.findByRole("tablist", { name: "Ada" })
+    // The section lists before the relayed socket is up, and asks again a second later.
     await act(() => clock.advance(1_000))
-    const read = await relayedCall(hub, "hub-ada", "routine.read")
-    expect(read).toEqual(expect.objectContaining({ params: { name: "inbox" } }))
+    await answerRelayed(hub, "hub-ada", "routine.list", {
+      routines: [
+        {
+          name: "inbox",
+          description: "Sort the inbox",
+          schedule: "0 9 * * *",
+          enabled: true,
+          mode: "auto",
+          next_run: null,
+          last_run: null,
+          pending: 0,
+        },
+      ],
+      warnings: [],
+    })
+    await answerRelayed(hub, "hub-ada", "routine.read", {
+      name: "inbox",
+      content: "---\ndescription: Sort the inbox\n---\n",
+      hash: "hash-inbox",
+    })
+    await answerRelayed(hub, "hub-ada", "config.history", { changes: [] })
+
+    const row = await screen.findByRole("listitem", { name: "inbox" })
+    expect(within(row).getByRole("button", { name: "Details" }).ariaExpanded).toBe("true")
   })
 
   it("says an instance behind the hub lacks routines on its older core, and opens the update", async () => {
@@ -919,7 +957,7 @@ describe("an instance's tabs", () => {
 
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByRole("button", { name: "Back to routines" })).toBeDefined()
+    expect(await screen.findByRole("heading", { name: "Routines" })).toBeDefined()
     expect(window.location.pathname).toBe("/instances/hub-ada/routines/inbox")
     expect(window.history.length).toBe(entries)
     expect(tabs("Ada").getByRole("tab", { name: "Routines", selected: true })).toBeDefined()

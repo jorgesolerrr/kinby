@@ -34,7 +34,12 @@ const issues: RoutineSummary = {
   enabled: false,
   mode: "ask",
   next_run: null,
-  last_run: null,
+  last_run: {
+    started_at: new Date(2026, 8, 28, 11, 0).toISOString(),
+    outcome: "parked",
+    thread_id: "thread-4",
+    turn_id: "turn-4",
+  },
   failure_count: 10,
   pending: 2,
   signal: { path: "/signals/issues", auth: "hmac-sha256" },
@@ -50,7 +55,7 @@ const disabledByThePolicy: ConfigChange = {
   hash: "hash-issues",
 }
 
-function openSection(answers: Answers = {}) {
+function openSection(answers: Answers = {}, opened?: string) {
   const caller = stubCaller({
     "routine.list": () => ({ routines: [issues, news], warnings: [] }),
     "routine.read": ({ name }) => ({ name, content: NEWS, hash: `hash-${name}` }),
@@ -60,57 +65,116 @@ function openSection(answers: Answers = {}) {
     "routine.grant.list": () => ({ grants: [] }),
     ...answers,
   })
-  render(<RoutinesSection client={caller} clock={fakeClock()} />)
+  render(<RoutinesSection client={caller} clock={fakeClock()} opened={opened} />)
   return { caller, user: userEvent.setup() }
 }
 
+/** Unfold the routine's row with its chevron, and return the row. */
+async function unfold(user: ReturnType<typeof userEvent.setup>, name: string) {
+  const row = await screen.findByRole("listitem", { name })
+  await user.click(within(row).getByRole("button", { name: "Details" }))
+  return row
+}
+
 describe("RoutinesSection", () => {
-  it("shows no list marker beside a routine", async () => {
+  it("shows each routine as a row: its trigger in words, next and last, its badges and its switch", async () => {
     openSection()
 
-    await screen.findByRole("listitem", { name: "news" })
-    // jsdom applies no Tailwind: an `Item` rendered as the `<li>` lays out as flex, so no marker.
-    const items = within(screen.getByRole("list", { name: "Routines" })).getAllByRole("listitem")
-    expect(items.map((item) => item.classList.contains("flex"))).toEqual([true, true])
+    const newsRow = await screen.findByRole("listitem", { name: "news" })
+    const issuesRow = screen.getByRole("listitem", { name: "issues" })
+
+    expect(within(newsRow).getByRole("switch", { name: "Enabled" }).ariaChecked).toBe("true")
+    expect(
+      within(newsRow).getByText(
+        "Daily at 09:00 · Next firing Sep 29, 2026, 9:00 AM · Last firing Sep 28, 2026, 9:00 AM, did work",
+      ),
+    ).toBeDefined()
+    expect(within(newsRow).queryByText(/failure|pending|Waiting/)).toBeNull()
+
+    expect(within(issuesRow).getByRole("switch", { name: "Enabled" }).ariaChecked).toBe("false")
+    expect(
+      within(issuesRow).getByText(
+        "When a signal arrives at /signals/issues · No next firing · Last firing Sep 28, 2026, 11:00 AM, waiting on an approval",
+      ),
+    ).toBeDefined()
+    expect(within(issuesRow).getByText("10 failures in a row")).toBeDefined()
+    expect(within(issuesRow).getByText("2 pending deliveries")).toBeDefined()
+    expect(within(issuesRow).getByText("Waiting on an approval")).toBeDefined()
+    expect(screen.queryByRole("textbox")).toBeNull()
   })
 
-  it("lists each routine with its firing, state, failures, pending deliveries, and last change", async () => {
-    openSection()
+  it("unfolds one routine at a time to its details and its editor", async () => {
+    const { user } = openSection()
 
-    const newsItem = await screen.findByRole("listitem", { name: "news" })
-    const issuesItem = screen.getByRole("listitem", { name: "issues" })
+    const newsRow = await unfold(user, "news")
+    expect(within(newsRow).getByText("Morning news")).toBeDefined()
+    expect(within(newsRow).getByText("Schedule 0 9 * * *")).toBeDefined()
+    expect(within(newsRow).getByText("auto")).toBeDefined()
+    expect(within(newsRow).getByText("Never changed")).toBeDefined()
+    expect(await within(newsRow).findByRole("textbox", { name: "ROUTINE.md" })).toHaveProperty(
+      "value",
+      NEWS,
+    )
 
-    expect(within(newsItem).getByRole("switch", { name: "On" }).ariaChecked).toBe("true")
-    expect(within(newsItem).getByText("Morning news")).toBeDefined()
-    expect(within(newsItem).getByText("Schedule 0 9 * * *")).toBeDefined()
-    expect(within(newsItem).getByText("Next firing Sep 29, 2026, 9:00 AM")).toBeDefined()
-    expect(within(newsItem).getByText("Last firing Sep 28, 2026, 9:00 AM, did work")).toBeDefined()
-    expect(within(newsItem).getByText("Never changed")).toBeDefined()
-    expect(within(newsItem).queryByText(/failure/)).toBeNull()
-    expect(within(newsItem).queryByText(/pending/)).toBeNull()
-
-    expect(within(issuesItem).getByRole("switch", { name: "On" }).ariaChecked).toBe("false")
-    expect(within(issuesItem).getByText("Signal at /signals/issues")).toBeDefined()
-    expect(within(issuesItem).getByText("No next firing")).toBeDefined()
-    expect(within(issuesItem).getByText("Never fired")).toBeDefined()
-    expect(within(issuesItem).getByText("10 failures in a row")).toBeDefined()
-    expect(within(issuesItem).getByText("2 pending deliveries")).toBeDefined()
+    const issuesRow = await unfold(user, "issues")
+    expect(within(issuesRow).getByText("Signal at /signals/issues")).toBeDefined()
+    expect(within(issuesRow).getByText("ask")).toBeDefined()
     expect(
-      within(issuesItem).getByText(
+      within(issuesRow).getByText(
         "Last changed by the routine failure policy, Sep 28, 2026, 10:04 AM",
       ),
     ).toBeDefined()
+    expect(await within(issuesRow).findByRole("textbox", { name: "ROUTINE.md" })).toBeDefined()
+    await waitFor(() => expect(within(newsRow).queryByRole("textbox")).toBeNull())
+  })
+
+  it("unfolds the routine a link names", async () => {
+    openSection({}, "issues")
+
+    const row = await screen.findByRole("listitem", { name: "issues" })
+
+    expect(within(row).getByRole("button", { name: "Details" }).ariaExpanded).toBe("true")
+    expect(await within(row).findByRole("textbox", { name: "ROUTINE.md" })).toBeDefined()
+  })
+
+  it("opens the editor of a linked routine the list leaves out, so it can be repaired", async () => {
+    let routines = [issues, news]
+    const { caller, user } = openSection(
+      {
+        "routine.list": () => ({ routines, warnings: [] }),
+        "routine.write": ({ name, content }) => {
+          routines = [...routines, { ...news, name }]
+          return { name, content, hash: "hash-fixed" }
+        },
+      },
+      "broken",
+    )
+
+    const editor = await screen.findByRole("region", { name: "broken" })
+    const field = await within(editor).findByRole("textbox", { name: "ROUTINE.md" })
+    expect(field).toHaveProperty("value", NEWS)
+    await user.type(field, "Fixed.")
+    await user.click(within(editor).getByRole("button", { name: "Save" }))
+
+    const row = await screen.findByRole("listitem", { name: "broken" })
+    expect(within(row).getByRole("button", { name: "Details" }).ariaExpanded).toBe("true")
+    expect(screen.queryByRole("region", { name: "broken" })).toBeNull()
+    expect(caller.calls.filter((call) => call.method === "routine.write").at(-1)?.params).toEqual({
+      name: "broken",
+      content: `${NEWS}Fixed.`,
+      hash: "hash-broken",
+    })
   })
 
   it("says a routine changed outside kinby when its directory differs from the last change", async () => {
-    openSection({
+    const { user } = openSection({
       "routine.read": ({ name }) => ({ name, content: NEWS, hash: "hash-by-hand" }),
     })
 
-    const issuesItem = await screen.findByRole("listitem", { name: "issues" })
+    const issuesRow = await unfold(user, "issues")
 
-    expect(within(issuesItem).getByText("Changed outside kinby")).toBeDefined()
-    expect(within(issuesItem).queryByText(/Last changed by/)).toBeNull()
+    expect(within(issuesRow).getByText("Changed outside kinby")).toBeDefined()
+    expect(within(issuesRow).queryByText(/Last changed by/)).toBeNull()
   })
 
   it("leaves out a routine removed between the list and its read", async () => {
@@ -144,14 +208,12 @@ describe("RoutinesSection", () => {
       },
     })
 
-    const item = await screen.findByRole("listitem", { name: "news" })
+    const issuesRow = await unfold(user, "issues")
+    await within(issuesRow).findByRole("textbox", { name: "ROUTINE.md" })
+    expect(within(issuesRow).queryByRole("list", { name: "Always allowed" })).toBeNull()
+    const item = await unfold(user, "news")
     const allowed = await within(item).findByRole("list", { name: "Always allowed" })
     expect(allowed.textContent).toContain("post, since Sep 28, 2026, 9:05 AM")
-    expect(
-      within(screen.getByRole("listitem", { name: "issues" })).queryByRole("list", {
-        name: "Always allowed",
-      }),
-    ).toBeNull()
 
     await user.click(within(allowed).getByRole("button", { name: "Revoke post" }))
 
@@ -174,10 +236,10 @@ describe("RoutinesSection", () => {
     })
 
     const item = await screen.findByRole("listitem", { name: "news" })
-    await user.click(within(item).getByRole("switch", { name: "On" }))
+    await user.click(within(item).getByRole("switch", { name: "Enabled" }))
 
     await waitFor(() =>
-      expect(within(item).getByRole("switch", { name: "On" }).ariaChecked).toBe("false"),
+      expect(within(item).getByRole("switch", { name: "Enabled" }).ariaChecked).toBe("false"),
     )
     expect(caller.calls.filter((call) => call.method === "routine.set_enabled")).toEqual([
       { method: "routine.set_enabled", params: { name: "news", enabled: false } },
@@ -189,7 +251,7 @@ describe("RoutinesSection", () => {
       "routine.run": () => ({ sequence: 1, thread_id: "thread-3", turn_id: "turn-3" }),
     })
 
-    const item = await screen.findByRole("listitem", { name: "news" })
+    const item = await unfold(user, "news")
     await user.click(within(item).getByRole("button", { name: "Run now" }))
 
     expect(await screen.findByText("Started news. Its turn is in a new thread.")).toBeDefined()
@@ -209,7 +271,7 @@ describe("RoutinesSection", () => {
       },
     })
 
-    const item = await screen.findByRole("listitem", { name: "news" })
+    const item = await unfold(user, "news")
     await user.click(within(item).getByRole("button", { name: "Run now" }))
 
     const alert = await screen.findByRole("alert")
@@ -237,32 +299,36 @@ describe("RoutinesSection", () => {
       },
     })
 
-    const item = await screen.findByRole("listitem", { name: "news" })
-    await user.click(within(item).getByRole("button", { name: "Edit" }))
-    const editor = await screen.findByRole("textbox", { name: "ROUTINE.md" })
+    const item = await unfold(user, "news")
+    const editor = await within(item).findByRole("textbox", { name: "ROUTINE.md" })
     expect(editor).toHaveProperty("value", NEWS)
     await user.type(editor, "Mine.")
-    await user.click(screen.getByRole("button", { name: "Save" }))
-    const alert = await screen.findByRole("alert")
+    await user.click(within(item).getByRole("button", { name: "Save" }))
+    const alert = await within(item).findByRole("alert")
     expect(alert.textContent).toContain("Changed since you opened it")
     await user.click(within(alert).getByRole("button", { name: "Load theirs" }))
     await waitFor(() => expect(editor).toHaveProperty("value", NEWS.replace("Read", "Skim")))
     await user.type(editor, "Mine.")
-    await user.click(screen.getByRole("button", { name: "Save" }))
+    const lists = caller.calls.filter((call) => call.method === "routine.list").length
+    await user.click(within(item).getByRole("button", { name: "Save" }))
 
-    expect(await screen.findByText("Saved.")).toBeDefined()
+    expect(await within(item).findByText("Saved.")).toBeDefined()
     expect(
       caller.calls.filter((call) => call.method === "routine.write").map((call) => call.params),
     ).toEqual([
       { name: "news", content: `${NEWS}Mine.`, hash: "hash-1" },
       { name: "news", content: `${NEWS.replace("Read", "Skim")}Mine.`, hash: "hash-3" },
     ])
-    await user.click(screen.getByRole("button", { name: "Back to routines" }))
-    expect(await screen.findByRole("listitem", { name: "news" })).toBeDefined()
+    // The row reads its new hash and last change again.
+    await waitFor(() =>
+      expect(caller.calls.filter((call) => call.method === "routine.list").length).toBe(lists + 1),
+    )
   })
 
-  it("creates a routine with a null hash and shows the loader's refusal", async () => {
+  it("creates a routine at the top of the list with a null hash, and shows the loader's refusal", async () => {
+    let routines = [issues, news]
     const { caller, user } = openSection({
+      "routine.list": () => ({ routines, warnings: [] }),
       "routine.write": ({ name, content }) => {
         if (!content.includes("description: Weather")) {
           throw new CallError({
@@ -271,24 +337,34 @@ describe("RoutinesSection", () => {
             retryable: false,
           })
         }
+        routines = [...routines, { ...news, name: "weather", description: "Weather" }]
         return { name, content, hash: "hash-5" }
       },
     })
 
-    await user.click(await screen.findByRole("button", { name: "New routine" }))
-    await user.type(screen.getByRole("textbox", { name: "Name" }), "weather")
-    const editor = screen.getByRole("textbox", { name: "ROUTINE.md" })
+    await screen.findByRole("listitem", { name: "news" })
+    await user.click(screen.getByRole("button", { name: "New routine" }))
+    const form = screen.getByRole("region", { name: "New routine" })
+    expect(
+      form.compareDocumentPosition(screen.getByRole("list", { name: "Routines" })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    const name = within(form).getByRole("textbox", { name: "Name" })
+    expect(document.activeElement).toBe(name)
+    await user.type(name, "weather")
+    const editor = within(form).getByRole("textbox", { name: "ROUTINE.md" })
     expect(editor).toHaveProperty("value", "---\ndescription: \nschedule: 0 9 * * *\n---\n")
-    await user.click(screen.getByRole("button", { name: "Save" }))
-    expect((await screen.findByRole("alert")).textContent).toContain(
+    await user.click(within(form).getByRole("button", { name: "Save" }))
+    expect((await within(form).findByRole("alert")).textContent).toContain(
       'Frontmatter must contain "description".',
     )
     await user.clear(editor)
     await user.type(editor, "---\ndescription: Weather\n---\nCheck the sky.")
-    await user.click(screen.getByRole("button", { name: "Save" }))
+    await user.click(within(form).getByRole("button", { name: "Save" }))
 
-    expect(await screen.findByText("Saved.")).toBeDefined()
-    expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull()
+    const row = await screen.findByRole("listitem", { name: "weather" })
+    expect(within(row).getByRole("button", { name: "Details" }).ariaExpanded).toBe("true")
+    expect(screen.queryByRole("region", { name: "New routine" })).toBeNull()
     expect(caller.calls.filter((call) => call.method === "routine.write").at(-1)?.params).toEqual({
       name: "weather",
       content: "---\ndescription: Weather\n---\nCheck the sky.",
@@ -314,7 +390,7 @@ describe("RoutinesSection", () => {
       },
     })
 
-    const item = await screen.findByRole("listitem", { name: "issues" })
+    const item = await unfold(user, "issues")
     await user.click(within(item).getByRole("button", { name: "Rename" }))
     const dialog = await screen.findByRole("dialog", { name: "Rename issues" })
     await user.type(within(dialog).getByRole("textbox", { name: "New name" }), "triage")
@@ -325,7 +401,8 @@ describe("RoutinesSection", () => {
     ).toBeDefined()
     await user.click(within(dialog).getByRole("button", { name: "Rename" }))
 
-    expect(await screen.findByRole("listitem", { name: "triage" })).toBeDefined()
+    const renamed = await screen.findByRole("listitem", { name: "triage" })
+    expect(within(renamed).getByRole("button", { name: "Details" }).ariaExpanded).toBe("true")
     expect(screen.queryByRole("listitem", { name: "issues" })).toBeNull()
     expect(screen.queryByRole("dialog")).toBeNull()
     expect(
@@ -336,7 +413,7 @@ describe("RoutinesSection", () => {
   it("says nothing of a signal path when renaming a routine without a signal", async () => {
     const { user } = openSection()
 
-    const item = await screen.findByRole("listitem", { name: "news" })
+    const item = await unfold(user, "news")
     await user.click(within(item).getByRole("button", { name: "Rename" }))
     const dialog = await screen.findByRole("dialog", { name: "Rename news" })
 
@@ -373,7 +450,7 @@ describe("RoutinesSection", () => {
       },
     })
 
-    const item = await screen.findByRole("listitem", { name: "issues" })
+    const item = await unfold(user, "issues")
     await user.click(within(item).getByRole("button", { name: "Rename" }))
     const dialog = await screen.findByRole("dialog", { name: "Rename issues" })
     const field = within(dialog).getByRole("textbox", { name: "New name" })
@@ -435,7 +512,7 @@ describe("RoutinesSection", () => {
     render(<RoutinesSection client={caller} clock={fakeClock()} />)
     const user = userEvent.setup()
 
-    const item = await screen.findByRole("listitem", { name: "issues" })
+    const item = await unfold(user, "issues")
     await user.click(within(item).getByRole("button", { name: "Rename" }))
     const dialog = await screen.findByRole("dialog", { name: "Rename issues" })
     await user.type(within(dialog).getByRole("textbox", { name: "New name" }), "triage")
@@ -479,19 +556,18 @@ describe("RoutinesSection", () => {
       },
     })
     const remove = async (name: string) => {
-      const item = await screen.findByRole("listitem", { name })
-      await user.click(within(item).getByRole("button", { name: "Edit" }))
-      await screen.findByRole("textbox", { name: "ROUTINE.md" })
-      await user.click(screen.getByRole("button", { name: "Delete" }))
+      const item = await unfold(user, name)
+      await within(item).findByRole("textbox", { name: "ROUTINE.md" })
+      await user.click(within(item).getByRole("button", { name: "Delete" }))
       const dialog = await screen.findByRole("alertdialog", { name: `Delete ${name}?` })
       await user.click(within(dialog).getByRole("button", { name: "Delete" }))
+      return item
     }
 
-    await remove("issues")
-    expect((await screen.findByRole("alert")).textContent).toContain(
+    const issuesRow = await remove("issues")
+    expect((await within(issuesRow).findByRole("alert")).textContent).toContain(
       'Routine "issues" has 2 pending deliveries and cannot be deleted.',
     )
-    await user.click(screen.getByRole("button", { name: "Back to routines" }))
     await remove("news")
 
     await waitFor(() => expect(screen.queryByRole("listitem", { name: "news" })).toBeNull())
