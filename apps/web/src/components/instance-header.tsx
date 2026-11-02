@@ -2,6 +2,7 @@ import type { Client, Clock, InstanceSummary, LifecycleOperationResult } from "@
 import {
   CircleStopIcon,
   CircleXIcon,
+  DownloadIcon,
   EllipsisIcon,
   PlayIcon,
   RefreshCwIcon,
@@ -10,7 +11,8 @@ import {
 import { type ReactNode, useCallback, useState } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { OperationSteps } from "@/components/operation-steps"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,8 +35,15 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
+import { type Update, useUpdate } from "@/hooks/use-update"
 import { followStart, type Starting } from "@/lib/creation"
-import { instanceName, observedState, shownState } from "@/lib/instances"
+import {
+  type InstanceNotice,
+  instanceName,
+  noticeTitle,
+  observedState,
+  shownState,
+} from "@/lib/instances"
 import { type Followed, followOperation, reason } from "@/lib/operation"
 import { openConfig, openCore, openHome } from "@/lib/selection"
 
@@ -46,7 +55,16 @@ export interface Lifecycle {
   starting: boolean
   /** A stop asked here drains. The hub marks the instance stopped before it does. */
   stopping: boolean
+  /** The instance's one update, which the header's update alert runs too. */
+  update: Update
 }
+
+/** The notices an instance update answers. */
+const UPDATE_ANSWERS: InstanceNotice["code"][] = [
+  "revision_behind",
+  "template_behind",
+  "hub_route_missing",
+]
 
 const STATES: Record<ReturnType<typeof shownState>, string> = {
   running: "Running",
@@ -65,10 +83,11 @@ const STATES: Record<ReturnType<typeof shownState>, string> = {
  * Force stop while the stop drains or after it failed. The hub marks the instance stopped before
  * it drains, so a stop asked here keeps Stop, and its Force stop, until the stop succeeds. The ⋯
  * menu opens Core version, and offers Remove on any but the home instance; a removal that
- * succeeds goes home. Under it, alerts say when a start, a stop or a removal failed, and when an
- * instance meant to run is restarting in a loop or failed.
- * `onChanged` hears a start, a stop or a removal end, so the instances are listed again, and must
- * keep its identity. `children` draws the page under the header, lent its lifecycle.
+ * succeeds goes home. Under it, alerts say when a start, a stop or a removal failed, when an
+ * instance meant to run is restarting in a loop or failed, and when an instance update answers a
+ * notice, with Update.
+ * `onChanged` hears a start, a stop, an update or a removal end, so the instances are listed
+ * again, and must keep its identity. `children` draws the page under the header, lent its lifecycle.
  */
 export function InstanceHeader({
   caller,
@@ -87,6 +106,7 @@ export function InstanceHeader({
   const start = useStart(caller, clock, instance, onChanged)
   const stop = useStop(caller, clock, instance, onChanged)
   const removal = useRemoval(caller, clock, instance, onChanged)
+  const update = useUpdate(caller, clock, instance.instance_id, onChanged)
   const intended = stop.stopping ? "running" : instance.intended_state
   const state = STATES[shownState(instance)]
   const revision = instance.source_revision.slice(0, 7)
@@ -129,6 +149,7 @@ export function InstanceHeader({
           </div>
         </div>
         {intended === "running" && <ProcessAlert instance={instance} name={name} />}
+        <UpdateAlert instance={instance} update={update} />
         {start.starting?.state === "failed" && (
           <Failure title="The start failed" detail={start.starting.detail}>
             Start it again to retry.
@@ -145,7 +166,7 @@ export function InstanceHeader({
           </Failure>
         )}
       </header>
-      {children?.({ start: start.ask, starting: start.busy, stopping: stop.stopping })}
+      {children?.({ start: start.ask, starting: start.busy, stopping: stop.stopping, update })}
     </>
   )
 }
@@ -442,6 +463,60 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
           </Button>
         </div>
       </AlertDescription>
+    </Alert>
+  )
+}
+
+/**
+ * Names the notice an instance update answers, with Update to the hub's revision, and how the
+ * update goes. The hub records the new revision before the replacement starts, so a relist can
+ * drop the notice mid-update: the alert stays until the update succeeds and the notice is gone.
+ */
+function UpdateAlert({ instance, update }: { instance: InstanceSummary; update: Update }) {
+  const notice = instance.notices.find((candidate) => UPDATE_ANSWERS.includes(candidate.code))
+  const { updating } = update
+  const failed = updating?.state === "failed" || updating?.state === "blocked"
+  if (notice === undefined && !update.busy && !failed) return null
+  return (
+    <Alert variant={failed ? "destructive" : "default"} className="max-w-2xl">
+      {failed ? <CircleXIcon /> : <DownloadIcon />}
+      <AlertTitle>
+        {notice === undefined
+          ? "Core update"
+          : notice.code === "revision_behind"
+            ? `Core ${notice.hub_revision.slice(0, 7)} is available`
+            : noticeTitle(notice)}
+      </AlertTitle>
+      <AlertDescription>
+        {notice !== undefined && <p>{notice.message}</p>}
+        {updating !== undefined && <OperationSteps label="Update steps" steps={updating.steps} />}
+        {updating?.state === "failed" && <p>The update failed: {updating.detail}</p>}
+        {updating?.state === "blocked" && (
+          <>
+            <p>
+              The update stopped before it began. The instance keeps running on its current core.
+            </p>
+            <ul aria-label="Problems" className="list-disc pl-4">
+              {updating.problems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </AlertDescription>
+      <AlertAction>
+        <Button
+          size="sm"
+          disabled={update.busy}
+          // The hub builds its own checkout from HEAD, which is the revision a notice names.
+          onClick={() =>
+            update.ask(notice?.code === "revision_behind" ? notice.hub_revision : "HEAD")
+          }
+        >
+          {update.busy && <Spinner data-icon="inline-start" />}
+          Update
+        </Button>
+      </AlertAction>
     </Alert>
   )
 }

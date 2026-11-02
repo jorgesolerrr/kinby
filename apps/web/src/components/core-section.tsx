@@ -1,5 +1,5 @@
-import type { Client, Clock, InstanceSummary } from "@kinby/contract"
-import { useCallback, useId, useState } from "react"
+import type { InstanceSummary } from "@kinby/contract"
+import { useId, useState } from "react"
 
 import { OperationSteps } from "@/components/operation-steps"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input"
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { useFollowing } from "@/hooks/use-following"
+import type { Update } from "@/hooks/use-update"
 import { type InstanceNotice, noticeKey, noticeTitle } from "@/lib/instances"
-import { followUpdate, type Updating } from "@/lib/update"
+import type { Updating } from "@/lib/update"
 import { CircleCheckIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react"
 
 /** What "Update core" moves the instance to: the hub's own revision, or a ref the user types. */
@@ -20,20 +20,10 @@ type Target = "hub" | "ref"
 const TARGETS: Record<Target, string> = { hub: "The hub's revision", ref: "Another ref" }
 
 /**
- * The kinby revision the instance runs, what the hub says about it, and "Update core".
- * `caller` reaches the hub, and `onChanged` hears an update succeed.
+ * The kinby revision the instance runs, what the hub says about it, and "Update core", which runs
+ * `update`, the one the instance header's update alert runs too.
  */
-export function CoreSection({
-  caller,
-  clock,
-  instance,
-  onChanged,
-}: {
-  caller: Pick<Client, "call">
-  clock: Clock
-  instance: InstanceSummary
-  onChanged: () => void
-}) {
+export function CoreSection({ instance, update }: { instance: InstanceSummary; update: Update }) {
   return (
     <div className="flex max-w-2xl flex-col gap-6">
       {instance.notices.map((notice) => (
@@ -42,7 +32,7 @@ export function CoreSection({
       <ItemGroup aria-label="Core version">
         <Fact label="kinby">{instance.source_revision.slice(0, 7)}</Fact>
       </ItemGroup>
-      <UpdateCore caller={caller} clock={clock} instance={instance} onChanged={onChanged} />
+      <UpdateCore instance={instance} update={update} />
     </div>
   )
 }
@@ -69,38 +59,13 @@ function Fact({ label, children }: { label: string; children: string }) {
   )
 }
 
-function UpdateCore({
-  caller,
-  clock,
-  instance,
-  onChanged,
-}: {
-  caller: Pick<Client, "call">
-  clock: Clock
-  instance: InstanceSummary
-  onChanged: () => void
-}) {
+function UpdateCore({ instance, update }: { instance: InstanceSummary; update: Update }) {
   const refId = useId()
   const [target, setTarget] = useState<Target>("hub")
   const [ref, setRef] = useState("")
-  const [request, setRequest] = useState<{ revision: string }>()
   const behind = instance.notices.find((notice) => notice.code === "revision_behind")
   const hubRevision = behind?.hub_revision
-  const update = useCallback(
-    ({ revision }: { revision: string }, report: (updating: Updating) => void) =>
-      followUpdate(
-        caller,
-        { instance_id: instance.instance_id, revision },
-        (updating) => {
-          report(updating)
-          if (updating.state === "updated") onChanged()
-        },
-        clock,
-      ),
-    [caller, clock, instance.instance_id, onChanged],
-  )
-  const updating = useFollowing(request, update)
-  const busy = request !== undefined && (updating === undefined || updating.state === "updating")
+  const { updating, busy } = update
   // The hub builds its own checkout from HEAD, which is the revision a notice names.
   const revision = target === "hub" ? (hubRevision ?? "HEAD") : ref.trim()
 
@@ -143,7 +108,7 @@ function UpdateCore({
         </Field>
       )}
       <div>
-        <Button disabled={busy || revision === ""} onClick={() => setRequest({ revision })}>
+        <Button disabled={busy || revision === ""} onClick={() => update.ask(revision)}>
           {busy && <Spinner data-icon="inline-start" />}
           Update core
         </Button>
