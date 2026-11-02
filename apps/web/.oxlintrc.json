@@ -4,6 +4,7 @@
   "jsPlugins": ["@shadcn/lint", "./lint/explicit-locale.js"],
   "categories": { "correctness": "error" },
   "options": { "typeAware": true },
+  "ignorePatterns": ["src/proto/**"],
   "rules": {
     "react/rules-of-hooks": "error",
     "react/exhaustive-deps": "error",
