@@ -469,23 +469,26 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
 
 /**
  * Names the notice an instance update answers, with Update to the hub's revision, and how the
- * update goes. Once the instances are listed again with the notice gone, so is the alert.
+ * update goes. The hub records the new revision before the replacement starts, so a relist can
+ * drop the notice mid-update: the alert stays until the update succeeds and the notice is gone.
  */
 function UpdateAlert({ instance, update }: { instance: InstanceSummary; update: Update }) {
   const notice = instance.notices.find((candidate) => UPDATE_ANSWERS.includes(candidate.code))
-  if (notice === undefined) return null
   const { updating } = update
   const failed = updating?.state === "failed" || updating?.state === "blocked"
+  if (notice === undefined && !update.busy && !failed) return null
   return (
     <Alert variant={failed ? "destructive" : "default"} className="max-w-2xl">
       {failed ? <CircleXIcon /> : <DownloadIcon />}
       <AlertTitle>
-        {notice.code === "revision_behind"
-          ? `Core ${notice.hub_revision.slice(0, 7)} is available`
-          : noticeTitle(notice)}
+        {notice === undefined
+          ? "Core update"
+          : notice.code === "revision_behind"
+            ? `Core ${notice.hub_revision.slice(0, 7)} is available`
+            : noticeTitle(notice)}
       </AlertTitle>
       <AlertDescription>
-        <p>{notice.message}</p>
+        {notice !== undefined && <p>{notice.message}</p>}
         {updating !== undefined && <OperationSteps label="Update steps" steps={updating.steps} />}
         {updating?.state === "failed" && <p>The update failed: {updating.detail}</p>}
         {updating?.state === "blocked" && (
@@ -507,7 +510,7 @@ function UpdateAlert({ instance, update }: { instance: InstanceSummary; update: 
           disabled={update.busy}
           // The hub builds its own checkout from HEAD, which is the revision a notice names.
           onClick={() =>
-            update.ask(notice.code === "revision_behind" ? notice.hub_revision : "HEAD")
+            update.ask(notice?.code === "revision_behind" ? notice.hub_revision : "HEAD")
           }
         >
           {update.busy && <Spinner data-icon="inline-start" />}

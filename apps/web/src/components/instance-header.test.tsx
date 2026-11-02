@@ -632,6 +632,39 @@ describe("the update alert", () => {
     expect(alert.getByRole("button", { name: "Update" }).hasAttribute("disabled")).toBe(false)
   })
 
+  it("keeps a running update, and then its failure, when a relist drops the notice", async () => {
+    const { user, clock, relist } = await openHeader(
+      answers([
+        updating({ steps: [{ name: "ready", state: "running", detail: "" }] }),
+        updating({
+          state: "failed",
+          detail: "The new container never became ready.",
+          steps: [
+            { name: "replace", state: "succeeded", detail: "" },
+            { name: "ready", state: "failed", detail: "" },
+          ],
+        }),
+      ]),
+      behind,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await act(() => clock.advance(0))
+    // The hub records the new revision before the replacement starts, so the notice goes first.
+    relist({ ...running, source_revision: HUB })
+
+    const alert = within(screen.getByRole("alert"))
+    expect(alert.getByRole("list", { name: "Update steps" })).toBeDefined()
+    expect(alert.getByRole("button", { name: /Update$/ }).hasAttribute("disabled")).toBe(true)
+    await act(() => clock.advance(1_000))
+
+    expect(
+      within(screen.getByRole("alert")).getByText(
+        "The update failed: The new container never became ready.",
+      ),
+    ).toBeDefined()
+  })
+
   it("lists what stopped an update before it began, and says the instance keeps running", async () => {
     const found = "The image did not build.\nerror: uv.lock needs to be updated"
     const { user, clock } = await openHeader(
