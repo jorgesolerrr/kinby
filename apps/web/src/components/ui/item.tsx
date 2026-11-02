@@ -44,6 +44,7 @@ const itemVariants = cva(
         default: "gap-3.5 px-4 py-3.5",
         sm: "gap-3.5 px-3.5 py-3",
         xs: "gap-2.5 px-3 py-2.5 in-data-[slot=dropdown-menu-content]:p-0",
+        row: "gap-3 px-0 py-3",
       },
     },
     defaultVariants: {
@@ -84,6 +85,7 @@ const itemMediaVariants = cva(
       variant: {
         default: "bg-transparent",
         icon: "[&_svg:not([class*='size-'])]:size-4",
+        tile: "size-8 rounded-lg bg-muted [&_svg:not([class*='size-'])]:size-4",
         image:
           "size-10 overflow-hidden rounded-xl group-data-[size=sm]/item:size-8 group-data-[size=xs]/item:size-6 group-data-[size=xs]/item:rounded-lg [&_img]:size-full [&_img]:object-cover",
       },
@@ -114,7 +116,7 @@ function ItemContent({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-content"
       className={cn(
-        "flex flex-1 flex-col gap-1 group-data-[size=xs]/item:gap-0.5 [&+[data-slot=item-content]]:flex-none",
+        "flex flex-1 flex-col gap-1 group-data-[size=row]/item:gap-0.5 group-data-[size=xs]/item:gap-0.5 [&+[data-slot=item-content]]:flex-none",
         className,
       )}
       {...props}
@@ -136,7 +138,7 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 const itemDescriptionVariants = cva(
-  "text-left text-sm font-normal text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+  "text-left text-sm font-normal text-muted-foreground group-data-[size=row]/item:text-xs [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
   {
     variants: {
       lines: {

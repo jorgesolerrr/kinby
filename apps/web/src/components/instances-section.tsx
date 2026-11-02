@@ -169,7 +169,7 @@ function RemovedRow({
   const [deleting, setDeleting] = useState(false)
   return (
     <li aria-label={name}>
-      <Item size="sm">
+      <Item size="row">
         <ItemMedia>
           <InstanceAvatar avatar={instance.avatar} name={name} />
         </ItemMedia>

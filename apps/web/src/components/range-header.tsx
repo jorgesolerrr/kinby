@@ -23,25 +23,10 @@ export function RangeHeader({ title, ...controls }: RangeProps & { title: string
 }
 
 /** The 7, 30, and 90-day range picker, its buckets, and Refresh. */
-export function RangeControls({ range, onRange, onRefresh }: RangeProps) {
+function RangeControls({ range, onRange, onRefresh }: RangeProps) {
   return (
     <>
-      <ToggleGroup
-        aria-label="Range"
-        size="sm"
-        variant="outline"
-        value={[String(range)]}
-        onValueChange={([picked]) => {
-          const next = RANGES.find((days) => String(days) === picked)
-          if (next !== undefined) onRange(next)
-        }}
-      >
-        {RANGES.map((days) => (
-          <ToggleGroupItem key={days} value={String(days)}>
-            {days} days
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
+      <RangeToggle range={range} onRange={onRange} />
       <span className="text-xs text-muted-foreground">
         {bucketSize(range) === "week" ? "Weekly" : "Daily"} buckets, UTC
       </span>
@@ -50,5 +35,27 @@ export function RangeControls({ range, onRange, onRefresh }: RangeProps) {
         Refresh
       </Button>
     </>
+  )
+}
+
+/** The 7, 30, and 90-day range picker. */
+export function RangeToggle({ range, onRange }: Omit<RangeProps, "onRefresh">) {
+  return (
+    <ToggleGroup
+      aria-label="Range"
+      size="sm"
+      variant="outline"
+      value={[String(range)]}
+      onValueChange={([picked]) => {
+        const next = RANGES.find((days) => String(days) === picked)
+        if (next !== undefined) onRange(next)
+      }}
+    >
+      {RANGES.map((days) => (
+        <ToggleGroupItem key={days} value={String(days)}>
+          {days} days
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
   )
 }

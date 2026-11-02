@@ -263,7 +263,7 @@ function AddChannel({
                   {kinds.map((each) => (
                     <SelectItem key={each.kind} value={each.kind}>
                       <KindIcon kind={each.kind} />
-                      {each.kind}
+                      {kindLabel(each.kind)}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -321,6 +321,17 @@ function KindIcon({ kind }: { kind: string }) {
   return <Icon aria-hidden />
 }
 
+const KIND_LABELS: Record<string, string> = {
+  telegram: "Telegram",
+  discord: "Discord",
+  email: "Email",
+}
+
+/** A channel kind as people write it. A kind with no label here, such as ntfy, shows as named. */
+function kindLabel(kind: string): string {
+  return KIND_LABELS[kind] ?? kind
+}
+
 /** When something happened, in the reader's own time zone. */
 function shownAt(instant: string): string {
   return new Date(instant).toLocaleString("en", {
@@ -373,7 +384,7 @@ function ChannelRow({
   const [renaming, setRenaming] = useState(false)
   const muted = channel.muted ?? []
   const shown = status(channel)
-  const line = `${channel.kind} · ${shown.text}`
+  const line = `${kindLabel(channel.kind)} · ${shown.text}`
   const interactions = `${window.location.origin}/channels/${encodeURIComponent(channel_id)}/discord`
 
   /** Make one change, then read the channels again. Whether the hub took it. */
@@ -394,13 +405,13 @@ function ChannelRow({
 
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} render={<li aria-label={name} />}>
-      <Item size="sm">
-        <ItemMedia variant="icon">
+      <Item size="row">
+        <ItemMedia variant="tile">
           <KindIcon kind={channel.kind} />
         </ItemMedia>
         <ItemContent className="min-w-0">
           <ItemTitle>{name}</ItemTitle>
-          <ItemDescription>
+          <ItemDescription lines="one">
             {shown.failed ? <span className="text-destructive">{line}</span> : line}
           </ItemDescription>
         </ItemContent>
@@ -430,7 +441,7 @@ function ChannelRow({
         )}
       </Item>
       <CollapsibleContent>
-        <div className="flex flex-col gap-4 pr-3.5 pb-4 pl-11 text-sm">
+        <div className="flex flex-col gap-4 pb-4 pl-11 text-sm">
           {code != null && (
             <Alert>
               <AlertTitle>

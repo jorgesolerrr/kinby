@@ -6,16 +6,17 @@ import type {
   StatsBucketSize,
   StatsSummaryResult,
 } from "@kinby/contract"
+import { RefreshCwIcon } from "lucide-react"
 import { type ReactNode, useCallback, useId, useState } from "react"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
 import { Failure } from "@/components/config-alerts"
 import { PlanRows } from "@/components/plans-strip"
-import { RangeControls } from "@/components/range-header"
+import { RangeToggle } from "@/components/range-header"
 import { SectionFrame } from "@/components/section-frame"
 import { Tile, TileStrip } from "@/components/tile"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   type ChartConfig,
   ChartContainer,
@@ -88,7 +89,14 @@ export function UsageSection({ client, clock }: { client: Caller; clock: Clock }
     <SectionFrame
       title="Usage"
       lead="What your instances used, counted by the hub."
-      actions={<RangeControls range={range} onRange={setRange} onRefresh={readAgain} />}
+      actions={
+        <>
+          <RangeToggle range={range} onRange={setRange} />
+          <Button variant="ghost" size="icon-sm" aria-label="Refresh" onClick={readAgain}>
+            <RefreshCwIcon />
+          </Button>
+        </>
+      }
     >
       {failure !== undefined && <Failure error={failure} />}
       {value === undefined ? (
