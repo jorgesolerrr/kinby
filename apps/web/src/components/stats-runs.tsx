@@ -13,17 +13,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { type RunUsageRead, useRunUsage } from "@/hooks/use-run-usage"
+import type { RunUsageState } from "@/hooks/use-run-usage"
 import { standing, workItem } from "@/lib/factory-runs"
 import { dayLabel, duration, money, SOURCE_LABELS, tokens } from "@/lib/stats"
 
-/**
- * The factory runs the instance handed in during the range, each with its run usage, and the
- * weekly medians. The hub joins them, so it reads them again with every stats read, and both
- * show the same moment.
- */
-export function Runs(read: RunUsageRead) {
-  const { usage, failure } = useRunUsage(read)
+/** The factory runs the instance handed in during the range, each with its run usage, and the weekly medians. */
+export function Runs({ usage, failure }: RunUsageState) {
   return (
     <>
       {failure !== undefined && <Failure error={failure} />}
@@ -72,17 +67,17 @@ function WeekTable({ weeks }: { weeks: RunWeek[] }) {
   const titleId = useId()
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h2 id={titleId} className="text-base font-semibold">
+      <h3 id={titleId} className="font-semibold">
         Weekly medians
-      </h2>
+      </h3>
       <Table aria-labelledby={titleId}>
         <TableHeader>
           <TableRow>
             <TableHead>Week of</TableHead>
             <TableHead className="text-right">Runs</TableHead>
             <TableHead className="text-right">Tokens</TableHead>
-            <TableHead className="text-right">Attempts</TableHead>
-            <TableHead className="text-right">Duration</TableHead>
+            <TableHead className="hidden text-right md:table-cell">Attempts</TableHead>
+            <TableHead className="hidden text-right md:table-cell">Duration</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -91,8 +86,10 @@ function WeekTable({ weeks }: { weeks: RunWeek[] }) {
               <TableCell>{dayLabel(week.start)}</TableCell>
               <TableCell className="text-right">{week.runs}</TableCell>
               <TableCell className="text-right">{tokens(Math.round(week.tokens))}</TableCell>
-              <TableCell className="text-right">{week.attempts}</TableCell>
-              <TableCell className="text-right">{lasted(week.duration_seconds)}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">{week.attempts}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">
+                {lasted(week.duration_seconds)}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -106,9 +103,9 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
   const titleId = useId()
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h2 id={titleId} className="text-base font-semibold">
-        Runs
-      </h2>
+      <h3 id={titleId} className="font-semibold">
+        Each run
+      </h3>
       <Table aria-labelledby={titleId}>
         <TableHeader>
           <TableRow>
@@ -116,11 +113,11 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Tokens</TableHead>
             <TableHead className="text-right">API cost</TableHead>
-            <TableHead>Plan runs</TableHead>
-            <TableHead>Attempts</TableHead>
-            <TableHead className="text-right">Retries</TableHead>
-            <TableHead className="text-right">Send-backs</TableHead>
-            <TableHead className="text-right">Duration</TableHead>
+            <TableHead className="hidden md:table-cell">Plan runs</TableHead>
+            <TableHead className="hidden md:table-cell">Attempts</TableHead>
+            <TableHead className="hidden text-right md:table-cell">Retries</TableHead>
+            <TableHead className="hidden text-right md:table-cell">Send-backs</TableHead>
+            <TableHead className="hidden text-right md:table-cell">Duration</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -130,13 +127,15 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
               <TableCell>{standing(usage.run)}</TableCell>
               <TableCell className="text-right">{tokens(usage.tokens)}</TableCell>
               <TableCell className="text-right">{money(usage.api.cost)}</TableCell>
-              <TableCell>{planRuns(usage)}</TableCell>
-              <TableCell>
+              <TableCell className="hidden md:table-cell">{planRuns(usage)}</TableCell>
+              <TableCell className="hidden md:table-cell">
                 {usage.attempts.map(({ step, attempts }) => `${step} ${attempts}`).join(" · ")}
               </TableCell>
-              <TableCell className="text-right">{usage.retries}</TableCell>
-              <TableCell className="text-right">{usage.send_backs}</TableCell>
-              <TableCell className="text-right">{lasted(usage.duration_seconds)}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">{usage.retries}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">{usage.send_backs}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">
+                {lasted(usage.duration_seconds)}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>

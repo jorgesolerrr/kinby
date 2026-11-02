@@ -316,8 +316,7 @@ describe("the instances", () => {
     await user.click(await screen.findByRole("button", { name: "Stats" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/stats")
-    // The stats page's own Overview, not the instance's.
-    expect(screen.getByRole("tab", { name: "Overview", selected: true })).toBeDefined()
+    expect(screen.getByRole("tab", { name: "Stats", selected: true })).toBeDefined()
     const relayed = hub.sockets.find(
       (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
     )

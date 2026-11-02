@@ -1,4 +1,4 @@
-import type { RunUsage, StatsBucketSize, StatsRunsResult } from "@kinby/contract"
+import type { RunUsage, StatsBucketSize, StatsGetResult } from "@kinby/contract"
 import type { ReactNode } from "react"
 import { Line, LineChart } from "recharts"
 
@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { type RunUsageRead, useRunUsage } from "@/hooks/use-run-usage"
+import type { RunUsageState } from "@/hooks/use-run-usage"
 import {
   bucketLabel,
   median,
@@ -35,12 +35,16 @@ const TOP_TOOLS = 10
 
 /** How well the range's work went: what it called, what it asked, and how it was rated. */
 export function Quality({
+  stats,
   by,
   starts,
-  ...read
-}: RunUsageRead & { by: StatsBucketSize; starts: string[] }) {
-  const { stats } = read
-  const runUsage = useRunUsage(read)
+  runUsage,
+}: {
+  stats: StatsGetResult
+  by: StatsBucketSize
+  starts: string[]
+  runUsage: RunUsageState
+}) {
   const { total } = stats
   const trend = navigationTrend(starts, stats.records, by)
   const tools = Object.entries(total.tool_calls)
@@ -141,7 +145,7 @@ function Counts({
  * The range's factory runs that recalled a fact next to the ones that did not. It claims no cause,
  * since runs differ in the work they do.
  */
-function RecallSplit({ usage, failure }: { usage?: StatsRunsResult; failure?: unknown }) {
+function RecallSplit({ usage, failure }: RunUsageState) {
   if (failure !== undefined) {
     return <p className="text-muted-foreground">The hub did not answer for the range's runs.</p>
   }

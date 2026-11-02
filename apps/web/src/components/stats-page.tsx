@@ -9,13 +9,14 @@ import type {
   StatsSummary,
   TurnMetrics,
 } from "@kinby/contract"
-import { type ReactNode, useCallback, useId, useState } from "react"
+import { useCallback, useId, useState } from "react"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
 import { Failure, OlderCoreAlert } from "@/components/config-alerts"
 import { PlansStrip } from "@/components/plans-strip"
 import { RangeHeader } from "@/components/range-header"
+import { SectionFrame } from "@/components/section-frame"
 import { Origins } from "@/components/stats-origin"
 import { Quality } from "@/components/stats-quality"
 import { Runs } from "@/components/stats-runs"
@@ -42,8 +43,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
+import { type RunUsageRead, useRunUsage } from "@/hooks/use-run-usage"
 import { OlderCore } from "@/lib/older-core"
 import { openCore, selectTurn, turnPath } from "@/lib/selection"
 import {
@@ -68,20 +69,24 @@ import { TriangleAlertIcon, XIcon } from "lucide-react"
 type Caller = Pick<InstanceClient, "call">
 
 /**
- * An instance's stats over the last 7, 30, or 90 UTC days. It reads when it opens, when the range
- * changes, when the window regains focus, and on Refresh, and never polls. A core too old for the
- * page, one whose answer lacks what the page reads or one without stats.get, points to its update.
+ * An instance's stats over the last 7, 30, or 90 UTC days, on one page: the totals and the turns
+ * chart, then Spend, Origin, Quality, and Runs on a factory instance. It reads when it opens, when
+ * the range changes, when the window regains focus, and on Refresh, and never polls. A core too old
+ * for the page, one whose answer lacks what the page reads or one without stats.get, points to its
+ * update.
  */
 export function StatsPage({
   client,
   caller,
   clock,
   instanceId,
+  factory,
 }: {
   client: Caller
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
+  factory: boolean
 }) {
   const [range, setRange] = useState<Range>(7)
   // The charts' buckets come from the moment the read asked about, so midnight never splits them.
@@ -96,14 +101,23 @@ export function StatsPage({
   const starts = value?.starts ?? []
   const openUpdate = () => openCore(instanceId)
   const [drill, setDrill] = useState<Drill>({})
+  // The drill-down lists under the chart or the table that last opened it.
+  const [drilledFrom, setDrilledFrom] = useState<"turns" | "origin">("turns")
   const by = bucketSize(range)
   // A second click on the picked row drops the filter.
-  const pickOrigin = (origin: OriginUse) =>
+  const pickOrigin = (origin: OriginUse) => {
+    setDrilledFrom("origin")
     setDrill(({ bucket, origin: picked }) => ({
       bucket,
       origin: picked?.routine === origin.routine ? undefined : origin,
     }))
-  const drillDown = (stats: StatsGetResult) =>
+  }
+  const pickBucket = (bucket: string) => {
+    setDrilledFrom("turns")
+    setDrill(({ origin }) => ({ bucket, origin }))
+  }
+  const drillDown = (stats: StatsGetResult, from: typeof drilledFrom) =>
+    drilledFrom === from &&
     (drill.bucket !== undefined || drill.origin !== undefined) && (
       <DrilledTurns
         title={drillTitle(drill, by)}
@@ -115,116 +129,100 @@ export function StatsPage({
 
   return (
     <OlderCore value={openUpdate}>
-      <div className="flex flex-col gap-4 p-6">
-        <RangeHeader
-          title="Stats"
-          range={range}
-          onRange={(next) => {
-            setRange(next)
-            // The range's buckets start on other days. An origin can have turns in any range.
-            setDrill(({ origin }) => ({ origin }))
-          }}
-          onRefresh={readAgain}
-        />
-        {stats !== undefined && <PlansStrip planUse={stats.plan_use} limits={stats.limits} />}
-        {older && <OlderCoreAlert onOpenUpdate={openUpdate} />}
-        {failure !== undefined && <Failure error={failure} />}
-        <Tabs defaultValue="overview">
-          <TabsList variant="line">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="spend">Spend</TabsTrigger>
-            <TabsTrigger value="origin">Origin</TabsTrigger>
-            <TabsTrigger value="quality">Quality</TabsTrigger>
-            <TabsTrigger value="runs">Runs</TabsTrigger>
-          </TabsList>
-          {stats === undefined ? (
-            value === undefined &&
-            failure === undefined && <Skeleton className="mt-4 h-72 w-full" />
-          ) : (
-            <>
-              <TabsContent value="overview">
-                <div className="flex flex-col gap-4 pt-4">
-                  <Overview
-                    stats={stats}
-                    by={by}
-                    starts={starts}
-                    onBucket={(bucket) => setDrill(({ origin }) => ({ bucket, origin }))}
-                  >
-                    {drillDown(stats)}
-                  </Overview>
-                </div>
-              </TabsContent>
-              <TabsContent value="spend">
-                <div className="flex flex-col gap-4 pt-4">
-                  <Spend stats={stats} by={by} starts={starts} />
-                </div>
-              </TabsContent>
-              <TabsContent value="origin">
-                <div className="flex flex-col gap-4 pt-4">
-                  <Origins
-                    client={client}
-                    clock={clock}
-                    stats={stats}
-                    instanceId={instanceId}
-                    picked={drill.origin}
-                    onPick={pickOrigin}
-                  >
-                    {drillDown(stats)}
-                  </Origins>
-                </div>
-              </TabsContent>
-              <TabsContent value="quality">
-                <div className="flex flex-col gap-4 pt-4">
-                  <Quality
-                    caller={caller}
-                    clock={clock}
-                    instanceId={instanceId}
-                    range={range}
-                    stats={stats}
-                    by={by}
-                    starts={starts}
-                  />
-                </div>
-              </TabsContent>
-              <TabsContent value="runs">
-                <div className="flex flex-col gap-4 pt-4">
-                  <Runs
-                    caller={caller}
-                    clock={clock}
-                    instanceId={instanceId}
-                    range={range}
-                    stats={stats}
-                  />
-                </div>
-              </TabsContent>
-            </>
-          )}
-        </Tabs>
+      <div className="flex flex-col gap-8 p-6">
+        <div className="flex flex-col gap-4">
+          <RangeHeader
+            range={range}
+            onRange={(next) => {
+              setRange(next)
+              // The range's buckets start on other days. An origin can have turns in any range.
+              setDrill(({ origin }) => ({ origin }))
+            }}
+            onRefresh={readAgain}
+          />
+          {stats !== undefined && <PlansStrip planUse={stats.plan_use} limits={stats.limits} />}
+          {older && <OlderCoreAlert onOpenUpdate={openUpdate} />}
+          {failure !== undefined && <Failure error={failure} />}
+        </div>
+        {stats === undefined ? (
+          value === undefined && failure === undefined && <Skeleton className="h-72 w-full" />
+        ) : (
+          <>
+            <div className="flex flex-col gap-4">
+              <Notices
+                unpricedModels={stats.unpriced_models}
+                mismatches={stats.warnings?.length ?? 0}
+              />
+              <Tiles total={stats.total} />
+              <TurnsChart buckets={stats.buckets} by={by} starts={starts} onBucket={pickBucket} />
+              {drillDown(stats, "turns")}
+            </div>
+            <SectionFrame
+              variant="page"
+              title="Spend"
+              lead="Where the range's API cost and plan runs went."
+            >
+              <Spend stats={stats} by={by} starts={starts} />
+            </SectionFrame>
+            <SectionFrame
+              variant="page"
+              title="Origin"
+              lead="The range's turns by chat and routine, and the instance's routines."
+            >
+              <Origins
+                client={client}
+                clock={clock}
+                stats={stats}
+                instanceId={instanceId}
+                picked={drill.origin}
+                onPick={pickOrigin}
+              >
+                {drillDown(stats, "origin")}
+              </Origins>
+            </SectionFrame>
+            <RunSections
+              caller={caller}
+              clock={clock}
+              instanceId={instanceId}
+              range={range}
+              stats={stats}
+              by={by}
+              starts={starts}
+              factory={factory}
+            />
+          </>
+        )}
       </div>
     </OlderCore>
   )
 }
 
-/** The notices, the tiles, and the turns chart, then the drill-down in `children`. */
-function Overview({
-  stats,
+/** Quality, then Runs on a factory instance, both from the one run usage read with the stats. */
+function RunSections({
   by,
   starts,
-  onBucket,
-  children,
-}: {
-  stats: StatsGetResult
-  by: StatsBucketSize
-  starts: string[]
-  onBucket: (start: string) => void
-  children: ReactNode
-}) {
+  factory,
+  ...read
+}: RunUsageRead & { by: StatsBucketSize; starts: string[]; factory: boolean }) {
+  const runUsage = useRunUsage(read)
   return (
     <>
-      <Notices unpricedModels={stats.unpriced_models} mismatches={stats.warnings?.length ?? 0} />
-      <Tiles total={stats.total} />
-      <TurnsChart buckets={stats.buckets} by={by} starts={starts} onBucket={onBucket} />
-      {children}
+      <SectionFrame
+        variant="page"
+        title="Quality"
+        lead="What the range's turns called and asked, and how they were rated."
+      >
+        <Quality stats={read.stats} by={by} starts={starts} runUsage={runUsage} />
+      </SectionFrame>
+      {factory && (
+        <SectionFrame
+          variant="page"
+          title="Runs"
+          lead="The factory runs this instance handed in during the range."
+        >
+          <Runs {...runUsage} />
+        </SectionFrame>
+      )}
     </>
   )
 }
@@ -260,30 +258,32 @@ function Notices({ unpricedModels, mismatches }: { unpricedModels: string[]; mis
 function Tiles({ total }: { total: StatsSummary }) {
   const rated = total.good_ratings + total.bad_ratings > 0
   return (
-    <TileStrip className="grid-cols-2 lg:grid-cols-4">
-      <Tile
-        title="Turns"
-        value={String(turnCount(total))}
-        note={`${total.failed} failed · ${total.interrupted} interrupted`}
-      />
-      <Tile
-        title="API cost"
-        value={money(total.cost)}
-        note={`${total.input_tokens.toLocaleString("en")} in · ${total.output_tokens.toLocaleString("en")} out`}
-      />
-      <Tile
-        title="Plan runs"
-        value={String(total.subscriptions.reduce((runs, use) => runs + (use.runs ?? 0), 0))}
-        note={total.subscriptions
-          .map((use) => `${SOURCE_LABELS[use.usage_source]} ${use.runs ?? 0}`)
-          .join(" · ")}
-      />
-      <Tile
-        title="Ratings"
-        value={rated ? `${total.good_ratings} good` : "—"}
-        note={rated ? `${total.bad_ratings} bad` : "No ratings"}
-      />
-    </TileStrip>
+    <section aria-label="Totals">
+      <TileStrip className="grid-cols-2 lg:grid-cols-4">
+        <Tile
+          title="Turns"
+          value={String(turnCount(total))}
+          note={`${total.failed} failed · ${total.interrupted} interrupted`}
+        />
+        <Tile
+          title="API cost"
+          value={money(total.cost)}
+          note={`${total.input_tokens.toLocaleString("en")} in · ${total.output_tokens.toLocaleString("en")} out`}
+        />
+        <Tile
+          title="Plan runs"
+          value={String(total.subscriptions.reduce((runs, use) => runs + (use.runs ?? 0), 0))}
+          note={total.subscriptions
+            .map((use) => `${SOURCE_LABELS[use.usage_source]} ${use.runs ?? 0}`)
+            .join(" · ")}
+        />
+        <Tile
+          title="Ratings"
+          value={rated ? `${total.good_ratings} good` : "—"}
+          note={rated ? `${total.bad_ratings} bad` : "No ratings"}
+        />
+      </TileStrip>
+    </section>
   )
 }
 
@@ -307,39 +307,41 @@ function TurnsChart({
 }) {
   const points = bucketPoints(starts, buckets)
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Turns</CardTitle>
-        <CardDescription>
-          {buckets.length === 0
-            ? "No turn closed in this range."
-            : `Per ${by}, UTC. Click a bar to list its turns.`}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ChartContainer config={TURN_SERIES} className="aspect-auto h-64 w-full">
-          <BarChart data={points} accessibilityLayer>
-            <BucketAxes />
-            <ChartTooltip
-              content={
-                <ChartTooltipContent labelFormatter={(start) => bucketLabel(String(start), by)} />
-              }
-            />
-            <ChartLegend content={<ChartLegendContent />} />
-            {Object.keys(TURN_SERIES).map((series) => (
-              <Bar
-                key={series}
-                dataKey={series}
-                stackId="turns"
-                fill={`var(--color-${series})`}
-                className="cursor-pointer"
-                onClick={({ originalDataIndex }) => onBucket(points[originalDataIndex].start)}
+    <section aria-label="Turns closed">
+      <Card>
+        <CardHeader>
+          <CardTitle>Turns</CardTitle>
+          <CardDescription>
+            {buckets.length === 0
+              ? "No turn closed in this range."
+              : `Per ${by}, UTC. Click a bar to list its turns.`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ChartContainer config={TURN_SERIES} className="aspect-auto h-64 w-full">
+            <BarChart data={points} accessibilityLayer>
+              <BucketAxes />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent labelFormatter={(start) => bucketLabel(String(start), by)} />
+                }
               />
-            ))}
-          </BarChart>
-        </ChartContainer>
-      </CardContent>
-    </Card>
+              <ChartLegend content={<ChartLegendContent />} />
+              {Object.keys(TURN_SERIES).map((series) => (
+                <Bar
+                  key={series}
+                  dataKey={series}
+                  stackId="turns"
+                  fill={`var(--color-${series})`}
+                  className="cursor-pointer"
+                  onClick={({ originalDataIndex }) => onBucket(points[originalDataIndex].start)}
+                />
+              ))}
+            </BarChart>
+          </ChartContainer>
+        </CardContent>
+      </Card>
+    </section>
   )
 }
 
@@ -383,8 +385,8 @@ function DrilledTurns({
           <TableRow>
             <TableHead>Origin</TableHead>
             <TableHead>Outcome</TableHead>
-            <TableHead>Rating</TableHead>
-            <TableHead>Delegated runs</TableHead>
+            <TableHead className="hidden md:table-cell">Rating</TableHead>
+            <TableHead className="hidden md:table-cell">Delegated runs</TableHead>
             <TableHead className="text-right">API cost</TableHead>
             <TableHead>
               <span className="sr-only">Link</span>
@@ -398,8 +400,10 @@ function DrilledTurns({
               <TableCell>
                 <OutcomeBadge turn={turn} />
               </TableCell>
-              <TableCell>{turn.rating === null ? "—" : VERDICTS[turn.rating.verdict]}</TableCell>
-              <TableCell>
+              <TableCell className="hidden md:table-cell">
+                {turn.rating === null ? "—" : VERDICTS[turn.rating.verdict]}
+              </TableCell>
+              <TableCell className="hidden md:table-cell">
                 {turn.delegated_runs?.length
                   ? turn.delegated_runs.map((reported) => reported.run.client).join(" · ")
                   : "—"}

@@ -75,7 +75,7 @@ export function Origins({
         onPick={onPick}
       />
       {children}
-      <h2 className="text-base font-semibold">Routines</h2>
+      <h3 className="font-semibold">Routines</h3>
       {failure !== undefined && <Failure error={failure} />}
       {routines !== undefined && <RoutineList routines={routines} />}
     </>
@@ -102,9 +102,9 @@ function OriginTable({
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
       <div>
-        <h2 id={titleId} className="text-base font-semibold">
+        <h3 id={titleId} className="font-semibold">
           Turns by origin
-        </h2>
+        </h3>
         <p className="text-sm text-muted-foreground">Click a row to list its turns.</p>
       </div>
       <Table aria-labelledby={titleId}>
@@ -112,11 +112,11 @@ function OriginTable({
           <TableRow>
             <TableHead>Origin</TableHead>
             <TableHead className="text-right">Turns</TableHead>
-            <TableHead className="text-right">No work</TableHead>
+            <TableHead className="hidden text-right md:table-cell">No work</TableHead>
             <TableHead className="text-right">Failed</TableHead>
-            <TableHead className="text-right">API cost</TableHead>
+            <TableHead className="hidden text-right md:table-cell">API cost</TableHead>
             {sources.map((source) => (
-              <TableHead key={source} className="text-right">
+              <TableHead key={source} className="hidden text-right md:table-cell">
                 {SOURCE_LABELS[source]} runs
               </TableHead>
             ))}
@@ -138,11 +138,13 @@ function OriginTable({
                 <OriginCell origin={origin} routines={routines} instanceId={instanceId} />
               </TableCell>
               <TableCell className="text-right">{origin.turns}</TableCell>
-              <TableCell className="text-right">{origin.no_work}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">{origin.no_work}</TableCell>
               <TableCell className="text-right">{origin.failed}</TableCell>
-              <TableCell className="text-right">{money(origin.cost)}</TableCell>
+              <TableCell className="hidden text-right md:table-cell">
+                {money(origin.cost)}
+              </TableCell>
               {origin.runs.map((use) => (
-                <TableCell key={use.usage_source} className="text-right">
+                <TableCell key={use.usage_source} className="hidden text-right md:table-cell">
                   {use.runs}
                 </TableCell>
               ))}

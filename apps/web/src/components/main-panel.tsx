@@ -289,6 +289,7 @@ function TabBody({
           caller={caller}
           clock={clock}
           instanceId={instanceId}
+          factory={instance.factory_role != null}
         />
       )
   }

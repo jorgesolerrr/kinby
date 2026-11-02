@@ -10,22 +10,10 @@ interface RangeProps {
   onRefresh: () => void
 }
 
-/** A stats view's title, its 7, 30, and 90-day range picker, and Refresh. */
-export function RangeHeader({ title, ...controls }: RangeProps & { title: string }) {
+/** A stats view's 7, 30, and 90-day range picker, its buckets, and Refresh. */
+export function RangeHeader({ range, onRange, onRefresh }: RangeProps) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <h1 className="text-xl font-semibold">{title}</h1>
-      <div className="flex flex-wrap items-center gap-2">
-        <RangeControls {...controls} />
-      </div>
-    </div>
-  )
-}
-
-/** The 7, 30, and 90-day range picker, its buckets, and Refresh. */
-function RangeControls({ range, onRange, onRefresh }: RangeProps) {
-  return (
-    <>
+    <div className="flex flex-wrap items-center gap-2">
       <RangeToggle range={range} onRange={onRange} />
       <span className="text-xs text-muted-foreground">
         {bucketSize(range) === "week" ? "Weekly" : "Daily"} buckets, UTC
@@ -34,7 +22,7 @@ function RangeControls({ range, onRange, onRefresh }: RangeProps) {
         <RefreshCwIcon data-icon="inline-start" />
         Refresh
       </Button>
-    </>
+    </div>
   )
 }
 
