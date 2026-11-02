@@ -9,10 +9,11 @@ import {
   type NodeKind,
   type NodeSummary,
 } from "@kinby/contract"
-import { useEffect, useId, useState, useSyncExternalStore } from "react"
+import { type FormEvent, useEffect, useId, useState, useSyncExternalStore } from "react"
 
 import { Failure } from "@/components/config-alerts"
-import { ProfileTab } from "@/components/profile-tab"
+import { ProfileRow } from "@/components/profile-row"
+import { SectionFrame } from "@/components/section-frame"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -27,21 +28,20 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Item,
+  ItemActions,
   ItemContent,
   ItemDescription,
-  ItemGroup,
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
-import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePace } from "@/hooks/use-pace"
@@ -50,11 +50,14 @@ import { leaveNode, linkedNode, selectThread } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 import {
   BookOpenIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   CircleXIcon,
   FactoryIcon,
   LightbulbIcon,
   MessageSquareIcon,
   PencilIcon,
+  PlusIcon,
   RefreshCwIcon,
   Trash2Icon,
   UserIcon,
@@ -82,12 +85,15 @@ const NO_FILTERS: Filters = {
 
 const KINDS: Record<NodeKind | "all", string> = { all: "All", fact: "Facts", episode: "Episodes" }
 
+/** A form's first field takes the focus when the form opens. */
+const focus = (element: HTMLElement | null) => element?.focus()
+
 /**
- * An instance's memory, as two tabs. The profile is text the user edits. The knowledge graph lists
- * its nodes newest first, narrowed by the filters above it, and opens one in the pane beside it,
- * where the user corrects or forgets it. A link can name the node to open first. With nothing
- * open, the pane adds a fact. Each tab reads when it opens and after each write, the graph also on
- * Refresh, and neither polls.
+ * An instance's memory: the profile as one row, then the knowledge graph's nodes as rows, newest
+ * first, narrowed by the filters above them. A row unfolds under itself to its node, where the user
+ * corrects or forgets it, one row at a time. A link can name the node to unfold first. Add fact
+ * opens a form at the top of the list. Each section reads when the page opens and after each write,
+ * the graph also on Refresh, and neither polls.
  */
 export function MemoryPage({
   client,
@@ -99,26 +105,15 @@ export function MemoryPage({
   instanceId: string
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-6">
-      <Tabs defaultValue="graph" className="min-h-0 flex-1">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-xl font-semibold">Memory</h1>
-          <TabsList>
-            <TabsTrigger value="profile">Profile</TabsTrigger>
-            <TabsTrigger value="graph">Knowledge graph</TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="profile">
-          <div className="pt-2">
-            <ProfileTab client={client} clock={clock} />
-          </div>
-        </TabsContent>
-        <TabsContent value="graph" className="flex min-h-0 flex-col">
-          <div className="flex min-h-0 flex-1 flex-col gap-4 pt-2">
-            <KnowledgeGraph client={client} clock={clock} instanceId={instanceId} />
-          </div>
-        </TabsContent>
-      </Tabs>
+    <div className="flex flex-col gap-8 p-6">
+      <SectionFrame
+        variant="page"
+        title="Profile"
+        lead="Your preferences and standing instructions. They go into every prompt."
+      >
+        <ProfileRow client={client} clock={clock} />
+      </SectionFrame>
+      <KnowledgeGraph client={client} clock={clock} instanceId={instanceId} />
     </div>
   )
 }
@@ -134,12 +129,13 @@ function KnowledgeGraph({
 }) {
   const pacing = usePace(clock)
   const [filters, setFilters] = useState(NO_FILTERS)
-  // Each Refresh and each write reads the list and the opened node again.
+  // Each Refresh and each write reads the list and the unfolded node again.
   const [reads, setReads] = useState(0)
   const [listed, setListed] = useState<MemoryListResult>()
   const [failure, setFailure] = useState<unknown>()
   const [selected, setSelected] = useState(linkedNode)
-  // Whether a write found the opened node forgotten since the list was read.
+  const [adding, setAdding] = useState(false)
+  // Whether a write found the unfolded node forgotten since the list was read.
   const [gone, setGone] = useState(false)
 
   useEffect(() => {
@@ -158,13 +154,13 @@ function KnowledgeGraph({
   }, [client, clock, filters, reads])
 
   const narrow = (changed: Partial<Filters>) => setFilters({ ...filters, ...changed })
-  // Once the user moves off a linked node, a reload no longer opens it.
+  // Once the user moves off a linked node, a reload no longer unfolds it.
   const open = (node: string | undefined) => {
     setSelected(node)
     setGone(false)
     if (linkedNode() !== undefined) leaveNode(instanceId)
   }
-  /** After a write, read the list again and open the fact it wrote, or nothing. */
+  /** After a write, read the list again and unfold the fact it wrote, or nothing. */
   const written = (node: string | undefined) => {
     open(node)
     setReads(reads + 1)
@@ -189,62 +185,92 @@ function KnowledgeGraph({
     }
   }
 
+  const items = listed?.items ?? []
+  // A linked node the list doesn't hold, or one just written before the list is read again,
+  // unfolds above the list. Its row keeps its key once the list holds it, so it reads only once.
+  const rows: { node: string; summary?: NodeSummary }[] = [
+    ...(selected !== undefined && !items.some((item) => item.node === selected)
+      ? [{ node: selected }]
+      : []),
+    ...items.map((summary) => ({ node: summary.node, summary })),
+  ]
+
   return (
-    <>
-      <FilterBar filters={filters} onNarrow={narrow} onRefresh={() => setReads(reads + 1)} />
-      {failure !== undefined && <Failure error={failure} />}
-      <div className="flex min-h-0 flex-1 flex-col gap-6 md:flex-row">
-        <div className="min-w-0 overflow-y-auto md:w-1/2">
-          {listed === undefined ? (
-            failure === undefined && <Skeleton className="h-72 w-full" />
-          ) : (
-            <NodeList
-              listed={listed}
-              selected={selected}
-              onSelect={open}
-              onLoadMore={() => void loadMore(listed)}
-            />
-          )}
+    <SectionFrame
+      variant="page"
+      title="Knowledge graph"
+      lead="The facts and episodes the instance remembers, newest first."
+      actions={
+        <Button size="sm" disabled={adding} onClick={() => setAdding(true)}>
+          <PlusIcon data-icon="inline-start" />
+          Add fact
+        </Button>
+      }
+    >
+      {adding && (
+        <div className="rounded-xl border bg-muted/30 p-4">
+          <FactForm
+            label="Add fact"
+            hint="Tell kinby something directly."
+            action="Add fact"
+            initial={NO_FACT}
+            save={async (fact) => {
+              const added = await client.call("memory.add", fact)
+              setAdding(false)
+              written(added.node)
+            }}
+            onCancel={() => setAdding(false)}
+          />
         </div>
-        <section
-          aria-label="Opened node"
-          className="min-w-0 overflow-y-auto md:w-1/2 md:border-l md:pl-6"
-        >
-          {selected === undefined ? (
-            <div className="flex flex-col gap-4">
-              {gone && (
-                <Alert variant="destructive">
-                  <CircleXIcon />
-                  <AlertTitle>That node is gone</AlertTitle>
-                  <AlertDescription>
-                    It was forgotten after the list was read, most likely by the agent.
-                  </AlertDescription>
-                </Alert>
-              )}
-              <FactForm
-                title="Add fact"
-                hint="Open a node to read it, or tell kinby something directly."
-                action="Add fact"
-                initial={NO_FACT}
-                save={async (fact) => written((await client.call("memory.add", fact)).node)}
-              />
-            </div>
-          ) : (
-            <NodePane
-              key={`${selected} ${reads}`}
+      )}
+      <FilterBar filters={filters} onNarrow={narrow} onRefresh={() => setReads(reads + 1)} />
+      {gone && (
+        <Alert variant="destructive">
+          <CircleXIcon />
+          <AlertTitle>That node is gone</AlertTitle>
+          <AlertDescription>
+            It was forgotten after the list was read, most likely by the agent.
+          </AlertDescription>
+        </Alert>
+      )}
+      {failure !== undefined && <Failure error={failure} />}
+      {rows.length > 0 && (
+        <ul aria-label="Facts and episodes" className="flex flex-col divide-y">
+          {rows.map(({ node, summary }) => (
+            <NodeRow
+              key={node}
               client={client}
               clock={clock}
               instanceId={instanceId}
-              node={selected}
+              node={node}
+              summary={summary}
+              reads={reads}
+              open={node === selected}
+              onOpenChange={(unfolded) => open(unfolded ? node : undefined)}
               onSubject={(subject) => narrow({ subject })}
-              onClose={() => open(undefined)}
               onWritten={written}
               onGone={wentMissing}
             />
-          )}
-        </section>
-      </div>
-    </>
+          ))}
+        </ul>
+      )}
+      {listed === undefined ? (
+        failure === undefined && <Skeleton className="h-72 w-full" />
+      ) : listed.items.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>Nothing matches</EmptyTitle>
+            <EmptyDescription>Search matches descriptions and subjects.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        listed.cursor !== null && (
+          <Button variant="ghost" size="sm" onClick={() => void loadMore(listed)}>
+            Load more
+          </Button>
+        )
+      )}
+    </SectionFrame>
   )
 }
 
@@ -325,65 +351,6 @@ function FilterBar({
   )
 }
 
-function NodeList({
-  listed,
-  selected,
-  onSelect,
-  onLoadMore,
-}: {
-  listed: MemoryListResult
-  selected: string | undefined
-  onSelect: (node: string) => void
-  onLoadMore: () => void
-}) {
-  if (listed.items.length === 0) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>Nothing matches</EmptyTitle>
-          <EmptyDescription>Search matches descriptions and subjects.</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    )
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      <ItemGroup aria-label="Nodes">
-        {listed.items.map((node) => (
-          <li key={node.node} className="list-none">
-            <Item
-              size="sm"
-              variant={node.node === selected ? "muted" : "default"}
-              className="text-left"
-              render={
-                <button
-                  type="button"
-                  aria-label={node.description}
-                  aria-current={node.node === selected || undefined}
-                  onClick={() => onSelect(node.node)}
-                />
-              }
-            >
-              <ItemMedia variant="icon">
-                <KindIcon kind={node.kind} />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle>{node.description}</ItemTitle>
-                <ItemDescription>{listedDetail(node)}</ItemDescription>
-              </ItemContent>
-            </Item>
-          </li>
-        ))}
-      </ItemGroup>
-      {listed.cursor !== null && (
-        <Button variant="ghost" size="sm" onClick={onLoadMore}>
-          Load more
-        </Button>
-      )}
-    </div>
-  )
-}
-
 function listedDetail({ date, subjects, source }: NodeSummary): string {
   return [date, subjects.join(", "), source === "user" && "added by you"]
     .filter(Boolean)
@@ -395,17 +362,20 @@ function KindIcon({ kind }: { kind: NodeKind }) {
 }
 
 /**
- * One node, read when it opens. A subject chip narrows the list to that subject. A fact can be
- * corrected, and any node forgotten. `onWritten` hears the fact a correction wrote, or nothing
- * after a forget, and `onGone` hears that the node was forgotten before the write reached it.
+ * One node's row: its kind, description and line, and a chevron that unfolds it. Unfolded, it
+ * reads the node, and again on each of the list's reads. A row with no summary is a node the list
+ * doesn't hold, named by its id until it is read.
  */
-function NodePane({
+function NodeRow({
   client,
   clock,
   instanceId,
   node,
+  summary,
+  reads,
+  open,
+  onOpenChange,
   onSubject,
-  onClose,
   onWritten,
   onGone,
 }: {
@@ -413,41 +383,110 @@ function NodePane({
   clock: Clock
   instanceId: string
   node: string
+  summary: NodeSummary | undefined
+  reads: number
+  open: boolean
+  onOpenChange: (open: boolean) => void
   onSubject: (subject: string) => void
-  onClose: () => void
   onWritten: (node: string | undefined) => void
   onGone: () => void
 }) {
   const [opened, setOpened] = useState<MemoryOpenResult>()
-  const [correcting, setCorrecting] = useState(false)
-  const [forgetting, setForgetting] = useState(false)
   const [failure, setFailure] = useState<unknown>()
-  const headingId = useId()
 
   useEffect(() => {
+    if (!open) return
     const pacing = pace(clock)
     retried(() => client.call("memory.open", { node }), pacing).then(
       (read) => {
-        if (!pacing.stopped) setOpened(read)
+        if (pacing.stopped) return
+        setOpened(read)
+        setFailure(undefined)
       },
       (error: unknown) => {
         if (!pacing.stopped) setFailure(error)
       },
     )
     return pacing.stop
-  }, [client, clock, node])
+  }, [client, clock, node, open, reads])
 
-  if (opened === undefined) {
-    return failure === undefined ? (
-      <Skeleton className="h-48 w-full" />
-    ) : (
-      <Failure error={failure} />
-    )
-  }
+  const shown = summary ?? opened
+  const description = shown?.description ?? node
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange} render={<li aria-label={description} />}>
+      <Item size="row">
+        <ItemMedia variant="tile">
+          {shown !== undefined && <KindIcon kind={shown.kind} />}
+        </ItemMedia>
+        <ItemContent className="min-w-0">
+          <ItemTitle>{description}</ItemTitle>
+          {shown !== undefined && (
+            <ItemDescription lines="one">{listedDetail(shown)}</ItemDescription>
+          )}
+        </ItemContent>
+        <ItemActions>
+          <CollapsibleTrigger
+            render={<Button variant="ghost" size="icon-sm" aria-label="Details" />}
+          >
+            {open ? <ChevronUpIcon /> : <ChevronDownIcon />}
+          </CollapsibleTrigger>
+        </ItemActions>
+      </Item>
+      <CollapsibleContent>
+        <div className="flex flex-col gap-3 pb-4 pl-11 text-sm">
+          {failure !== undefined && <Failure error={failure} />}
+          {opened === undefined ? (
+            failure === undefined && <Skeleton className="h-24 w-full" />
+          ) : (
+            <NodeDetails
+              key={reads}
+              client={client}
+              clock={clock}
+              instanceId={instanceId}
+              opened={opened}
+              onSubject={onSubject}
+              onWritten={onWritten}
+              onGone={onGone}
+            />
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+/**
+ * What an unfolded row shows of its node. A subject chip narrows the list to that subject. A fact
+ * can be corrected, and any node forgotten. `onWritten` hears the fact a correction wrote, or
+ * nothing after a forget, and `onGone` hears that the node was forgotten before the write reached
+ * it.
+ */
+function NodeDetails({
+  client,
+  clock,
+  instanceId,
+  opened,
+  onSubject,
+  onWritten,
+  onGone,
+}: {
+  client: Caller
+  clock: Clock
+  instanceId: string
+  opened: MemoryOpenResult
+  onSubject: (subject: string) => void
+  onWritten: (node: string | undefined) => void
+  onGone: () => void
+}) {
+  const { node } = opened
+  const [correcting, setCorrecting] = useState(false)
+  const [forgetting, setForgetting] = useState(false)
+  const [failure, setFailure] = useState<unknown>()
+
   if (correcting) {
     return (
       <FactForm
-        title="Correct fact"
+        label="Correct fact"
         hint="Saving writes a new fact dated today and forgets this one."
         action="Save correction"
         initial={{
@@ -477,24 +516,8 @@ function NodePane({
     }
   }
   return (
-    <article aria-labelledby={headingId} className="flex flex-col gap-3">
+    <>
       {failure !== undefined && <Failure error={failure} />}
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">{opened.kind}</Badge>
-        <span className="text-sm text-muted-foreground">{opened.date}</span>
-        <Button
-          className="ml-auto"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close"
-          onClick={onClose}
-        >
-          <XIcon />
-        </Button>
-      </div>
-      <h2 id={headingId} className="text-base font-semibold">
-        {opened.description}
-      </h2>
       {opened.subjects.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {opened.subjects.map((subject) => (
@@ -509,22 +532,26 @@ function NodePane({
           ))}
         </div>
       )}
-      <p className="text-sm whitespace-pre-wrap">{opened.body}</p>
+      <p className="whitespace-pre-wrap">{opened.body}</p>
       {opened.tools !== null && opened.tools.length > 0 && (
-        <p className="text-sm text-muted-foreground">Tool path: {opened.tools.join(" → ")}</p>
+        <p className="text-muted-foreground">Tool path: {opened.tools.join(" → ")}</p>
       )}
-      <Separator />
       <Origin client={client} clock={clock} instanceId={instanceId} opened={opened} />
       <div className="flex flex-wrap gap-2">
         {opened.kind === "fact" && (
-          <Button variant="outline" disabled={forgetting} onClick={() => setCorrecting(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={forgetting}
+            onClick={() => setCorrecting(true)}
+          >
             <PencilIcon data-icon="inline-start" />
             Correct
           </Button>
         )}
         <AlertDialog>
           <AlertDialogTrigger
-            render={<Button className="ml-auto" variant="destructive" disabled={forgetting} />}
+            render={<Button variant="destructive" size="sm" disabled={forgetting} />}
           >
             {forgetting ? (
               <Spinner data-icon="inline-start" />
@@ -549,7 +576,7 @@ function NodePane({
           </AlertDialogContent>
         </AlertDialog>
       </div>
-    </article>
+    </>
   )
 }
 
@@ -588,19 +615,19 @@ function fact({ description, subjects, body }: FactDraft): MemoryAddCommand {
  * the instance refuses shows its reason beside its field.
  */
 function FactForm({
-  title,
+  label,
   hint,
   action,
   initial,
   save,
   onCancel,
 }: {
-  title: string
+  label: string
   hint: string
   action: string
   initial: FactDraft
   save: (fact: MemoryAddCommand) => Promise<void>
-  onCancel?: () => void
+  onCancel: () => void
 }) {
   const id = useId()
   const [draft, setDraft] = useState(initial)
@@ -612,7 +639,8 @@ function FactForm({
     setDraft({ ...draft, ...changed })
     setErrors({})
   }
-  const submit = async () => {
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
     setSaving(true)
     setFailure(undefined)
     try {
@@ -634,14 +662,17 @@ function FactForm({
   })
 
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="text-base font-semibold">{title}</h2>
+    <form
+      aria-label={label}
+      className="flex flex-col gap-3"
+      onSubmit={(event) => void submit(event)}
+    >
       <p className="text-sm text-muted-foreground">{hint}</p>
       {failure !== undefined && <Failure error={failure} />}
       <FieldGroup>
         <Field data-invalid={errors.description !== undefined || undefined}>
           <FieldLabel htmlFor={`${id}-description`}>Description</FieldLabel>
-          <Input {...input("description")} />
+          <Input ref={focus} {...input("description")} />
           <FieldError>{errors.description}</FieldError>
         </Field>
         <Field data-invalid={errors.subjects !== undefined || undefined}>
@@ -657,17 +688,15 @@ function FactForm({
         </Field>
       </FieldGroup>
       <div className="flex flex-wrap gap-2">
-        <Button disabled={saving || draft.description === ""} onClick={() => void submit()}>
+        <Button type="submit" disabled={saving || draft.description === ""}>
           {saving && <Spinner data-icon="inline-start" />}
           {action}
         </Button>
-        {onCancel !== undefined && (
-          <Button variant="ghost" disabled={saving} onClick={onCancel}>
-            Cancel
-          </Button>
-        )}
+        <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
+          Cancel
+        </Button>
       </div>
-    </div>
+    </form>
   )
 }
 

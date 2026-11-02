@@ -266,7 +266,7 @@ describe("the instances", () => {
     await user.click(await screen.findByRole("button", { name: "Memory" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/memory")
-    expect(screen.getByRole("tab", { name: "Knowledge graph" })).toBeDefined()
+    expect(screen.getByRole("heading", { name: "Knowledge graph" })).toBeDefined()
     const relayed = hub.sockets.find(
       (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
     )
@@ -281,7 +281,7 @@ describe("the instances", () => {
 
     const { hub, clock } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByRole("tab", { name: "Knowledge graph" })).toBeDefined()
+    expect(await screen.findByRole("heading", { name: "Knowledge graph" })).toBeDefined()
     const relayed = hub.sockets.find(
       (socket) => socket.url === "ws://hub.test/instances/hub-ada/ws",
     )
@@ -302,7 +302,7 @@ describe("the instances", () => {
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect(await screen.findByText("Start it to see its memory.")).toBeDefined()
-    expect(screen.queryByRole("tab", { name: "Knowledge graph" })).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Knowledge graph" })).toBeNull()
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
     )

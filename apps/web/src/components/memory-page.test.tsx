@@ -15,6 +15,7 @@ import { StrictMode } from "react"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import { MemoryPage } from "@/components/memory-page"
+import { PROFILE_FILE } from "@/lib/profile"
 
 const THREAD = "11111111-1111-1111-1111-111111111111"
 
@@ -95,6 +96,8 @@ function openPage(answers: Answers = {}) {
       return found
     },
     "thread.list": () => ({ threads: [thread], ceiling: "full-access", cursor: null }),
+    "profile.get": () => profile,
+    "config.history": ({ file }) => ({ changes: file === PROFILE_FILE ? [byYou] : [] }),
     ...answers,
   })
   render(<MemoryPage client={caller} clock={fakeClock()} instanceId="instance-1" />)
@@ -106,10 +109,17 @@ const listCalls = (caller: ReturnType<typeof stubCaller>) =>
     .filter((call) => call.method === "memory.list")
     .map((call) => call.params as MemoryListCommand)
 
-const nodeButton = (description: string) =>
-  screen.findByRole("button", { name: new RegExp(description) })
+const row = (description: string) => screen.findByRole("listitem", { name: description })
 
-const pane = () => within(screen.getByRole("region", { name: "Opened node" }))
+/** Unfold a node's row by its chevron, and look inside it. */
+async function unfold(user: ReturnType<typeof userEvent.setup>, description: string) {
+  const unfolded = await row(description)
+  await user.click(within(unfolded).getByRole("button", { name: "Details" }))
+  return within(unfolded)
+}
+
+const expanded = (unfolded: HTMLElement) =>
+  within(unfolded).getByRole("button", { name: "Details" }).getAttribute("aria-expanded")
 
 const called = (caller: ReturnType<typeof stubCaller>, method: string) =>
   caller.calls.filter((call) => call.method === method).map((call) => call.params)
@@ -156,7 +166,7 @@ const profile: ProfileResult = { text: "Call me Jo.", hash: "hash-1", tokens: 3 
 const byYou: ConfigChange = {
   // Local time, so the page shows the same clock time wherever the test runs.
   at: new Date(2026, 8, 28, 10, 4).toISOString(),
-  file: "memory/profile.md",
+  file: PROFILE_FILE,
   actor: "app",
   thread_id: null,
   turn_id: null,
@@ -164,14 +174,10 @@ const byYou: ConfigChange = {
   hash: "hash-1",
 }
 
-/** The page with its Profile tab open. The profile was last changed by the user. */
+/** The page with its profile row unfolded. The profile was last changed by the user. */
 async function openProfile(answers: Answers = {}) {
-  const page = openPage({
-    "profile.get": () => profile,
-    "config.history": ({ file }) => ({ changes: file === "memory/profile.md" ? [byYou] : [] }),
-    ...answers,
-  })
-  await page.user.click(await screen.findByRole("tab", { name: "Profile" }))
+  const page = openPage(answers)
+  await page.user.click(await screen.findByRole("button", { name: "Edit" }))
   return page
 }
 
@@ -180,48 +186,61 @@ describe("the memory page", () => {
     window.history.replaceState(null, "", "/instances/instance-1/memory")
   })
 
-  it("lists the knowledge graph as the instance orders it and opens a node in the pane", async () => {
-    const { user } = openPage()
-
-    const nodes = await screen.findByRole("list", { name: "Nodes" })
-    expect(
-      within(nodes)
-        .getAllByRole("button")
-        .map((button) => button.textContent),
-    ).toEqual([
-      expect.stringContaining("Fixed the deploy"),
-      expect.stringContaining("Likes coffee"),
-      expect.stringContaining("Picked markdown"),
-    ])
-    await user.click(await nodeButton("Picked markdown"))
-
-    expect(await pane().findByText("The body of Picked markdown.")).toBeDefined()
-    expect(pane().getByRole("heading", { name: "Picked markdown" })).toBeDefined()
-    expect(pane().getByText("2026-09-01")).toBeDefined()
-    expect(pane().getByRole("button", { name: "memory" })).toBeDefined()
-  })
-
-  it("left-aligns every line of a node row, since a button centers its text", async () => {
+  it("shows the profile, then the knowledge graph, as sections with no sub-tabs", async () => {
     openPage()
 
-    const nodes = await screen.findByRole("list", { name: "Nodes" })
-    // jsdom applies no Tailwind, so the class stands in for the computed alignment.
     expect(
-      within(nodes)
-        .getAllByRole("button")
-        .map((button) => button.classList.contains("text-left")),
-    ).toEqual([true, true, true])
+      (await screen.findAllByRole("heading", { level: 2 })).map((heading) => heading.textContent),
+    ).toEqual(["Profile", "Knowledge graph"])
+    expect(screen.queryByRole("tab")).toBeNull()
   })
 
-  it("opens the node a link names in the pane", async () => {
+  it("lists the knowledge graph as rows, as the instance orders it", async () => {
+    openPage()
+
+    const nodes = await screen.findByRole("list", { name: "Facts and episodes" })
+    expect(
+      within(nodes)
+        .getAllByRole("listitem")
+        .map((item) => item.getAttribute("aria-label")),
+    ).toEqual(["Fixed the deploy", "Likes coffee", "Picked markdown"])
+    expect((await row("Likes coffee")).textContent).toContain("2026-09-02 · coffee · added by you")
+  })
+
+  it("unfolds a row under itself to its body, subjects and date, one row at a time", async () => {
+    const { user } = openPage()
+
+    const markdownRow = await unfold(user, "Picked markdown")
+
+    expect(await markdownRow.findByText("The body of Picked markdown.")).toBeDefined()
+    expect(markdownRow.getByRole("button", { name: "memory" })).toBeDefined()
+    expect(expanded(await row("Picked markdown"))).toBe("true")
+    await unfold(user, "Likes coffee")
+    expect(expanded(await row("Picked markdown"))).toBe("false")
+    expect(screen.queryByText("The body of Picked markdown.")).toBeNull()
+  })
+
+  it("unfolds the row of the node a link names", async () => {
     window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
     const { caller } = openPage()
 
-    expect(await pane().findByText("The body of Fixed the deploy.")).toBeDefined()
+    const deployRow = await row("Fixed the deploy")
+    expect(await within(deployRow).findByText("The body of Fixed the deploy.")).toBeDefined()
+    expect(expanded(deployRow)).toBe("true")
     expect(called(caller, "memory.open")).toEqual([{ node: deploy.node }])
   })
 
-  it("asks again for the opened node once a second under StrictMode, which remounts the pane", async () => {
+  it("unfolds a linked node the list doesn't hold first, above the list", async () => {
+    window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
+    openPage({ "memory.list": () => listing([coffee, markdown]) })
+
+    const deployRow = await row("Fixed the deploy")
+    expect(await within(deployRow).findByText("The body of Fixed the deploy.")).toBeDefined()
+    const nodes = screen.getByRole("list", { name: "Facts and episodes" })
+    expect(within(nodes).getAllByRole("listitem").at(0)).toBe(deployRow)
+  })
+
+  it("asks again for the unfolded node once a second under StrictMode, which remounts the page", async () => {
     window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
     const clock = fakeClock()
     const caller = stubCaller({
@@ -229,6 +248,8 @@ describe("the memory page", () => {
       "memory.open": () => {
         throw new CallError({ code: "CONNECTION_LOST", message: "dropped", retryable: false })
       },
+      "profile.get": () => profile,
+      "config.history": () => ({ changes: [] }),
     })
     render(
       <StrictMode>
@@ -251,19 +272,26 @@ describe("the memory page", () => {
       },
     })
 
-    expect(await pane().findByText("Refused with NOT_FOUND.")).toBeDefined()
+    const forgotten = await row("2026-09-01-forgotten")
+    expect(await within(forgotten).findByText("Refused with NOT_FOUND.")).toBeDefined()
   })
 
   it.each([
-    ["another node opens", () => nodeButton("Likes coffee")],
-    ["the pane closes", () => pane().findByRole("button", { name: "Close" })],
+    [
+      "another row unfolds",
+      (user: ReturnType<typeof userEvent.setup>) => unfold(user, "Likes coffee"),
+    ],
+    [
+      "its row folds",
+      (user: ReturnType<typeof userEvent.setup>) => unfold(user, "Fixed the deploy"),
+    ],
   ])("drops the linked node from the URL when %s", async (_, control) => {
     window.history.replaceState(null, "", `/instances/instance-1/memory/${deploy.node}`)
     const { user } = openPage()
-    await pane().findByText("The body of Fixed the deploy.")
+    await screen.findByText("The body of Fixed the deploy.")
     const entries = window.history.length
 
-    await user.click(await control())
+    await control(user)
 
     expect(window.location.pathname).toBe("/instances/instance-1/memory")
     expect(window.history.length).toBe(entries)
@@ -271,7 +299,7 @@ describe("the memory page", () => {
 
   it("narrows the list by search, kind, and date bounds", async () => {
     const { caller, user } = openPage()
-    await nodeButton("Picked markdown")
+    await row("Picked markdown")
 
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "kinby")
     await user.click(screen.getByRole("button", { name: "Episodes" }))
@@ -289,18 +317,18 @@ describe("the memory page", () => {
     expect(listCalls(caller).at(-1)).not.toHaveProperty("kind")
   })
 
-  it("narrows the list to a subject clicked in the pane, until the filter is cleared", async () => {
+  it("narrows the list to a subject clicked in an unfolded row, until the filter is cleared", async () => {
     const { caller, user } = openPage()
-    await user.click(await nodeButton("Fixed the deploy"))
+    const deployRow = await unfold(user, "Fixed the deploy")
 
-    await user.click(await pane().findByRole("button", { name: "deploy" }))
+    await user.click(await deployRow.findByRole("button", { name: "deploy" }))
 
     expect(listCalls(caller).at(-1)).toEqual({ query: "", subject: "deploy" })
     await user.click(screen.getByRole("button", { name: "Stop filtering by deploy" }))
     expect(listCalls(caller).at(-1)).toEqual({ query: "" })
   })
 
-  it("loads the next page below the last node shown, and stops on the last page", async () => {
+  it("loads the next page below the last row shown, and stops on the last page", async () => {
     const { caller, user } = openPage({
       "memory.list": ({ cursor }) =>
         cursor === undefined || cursor === null
@@ -310,8 +338,8 @@ describe("the memory page", () => {
 
     await user.click(await screen.findByRole("button", { name: "Load more" }))
 
-    expect(await nodeButton("Picked markdown")).toBeDefined()
-    expect(await nodeButton("Fixed the deploy")).toBeDefined()
+    expect(await row("Picked markdown")).toBeDefined()
+    expect(await row("Fixed the deploy")).toBeDefined()
     expect(listCalls(caller).at(-1)).toEqual({ query: "", cursor: coffee.node })
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull()
   })
@@ -319,11 +347,11 @@ describe("the memory page", () => {
   it("says what recapped an episode and shows its tool path, linking to its thread", async () => {
     const { user } = openPage()
 
-    await user.click(await nodeButton("Fixed the deploy"))
+    const deployRow = await unfold(user, "Fixed the deploy")
 
-    expect(await pane().findByText("Tool path: grep → bash")).toBeDefined()
-    expect(pane().getByText(/Recap of a turn in/)).toBeDefined()
-    await user.click(await pane().findByRole("button", { name: "Deploy day" }))
+    expect(await deployRow.findByText("Tool path: grep → bash")).toBeDefined()
+    expect(deployRow.getByText(/Recap of a turn in/)).toBeDefined()
+    await user.click(await deployRow.findByRole("button", { name: "Deploy day" }))
     expect(window.location.pathname).toBe(`/instances/instance-1/threads/${THREAD}`)
   })
 
@@ -337,8 +365,8 @@ describe("the memory page", () => {
       }),
     })
 
-    await user.click(await nodeButton("Fixed the deploy"))
-    await user.click(await pane().findByRole("button", { name: "Old deploy day" }))
+    const deployRow = await unfold(user, "Fixed the deploy")
+    await user.click(await deployRow.findByRole("button", { name: "Old deploy day" }))
 
     expect(window.location.pathname).toBe(`/instances/instance-1/threads/${THREAD}`)
   })
@@ -360,67 +388,75 @@ describe("the memory page", () => {
         }),
     })
 
-    await user.click(await nodeButton("Shipped run recaps"))
+    const shippedRow = await unfold(user, "Shipped run recaps")
 
-    expect(await pane().findByText("Recap of a factory run")).toBeDefined()
-    expect(pane().queryByText(/Added by you|Recap of a turn in|Tool path/)).toBeNull()
+    expect(await shippedRow.findByText("Recap of a factory run")).toBeDefined()
+    expect(shippedRow.queryByText(/Added by you|Recap of a turn in|Tool path/)).toBeNull()
   })
 
   it("says a fact the agent remembered was remembered in its thread", async () => {
     const { user } = openPage()
 
-    await user.click(await nodeButton("Picked markdown"))
+    const markdownRow = await unfold(user, "Picked markdown")
 
-    expect(await pane().findByText(/Remembered in/)).toBeDefined()
-    expect(await pane().findByRole("button", { name: "Deploy day" })).toBeDefined()
-    expect(pane().queryByText(/Tool path/)).toBeNull()
+    expect(await markdownRow.findByText(/Remembered in/)).toBeDefined()
+    expect(await markdownRow.findByRole("button", { name: "Deploy day" })).toBeDefined()
+    expect(markdownRow.queryByText(/Tool path/)).toBeNull()
   })
 
   it("says a fact the user added was added by them, with no thread", async () => {
     const { user } = openPage()
 
-    await user.click(await nodeButton("Likes coffee"))
+    const coffeeRow = await unfold(user, "Likes coffee")
 
-    expect(await pane().findByText("Added by you")).toBeDefined()
-    expect(pane().queryByText(/Remembered in|Recap of a turn in/)).toBeNull()
-    expect(screen.getByRole("button", { name: /Likes coffee/ }).textContent).toContain(
-      "added by you",
-    )
+    expect(await coffeeRow.findByText("Added by you")).toBeDefined()
+    expect(coffeeRow.queryByText(/Remembered in|Recap of a turn in/)).toBeNull()
   })
 
-  it("reads the list and the opened node again on Refresh, and never on its own", async () => {
+  it("reads the list and the unfolded node again on Refresh, and never on its own", async () => {
     const clock = fakeClock()
     const caller = stubCaller({
       "memory.list": () => listing([markdown]),
       "memory.open": () => OPENED[markdown.node] as MemoryOpenResult,
       "thread.list": () => ({ threads: [thread], ceiling: "full-access", cursor: null }),
+      "profile.get": () => profile,
+      "config.history": () => ({ changes: [] }),
     })
     render(<MemoryPage client={caller} clock={clock} instanceId="instance-1" />)
     const user = userEvent.setup()
-    await user.click(await nodeButton("Picked markdown"))
-    await pane().findByText("The body of Picked markdown.")
+    const markdownRow = await unfold(user, "Picked markdown")
+    await markdownRow.findByText("The body of Picked markdown.")
     const reads = () => caller.calls.filter((call) => call.method.startsWith("memory.")).length
 
     await act(() => clock.advance(10 * 60_000))
     expect(reads()).toBe(2)
     await user.click(screen.getByRole("button", { name: "Refresh" }))
 
-    await pane().findByText("The body of Picked markdown.")
+    await markdownRow.findByText("The body of Picked markdown.")
     expect(caller.calls.filter((call) => call.method === "memory.list")).toHaveLength(2)
     expect(caller.calls.filter((call) => call.method === "memory.open")).toHaveLength(2)
   })
 
-  it("edits the profile with an approximate token count and says who changed it last", async () => {
+  it("shows the profile as one row with its file and an approximate token count", async () => {
+    openPage()
+
+    const section = await screen.findByRole("region", { name: "Profile" })
+    expect(await within(section).findByText(PROFILE_FILE)).toBeDefined()
+    expect(within(section).getByText("About 3 tokens in every prompt")).toBeDefined()
+    expect(screen.queryByRole("textbox", { name: PROFILE_FILE })).toBeNull()
+  })
+
+  it("unfolds the profile to its editor, focused, saves it and says who changed it last", async () => {
     const { caller, user } = await openProfile({
       "profile.set": ({ text }) => ({ text, hash: "hash-2", tokens: 7 }),
     })
 
-    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    const editor = await screen.findByRole("textbox", { name: PROFILE_FILE })
+    expect(document.activeElement).toBe(editor)
     expect(editor).toHaveProperty("value", "Call me Jo.")
-    expect(screen.getByText(/about 3 tokens/)).toBeDefined()
     expect(screen.getByText("Last changed by you, Sep 28, 2026, 10:04 AM")).toBeDefined()
     await user.type(editor, " Mornings only.")
-    expect(screen.getByText(/about 7 tokens/)).toBeDefined()
+    expect(screen.getByText("About 7 tokens in every prompt")).toBeDefined()
     await user.click(screen.getByRole("button", { name: "Save" }))
 
     expect(await screen.findByText("Saved. It applies at the next turn.")).toBeDefined()
@@ -428,8 +464,8 @@ describe("the memory page", () => {
       { text: "Call me Jo. Mornings only.", hash: "hash-1" },
     ])
     expect(called(caller, "config.history")).toEqual([
-      { file: "memory/profile.md", limit: 1 },
-      { file: "memory/profile.md", limit: 1 },
+      { file: PROFILE_FILE, limit: 1 },
+      { file: PROFILE_FILE, limit: 1 },
     ])
     expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true)
   })
@@ -445,7 +481,7 @@ describe("the memory page", () => {
       "config.history": () => ({ changes }),
     })
 
-    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    const editor = await screen.findByRole("textbox", { name: PROFILE_FILE })
     expect(screen.getByText("Changed outside kinby")).toBeDefined()
     expect(screen.queryByText(/Last changed by/)).toBeNull()
     await user.type(editor, " Mine.")
@@ -460,11 +496,11 @@ describe("the memory page", () => {
       "profile.get": () => ({ text: "", hash: EMPTY, tokens: 0 }),
     })
 
-    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
-    expect(screen.getByText(/about 0 tokens/)).toBeDefined()
+    const editor = await screen.findByRole("textbox", { name: PROFILE_FILE })
+    expect(screen.getByText("About 0 tokens in every prompt")).toBeDefined()
     await user.type(editor, "🌱🌱🌱🌱🌱")
 
-    expect(screen.getByText(/about 2 tokens/)).toBeDefined()
+    expect(screen.getByText("About 2 tokens in every prompt")).toBeDefined()
   })
 
   it("offers to load theirs when the profile changed since it was opened", async () => {
@@ -478,7 +514,7 @@ describe("the memory page", () => {
       },
     })
 
-    const editor = await screen.findByRole("textbox", { name: "memory/profile.md" })
+    const editor = await screen.findByRole("textbox", { name: PROFILE_FILE })
     await user.type(editor, " Mine.")
     await user.click(screen.getByRole("button", { name: "Save" }))
     const alert = await screen.findByRole("alert")
@@ -486,7 +522,7 @@ describe("the memory page", () => {
     await user.click(within(alert).getByRole("button", { name: "Load theirs" }))
 
     expect(await screen.findByDisplayValue("Call me Jorge.")).toBe(editor)
-    expect(screen.getByText(/about 4 tokens/)).toBeDefined()
+    expect(screen.getByText("About 4 tokens in every prompt")).toBeDefined()
     expect(screen.queryByRole("alert")).toBeNull()
     await user.type(editor, " Mine.")
     await user.click(screen.getByRole("button", { name: "Save" }))
@@ -496,34 +532,69 @@ describe("the memory page", () => {
     })
   })
 
-  it("adds a fact from the pane with nothing open, then reloads the list and opens it", async () => {
-    const { caller, user } = openWritablePage()
-    await nodeButton("Picked markdown")
+  it("opens Add fact at the top of the list, focused on its first field", async () => {
+    const { user } = openWritablePage()
+    const nodes = await screen.findByRole("list", { name: "Facts and episodes" })
 
-    await user.type(pane().getByLabelText("Description"), "Likes green tea")
-    await user.type(pane().getByLabelText("Subjects"), "drinks, mornings,")
-    await user.type(pane().getByLabelText("Body"), "No milk.")
-    await user.click(pane().getByRole("button", { name: "Add fact" }))
+    await user.click(screen.getByRole("button", { name: "Add fact" }))
+
+    const form = screen.getByRole("form", { name: "Add fact" })
+    expect(form.compareDocumentPosition(nodes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.activeElement).toBe(within(form).getByLabelText("Description"))
+    expect(screen.getAllByRole("button", { name: "Add fact" }).at(0)).toHaveProperty(
+      "disabled",
+      true,
+    )
+  })
+
+  it("adds a fact, then reloads the list and unfolds its row", async () => {
+    const { caller, user } = openWritablePage()
+    await row("Picked markdown")
+    await user.click(screen.getByRole("button", { name: "Add fact" }))
+    const form = within(screen.getByRole("form", { name: "Add fact" }))
+
+    await user.type(form.getByLabelText("Description"), "Likes green tea")
+    await user.type(form.getByLabelText("Subjects"), "drinks, mornings,")
+    await user.type(form.getByLabelText("Body"), "No milk.")
+    await user.click(form.getByRole("button", { name: "Add fact" }))
 
     expect(called(caller, "memory.add")).toEqual([
       { description: "Likes green tea", subjects: ["drinks", "mornings"], body: "No milk." },
     ])
-    expect(await pane().findByRole("heading", { name: "Likes green tea" })).toBeDefined()
+    const teaRow = await row("Likes green tea")
+    expect(await within(teaRow).findByText("The body of Likes green tea.")).toBeDefined()
+    expect(expanded(teaRow)).toBe("true")
+    expect(screen.queryByRole("form", { name: "Add fact" })).toBeNull()
     expect(listCalls(caller)).toHaveLength(2)
-    expect(await nodeButton("Likes green tea")).toBeDefined()
   })
 
-  it("corrects an open fact from a copy of its fields and opens the new fact", async () => {
+  it("drops a new fact on Cancel", async () => {
     const { caller, user } = openWritablePage()
-    await user.click(await nodeButton("Picked markdown"))
+    await row("Picked markdown")
+    await user.click(screen.getByRole("button", { name: "Add fact" }))
 
-    await user.click(await pane().findByRole("button", { name: "Correct" }))
-    const description = pane().getByLabelText("Description")
+    await user.click(
+      within(screen.getByRole("form", { name: "Add fact" })).getByRole("button", {
+        name: "Cancel",
+      }),
+    )
+
+    expect(screen.queryByRole("form", { name: "Add fact" })).toBeNull()
+    expect(called(caller, "memory.add")).toEqual([])
+  })
+
+  it("corrects an unfolded fact from a copy of its fields and unfolds the new fact", async () => {
+    const { caller, user } = openWritablePage()
+    const markdownRow = await unfold(user, "Picked markdown")
+
+    await user.click(await markdownRow.findByRole("button", { name: "Correct" }))
+    const description = markdownRow.getByLabelText("Description")
+    expect(document.activeElement).toBe(description)
     expect(description).toHaveProperty("value", "Picked markdown")
-    expect(pane().getByLabelText("Subjects")).toHaveProperty("value", "memory, kinby")
+    expect(markdownRow.getByLabelText("Subjects")).toHaveProperty("value", "memory, kinby")
     await user.clear(description)
     await user.type(description, "Likes green tea")
-    await user.click(pane().getByRole("button", { name: "Save correction" }))
+    await user.click(markdownRow.getByRole("button", { name: "Save correction" }))
 
     expect(called(caller, "memory.correct")).toEqual([
       {
@@ -533,60 +604,61 @@ describe("the memory page", () => {
         body: "The body of Picked markdown.",
       },
     ])
-    expect(await pane().findByRole("heading", { name: "Likes green tea" })).toBeDefined()
+    const teaRow = await row("Likes green tea")
+    expect(await within(teaRow).findByText("The body of Likes green tea.")).toBeDefined()
     expect(listCalls(caller)).toHaveLength(2)
   })
 
   it("drops a correction on Cancel and shows the fact again", async () => {
     const { caller, user } = openWritablePage()
-    await user.click(await nodeButton("Picked markdown"))
+    const markdownRow = await unfold(user, "Picked markdown")
 
-    await user.click(await pane().findByRole("button", { name: "Correct" }))
-    await user.click(pane().getByRole("button", { name: "Cancel" }))
+    await user.click(await markdownRow.findByRole("button", { name: "Correct" }))
+    await user.click(markdownRow.getByRole("button", { name: "Cancel" }))
 
-    expect(pane().getByRole("heading", { name: "Picked markdown" })).toBeDefined()
+    expect(markdownRow.getByText("The body of Picked markdown.")).toBeDefined()
     expect(called(caller, "memory.correct")).toEqual([])
   })
 
-  it("offers only Forget on an open episode", async () => {
+  it("offers only Forget on an unfolded episode", async () => {
     const { user } = openWritablePage()
 
-    await user.click(await nodeButton("Fixed the deploy"))
+    const deployRow = await unfold(user, "Fixed the deploy")
 
-    expect(await pane().findByRole("button", { name: "Forget" })).toBeDefined()
-    expect(pane().queryByRole("button", { name: "Correct" })).toBeNull()
+    expect(await deployRow.findByRole("button", { name: "Forget" })).toBeDefined()
+    expect(deployRow.queryByRole("button", { name: "Correct" })).toBeNull()
   })
 
-  it("forgets only after a confirmation that says it can't be undone, then closes the pane", async () => {
+  it("forgets only after a confirmation that says it can't be undone, then folds the row", async () => {
     const { caller, user } = openWritablePage()
-    await user.click(await nodeButton("Fixed the deploy"))
+    const deployRow = await unfold(user, "Fixed the deploy")
 
-    await user.click(await pane().findByRole("button", { name: "Forget" }))
+    await user.click(await deployRow.findByRole("button", { name: "Forget" }))
     let dialog = await screen.findByRole("alertdialog", { name: "Forget this episode?" })
     expect(dialog.textContent).toContain("can't be undone")
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(called(caller, "memory.forget")).toEqual([])
-    await user.click(pane().getByRole("button", { name: "Forget" }))
+    await user.click(deployRow.getByRole("button", { name: "Forget" }))
     dialog = await screen.findByRole("alertdialog", { name: "Forget this episode?" })
     await user.click(within(dialog).getByRole("button", { name: "Forget" }))
 
     expect(called(caller, "memory.forget")).toEqual([{ node: deploy.node }])
-    expect(await pane().findByRole("button", { name: "Add fact" })).toBeDefined()
+    expect(expanded(await row("Fixed the deploy"))).toBe("false")
     expect(listCalls(caller)).toHaveLength(2)
   })
 
   it.each([
     [
       "a correction",
-      async (user: ReturnType<typeof userEvent.setup>) => {
-        await user.click(await pane().findByRole("button", { name: "Correct" }))
-        await user.click(pane().getByRole("button", { name: "Save correction" }))
+      async (user: ReturnType<typeof userEvent.setup>, unfolded: ReturnType<typeof within>) => {
+        await user.click(await unfolded.findByRole("button", { name: "Correct" }))
+        await user.click(unfolded.getByRole("button", { name: "Save correction" }))
       },
     ],
     [
       "a forget",
-      async (user: ReturnType<typeof userEvent.setup>) => {
-        await user.click(await pane().findByRole("button", { name: "Forget" }))
+      async (user: ReturnType<typeof userEvent.setup>, unfolded: ReturnType<typeof within>) => {
+        await user.click(await unfolded.findByRole("button", { name: "Forget" }))
         const dialog = await screen.findByRole("alertdialog", { name: "Forget this fact?" })
         await user.click(within(dialog).getByRole("button", { name: "Forget" }))
       },
@@ -596,12 +668,12 @@ describe("the memory page", () => {
       throw refused("NOT_FOUND")
     }
     const { caller, user } = openWritablePage({ "memory.correct": gone, "memory.forget": gone })
-    await user.click(await nodeButton("Picked markdown"))
+    const markdownRow = await unfold(user, "Picked markdown")
 
-    await write(user)
+    await write(user, markdownRow)
 
-    expect(await pane().findByText(/is gone/)).toBeDefined()
-    expect(pane().getByRole("button", { name: "Add fact" })).toBeDefined()
+    expect(await screen.findByText("That node is gone")).toBeDefined()
+    expect(expanded(await row("Picked markdown"))).toBe("false")
     expect(listCalls(caller)).toHaveLength(2)
   })
 
@@ -611,22 +683,15 @@ describe("the memory page", () => {
         throw refused("INVALID_ARGUMENT", { description: "Describe the fact." })
       },
     })
-    await nodeButton("Picked markdown")
+    await row("Picked markdown")
+    await user.click(screen.getByRole("button", { name: "Add fact" }))
+    const form = within(screen.getByRole("form", { name: "Add fact" }))
 
-    await user.type(pane().getByLabelText("Description"), " ")
-    await user.click(pane().getByRole("button", { name: "Add fact" }))
+    await user.type(form.getByLabelText("Description"), " ")
+    await user.click(form.getByRole("button", { name: "Add fact" }))
 
-    expect(await pane().findByText("Describe the fact.")).toBeDefined()
-    expect(pane().getByLabelText("Description").getAttribute("aria-invalid")).toBe("true")
-    expect(pane().getByLabelText("Subjects").getAttribute("aria-invalid")).toBeNull()
-  })
-
-  it("closes an open node to offer Add fact again", async () => {
-    const { user } = openWritablePage()
-    await user.click(await nodeButton("Picked markdown"))
-
-    await user.click(await pane().findByRole("button", { name: "Close" }))
-
-    expect(pane().getByRole("button", { name: "Add fact" })).toBeDefined()
+    expect(await form.findByText("Describe the fact.")).toBeDefined()
+    expect(form.getByLabelText("Description").getAttribute("aria-invalid")).toBe("true")
+    expect(form.getByLabelText("Subjects").getAttribute("aria-invalid")).toBeNull()
   })
 })
