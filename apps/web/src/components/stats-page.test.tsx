@@ -11,7 +11,7 @@ import {
   type TurnMetrics,
 } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
-import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -176,11 +176,30 @@ function runsResult(fields: Partial<StatsRunsResult> = {}): StatsRunsResult {
 function openStats(
   answers: Answers = { "stats.get": () => stats() },
   hubAnswers: Answers = { "stats.runs": () => runsResult() },
+  { factory = false } = {},
 ) {
-  const client = stubCaller(answers)
+  const client = stubCaller({ "routine.list": () => ({ routines: [], warnings: [] }), ...answers })
   const caller = stubCaller(hubAnswers)
-  render(<StatsPage client={client} caller={caller} clock={fakeClock()} instanceId="hub-ada" />)
-  return client
+  render(
+    <StatsPage
+      client={client}
+      caller={caller}
+      clock={fakeClock()}
+      instanceId="hub-ada"
+      factory={factory}
+    />,
+  )
+  return { client, caller }
+}
+
+/** The range's totals, once the stats are read. */
+function totals() {
+  return screen.findByRole("region", { name: "Totals" })
+}
+
+/** A section of the page by its title. */
+function section(name: string) {
+  return screen.getByRole("region", { name })
 }
 
 /** What each stats.get asked for, oldest first. */
@@ -199,7 +218,7 @@ afterEach(() => {
 
 describe("the stats page", () => {
   it("reads the last 7 days by day on open, from midnight UTC on the first one", async () => {
-    const client = openStats()
+    const { client } = openStats()
 
     await act(() => Promise.resolve())
 
@@ -207,7 +226,7 @@ describe("the stats page", () => {
   })
 
   it("reads 30 days by day and 90 days by week when the range changes", async () => {
-    const client = openStats()
+    const { client } = openStats()
     const user = userEvent.setup()
 
     await user.click(await screen.findByRole("button", { name: "30 days" }))
@@ -229,16 +248,16 @@ describe("the stats page", () => {
       },
     })
     const user = userEvent.setup()
-    expect(await screen.findByRole("region", { name: "Turns" })).toBeTruthy()
+    expect(await totals()).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: "30 days" }))
 
     expect(await screen.findByRole("alert")).toBeTruthy()
-    expect(screen.queryByRole("region", { name: "Turns" })).toBeNull()
+    expect(screen.queryByRole("region", { name: "Totals" })).toBeNull()
   })
 
   it("shows each plan's recent runs under the title from the one stats.get it reads", async () => {
-    const client = openStats({
+    const { client } = openStats({
       "stats.get": () =>
         stats({
           plan_use: [
@@ -252,18 +271,28 @@ describe("the stats page", () => {
 
     expect(await screen.findByText("Claude runs: 2 in 5h · 9 in 7d")).toBeDefined()
     expect(screen.getByText("ChatGPT runs: 0 in 5h · 3 in 7d")).toBeDefined()
-    expect(client.calls.map((call) => call.method)).toEqual(["stats.get"])
+    expect(client.calls.map((call) => call.method)).toEqual(["stats.get", "routine.list"])
   })
 
-  it("opens on Overview, with every other tab available", async () => {
+  it("shows the totals, the turns chart, Spend, Origin and Quality on one page, with no tabs", async () => {
     openStats()
 
-    const overview = await screen.findByRole("tab", { name: "Overview" })
+    await totals()
 
-    expect(overview.getAttribute("aria-selected")).toBe("true")
-    for (const name of ["Spend", "Origin", "Quality", "Runs"]) {
-      expect(screen.getByRole("tab", { name }).getAttribute("aria-disabled")).toBe("false")
-    }
+    expect(screen.getByRole("region", { name: "Turns closed" })).toBeDefined()
+    for (const name of ["Spend", "Origin", "Quality"]) expect(section(name)).toBeDefined()
+    expect(screen.queryByRole("tab")).toBeNull()
+  })
+
+  it("adds the Runs section on a factory instance only", async () => {
+    openStats()
+    await totals()
+    expect(screen.queryByRole("region", { name: "Runs" })).toBeNull()
+    cleanup()
+
+    openStats(undefined, undefined, { factory: true })
+    await totals()
+    expect(section("Runs")).toBeDefined()
   })
 
   it("adds up the range in tiles: turns, API cost, plan runs, and ratings", async () => {
@@ -287,21 +316,23 @@ describe("the stats page", () => {
         }),
     })
 
-    const tile = async (name: string) => (await screen.findByRole("region", { name })).textContent
+    const strip = await totals()
+    const tile = (name: string) => within(strip).getByRole("region", { name }).textContent
 
-    expect(await tile("Turns")).toBe("Turns81 failed · 2 interrupted")
-    expect(await tile("API cost")).toBe("API cost$1.2412,000 in · 3,400 out")
-    expect(await tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
-    expect(await tile("Ratings")).toBe("Ratings3 good1 bad")
+    expect(tile("Turns")).toBe("Turns81 failed · 2 interrupted")
+    expect(tile("API cost")).toBe("API cost$1.2412,000 in · 3,400 out")
+    expect(tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
+    expect(tile("Ratings")).toBe("Ratings3 good1 bad")
   })
 
   it("shows an unpriced cost as not priced and no ratings as a dash", async () => {
     openStats()
+    const strip = await totals()
 
-    expect((await screen.findByRole("region", { name: "API cost" })).textContent).toContain(
+    expect(within(strip).getByRole("region", { name: "API cost" }).textContent).toContain(
       "not priced",
     )
-    expect(screen.getByRole("region", { name: "Ratings" }).textContent).toContain("—")
+    expect(within(strip).getByRole("region", { name: "Ratings" }).textContent).toContain("—")
   })
 
   it("names the unpriced models and the turns whose model calls don't add up", async () => {
@@ -318,7 +349,7 @@ describe("the stats page", () => {
   it("shows no notice when every model is priced and every turn adds up", async () => {
     openStats()
 
-    await screen.findByRole("region", { name: "Turns" })
+    await totals()
 
     expect(screen.queryByRole("alert")).toBeNull()
   })
@@ -333,9 +364,9 @@ describe("the stats page", () => {
           ],
         }),
     })
-    await screen.findByRole("region", { name: "Turns" })
+    await totals()
 
-    expect(bucketTooltips(screen.getByRole("tabpanel"), 7)).toEqual([
+    expect(bucketTooltips(turnsChart(), 7)).toEqual([
       "Sep 24Completed0Failed0Interrupted0",
       "Sep 25Completed2Failed1Interrupted0",
       "Sep 26Completed0Failed0Interrupted0",
@@ -356,13 +387,13 @@ describe("the stats page", () => {
       },
     })
     const user = userEvent.setup()
-    await screen.findByRole("region", { name: "Turns" })
+    await totals()
 
     vi.setSystemTime(new Date("2026-10-01T00:05:00Z"))
     await user.click(screen.getByRole("button", { name: "Refresh" }))
 
     expect(await screen.findByRole("alert")).toBeTruthy()
-    const days = bucketTooltips(screen.getByRole("tabpanel"), 7).map((tip) => tip.slice(0, 6))
+    const days = bucketTooltips(turnsChart(), 7).map((tip) => tip.slice(0, 6))
     expect(days).toEqual(["Sep 24", "Sep 25", "Sep 26", "Sep 27", "Sep 28", "Sep 29", "Sep 30"])
   })
 
@@ -407,7 +438,7 @@ describe("the stats page", () => {
         }),
     })
     const user = userEvent.setup()
-    await screen.findByRole("region", { name: "Turns" })
+    await totals()
 
     clickBar(0)
 
@@ -455,7 +486,7 @@ describe("the stats page", () => {
           buckets: [{ ...summary({ completed: 2 }), start: "2026-09-28" }],
         }),
     })
-    await screen.findByRole("region", { name: "Turns" })
+    await totals()
 
     clickBar(0)
 
@@ -481,7 +512,7 @@ describe("the stats page", () => {
             ],
           }),
       })
-      await screen.findByRole("region", { name: "Turns" })
+      await totals()
 
       clickBar(0, series)
 
@@ -518,7 +549,15 @@ describe("the stats page", () => {
   it("reads again on window focus and on Refresh, and never on its own", async () => {
     const client = stubCaller({ "stats.get": () => stats() })
     const clock = fakeClock()
-    render(<StatsPage client={client} caller={stubCaller({})} clock={clock} instanceId="hub-ada" />)
+    render(
+      <StatsPage
+        client={client}
+        caller={stubCaller({})}
+        clock={clock}
+        instanceId="hub-ada"
+        factory={false}
+      />,
+    )
     const user = userEvent.setup()
     await act(() => clock.advance(10 * 60_000))
     expect(statsReads(client)).toHaveLength(1)
@@ -533,6 +572,10 @@ describe("the stats page", () => {
     )
   })
 })
+
+function turnsChart() {
+  return screen.getByRole("region", { name: "Turns closed" })
+}
 
 describe("an older core", () => {
   beforeEach(() => {
@@ -552,7 +595,7 @@ describe("an older core", () => {
 
     const alert = await screen.findByRole("alert")
     expect(alert.textContent).toContain("This instance runs an older core")
-    expect(screen.queryByRole("region", { name: "Turns" })).toBeNull()
+    expect(screen.queryByRole("region", { name: "Totals" })).toBeNull()
     await user.click(within(alert).getByRole("button", { name: "Open Core version" }))
 
     expect(window.location.pathname).toBe("/instances/hub-ada/config/core")
@@ -567,12 +610,7 @@ describe("an older core", () => {
   })
 })
 
-async function openTab(name: string) {
-  const user = userEvent.setup()
-  await user.click(await screen.findByRole("tab", { name }))
-}
-
-describe("the Spend tab", () => {
+describe("the Spend section", () => {
   it("shows the range's usage by source: API tokens and cost, and each plan's runs", async () => {
     openStats({
       "stats.get": () =>
@@ -602,7 +640,7 @@ describe("the Spend tab", () => {
         }),
     })
 
-    await openTab("Spend")
+    await totals()
 
     expect(rows(screen.getByRole("table", { name: "Usage by source" }))).toEqual([
       ["API", "—", "15,400", "—", "$1.24"],
@@ -610,14 +648,6 @@ describe("the Spend tab", () => {
       ["ChatGPT", "1", "1,000", "1m 35s", "not priced"],
     ])
   })
-  it("names the unpriced models, since the cost it shows leaves their turns out", async () => {
-    openStats({ "stats.get": () => stats({ unpriced_models: ["mystery"] }) })
-
-    await openTab("Spend")
-
-    expect(screen.getByText("No price for mystery")).toBeDefined()
-  })
-
   it("shows each bucket's API cost, an unpriced one as not priced, an empty one as $0.00", async () => {
     openStats({
       "stats.get": () =>
@@ -631,9 +661,11 @@ describe("the Spend tab", () => {
         }),
     })
 
-    await openTab("Spend")
+    await totals()
 
-    expect(bucketTooltips(screen.getByRole("region", { name: "API cost" }), 7)).toEqual([
+    expect(
+      bucketTooltips(within(section("Spend")).getByRole("region", { name: "API cost" }), 7),
+    ).toEqual([
       "Sep 24API cost$0.00",
       "Sep 25API cost$0.00",
       "Sep 26API cost$0.00",
@@ -655,9 +687,9 @@ describe("the Spend tab", () => {
         }),
     })
 
-    await openTab("Spend")
+    await totals()
 
-    expect(axisTicks(screen.getByRole("region", { name: "API cost" }))).toEqual([
+    expect(axisTicks(within(section("Spend")).getByRole("region", { name: "API cost" }))).toEqual([
       "$0.00",
       "$0.05",
       "$0.10",
@@ -677,9 +709,9 @@ describe("the Spend tab", () => {
         }),
     })
 
-    await openTab("Spend")
+    await totals()
 
-    expect(axisTicks(screen.getByRole("region", { name: "API cost" }))).toEqual([
+    expect(axisTicks(within(section("Spend")).getByRole("region", { name: "API cost" }))).toEqual([
       "$0.00",
       "$3.50",
       "$7.00",
@@ -701,9 +733,9 @@ describe("the Spend tab", () => {
         }),
     })
 
-    await openTab("Spend")
+    await totals()
 
-    const cost = screen.getByRole("region", { name: "API cost" })
+    const cost = within(section("Spend")).getByRole("region", { name: "API cost" })
     expect(within(cost).getByText("No turn in this range was priced.")).toBeDefined()
     expect(cost.querySelector("svg.recharts-surface")).toBeNull()
     expect(rows(screen.getByRole("table", { name: "Usage by source" }))[0]).toEqual([
@@ -713,7 +745,7 @@ describe("the Spend tab", () => {
       "—",
       "not priced",
     ])
-    expect(within(screen.getByRole("tabpanel")).queryByText(/\$0/)).toBeNull()
+    expect(within(section("Spend")).queryByText(/\$0/)).toBeNull()
   })
   it("shows each plan's runs in each bucket", async () => {
     const runs = (claude: number, chatgpt: number) => [
@@ -730,9 +762,9 @@ describe("the Spend tab", () => {
         }),
     })
 
-    await openTab("Spend")
+    await totals()
 
-    const chart = screen.getByRole("region", { name: "Plan runs" })
+    const chart = within(section("Spend")).getByRole("region", { name: "Plan runs" })
     expect(legend(chart)).toBe("ChatGPTClaude")
     expect(bucketTooltips(chart, 7)).toEqual([
       "Sep 24Claude0ChatGPT0",
@@ -746,7 +778,7 @@ describe("the Spend tab", () => {
   })
 })
 
-describe("the Quality tab", () => {
+describe("the Quality section", () => {
   it("counts the range's tools, memory calls, approvals and denials, and ratings", async () => {
     openStats({
       "stats.get": () =>
@@ -765,9 +797,10 @@ describe("the Quality tab", () => {
         }),
     })
 
-    await openTab("Quality")
+    await totals()
 
-    const region = (name: string) => counts(screen.getByRole("region", { name }))
+    const region = (name: string) =>
+      counts(within(section("Quality")).getByRole("region", { name }))
     expect(region("Most-called tools")).toEqual([
       ["bash", "30"],
       ["read_file", "12"],
@@ -806,7 +839,7 @@ describe("the Quality tab", () => {
         }),
     })
 
-    await openTab("Quality")
+    await totals()
 
     const memory = screen.getByRole("region", { name: "Memory" })
     expect(rows(await within(memory).findByRole("table"))).toEqual([
@@ -824,7 +857,7 @@ describe("the Quality tab", () => {
         }),
     })
 
-    await openTab("Quality")
+    await totals()
 
     const memory = screen.getByRole("region", { name: "Memory" })
     expect(
@@ -837,7 +870,7 @@ describe("the Quality tab", () => {
   it("says so on the Memory card when no run started in the range", async () => {
     openStats()
 
-    await openTab("Quality")
+    await totals()
 
     const memory = screen.getByRole("region", { name: "Memory" })
     expect(await within(memory).findByText("No factory run started in this range.")).toBeTruthy()
@@ -848,7 +881,7 @@ describe("the Quality tab", () => {
         stats({ total: summary({ completed: 5, failed: 1, memory_estimated_turns: 2 }) }),
     })
 
-    await openTab("Quality")
+    await totals()
 
     expect(
       within(screen.getByRole("region", { name: "Memory" })).getByText(
@@ -879,7 +912,7 @@ describe("the Quality tab", () => {
         }),
     })
 
-    await openTab("Quality")
+    await totals()
 
     expect(bucketTooltips(screen.getByRole("region", { name: "Navigation" }), 7)).toEqual([
       "",
@@ -901,9 +934,9 @@ describe("the Quality tab", () => {
         }),
     })
 
-    await openTab("Quality")
+    await totals()
 
-    expect(screen.getByRole("region", { name: "Ratings" })).toBeDefined()
+    expect(within(section("Quality")).getByRole("region", { name: "Ratings" })).toBeDefined()
     expect(screen.queryByRole("region", { name: "Navigation" })).toBeNull()
   })
 })
@@ -922,7 +955,7 @@ function routine(fields: Partial<RoutineSummary> & Pick<RoutineSummary, "name">)
   }
 }
 
-describe("the Origin tab", () => {
+describe("the Origin section", () => {
   const byOrigin = stats({
     records: [
       turn({ turn_id: "chat", cost: 0.5 }),
@@ -970,7 +1003,7 @@ describe("the Origin tab", () => {
   it("shows a row for chat and one per routine: turns, no work, failed, API cost, plan runs", async () => {
     openOrigins()
 
-    await openTab("Origin")
+    await totals()
 
     const table = screen.getByRole("table", { name: "Turns by origin" })
     expect(
@@ -990,7 +1023,7 @@ describe("the Origin tab", () => {
     window.history.replaceState(null, "", "/instances/hub-ada/stats")
     openOrigins()
     const user = userEvent.setup()
-    await openTab("Origin")
+    await totals()
     const table = screen.getByRole("table", { name: "Turns by origin" })
 
     await user.click(await within(table).findByRole("link", { name: "inbox" }))
@@ -999,29 +1032,26 @@ describe("the Origin tab", () => {
     expect(window.location.pathname).toBe("/instances/hub-ada/routines/inbox")
   })
 
-  it("filters the drill-down to a clicked row, here and in the Overview", async () => {
+  it("filters the drill-down to a clicked row, listing it under what opened it", async () => {
     openOrigins()
     const user = userEvent.setup()
-    await openTab("Origin")
-    const origins = screen.getByRole("table", { name: "Turns by origin" })
-    const costs = (name: string) => rows(screen.getByRole("table", { name })).map((row) => row[4])
+    await totals()
+    const origin = section("Origin")
+    const origins = within(origin).getByRole("table", { name: "Turns by origin" })
+    const costs = (where: HTMLElement, name: string) =>
+      rows(within(where).getByRole("table", { name })).map((row) => row[4])
 
     await user.click(within(origins).getByRole("row", { name: /^Chat/ }))
-    expect(costs("Chat turns closed in this range")).toEqual(["$0.50", "$0.10"])
+    expect(costs(origin, "Chat turns closed in this range")).toEqual(["$0.50", "$0.10"])
     await user.click(within(origins).getByRole("row", { name: /^inbox/ }))
-    expect(costs("inbox turns closed in this range")).toEqual(["$1.20", "$0.70"])
+    expect(costs(origin, "inbox turns closed in this range")).toEqual(["$1.20", "$0.70"])
 
-    await openTab("Overview")
     clickBar(0)
-    expect(costs("inbox turns closed on Sep 28")).toEqual(["$1.20"])
+    expect(within(origin).queryByRole("table", { name: /turns closed/ })).toBeNull()
+    expect(costs(document.body, "inbox turns closed on Sep 28")).toEqual(["$1.20"])
 
-    await openTab("Origin")
-    await user.click(
-      within(screen.getByRole("table", { name: "Turns by origin" })).getByRole("row", {
-        name: /^inbox/,
-      }),
-    )
-    expect(costs("Turns closed on Sep 28")).toEqual(["$1.20", "$0.50", "$0.10"])
+    await user.click(within(origins).getByRole("row", { name: /^inbox/ }))
+    expect(costs(origin, "Turns closed on Sep 28")).toEqual(["$1.20", "$0.50", "$0.10"])
   })
 
   it("lists each routine's last outcome, failures in a row, and next run below the table", async () => {
@@ -1039,7 +1069,7 @@ describe("the Origin tab", () => {
       routine({ name: "triage", failure_count: 3 }),
     ])
 
-    await openTab("Origin")
+    await totals()
 
     const listed = await screen.findByRole("list", { name: "Routines" })
     const inbox = within(listed).getByRole("listitem", { name: "inbox" }).textContent
@@ -1053,7 +1083,7 @@ describe("the Origin tab", () => {
   })
 })
 
-describe("the Runs tab", () => {
+describe("the Runs section", () => {
   it("asks the hub for the range's runs, and lists each run's usage and the weekly medians", async () => {
     const caller = stubCaller({
       "stats.runs": () =>
@@ -1094,12 +1124,13 @@ describe("the Runs tab", () => {
         caller={caller}
         clock={fakeClock()}
         instanceId="hub-ada"
+        factory
       />,
     )
 
-    await openTab("Runs")
+    await totals()
 
-    expect(rows(await screen.findByRole("table", { name: "Runs" }))).toEqual([
+    expect(rows(await screen.findByRole("table", { name: "Each run" }))).toEqual([
       [
         "issue 7",
         "Done",
@@ -1125,13 +1156,16 @@ describe("the Runs tab", () => {
   })
 
   it("says when no run started in the range, and which instances' tokens it left out", async () => {
-    openStats(undefined, {
-      "stats.runs": () => runsResult({ unreachable: ["hub-bob"], skipped: ["hub-cy"] }),
-    })
+    openStats(
+      undefined,
+      { "stats.runs": () => runsResult({ unreachable: ["hub-bob"], skipped: ["hub-cy"] }) },
+      { factory: true },
+    )
 
-    await openTab("Runs")
+    await totals()
 
-    expect(await screen.findByText("No factory run started in this range.")).toBeDefined()
-    expect(screen.getByText("Tokens leave out 2 instances")).toBeDefined()
+    const runs = section("Runs")
+    expect(await within(runs).findByText("No factory run started in this range.")).toBeDefined()
+    expect(within(runs).getByText("Tokens leave out 2 instances")).toBeDefined()
   })
 })

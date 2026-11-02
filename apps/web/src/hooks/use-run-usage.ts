@@ -13,11 +13,22 @@ export interface RunUsageRead {
   stats: StatsGetResult
 }
 
-/** The hub's run usage of the factory runs the instance handed in during the range. */
-export function useRunUsage({ caller, clock, instanceId, range, stats }: RunUsageRead): {
+export interface RunUsageState {
   usage?: StatsRunsResult
   failure?: unknown
-} {
+}
+
+/**
+ * The hub's run usage of the factory runs the instance handed in during the range. The hub joins
+ * them, so it reads them again with every stats read, and both show the same moment.
+ */
+export function useRunUsage({
+  caller,
+  clock,
+  instanceId,
+  range,
+  stats,
+}: RunUsageRead): RunUsageState {
   const [usage, setUsage] = useState<StatsRunsResult>()
   const [failure, setFailure] = useState<unknown>()
 

@@ -45,7 +45,6 @@ export function Spend({
 }) {
   return (
     <>
-      <UnpricedNotice models={stats.unpriced_models} />
       <CostChart buckets={stats.buckets} by={by} starts={starts} />
       <Sources stats={stats} />
       <PlanRunsChart buckets={stats.buckets} by={by} starts={starts} />
@@ -147,8 +146,8 @@ function Sources({ stats: { total } }: { stats: StatsGetResult }) {
             <TableRow>
               <TableHead>Source</TableHead>
               <TableHead className="text-right">Runs</TableHead>
-              <TableHead className="text-right">Tokens</TableHead>
-              <TableHead className="text-right">Time</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Tokens</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Time</TableHead>
               <TableHead className="text-right">Cost</TableHead>
             </TableRow>
           </TableHeader>
@@ -156,20 +155,22 @@ function Sources({ stats: { total } }: { stats: StatsGetResult }) {
             <TableRow>
               <TableCell>{SOURCE_LABELS.api}</TableCell>
               <TableCell className="text-right">—</TableCell>
-              <TableCell className="text-right">
+              <TableCell className="hidden text-right md:table-cell">
                 {tokens(total.input_tokens + total.output_tokens)}
               </TableCell>
-              <TableCell className="text-right">—</TableCell>
+              <TableCell className="hidden text-right md:table-cell">—</TableCell>
               <TableCell className="text-right">{money(total.cost)}</TableCell>
             </TableRow>
             {total.subscriptions.map((use) => (
               <TableRow key={use.usage_source}>
                 <TableCell>{SOURCE_LABELS[use.usage_source]}</TableCell>
                 <TableCell className="text-right">{use.runs ?? 0}</TableCell>
-                <TableCell className="text-right">
+                <TableCell className="hidden text-right md:table-cell">
                   {tokens((use.input_tokens ?? 0) + (use.output_tokens ?? 0))}
                 </TableCell>
-                <TableCell className="text-right">{duration(use.duration_ms ?? 0)}</TableCell>
+                <TableCell className="hidden text-right md:table-cell">
+                  {duration(use.duration_ms ?? 0)}
+                </TableCell>
                 <TableCell className="text-right">not priced</TableCell>
               </TableRow>
             ))}
