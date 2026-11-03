@@ -20,9 +20,9 @@ export const tdd = "---\nname: tdd\ndescription: Test first.\n---\nRed, green, r
 export const commit = "0123456789abcdef0123456789abcdef01234567"
 
 /** The Library page at `path`, on `caller`. */
-export function openLibrary(caller: Pick<Client, "call">, path = "/library") {
+export function openLibrary(caller: Pick<Client, "call">, path = "/library", clock = fakeClock()) {
   window.history.replaceState(null, "", path)
-  render(<LibraryPage client={caller} clock={fakeClock()} />)
+  render(<LibraryPage client={caller} clock={clock} />)
   return userEvent.setup()
 }
 

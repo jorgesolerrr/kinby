@@ -1,5 +1,12 @@
+import { CallError } from "@kinby/contract"
 import type { InstancePicksResult, LibraryEntry } from "@kinby/contract"
-import { type Answers, instanceSummary, type StubCaller, stubCaller } from "@kinby/contract/testing"
+import {
+  type Answers,
+  fakeClock,
+  instanceSummary,
+  type StubCaller,
+  stubCaller,
+} from "@kinby/contract/testing"
 import { act, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
@@ -208,7 +215,7 @@ describe("Used by", () => {
     },
   }
 
-  function openUsed(path?: string, answers: Answers = {}) {
+  function openUsed(path?: string, answers: Answers = {}, clock = fakeClock()) {
     const caller = stubCaller({
       "library.list": () => ({ entries: [...listed.entries, ...servers] }),
       "library.skill.read": () => ({ content: tdd, files: [], hash: "h-1" }),
@@ -225,7 +232,7 @@ describe("Used by", () => {
       },
       ...answers,
     })
-    return { caller, user: openLibrary(caller, path) }
+    return { caller, user: openLibrary(caller, path, clock) }
   }
 
   const picksRead = (caller: StubCaller) =>
@@ -270,6 +277,37 @@ describe("Used by", () => {
     expect(within(ada).getByText("Edited in the instance")).toBeTruthy()
     await user.click(within(ada).getByRole("button", { name: "Open" }))
     expect(window.location.pathname).toBe("/instances/instance-1/config")
+  })
+
+  it("reads every instance's picks again after the connection drops mid-read", async () => {
+    const clock = fakeClock()
+    let dropped = false
+    openUsed(
+      undefined,
+      {
+        "instance.picks.get": ({ instance_id }) => {
+          if (instance_id === "instance-2" && !dropped) {
+            dropped = true
+            throw new CallError({ code: "CONNECTION_LOST", message: "dropped", retryable: false })
+          }
+          const read = picks[instance_id]
+          if (read === undefined) throw new Error("The instance's files are unreadable.")
+          return read
+        },
+      },
+      clock,
+    )
+    const row = await screen.findByRole("button", { name: "tdd, shipped skill" })
+
+    await act(() => clock.advance(1_000))
+
+    await waitFor(() =>
+      expect(
+        within(row)
+          .getAllByRole("img")
+          .map((avatar) => avatar.ariaLabel),
+      ).toEqual(["Ada", "Coder"]),
+    )
   })
 
   it("says nobody picked an entry, and where to pick it", async () => {

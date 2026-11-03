@@ -1,5 +1,7 @@
 import type { Client, InstanceSummary, PickState } from "@kinby/contract"
 
+import { lost } from "@/lib/operation"
+
 /** An instance's pick of a library entry, and how its copy stands. */
 export interface InstancePick {
   instance: InstanceSummary
@@ -11,7 +13,8 @@ export type PicksByEntry = Record<"skill" | "mcp_server", Map<string, InstancePi
 
 /**
  * Read each instance's picks. The hub reads them from the instance's files, so a stopped instance
- * answers too. An instance whose picks fail to read is left out.
+ * answers too. An instance whose picks fail to read is left out. A dropped connection fails the
+ * whole read, so a retry reads every instance again.
  */
 export async function readPicks(client: Pick<Client, "call">): Promise<PicksByEntry> {
   const { instances } = await client.call("instance.list", {})
@@ -19,7 +22,10 @@ export async function readPicks(client: Pick<Client, "call">): Promise<PicksByEn
     instances.map((instance) =>
       client.call("instance.picks.get", { instance_id: instance.instance_id }).then(
         (picks) => ({ instance, picks }),
-        () => undefined,
+        (error: unknown) => {
+          if (lost(error)) throw error
+          return undefined
+        },
       ),
     ),
   )
