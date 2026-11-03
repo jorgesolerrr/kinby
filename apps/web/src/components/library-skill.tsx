@@ -11,7 +11,7 @@ import type {
   SkillResult,
 } from "@kinby/contract"
 import { CircleXIcon, Trash2Icon } from "lucide-react"
-import { type FormEvent, useCallback, useEffect, useId, useState } from "react"
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { Failure, Refusal } from "@/components/config-alerts"
 import { NewSkill, type WriteNew } from "@/components/new-skill"
@@ -57,15 +57,16 @@ const ORIGINS: Record<LibrarySource, string> = {
 }
 
 /**
- * A library skill unfolded: a shipped or git skill's source and newer version to move to, its
- * `SKILL.md` to edit, then where it came from, Delete and Save. An instance that picked it keeps
- * its copy.
+ * A library skill unfolded: a shipped or git skill's source and newer version to move to, the
+ * instances that picked it, its `SKILL.md` to edit, then where it came from, Delete and Save. An
+ * instance that picked it keeps its copy.
  */
 export function SkillEntry({
   client,
   clock,
   entry,
   newer,
+  usedBy,
   onSaved,
   onChecked,
   onMoved,
@@ -76,6 +77,7 @@ export function SkillEntry({
   entry: LibraryEntry
   /** Whether the list or a check found a newer version. */
   newer: boolean
+  usedBy: ReactNode
   onSaved: () => void
   onChecked: (newer: boolean) => void
   onMoved: () => void
@@ -164,6 +166,7 @@ export function SkillEntry({
           unsaved={opened !== undefined && draft !== opened.content}
         />
       )}
+      {usedBy}
       {opened === undefined ? (
         failure === undefined && <Skeleton className="h-72 w-full" />
       ) : (
