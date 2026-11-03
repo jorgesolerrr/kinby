@@ -17,6 +17,11 @@ const yours: LibraryEntry[] = [
   },
 ]
 
+const servers: LibraryEntry[] = [
+  { kind: "mcp_server", name: "github", description: "Issues and pulls.", source: "written" },
+  { kind: "mcp_server", name: "linear", description: "Tickets first.", source: "written" },
+]
+
 function openPage(entries: LibraryEntry[] = listed.entries, path?: string) {
   const caller = stubCaller({
     "library.list": () => ({ entries }),
@@ -67,7 +72,45 @@ describe("LibraryPage", () => {
       "unslop, shipped skill",
     ])
     await user.type(screen.getByRole("searchbox", { name: "Search the library" }), " and more")
-    expect(screen.getByText('Nothing matches "ai tells and more"')).toBeTruthy()
+    expect(screen.getByText('Nothing here matches "ai tells and more"')).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /^\d+ in / })).toBeNull()
+  })
+
+  it("searches every kind at once, and each tab counts its matches", async () => {
+    const { user } = openPage([...listed.entries, ...servers])
+    await screen.findByRole("list", { name: "Shipped with kinby" })
+    const search = screen.getByRole("searchbox", { name: "Search the library" })
+
+    await user.type(search, "first")
+
+    expect(tab("Skills").textContent).toBe("Skills 1")
+    expect(tab("MCP servers").textContent).toBe("MCP servers 1")
+    expect(tab("Factories").textContent).toBe("Factories 0")
+    await user.clear(search)
+    expect(tab("Skills").textContent).toBe("Skills 2")
+    expect(tab("MCP servers").textContent).toBe("MCP servers 2")
+    expect(tab("Factories").textContent).toBe("Factories 2")
+  })
+
+  it("links a tab with no matches to the tabs that have some, keeping the search", async () => {
+    const { user } = openPage([...listed.entries, ...servers])
+    await screen.findByRole("list", { name: "Shipped with kinby" })
+
+    await user.type(screen.getByRole("searchbox", { name: "Search the library" }), "github")
+
+    expect(screen.getByText('Nothing here matches "github"')).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /in Factories/ })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "1 in MCP servers" }))
+
+    expect(window.location.pathname).toBe("/library/mcp-servers")
+    expect(tab("MCP servers").getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByRole("searchbox", { name: "Search the library" })).toHaveProperty(
+      "value",
+      "github",
+    )
+    expect(names(await screen.findByRole("list", { name: "MCP servers" }))).toEqual([
+      "github, written MCP server",
+    ])
   })
 
   it("gives each tab its own address, and Back moves between them", async () => {
@@ -132,6 +175,7 @@ describe("LibraryPage", () => {
   it("opens Add MCP server at the top of the list, on its name", async () => {
     const { user } = openPage(listed.entries, "/library/mcp-servers")
     await screen.findByText("No MCP servers yet")
+    expect(screen.queryByRole("button", { name: /^\d+ in / })).toBeNull()
 
     await user.click(screen.getByRole("button", { name: "Add MCP server" }))
 
