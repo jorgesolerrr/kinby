@@ -143,6 +143,8 @@ export function SkillEntry({
   const save = (read: SkillResult) =>
     act(async () => {
       show(await client.call("library.skill.write", { name, content: draft, hash: read.hash }))
+      // A move goes over the version the check read, which the save just replaced.
+      version.forget()
       setNotice("saved")
       onSaved()
     })
@@ -252,7 +254,8 @@ export function SkillEntry({
 
 /**
  * Check a shipped or git skill for a newer version, and move the library's skill to the one a
- * check showed. A skill the user edited moves over the edits, once they agree to it.
+ * check showed. A skill the user edited moves over the edits, once they agree to it. `forget`
+ * drops the check, which a save outdates.
  */
 function useNewerVersion({
   client,
@@ -287,7 +290,8 @@ function useNewerVersion({
       setChecked(undefined)
       onMoved()
     })
-  return { checked, busy, refusal, failure, check, move }
+  const forget = () => setChecked(undefined)
+  return { checked, busy, refusal, failure, check, move, forget }
 }
 
 /**

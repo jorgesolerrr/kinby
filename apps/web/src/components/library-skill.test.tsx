@@ -263,6 +263,7 @@ function openUpdatablePage({
   const caller = stubCaller({
     "library.list": () => ({ entries }),
     "library.skill.read": () => ({ content: tdd, files: [], hash: "h-1" }),
+    "library.skill.write": ({ content }) => ({ content, files: [], hash: "h-2" }),
     "library.skill.check": ({ name }) => ({
       newer:
         name === "tdd" ? null : { commit: name === "pr" ? later : null, hash: `h-${name}`, diff },
@@ -387,6 +388,25 @@ describe("LibraryPage, moving a skill to a newer version", () => {
     expect((screen.getByRole("textbox", { name: "SKILL.md" }) as HTMLTextAreaElement).value).toBe(
       `${tdd}More.\n`,
     )
+  })
+
+  it("reads the diff again once the unsaved edits are saved", async () => {
+    const { caller, user } = openUpdatablePage()
+
+    await user.click(await screen.findByRole("button", { name: "pr, git skill" }))
+    await user.type(await screen.findByRole("textbox", { name: "SKILL.md" }), "More.\n")
+    await user.click(screen.getByRole("button", { name: "Check for a newer version" }))
+    await screen.findByRole("textbox", { name: "Diff" })
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    await screen.findByText(/Saved\./)
+    expect(screen.queryByRole("textbox", { name: "Diff" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Read the diff" }))
+    await screen.findByRole("textbox", { name: "Diff" })
+    expect(updates(caller)).toEqual([
+      { method: "library.skill.check", params: { name: "pr" } },
+      { method: "library.skill.check", params: { name: "pr" } },
+    ])
   })
 
   it("shows why the hub refused a move", async () => {
