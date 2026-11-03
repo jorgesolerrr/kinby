@@ -295,6 +295,16 @@ function InstanceGroup({
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>
           ))}
+          {instance.threads.length === 0 && instance.views.length === 0 && (
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton
+                className="text-muted-foreground"
+                onClick={() => open_({ kind: "home" })}
+              >
+                No threads yet
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          )}
           {instance.threads.slice(0, RECENT).map((t) => (
             <SidebarMenuSubItem key={t.id}>
               <SidebarMenuSubButton

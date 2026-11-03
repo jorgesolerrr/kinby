@@ -4,7 +4,7 @@
 // uses it, its content, its actions). Adding opens in place at the top of the list.
 import { ChevronDownIcon, GitBranchIcon, PenLineIcon, PlusIcon, SearchIcon } from "lucide-react"
 import type * as React from "react"
-import { useState } from "react"
+import { createContext, useContext, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -119,6 +119,7 @@ export function LibraryA({ go, kind, onKind }: { go: Go; kind: Kind; onKind: (k:
                 open={open}
                 onOpen={setOpen}
                 onKind={onKind}
+                onAdd={setAdding}
                 go={go}
               />
             </TabsContent>
@@ -128,6 +129,11 @@ export function LibraryA({ go, kind, onKind }: { go: Go; kind: Kind; onKind: (k:
     </div>
   )
 }
+
+/** Lets /proto/onboarding draw a kind's empty state. `add` opens the tab's add panel. */
+export const LibraryEmptySlot = createContext<
+  ((kind: Kind, add: () => void) => React.ReactNode) | undefined
+>(undefined)
 
 /** The header's one action: it follows the tab. */
 function AddAction({ kind, onAdd }: { kind: Kind; onAdd: (a: Adding) => void }) {
@@ -197,6 +203,7 @@ function KindList({
   open,
   onOpen,
   onKind,
+  onAdd,
   go,
 }: {
   kind: Kind
@@ -205,9 +212,14 @@ function KindList({
   open: string | undefined
   onOpen: (name: string | undefined) => void
   onKind: (k: Kind) => void
+  onAdd: (a: Adding) => void
   go: Go
 }) {
   const shown = byKind(kind).filter((e) => matches(e, query))
+  const empty = useContext(LibraryEmptySlot)
+  if (shown.length === 0 && query.trim() === "" && empty !== undefined) {
+    return empty(kind, () => onAdd(kind === "mcp_server" ? "mcp" : "write"))
+  }
   if (shown.length === 0) {
     const elsewhere = KINDS.filter((k) => k.kind !== kind && counts[k.kind] > 0)
     return (

@@ -8,8 +8,16 @@ import App from "./App.tsx"
 const root = document.getElementById("root")
 if (root === null) throw new Error("index.html has no #root element")
 
-// PROTOTYPE: /proto/library and /proto/instance render throwaway prototypes on mock data, no hub.
-if (window.location.pathname.startsWith("/proto/library")) {
+// PROTOTYPE: /proto/* routes render throwaway prototypes on mock data, no hub.
+if (window.location.pathname.startsWith("/proto/onboarding")) {
+  void import("./proto/onboarding").then(({ OnboardingPrototype }) => {
+    createRoot(root).render(
+      <StrictMode>
+        <OnboardingPrototype />
+      </StrictMode>,
+    )
+  })
+} else if (window.location.pathname.startsWith("/proto/library")) {
   void import("./proto/library").then(({ LibraryPrototype }) => {
     createRoot(root).render(
       <StrictMode>

@@ -75,6 +75,11 @@ export const InstanceSlot = createContext<
   ((instanceId: string, tab: InstanceTab, go: Go) => React.ReactNode) | undefined
 >(undefined)
 
+/** Lets /proto/onboarding draw any screen; undefined falls through to the usual one. */
+export const MainSlot = createContext<
+  ((screen: Screen, go: Go) => React.ReactNode | undefined) | undefined
+>(undefined)
+
 /** Lets /proto/library draw the Library page inside this shell. */
 export const LibrarySlot = createContext<((go: Go) => React.ReactNode) | undefined>(undefined)
 
@@ -441,6 +446,8 @@ export function MainScreen({
 }) {
   const instancePage = useContext(InstanceSlot)
   const libraryPage = useContext(LibrarySlot)
+  const main = useContext(MainSlot)?.(screen, go)
+  if (main !== undefined) return main
   if (screen.kind === "instance" && instancePage !== undefined) {
     return instancePage(screen.instanceId, screen.tab, go)
   }
