@@ -1,5 +1,12 @@
-import type { LibraryEntry } from "@kinby/contract"
-import { stubCaller } from "@kinby/contract/testing"
+import { CallError } from "@kinby/contract"
+import type { InstancePicksResult, LibraryEntry } from "@kinby/contract"
+import {
+  type Answers,
+  fakeClock,
+  instanceSummary,
+  type StubCaller,
+  stubCaller,
+} from "@kinby/contract/testing"
 import { act, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
@@ -188,5 +195,168 @@ describe("LibraryPage", () => {
 
     expect(await screen.findByText(/with the write-factory skill/)).toBeTruthy()
     expect(screen.queryByRole("button", { name: "New skill" })).toBeNull()
+  })
+})
+
+describe("Used by", () => {
+  const ada = instanceSummary({ instance_id: "instance-1", persona_name: "Ada" })
+  const coder = instanceSummary({ instance_id: "instance-2", persona_name: "Coder" })
+  const broken = instanceSummary({ instance_id: "instance-3", persona_name: "Broken" })
+  const picks: Record<string, InstancePicksResult> = {
+    "instance-1": {
+      hash: "p-1",
+      picks: [{ name: "tdd", source: "shipped", state: "up-to-date" }],
+      mcp_servers: [{ name: "github", state: "edited", trust_hints: false }],
+    },
+    "instance-2": {
+      hash: "p-2",
+      picks: [{ name: "tdd", source: "shipped", state: "behind" }],
+      mcp_servers: [],
+    },
+  }
+
+  function openUsed(path?: string, answers: Answers = {}, clock = fakeClock()) {
+    const caller = stubCaller({
+      "library.list": () => ({ entries: [...listed.entries, ...servers] }),
+      "library.skill.read": () => ({ content: tdd, files: [], hash: "h-1" }),
+      "library.mcp_server.read": ({ name }) => ({
+        name,
+        server: { transport: { type: "url", url: "https://example.com/mcp" } },
+        hash: "m-1",
+      }),
+      "instance.list": () => ({ instances: [ada, coder, broken] }),
+      "instance.picks.get": ({ instance_id }) => {
+        const read = picks[instance_id]
+        if (read === undefined) throw new Error("The instance's files are unreadable.")
+        return read
+      },
+      ...answers,
+    })
+    return { caller, user: openLibrary(caller, path, clock) }
+  }
+
+  const picksRead = (caller: StubCaller) =>
+    caller.calls.filter((call) => call.method === "instance.picks.get").length
+
+  it("shows on each row the avatars of the instances that picked it, or Not picked", async () => {
+    openUsed()
+
+    const row = await screen.findByRole("button", { name: "tdd, shipped skill" })
+    await waitFor(() =>
+      expect(
+        within(row)
+          .getAllByRole("img")
+          .map((avatar) => avatar.ariaLabel),
+      ).toEqual(["Ada", "Coder"]),
+    )
+    const unslop = screen.getByRole("button", { name: "unslop, shipped skill" })
+    expect(within(unslop).getByText("Not picked")).toBeTruthy()
+    expect(within(unslop).queryByRole("img")).toBeNull()
+  })
+
+  it("lists each instance that picked a skill with how its copy stands, leaving out one that fails", async () => {
+    const { user } = openUsed()
+
+    await user.click(await screen.findByRole("button", { name: "tdd, shipped skill" }))
+
+    const usedBy = await screen.findByRole("list", { name: "Used by" })
+    const instances = within(usedBy).getAllByRole("listitem")
+    expect(instances.map((each) => each.getAttribute("aria-label"))).toEqual(["Ada", "Coder"])
+    expect(within(instances[0]).getByText("Up to date")).toBeTruthy()
+    expect(within(instances[1]).getByText("Behind the library")).toBeTruthy()
+  })
+
+  it("lists each instance that picked an MCP server, and Open goes to its Config", async () => {
+    const { user } = openUsed("/library/mcp-servers")
+
+    await user.click(await screen.findByRole("button", { name: "github, written MCP server" }))
+
+    const ada = within(await screen.findByRole("list", { name: "Used by" })).getByRole("listitem", {
+      name: "Ada",
+    })
+    expect(within(ada).getByText("Edited in the instance")).toBeTruthy()
+    await user.click(within(ada).getByRole("button", { name: "Open" }))
+    expect(window.location.pathname).toBe("/instances/instance-1/config")
+  })
+
+  it("reads every instance's picks again after the connection drops mid-read", async () => {
+    const clock = fakeClock()
+    let dropped = false
+    openUsed(
+      undefined,
+      {
+        "instance.picks.get": ({ instance_id }) => {
+          if (instance_id === "instance-2" && !dropped) {
+            dropped = true
+            throw new CallError({ code: "CONNECTION_LOST", message: "dropped", retryable: false })
+          }
+          const read = picks[instance_id]
+          if (read === undefined) throw new Error("The instance's files are unreadable.")
+          return read
+        },
+      },
+      clock,
+    )
+    const row = await screen.findByRole("button", { name: "tdd, shipped skill" })
+
+    await act(() => clock.advance(1_000))
+
+    await waitFor(() =>
+      expect(
+        within(row)
+          .getAllByRole("img")
+          .map((avatar) => avatar.ariaLabel),
+      ).toEqual(["Ada", "Coder"]),
+    )
+  })
+
+  it("says nobody picked an entry, and where to pick it", async () => {
+    const { user } = openUsed()
+
+    await user.click(await screen.findByRole("button", { name: "unslop, shipped skill" }))
+
+    expect(
+      await screen.findByText("No instance picked unslop. Pick it in an instance's Config."),
+    ).toBeTruthy()
+    expect(screen.queryByRole("list", { name: "Used by" })).toBeNull()
+  })
+
+  it.each([
+    ["a save", "Save", undefined],
+    ["a delete", "Delete", "Delete"],
+  ])("reads again after %s", async (_, action, confirm) => {
+    const { caller, user } = openUsed(undefined, {
+      "library.skill.write": () => ({ content: tdd, files: [], hash: "h-2" }),
+      "library.skill.delete": () => ({ entries: [] }),
+    })
+    await user.click(await screen.findByRole("button", { name: "tdd, shipped skill" }))
+    const editor = await screen.findByRole("textbox", { name: "SKILL.md" })
+    await screen.findByRole("list", { name: "Used by" })
+    const before = picksRead(caller)
+    await user.type(editor, "More.")
+
+    await user.click(screen.getByRole("button", { name: action }))
+    if (confirm !== undefined) {
+      const dialog = await screen.findByRole("alertdialog")
+      await user.click(within(dialog).getByRole("button", { name: confirm }))
+    }
+
+    await waitFor(() => expect(picksRead(caller)).toBe(before + 3))
+  })
+
+  it("reads again after a move", async () => {
+    const { caller, user } = openUsed(undefined, {
+      "library.list": () => ({ entries: [{ ...listed.entries[2], newer: true }] }),
+      "library.skill.check": () => ({ newer: { commit: null, diff: "+More.", hash: "h-2" } }),
+      "library.skill.move": () => ({ entries: [] }),
+    })
+    await user.click(await screen.findByRole("button", { name: "tdd, shipped skill, newer" }))
+    await screen.findByRole("list", { name: "Used by" })
+    const before = picksRead(caller)
+    await user.click(await screen.findByRole("button", { name: "Read the diff" }))
+
+    await user.click(await screen.findByRole("button", { name: "Move to this version" }))
+
+    await waitFor(() => expect(picksRead(caller)).toBe(before + 3))
   })
 })

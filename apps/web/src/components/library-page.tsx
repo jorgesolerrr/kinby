@@ -13,6 +13,7 @@ import { Failure } from "@/components/config-alerts"
 import { FactoryEntry } from "@/components/library-factory"
 import { McpServerEntry, NewMcpServer } from "@/components/library-mcp-server"
 import { AddFromGit, SkillEntry, WriteSkill } from "@/components/library-skill"
+import { PickedAvatars, UsedBy } from "@/components/library-used-by"
 import { SectionFrame } from "@/components/section-frame"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,6 +30,7 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/co
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
+import { type InstancePick, readPicks } from "@/lib/picks"
 import { openLibraryTab, useLibraryTab } from "@/lib/selection"
 
 type Caller = Pick<Client, "call">
@@ -63,6 +65,11 @@ const focusFirstField = (panel: HTMLElement | null) =>
 export function LibraryPage({ client, clock }: { client: Caller; clock: Clock }) {
   const list = useCallback(() => client.call("library.list", {}), [client])
   const { value: listed, failure, readAgain } = useRead(list, clock)
+  const picks = useCallback(() => readPicks(client), [client])
+  const { value: picked, readAgain: readPicksAgain } = useRead(picks, clock)
+  // Unknown until the picks are read, and for a factory, whose instances its row reads apart.
+  const picksOf = (entry: LibraryEntry) =>
+    entry.kind === "factory" ? undefined : picked && (picked[entry.kind].get(entry.name) ?? [])
   const kind = useLibraryTab() ?? "skill"
   const [query, setQuery] = useState("")
   // Kept with the tab it opened on, so Back to another tab opens nothing.
@@ -88,6 +95,19 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
     show(undefined)
     readAgain()
   }
+  const changed = () => {
+    readAgain()
+    readPicksAgain()
+  }
+  const deleted = () => {
+    show(undefined)
+    changed()
+  }
+
+  const usedBy = (entry: LibraryEntry) => {
+    const picks = picksOf(entry)
+    return picks && <UsedBy name={entry.name} picks={picks} />
+  }
 
   const rows = (title: string, listedEntries: LibraryEntry[]) => (
     <ul aria-label={title} className="flex flex-col divide-y">
@@ -97,6 +117,7 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
           entry={entry}
           noun={shownKind?.noun ?? entry.kind}
           newer={isNewer(entry)}
+          picks={picksOf(entry)}
           open={open !== undefined && "entry" in open && open.entry === entry.name}
           onOpenChange={(unfold) => show(unfold ? { entry: entry.name } : undefined)}
         >
@@ -106,22 +127,26 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
               clock={clock}
               entry={entry}
               newer={isNewer(entry)}
-              onSaved={readAgain}
+              usedBy={usedBy(entry)}
+              onSaved={changed}
               onChecked={(newer) => marked(entry.name, newer)}
               onMoved={() => {
                 marked(entry.name, false)
-                readAgain()
+                changed()
               }}
-              onDeleted={closed}
+              onDeleted={deleted}
             />
           ) : entry.kind === "mcp_server" ? (
-            <McpServerEntry
-              client={client}
-              clock={clock}
-              entry={entry}
-              onSaved={readAgain}
-              onDeleted={closed}
-            />
+            <>
+              {usedBy(entry)}
+              <McpServerEntry
+                client={client}
+                clock={clock}
+                entry={entry}
+                onSaved={changed}
+                onDeleted={deleted}
+              />
+            </>
           ) : (
             <FactoryEntry client={client} clock={clock} name={entry.name} />
           )}
@@ -316,13 +341,14 @@ function AddPanel({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /**
- * One entry's row: its name, an Edited or Git badge, a dot for a newer version, and its
- * description. Clicking it unfolds `children` under it.
+ * One entry's row: its name, an Edited or Git badge, a dot for a newer version, its description,
+ * and the instances that picked it. Clicking it unfolds `children` under it.
  */
 function EntryRow({
   entry,
   noun,
   newer,
+  picks,
   open,
   onOpenChange,
   children,
@@ -331,6 +357,7 @@ function EntryRow({
   /** What the entry's kind is called. */
   noun: string
   newer: boolean
+  picks: InstancePick[] | undefined
   open: boolean
   onOpenChange: (open: boolean) => void
   children: ReactNode
@@ -364,6 +391,7 @@ function EntryRow({
           )}
         </ItemContent>
         <ItemActions>
+          {picks && <PickedAvatars picks={picks} />}
           {open ? (
             <ChevronUpIcon className="text-muted-foreground" />
           ) : (
