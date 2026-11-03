@@ -467,6 +467,8 @@ export function AddFromGit({
   const [preview, setPreview] = useState<Previewed>()
   const [chosen, setChosen] = useState<string[]>([])
   const { busy, refusal, failure, ask } = useHubCall()
+  // The library can come to hold a chosen skill after the preview, as another tab adds it.
+  const ticked = chosen.filter((name) => !held.includes(name))
 
   const previewAddress = (event: FormEvent) => {
     event.preventDefault()
@@ -531,7 +533,7 @@ export function AddFromGit({
                 key={skill.name}
                 skill={skill}
                 held={held.includes(skill.name)}
-                chosen={chosen.includes(skill.name)}
+                chosen={ticked.includes(skill.name)}
                 onChosen={(on) =>
                   setChosen((names) =>
                     on ? [...names, skill.name] : names.filter((name) => name !== skill.name),
@@ -541,8 +543,8 @@ export function AddFromGit({
             ))}
           </FieldGroup>
           <Field orientation="horizontal">
-            <Button disabled={busy || chosen.length === 0} onClick={() => add(preview, chosen)}>
-              Add {chosen.length} {chosen.length === 1 ? "skill" : "skills"}
+            <Button disabled={busy || ticked.length === 0} onClick={() => add(preview, ticked)}>
+              Add {ticked.length} {ticked.length === 1 ? "skill" : "skills"}
             </Button>
           </Field>
         </FieldSet>
