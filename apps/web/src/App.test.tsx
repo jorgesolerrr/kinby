@@ -538,6 +538,22 @@ describe("the sidebar", () => {
     expect((await screen.findByRole("combobox", { name: "Send to" })).textContent).toContain("Ada")
   })
 
+  it("says No threads yet in a group with none, opening the home screen sent to it", async () => {
+    const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+    openApp({ signedIn: true, instances: [ada, kinby], threads: { "hub-kinby": [] } })
+    const user = userEvent.setup()
+
+    await user.click(
+      await (await instanceGroup("Kinby")).findByRole("link", { name: "No threads yet" }),
+    )
+
+    expect(window.location.pathname).toBe("/")
+    expect(window.location.search).toBe("?to=hub-kinby")
+    expect((await screen.findByRole("combobox", { name: "Send to" })).textContent).toContain(
+      "Kinby",
+    )
+  })
+
   it("opens an instance's tab from its row menu", async () => {
     openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
