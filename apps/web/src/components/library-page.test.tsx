@@ -29,13 +29,17 @@ const servers: LibraryEntry[] = [
   { kind: "mcp_server", name: "linear", description: "Tickets first.", source: "written" },
 ]
 
+const home = instanceSummary({ instance_id: "instance-home", persona_name: "Kin", home: true })
+
 function openPage(entries: LibraryEntry[] = listed.entries, path?: string) {
   const caller = stubCaller({
     "library.list": () => ({ entries }),
     "library.skill.read": () => ({ content: tdd, files: [], hash: "h-1" }),
   })
-  return { caller, user: openLibrary(caller, path) }
+  return { caller, user: openLibrary(caller, path, undefined, home) }
 }
+
+const header = () => within(screen.getByRole("heading", { name: "Library" }).closest("header")!)
 
 const tab = (name: string) => screen.getByRole("tab", { name: new RegExp(`^${name}`) })
 
@@ -48,6 +52,8 @@ describe("LibraryPage", () => {
     expect(within(skills).getByText("Test first.")).toBeTruthy()
     expect(screen.getByRole("tab", { name: "Skills 2" })).toBeTruthy()
     expect(screen.queryByText("Nothing open")).toBeNull()
+    expect(screen.queryByRole("list", { name: "Yours" })).toBeNull()
+    expect(screen.queryByText("No skills yet")).toBeNull()
     await user.click(screen.getByRole("tab", { name: "Factories 2" }))
 
     const factories = await screen.findByRole("list", { name: "Factories" })
@@ -81,6 +87,9 @@ describe("LibraryPage", () => {
     await user.type(screen.getByRole("searchbox", { name: "Search the library" }), " and more")
     expect(screen.getByText('Nothing here matches "ai tells and more"')).toBeTruthy()
     expect(screen.queryByRole("button", { name: /^\d+ in / })).toBeNull()
+    expect(screen.queryByText("No skills yet")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Write a skill" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Ask Kin to add one" })).toBeNull()
   })
 
   it("searches every kind at once, and each tab counts its matches", async () => {
@@ -184,10 +193,62 @@ describe("LibraryPage", () => {
     await screen.findByText("No MCP servers yet")
     expect(screen.queryByRole("button", { name: /^\d+ in / })).toBeNull()
 
-    await user.click(screen.getByRole("button", { name: "Add MCP server" }))
+    await user.click(header().getByRole("button", { name: "Add MCP server" }))
 
     const panel = await screen.findByRole("region", { name: "Add an MCP server" })
     expect(document.activeElement).toBe(within(panel).getByRole("textbox", { name: "Name" }))
+  })
+
+  it.each([
+    [
+      "/library",
+      "No skills yet",
+      "A skill teaches an instance one kind of task. Write one, or add some from a git repository.",
+      "Write a skill",
+      "Write a skill",
+    ],
+    [
+      "/library/mcp-servers",
+      "No MCP servers yet",
+      "An MCP server gives an instance tools from outside kinby, like GitHub or Notion. Add one here, then pick it for an instance.",
+      "Add MCP server",
+      "Add an MCP server",
+    ],
+  ])(
+    "shows an empty %s as the empty block, whose add action opens the form",
+    async (path, title, lead, add, form) => {
+      const { user } = openPage([], path)
+
+      const block = within(
+        (await screen.findByText(title)).closest<HTMLElement>("[data-slot=empty]")!,
+      )
+      expect(block.getByText(lead)).toBeTruthy()
+      await user.click(block.getByRole("button", { name: add }))
+
+      expect(await screen.findByRole("region", { name: form })).toBeTruthy()
+    },
+  )
+
+  it("asks the home instance to add one, on the home screen sent to it", async () => {
+    const { user } = openPage([], "/library/mcp-servers")
+
+    await user.click(await screen.findByRole("button", { name: "Ask Kin to add one" }))
+
+    expect(window.location.pathname).toBe("/")
+    expect(window.location.search).toBe("?to=instance-home")
+  })
+
+  it("shows an empty Factories tab with no add action, naming the write-factory skill", async () => {
+    openPage([], "/library/factories")
+
+    expect(await screen.findByText("No factories yet")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "A factory runs work through steps across instances. Ask an instance with the write-factory skill to make one.",
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /^(Add|Write)/ })).toBeNull()
+    expect(screen.getByRole("button", { name: "Ask Kin to add one" })).toBeTruthy()
   })
 
   it("points to the write-factory skill for a new factory", async () => {
