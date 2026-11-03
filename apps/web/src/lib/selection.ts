@@ -1,3 +1,4 @@
+import type { LibraryKind } from "@kinby/contract"
 import { useMemo, useSyncExternalStore } from "react"
 
 // What the page shows lives in the URL, so a reload or an opened link lands on it.
@@ -12,11 +13,19 @@ const MEMORY = "memory"
 const STATS = "stats"
 const VIEWS = "views"
 export const CREATE_PATH = "/new"
-export const LIBRARY_PATH = "/library"
+const LIBRARY = "library"
+export const LIBRARY_PATH = `/${LIBRARY}`
 
 /** An instance's page holds these tabs, each at its own path under the instance but Overview. */
 const TABS = ["overview", CONFIG, ROUTINES, MEMORY, STATS] as const
 export type InstanceTab = (typeof TABS)[number]
+
+/** The Library holds a tab per kind, each at its own path under the Library's but Skills. */
+const LIBRARY_TABS: { kind: LibraryKind; segment?: string }[] = [
+  { kind: "skill" },
+  { kind: "mcp_server", segment: "mcp-servers" },
+  { kind: "factory", segment: "factories" },
+]
 
 // The Settings dialog opens over whatever path is open, so its section is a search parameter.
 const SETTINGS = "settings"
@@ -103,6 +112,11 @@ export function viewPath(instanceId: string, viewId: string): string {
   return `${instancePath(instanceId)}/${VIEWS}/${encodeURIComponent(viewId)}`
 }
 
+function libraryPath(kind: LibraryKind): string {
+  const segment = LIBRARY_TABS.find((tab) => tab.kind === kind)?.segment
+  return segment === undefined ? LIBRARY_PATH : `${LIBRARY_PATH}/${segment}`
+}
+
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
 export function selectInstance(instanceId: string): void {
   navigate(instancePath(instanceId))
@@ -121,6 +135,11 @@ export function selectTurn(instanceId: string, threadId: string, turnId: string)
 /** Open one of an instance's tabs the same way. */
 export function openTab(instanceId: string, tab: InstanceTab): void {
   navigate(tabPath(instanceId, tab))
+}
+
+/** Open one of the Library's tabs the same way. */
+export function openLibraryTab(kind: LibraryKind): void {
+  navigate(libraryPath(kind))
 }
 
 /** Open an instance's config panel the same way. */
@@ -303,9 +322,9 @@ export function useCreating(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname === CREATE_PATH)
 }
 
-/** Whether the URL opens the hub's library page. */
-export function useLibraryOpen(): boolean {
-  return useSyncExternalStore(subscribe, () => window.location.pathname === LIBRARY_PATH)
+/** The tab the URL opens on the hub's library page, or none off the page. */
+export function useLibraryTab(): LibraryKind | undefined {
+  return useSyncExternalStore(subscribe, libraryTab)
 }
 
 /** Whether the URL opens the Settings dialog, on a section or none. */
@@ -364,6 +383,12 @@ function openedTab(): InstanceTab | undefined {
   const [, section, instanceId, page] = window.location.pathname.split("/")
   if (section !== SECTION || !instanceId || page === THREADS || page === VIEWS) return undefined
   return TABS.find((tab) => tab === page) ?? "overview"
+}
+
+function libraryTab(): LibraryKind | undefined {
+  const [, root, segment] = window.location.pathname.split("/")
+  if (root !== LIBRARY) return undefined
+  return LIBRARY_TABS.find((tab) => tab.segment === segment)?.kind ?? "skill"
 }
 
 /** The routine the URL opens on its instance's Routines tab, if it names one. */

@@ -22,7 +22,7 @@ import {
   replaceOldPath,
   useCreating,
   useInstanceTab,
-  useLibraryOpen,
+  useLibraryTab,
   usePath,
   useSelectedInstanceId,
   useSelectedThreadId,
@@ -57,7 +57,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const tab = useInstanceTab()
   const configOpen = tab === "config"
   const viewId = useViewOpen()
-  const libraryOpen = useLibraryOpen()
+  const libraryOpen = useLibraryTab() !== undefined
   const settingsOpen = useSettingsOpen()
   const settingsSection = useSettingsSection()
   const threadsOpen = useThreadsOpen()
