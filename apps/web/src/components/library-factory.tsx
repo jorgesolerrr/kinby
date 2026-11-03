@@ -37,7 +37,9 @@ export function FactoryEntry({
   const read = useCallback(async () => {
     const { "factory.yaml": content = "", ...others } = (await client.call("factory.get", { name }))
       .files
-    return { content, factory: parse(content) as FactoryFile, files: Object.keys(others) }
+    // The hub reads it with PyYAML, which resolves `<<` merge keys.
+    const factory = parse(content, { merge: true }) as FactoryFile
+    return { content, factory, files: Object.keys(others) }
   }, [client, name])
   const { value: opened, failure } = useRead(read, clock)
 

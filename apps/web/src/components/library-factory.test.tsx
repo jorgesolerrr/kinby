@@ -19,13 +19,13 @@ steps:
   - { id: publish, kind: code }
 `
 
-function openPage() {
+function openPage(file = factoryFile) {
   const caller = stubCaller({
     "library.list": () => listed,
     "factory.get": ({ name }) => ({
       name,
       source: "shipped",
-      files: { "factory.yaml": factoryFile, "prompts/implement.md": "Implement it.\n" },
+      files: { "factory.yaml": file, "prompts/implement.md": "Implement it.\n" },
       hash: "h-2",
     }),
     "instance.list": () => ({
@@ -87,5 +87,24 @@ describe("LibraryPage, a factory", () => {
         .getAllByRole("listitem")
         .map((step) => step.textContent),
     ).toEqual(["prepare", "implement", "publish"])
+  })
+
+  it("reads a role's merge keys as the hub does", async () => {
+    const user = openPage(`name: software
+instances:
+  coder: &coder
+    image: coder
+    suggested_picks: [tdd]
+  reviewer:
+    <<: *coder
+steps:
+  - { id: prepare, kind: code }
+`)
+
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+
+    const reviewer = await screen.findByRole("region", { name: "reviewer role" })
+    expect(within(reviewer).getByText(/image coder/)).toBeDefined()
+    expect(within(reviewer).getByText("tdd")).toBeDefined()
   })
 })
