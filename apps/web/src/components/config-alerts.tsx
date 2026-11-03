@@ -27,6 +27,17 @@ export function Failure({ error }: { error: unknown }) {
   )
 }
 
+/** A call the hub refused, with `reason`. */
+export function Refusal({ reason }: { reason: string }) {
+  return (
+    <Alert variant="destructive">
+      <CircleXIcon />
+      <AlertTitle>The hub refused it</AlertTitle>
+      <AlertDescription>{reason}</AlertDescription>
+    </Alert>
+  )
+}
+
 /** What the page needs is newer than the instance's core. The button opens Core version. */
 export function OlderCoreAlert({ onOpenUpdate }: { onOpenUpdate: () => void }) {
   return (

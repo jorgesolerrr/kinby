@@ -8,6 +8,7 @@ import {
   landOn,
   linkedNode,
   linkedRoutine,
+  openLibraryTab,
   openPane,
   openSettings,
   openTab,
@@ -18,6 +19,7 @@ import {
   selectTurn,
   turnPath,
   useInstanceTab,
+  useLibraryTab,
   useOpenPane,
   useSelectedInstanceId,
   useSelectedThreadId,
@@ -112,6 +114,43 @@ describe("the open tab of an instance's page", () => {
 
     expect(window.location.pathname).toBe("/instances/hub-ada")
     expect(open.current).toBe("overview")
+  })
+})
+
+describe("the open tab of the Library", () => {
+  const tab = () => renderHook(() => useLibraryTab()).result
+
+  it.each([
+    ["/library", "skill"],
+    ["/library/mcp-servers", "mcp_server"],
+    ["/library/factories", "factory"],
+  ])("comes back from %s as %s", (path, open) => {
+    window.history.replaceState(null, "", path)
+
+    expect(tab().current).toBe(open)
+  })
+
+  it.each(["/", "/instances/hub-ada", "/libraryx"])("is none on %s, off the Library", (path) => {
+    window.history.replaceState(null, "", path)
+
+    expect(tab().current).toBeUndefined()
+  })
+
+  it("opens as one new history entry at the tab's path", () => {
+    window.history.replaceState(null, "", "/library")
+    const entries = window.history.length
+    const open = tab()
+
+    act(() => openLibraryTab("factory"))
+
+    expect(window.history.length).toBe(entries + 1)
+    expect(window.location.pathname).toBe("/library/factories")
+    expect(open.current).toBe("factory")
+
+    act(() => openLibraryTab("skill"))
+
+    expect(window.location.pathname).toBe("/library")
+    expect(open.current).toBe("skill")
   })
 })
 
