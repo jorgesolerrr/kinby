@@ -452,10 +452,13 @@ interface Previewed {
  */
 export function AddFromGit({
   client,
+  held,
   onAdded,
   onCancel,
 }: {
   client: Caller
+  /** The names of the skills the library holds, which the preview offers no way to add again. */
+  held: string[]
   onAdded: () => void
   onCancel: () => void
 }) {
@@ -470,7 +473,7 @@ export function AddFromGit({
     void ask(async () => {
       const shown = await client.call("library.git.preview", { address })
       setPreview({ address, shown })
-      setChosen(shown.skills.map((skill) => skill.name))
+      setChosen(shown.skills.map((skill) => skill.name).filter((name) => !held.includes(name)))
     })
   }
 
@@ -527,6 +530,7 @@ export function AddFromGit({
               <SkillPreview
                 key={skill.name}
                 skill={skill}
+                held={held.includes(skill.name)}
                 chosen={chosen.includes(skill.name)}
                 onChosen={(on) =>
                   setChosen((names) =>
@@ -547,24 +551,30 @@ export function AddFromGit({
   )
 }
 
-/** One skill a preview found: whether to add it, and what the model would read. */
+/**
+ * One skill a preview found: whether to add it, and what the model would read. A skill the library
+ * already holds is greyed out and cannot be chosen.
+ */
 function SkillPreview({
   skill,
+  held,
   chosen,
   onChosen,
 }: {
   skill: PreviewedSkill
+  held: boolean
   chosen: boolean
   onChosen: (chosen: boolean) => void
 }) {
   const id = useId()
   return (
     <FieldGroup>
-      <Field orientation="horizontal">
-        <Checkbox id={`${id}-choose`} checked={chosen} onCheckedChange={onChosen} />
+      <Field orientation="horizontal" data-disabled={held}>
+        <Checkbox id={`${id}-choose`} checked={chosen} disabled={held} onCheckedChange={onChosen} />
         <FieldContent>
           <FieldLabel htmlFor={`${id}-choose`}>{skill.name}</FieldLabel>
           <FieldDescription>{skill.path}</FieldDescription>
+          {held && <FieldDescription>Already in the library</FieldDescription>}
         </FieldContent>
       </Field>
       <Field>

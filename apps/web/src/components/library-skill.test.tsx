@@ -100,6 +100,32 @@ describe("LibraryPage, adding from git", () => {
     expect(screen.queryByRole("textbox", { name: "Address" })).toBeNull()
   })
 
+  it("greys out a skill the library already holds, and adds only the ticked ones", async () => {
+    const held = { name: "tdd", path: "skills/tdd", content: tdd, files: [] }
+    const { caller, user } = openGitPage(() => ({ ...shown, skills: [held, ...shown.skills] }))
+
+    await newSkill(user, "Add from git")
+    await user.type(screen.getByRole("textbox", { name: "Address" }), "owner/repo#main")
+    await user.click(screen.getByRole("button", { name: "Preview" }))
+
+    const tddBox = await screen.findByRole("checkbox", { name: "tdd" })
+    expect(tddBox.getAttribute("aria-checked")).toBe("false")
+    expect(tddBox.hasAttribute("data-disabled")).toBe(true)
+    expect(screen.getByText("Already in the library")).toBeTruthy()
+    await user.click(tddBox)
+    expect(tddBox.getAttribute("aria-checked")).toBe("false")
+    await user.click(screen.getByRole("checkbox", { name: "caveman" }))
+    await user.click(screen.getByRole("button", { name: "Add 1 skill" }))
+
+    await screen.findByRole("button", { name: "grill, git skill" })
+    expect(caller.calls.filter((call) => call.method === "library.git.add")).toEqual([
+      {
+        method: "library.git.add",
+        params: { address: "owner/repo#main", commit, skills: ["grill"] },
+      },
+    ])
+  })
+
   it("shows why the hub refused an address", async () => {
     const { user } = openGitPage(() => {
       throw refused({ address: "skills/grill/logo.png is a binary file. A skill holds only text." })
