@@ -23,7 +23,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -75,11 +75,12 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
     setCheckedNewer((names) => [...names.filter((each) => each !== name), ...(newer ? [name] : [])])
   const isNewer = (entry: LibraryEntry) => entry.newer === true || checkedNewer.includes(entry.name)
   const wanted = query.trim().toLocaleLowerCase()
-  const entries = listed?.entries.filter(
-    (entry) =>
-      entry.kind === kind &&
-      `${entry.name} ${entry.description ?? ""}`.toLocaleLowerCase().includes(wanted),
+  const matching = listed?.entries.filter((entry) =>
+    `${entry.name} ${entry.description ?? ""}`.toLocaleLowerCase().includes(wanted),
   )
+  const count = (of: LibraryKind) => matching?.filter((entry) => entry.kind === of).length
+  const entries = matching?.filter((entry) => entry.kind === kind)
+  const elsewhere = KINDS.filter((each) => each.kind !== kind && (count(each.kind) ?? 0) > 0)
   const shownKind = KINDS.find((each) => each.kind === kind)
   const closed = () => {
     show(undefined)
@@ -156,9 +157,7 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
             {KINDS.map(({ kind, title }) => (
               <TabsTrigger key={kind} value={kind} className="flex-none">
                 {title}{" "}
-                <span className="font-mono text-xs text-muted-foreground">
-                  {listed?.entries.filter((entry) => entry.kind === kind).length}
-                </span>
+                <span className="font-mono text-xs text-muted-foreground">{count(kind)}</span>
               </TabsTrigger>
             ))}
           </TabsList>
@@ -184,8 +183,22 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
             <Empty>
               <EmptyHeader>
                 <EmptyTitle>
-                  {wanted === "" ? shownKind?.none : `Nothing matches "${query.trim()}"`}
+                  {wanted === "" ? shownKind?.none : `Nothing here matches "${query.trim()}"`}
                 </EmptyTitle>
+                {wanted !== "" && elsewhere.length > 0 && (
+                  <EmptyDescription>
+                    {elsewhere.map((each) => (
+                      <Button
+                        key={each.kind}
+                        variant="link"
+                        size="sm"
+                        onClick={() => openLibraryTab(each.kind)}
+                      >
+                        {count(each.kind)} in {each.title}
+                      </Button>
+                    ))}
+                  </EmptyDescription>
+                )}
               </EmptyHeader>
             </Empty>
           ) : kind === "skill" ? (
