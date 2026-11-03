@@ -81,6 +81,8 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
   const count = (of: LibraryKind) => matching?.filter((entry) => entry.kind === of).length
   const entries = matching?.filter((entry) => entry.kind === kind)
   const elsewhere = KINDS.filter((each) => each.kind !== kind && (count(each.kind) ?? 0) > 0)
+  const heldSkills =
+    listed?.entries.filter((entry) => entry.kind === "skill").map((entry) => entry.name) ?? []
   const shownKind = KINDS.find((each) => each.kind === kind)
   const closed = () => {
     show(undefined)
@@ -170,7 +172,12 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
               {open.form === "write" ? (
                 <WriteSkill client={client} onWritten={closed} onCancel={() => show(undefined)} />
               ) : open.form === "git" ? (
-                <AddFromGit client={client} onAdded={closed} onCancel={() => show(undefined)} />
+                <AddFromGit
+                  client={client}
+                  held={heldSkills}
+                  onAdded={closed}
+                  onCancel={() => show(undefined)}
+                />
               ) : (
                 <NewMcpServer client={client} onAdded={closed} onCancel={() => show(undefined)} />
               )}

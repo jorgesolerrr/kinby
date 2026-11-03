@@ -1,7 +1,7 @@
 import { CallError } from "@kinby/contract"
 import type { LibraryEntry, LibraryGitPreviewResult } from "@kinby/contract"
 import { stubCaller } from "@kinby/contract/testing"
-import { screen, waitFor, within } from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import type { UserEvent } from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -68,7 +68,11 @@ function openGitPage(preview: () => LibraryGitPreviewResult) {
       return { entries: [added] }
     },
   })
-  return { caller, user: openLibrary(caller) }
+  /** Add `entry` to the library, as another tab would. */
+  const hold = (entry: LibraryEntry) => {
+    entries = [...entries, entry]
+  }
+  return { caller, user: openLibrary(caller), hold }
 }
 
 describe("LibraryPage, adding from git", () => {
@@ -98,6 +102,59 @@ describe("LibraryPage, adding from git", () => {
       },
     ])
     expect(screen.queryByRole("textbox", { name: "Address" })).toBeNull()
+  })
+
+  it("greys out a skill the library already holds, and adds only the ticked ones", async () => {
+    const held = { name: "tdd", path: "skills/tdd", content: tdd, files: [] }
+    const { caller, user } = openGitPage(() => ({ ...shown, skills: [held, ...shown.skills] }))
+
+    await newSkill(user, "Add from git")
+    await user.type(screen.getByRole("textbox", { name: "Address" }), "owner/repo#main")
+    await user.click(screen.getByRole("button", { name: "Preview" }))
+
+    const tddBox = await screen.findByRole("checkbox", { name: "tdd" })
+    expect(tddBox.getAttribute("aria-checked")).toBe("false")
+    expect(tddBox.hasAttribute("data-disabled")).toBe(true)
+    expect(screen.getByText("Already in the library")).toBeTruthy()
+    await user.click(tddBox)
+    expect(tddBox.getAttribute("aria-checked")).toBe("false")
+    await user.click(screen.getByRole("checkbox", { name: "caveman" }))
+    await user.click(screen.getByRole("button", { name: "Add 1 skill" }))
+
+    await screen.findByRole("button", { name: "grill, git skill" })
+    expect(caller.calls.filter((call) => call.method === "library.git.add")).toEqual([
+      {
+        method: "library.git.add",
+        params: { address: "owner/repo#main", commit, skills: ["grill"] },
+      },
+    ])
+  })
+
+  it("drops a ticked skill from the confirm once the library holds it", async () => {
+    const { caller, user, hold } = openGitPage(() => shown)
+
+    await newSkill(user, "Add from git")
+    await user.type(screen.getByRole("textbox", { name: "Address" }), "owner/repo#main")
+    await user.click(screen.getByRole("button", { name: "Preview" }))
+    await screen.findByRole("button", { name: "Add 2 skills" })
+    hold({ ...added, name: "caveman" })
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    const caveman = screen.getByRole("checkbox", { name: "caveman" })
+    await waitFor(() => expect(caveman.hasAttribute("data-disabled")).toBe(true))
+    expect(caveman.getAttribute("aria-checked")).toBe("false")
+    await user.click(screen.getByRole("button", { name: "Add 1 skill" }))
+
+    await waitFor(() =>
+      expect(caller.calls.filter((call) => call.method === "library.git.add")).toEqual([
+        {
+          method: "library.git.add",
+          params: { address: "owner/repo#main", commit, skills: ["grill"] },
+        },
+      ]),
+    )
   })
 
   it("shows why the hub refused an address", async () => {
