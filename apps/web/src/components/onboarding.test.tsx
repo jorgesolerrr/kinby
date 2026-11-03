@@ -125,101 +125,99 @@ function preparation(fields: Partial<OperationGetResult>): Answers {
 
 async function prepareImage(answers: Answers) {
   const clock = fakeClock()
-  render(<Onboarding caller={stubCaller(answers)} clock={clock} />)
-  await userEvent.setup().click(screen.getByRole("button", { name: "Prepare the image" }))
+  const caller = stubCaller(answers)
+  render(<Onboarding caller={caller} clock={clock} />)
   await act(() => clock.advance(0))
+  return { caller, clock }
 }
 
-const step = (name: string) => within(screen.getByRole("listitem", { name }))
+/** The page's header, which holds the avatar, the name, the image's state and Create. */
+function header() {
+  const banner = screen.getByRole("heading", { level: 1 }).closest("header")
+  if (banner === null) throw new Error("The page has no header.")
+  return within(banner)
+}
 
-describe("the onboarding's image step", () => {
-  it("prepares the image and shows the step running", async () => {
-    await prepareImage(
-      preparation({
-        steps: [
-          {
-            name: "image",
-            state: "running",
-            detail: "Building the image, or reusing the one prepared.",
-          },
-        ],
-      }),
-    )
+/** What Create says still blocks it, or nothing once it can create. */
+function blocking() {
+  const create = screen.getByRole("button", { name: "Create" })
+  const reason = create.getAttribute("aria-describedby")
+  return {
+    disabled: create.hasAttribute("disabled"),
+    reason: reason === null ? undefined : document.getElementById(reason)?.textContent,
+  }
+}
+
+describe("the onboarding's page", () => {
+  it("prepares the image as it opens, with no click", async () => {
+    const { caller } = await prepareImage(preparation({}))
+
+    expect(caller.calls.filter((call) => call.method === "image.prepare")).toEqual([
+      { method: "image.prepare", params: {} },
+    ])
+    expect(screen.queryByRole("button", { name: /Prepare/ })).toBeNull()
+  })
+
+  it("shows every section at once, in order, with no Continue or Back", async () => {
+    await prepareImage(preparation({ state: "succeeded" }))
+
+    const titles = screen
+      .getAllByRole("region")
+      .map(
+        (region) =>
+          document.getElementById(region.getAttribute("aria-labelledby") ?? "")?.textContent,
+      )
+    expect(titles).toEqual(["Role", "Name and look", "Skills", "Prompt", "Setup"])
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull()
+  })
+
+  it("heads the page with the avatar and the name as typed", async () => {
+    await prepareImage(preparation({ state: "succeeded" }))
+
+    expect(header().getByRole("heading", { name: "New instance" })).toBeDefined()
+    await userEvent.setup().type(screen.getByLabelText("Name"), "Ada")
+
+    expect(header().getByRole("heading", { name: "Ada" })).toBeDefined()
+    expect(header().getByRole("img", { name: "Avatar of Ada" })).toBeDefined()
+  })
+
+  it("asks for the setup fields only once the image is prepared", async () => {
+    await prepareImage(preparation({}))
+
+    expect(screen.getByText("The setup fields show once the image is prepared.")).toBeDefined()
+    expect(screen.queryByLabelText("Model")).toBeNull()
+  })
+})
+
+describe("the onboarding's image", () => {
+  it("shows the step the preparation is running, then that the image is ready", async () => {
+    let state: "running" | "succeeded" = "running"
+    const { clock } = await prepareImage({
+      ...preparation({}),
+      "operation.get": () =>
+        operationAnswer({
+          state,
+          steps: [
+            {
+              name: "image",
+              state,
+              detail: "Building the image, or reusing the one prepared.",
+            },
+          ],
+        }),
+    })
 
     expect(
-      step("image").getByText("Building the image, or reusing the one prepared."),
+      header().getByText("Preparing the image · Building the image, or reusing the one prepared."),
     ).toBeDefined()
-    expect(step("image").getByText("Running")).toBeDefined()
-    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
-      true,
-    )
+    state = "succeeded"
+    await act(() => clock.advance(5_000))
+
+    expect(header().getByText("Image ready")).toBeDefined()
   })
 
-  it("lists the fields the prepared image declares", async () => {
-    await prepareImage(
-      preparation({
-        state: "succeeded",
-        steps: [
-          { name: "image", state: "succeeded", detail: "Building the image." },
-          { name: "describe", state: "succeeded", detail: "Reading what it declares." },
-        ],
-      }),
-    )
-
-    const fields = within(await screen.findByRole("list", { name: "Setup fields" }))
-    const model = within(fields.getByRole("listitem", { name: "Model" }))
-    const apiKey = within(fields.getByRole("listitem", { name: "API key" }))
-    const prompt = within(fields.getByRole("listitem", { name: "Behavior prompt" }))
-    expect(model.getByText("Configuration")).toBeDefined()
-    expect(model.queryByText("Optional")).toBeNull()
-    expect(apiKey.getByText("Secret")).toBeDefined()
-    expect(prompt.getByText("Optional")).toBeDefined()
-    expect(prompt.getByText("Instructions the instance follows in every turn.")).toBeDefined()
-    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
-  })
-
-  it("lists each login the prepared image declares, after its fields", async () => {
-    await prepareImage({
-      ...preparation({ state: "succeeded" }),
-      "image.describe": () => ({ ...vanilla, logins: [codex] }),
-    })
-
-    const logins = await screen.findByRole("list", { name: "Subscription logins" })
-    const row = within(within(logins).getByRole("listitem", { name: "Codex" }))
-    expect(row.getByText("Signs Codex in with your ChatGPT plan.")).toBeDefined()
-    expect(row.getByText("After creation")).toBeDefined()
-    expect(
-      screen.getByRole("list", { name: "Setup fields" }).compareDocumentPosition(logins) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  // jsdom lays nothing out, so the line clamp shows only in the classes.
-  it("shows each field's whole description, however narrow the screen", async () => {
-    await prepareImage(
-      preparation({
-        state: "succeeded",
-        steps: [{ name: "image", state: "succeeded", detail: "Building the image." }],
-      }),
-    )
-
-    const fields = within(await screen.findByRole("list", { name: "Setup fields" }))
-    const description = fields.getByText("Instructions the instance follows in every turn.")
-    expect(description.className).not.toMatch(/line-clamp-\d/)
-  })
-
-  it("shows each login's whole description, however narrow the screen", async () => {
-    await prepareImage({
-      ...preparation({ state: "succeeded" }),
-      "image.describe": () => ({ ...vanilla, logins: [codex] }),
-    })
-
-    const logins = within(await screen.findByRole("list", { name: "Subscription logins" }))
-    const description = logins.getByText("Signs Codex in with your ChatGPT plan.")
-    expect(description.className).not.toMatch(/line-clamp-\d/)
-  })
-
-  it("marks the step that failed with what went wrong", async () => {
+  it("says which step failed and why, with Prepare again", async () => {
     await prepareImage(
       preparation({
         state: "failed",
@@ -231,11 +229,11 @@ describe("the onboarding's image step", () => {
       }),
     )
 
-    expect(step("describe").getByText("Failed")).toBeDefined()
-    expect(step("describe").getByText('Executable "claude" is not on PATH.')).toBeDefined()
-    expect(step("image").getByText("Done")).toBeDefined()
-    expect(screen.queryByRole("list", { name: "Setup fields" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
+    expect(header().getByRole("alert").textContent).toBe(
+      'The preparation failed at describe: Executable "claude" is not on PATH.',
+    )
+    expect(screen.queryByLabelText("Model")).toBeNull()
+    expect(header().getByRole("button", { name: "Prepare again" }).hasAttribute("disabled")).toBe(
       false,
     )
   })
@@ -243,12 +241,10 @@ describe("the onboarding's image step", () => {
   it("says why when the preparation could not start", async () => {
     await prepareImage({})
 
-    expect((await screen.findByRole("alert")).textContent).toContain(
+    expect(header().getByRole("alert").textContent).toContain(
       "The stub has no answer for image.prepare.",
     )
-    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
-      false,
-    )
+    expect(header().getByRole("button", { name: "Prepare again" })).toBeDefined()
   })
 
   it("prepares the image again after the preparation failed", async () => {
@@ -291,25 +287,53 @@ describe("the onboarding's image step", () => {
     })
     const clock = fakeClock()
     render(<Onboarding caller={caller} clock={clock} />)
-    const user = userEvent.setup()
-
-    await user.click(screen.getByRole("button", { name: "Prepare the image" }))
     await act(() => clock.advance(0))
 
-    const again = screen.getByRole("button", { name: "Prepare the image" })
-    expect(again.hasAttribute("disabled")).toBe(false)
-    await user.click(again)
+    await userEvent.setup().click(header().getByRole("button", { name: "Prepare again" }))
     await act(() => clock.advance(0))
 
     expect(
-      step("image").getByText("Building the image, or reusing the one prepared."),
+      header().getByText("Preparing the image · Building the image, or reusing the one prepared."),
     ).toBeDefined()
-    expect(step("image").getByText("Running")).toBeDefined()
-    expect(again.hasAttribute("disabled")).toBe(true)
+    expect(header().queryByRole("button", { name: "Prepare again" })).toBeNull()
     expect(caller.calls.filter((call) => call.method === "image.prepare")).toEqual([
       { method: "image.prepare", params: {} },
       { method: "image.prepare", params: {} },
     ])
+  })
+
+  it("lists each login the prepared image declares, after the setup fields", async () => {
+    await prepareImage({
+      ...preparation({ state: "succeeded" }),
+      "image.describe": () => ({ ...vanilla, logins: [codex] }),
+    })
+
+    const logins = await screen.findByRole("list", { name: "Subscription logins" })
+    const row = within(within(logins).getByRole("listitem", { name: "Codex" }))
+    expect(row.getByText("Signs Codex in with your ChatGPT plan.")).toBeDefined()
+    expect(row.getByText("After creation")).toBeDefined()
+    expect(
+      screen.getByRole("group", { name: "Secrets" }).compareDocumentPosition(logins) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  // jsdom lays nothing out, so the line clamp shows only in the classes.
+  it("shows each login's whole description, however narrow the screen", async () => {
+    await prepareImage({
+      ...preparation({ state: "succeeded" }),
+      "image.describe": () => ({ ...vanilla, logins: [codex] }),
+    })
+
+    const logins = within(await screen.findByRole("list", { name: "Subscription logins" }))
+    const description = logins.getByText("Signs Codex in with your ChatGPT plan.")
+    expect(description.className).not.toMatch(/line-clamp-\d/)
+  })
+
+  it("lists no login when the image declares none", async () => {
+    await prepareImage(preparation({ state: "succeeded" }))
+
+    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
   })
 })
 
@@ -358,29 +382,23 @@ function hub(answers: Answers, created: OperationGetResult = creating) {
   })
 }
 
-/** Open the onboarding, prepare the image, and go on to the role step. */
+/** Open the onboarding once the image is prepared. */
 async function openOnboarding(caller: StubCaller, onPublished = () => {}) {
   const clock = fakeClock()
   const user = userEvent.setup()
   render(<Onboarding caller={caller} clock={clock} onPublished={onPublished} />)
-  await user.click(screen.getByRole("button", { name: "Prepare the image" }))
   await act(() => clock.advance(0))
-  await user.click(await screen.findByRole("button", { name: "Continue" }))
   return { user, clock }
 }
 
-const next = (user: UserEvent) => user.click(screen.getByRole("button", { name: "Continue" }))
+const create = (user: UserEvent) => user.click(screen.getByRole("button", { name: "Create" }))
 
-/** Pick no role, name the instance, keep the skills, and write a prompt, up to the setup step. */
-async function toSetup(user: UserEvent, name = "Ada") {
-  await next(user)
+/** Pick no role, name the instance, keep the skills, and write a prompt. */
+async function nameAndPrompt(user: UserEvent, name = "Ada") {
   await user.type(screen.getByLabelText("Name"), name)
-  await next(user)
-  await next(user)
   const prompt = screen.getByLabelText("Behavior prompt")
   await user.clear(prompt)
   await user.type(prompt, "Answer in haiku.")
-  await next(user)
 }
 
 async function fillSetup(user: UserEvent) {
@@ -388,13 +406,10 @@ async function fillSetup(user: UserEvent) {
   await user.type(screen.getByLabelText("API key"), "sk-private")
 }
 
-describe("the onboarding's identity step", () => {
+describe("the onboarding's name and look", () => {
   it("names the instance and draws the avatar picked for it", async () => {
     const { user } = await openOnboarding(hub({}))
-    await next(user)
 
-    const onward = screen.getByRole("button", { name: "Continue" })
-    expect(onward.hasAttribute("disabled")).toBe(true)
     await user.type(screen.getByLabelText("Name"), "Ada")
     await user.click(screen.getByRole("button", { name: "Squircle" }))
     await user.click(screen.getByRole("button", { name: "Green" }))
@@ -404,12 +419,10 @@ describe("the onboarding's identity step", () => {
     expect(preview.querySelector("[data-slot=avatar-fallback]")?.getAttribute("data-variant")).toBe(
       "green",
     )
-    expect(onward.hasAttribute("disabled")).toBe(false)
   })
 
   it("starts from a circle in the palette's first color", async () => {
     const { user } = await openOnboarding(hub({}))
-    await next(user)
 
     await user.type(screen.getByLabelText("Name"), "Ada")
 
@@ -421,10 +434,53 @@ describe("the onboarding's identity step", () => {
   })
 })
 
-describe("the onboarding's setup step", () => {
+describe("the onboarding's Create", () => {
+  it("waits for the image, then the name, then each required setup field", async () => {
+    let state: "running" | "succeeded" = "running"
+    const caller = hub({
+      "operation.get": () => operationAnswer({ state }),
+    })
+    const { user, clock } = await openOnboarding(caller)
+
+    expect(blocking()).toEqual({ disabled: true, reason: "The image is preparing" })
+    state = "succeeded"
+    await act(() => clock.advance(5_000))
+    expect(blocking()).toEqual({ disabled: true, reason: "Name it" })
+    await user.type(screen.getByLabelText("Name"), "Ada")
+    expect(blocking()).toEqual({ disabled: true, reason: "2 required setup fields left" })
+    await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
+    expect(blocking()).toEqual({ disabled: true, reason: "1 required setup field left" })
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+
+    expect(blocking()).toEqual({ disabled: false, reason: undefined })
+  })
+
+  it("takes a hub secret as the value of a required secret field", async () => {
+    const { user } = await openOnboarding(
+      hub({ "hub.secret.list": () => ({ secrets: [{ name: "OPENAI_API_KEY" }] }) }),
+    )
+
+    await user.type(screen.getByLabelText("Name"), "Ada")
+    await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
+
+    expect(blocking()).toEqual({ disabled: false, reason: undefined })
+  })
+
+  it("says the image did not prepare while it failed", async () => {
+    await openOnboarding(
+      hub({
+        "operation.get": () => operationAnswer({ state: "failed", detail: "No Docker." }),
+      }),
+    )
+
+    expect(blocking()).toEqual({ disabled: true, reason: "The image did not prepare" })
+  })
+})
+
+describe("the onboarding's setup", () => {
   it("asks for each declared field, and never shows a secret it was given", async () => {
     const { user } = await openOnboarding(hub({}))
-    await toSetup(user)
+    await nameAndPrompt(user)
 
     const configuration = within(screen.getByRole("group", { name: "Configuration" }))
     const secrets = within(screen.getByRole("group", { name: "Secrets" }))
@@ -437,17 +493,13 @@ describe("the onboarding's setup step", () => {
   it("creates the instance from the values and the identity", async () => {
     const caller = hub({})
     const { user } = await openOnboarding(caller)
-    await next(user)
     await user.type(screen.getByLabelText("Name"), "Ada")
     await user.click(screen.getByRole("button", { name: "Square" }))
-    await next(user)
-    await next(user)
     await user.clear(screen.getByLabelText("Behavior prompt"))
     await user.type(screen.getByLabelText("Behavior prompt"), "Answer in haiku.")
-    await next(user)
     await fillSetup(user)
 
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
       manifest_id: "Ada",
@@ -489,11 +541,11 @@ describe("the onboarding's setup step", () => {
     }
     const caller = hub({ "image.describe": () => untouched })
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
 
     expect(screen.getByRole("switch", { name: /Share/ }).getAttribute("aria-checked")).toBe("false")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
       manifest_id: "Ada",
@@ -525,11 +577,11 @@ describe("the onboarding's setup step", () => {
     }
     const caller = hub({ "image.describe": () => untouched })
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("switch", { name: /Share/ }))
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
       config: { share: true },
@@ -538,13 +590,14 @@ describe("the onboarding's setup step", () => {
 
   it("renders each field by its type, starting from its default", async () => {
     const { user } = await openOnboarding(hub({ "image.describe": () => typed }))
-    await toSetup(user)
+    await nameAndPrompt(user)
 
     const configuration = within(screen.getByRole("group", { name: "Configuration" }))
     expect(configuration.getByRole("combobox", { name: "Tone" }).textContent).toContain("plain")
     expect(configuration.getByRole("switch", { name: /Review/ }).getAttribute("aria-checked")).toBe(
       "true",
     )
+    expect(configuration.getByRole("switch", { name: /^Review ?\(optional\)$/ })).toBeDefined()
     const steps = configuration.getByRole("spinbutton", { name: /Steps per turn/ })
     expect((steps as HTMLInputElement).value).toBe("7")
     const email = configuration.getByLabelText(/Commit email/) as HTMLInputElement
@@ -558,7 +611,7 @@ describe("the onboarding's setup step", () => {
   it("sends a picked choice, a switch, and a whole number as typed values", async () => {
     const caller = hub({ "image.describe": () => typed })
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
 
     await user.click(screen.getByRole("combobox", { name: "Tone" }))
@@ -567,7 +620,7 @@ describe("the onboarding's setup step", () => {
     const steps = screen.getByRole("spinbutton", { name: /Steps per turn/ })
     await user.clear(steps)
     await user.type(steps, "12")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
       config: { behavior_prompt: "Answer in haiku.", tone: "formal", review: false, steps: 12 },
@@ -586,10 +639,10 @@ describe("the onboarding's setup step", () => {
       },
     })
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
 
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     const model = await screen.findByLabelText("Model")
     expect(model.getAttribute("aria-invalid")).toBe("true")
@@ -617,7 +670,7 @@ describe("the onboarding's setup step", () => {
       },
     })
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
     const email = screen.getByLabelText(/Commit email/)
     const repository = screen.getByLabelText(/Repository/)
@@ -626,7 +679,7 @@ describe("the onboarding's setup step", () => {
     await user.clear(repository)
     await user.type(repository, "not a repository")
 
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(caller.calls.find((call) => call.method === "instance.create")?.params).toMatchObject({
       config: { commit_email: "not-an-email", repository: "not a repository" },
@@ -642,7 +695,7 @@ describe("the onboarding's setup step", () => {
     expect(screen.getByLabelText(/Repository/).getAttribute("aria-invalid")).toBe("true")
   })
 
-  it("shows the fields a rebuilt image stored, and a retry sends the new one", async () => {
+  it("asks for the fields a rebuilt image stored, and a retry sends the new one", async () => {
     let described = 0
     let creates = 0
     const rebuilt: DeclaredSetup = {
@@ -681,50 +734,28 @@ describe("the onboarding's setup step", () => {
       },
       "instance.create": () => {
         creates += 1
-        if (creates === 1) return { operation_id: "op-create", instance_id: "instance-1" }
-        if (creates === 2) {
-          throw new CallError({
-            code: "INVALID_SETUP",
-            message: "Some setup values are missing or invalid.",
-            retryable: false,
-            fields: { search_region: "Search region is required." },
-          })
-        }
-        return { operation_id: "op-create-2", instance_id: "instance-2" }
+        return creates === 1
+          ? { operation_id: "op-create", instance_id: "instance-1" }
+          : { operation_id: "op-create-2", instance_id: "instance-2" }
       },
       "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : validateFailed),
     })
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
 
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
-    await user.click(await screen.findByRole("button", { name: "Back to setup" }))
+    await create(user)
+    await user.click(await screen.findByRole("button", { name: "Back to the form" }))
 
-    expect(await screen.findByLabelText("Search region")).toBeDefined()
-    for (const _ of ["prompt", "skills", "identity", "role", "image"]) {
-      await user.click(screen.getByRole("button", { name: "Back" }))
-    }
-    const asked = within(screen.getByRole("list", { name: "Setup fields" }))
-    expect(asked.getByRole("listitem", { name: "Search region" })).toBeDefined()
-    expect(screen.getByRole("button", { name: "Prepare the image" }).hasAttribute("disabled")).toBe(
-      true,
-    )
-    for (const _ of ["role", "identity", "skills", "prompt", "setup"]) await next(user)
-
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
-
-    const refused = await screen.findByLabelText("Search region")
-    const configuration = within(screen.getByRole("group", { name: "Configuration" }))
-    expect(refused.getAttribute("aria-invalid")).toBe("true")
-    expect(configuration.getByRole("alert").textContent).toBe("Search region is required.")
-
-    await user.type(refused, "eu")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    const region = await screen.findByLabelText("Search region")
+    expect(blocking()).toEqual({ disabled: true, reason: "1 required setup field left" })
+    expect(screen.queryByRole("button", { name: /Prepare/ })).toBeNull()
+    await user.type(region, "eu")
+    await create(user)
 
     const sent = caller.calls.filter((call) => call.method === "instance.create")
-    expect(sent).toHaveLength(3)
-    expect(sent[2]?.params).toMatchObject({
+    expect(sent).toHaveLength(2)
+    expect(sent[1]?.params).toMatchObject({
       config: { search_region: "eu" },
     })
   })
@@ -798,7 +829,6 @@ function softwareHub(answers: Answers = {}) {
 async function pickCoder(user: UserEvent) {
   await user.click(await screen.findByRole("combobox", { name: "Factory role" }))
   await user.click(await screen.findByRole("option", { name: "coder in software" }))
-  await next(user)
 }
 
 async function fillCoderSetup(user: UserEvent) {
@@ -837,7 +867,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
     })
 
   /** The secret field whose value input has *label*, with its save to the hub. */
-  const secretField = (label: string) => {
+  const secretField = (label: string | RegExp) => {
     const field = screen.getByLabelText(label).closest<HTMLElement>("[data-slot=field]")
     if (field === null) throw new Error(`No field holds ${label}.`)
     return within(field)
@@ -851,7 +881,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
 
   async function toSecrets(caller: StubCaller, model: string) {
     const { user } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await user.type(screen.getByLabelText("Model"), model)
     return user
   }
@@ -863,7 +893,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
     expect(screen.getByRole("combobox", { name: "Hub secret for API key" }).textContent).toContain(
       "ANTHROPIC_API_KEY",
     )
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(secretsSent(caller)).toEqual({
       secrets: {},
@@ -881,7 +911,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
     await user.click(screen.getByRole("combobox", { name: "Hub secret for API key" }))
     await user.click(await screen.findByRole("option", { name: "Type a value" }))
     await user.type(screen.getByLabelText("API key"), "sk-private")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(secretsSent(caller)).toEqual({
       secrets: { api_key: "sk-private" },
@@ -896,7 +926,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
 
     await user.type(screen.getByLabelText("API key"), "sk-private")
     await user.type(screen.getByLabelText("GitHub token"), "ghp-typed")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(secretsSent(caller)).toEqual({
       secrets: { api_key: "sk-private", GITHUB_TOKEN: "ghp-typed" },
@@ -919,7 +949,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
     const tokenName = secretField("GitHub token").getByLabelText("Name on the hub")
     await user.clear(tokenName)
     await user.type(tokenName, "PERSONAL_TOKEN")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(secretsSent(caller)).toEqual({
       secrets: { api_key: "sk-private", GITHUB_TOKEN: "ghp-typed" },
@@ -928,14 +958,28 @@ describe("the onboarding's secret fields and hub secrets", () => {
     })
   })
 
-  it("saves nothing for a field left empty", async () => {
-    const caller = keeping()
+  it("saves nothing for an optional field left empty", async () => {
+    const caller = hub({
+      "image.describe": () => ({
+        ...vanilla,
+        setup_fields: withToken.setup_fields.map((field) =>
+          field.name === "GITHUB_TOKEN" ? { ...field, required: false } : field,
+        ),
+      }),
+    })
     const user = await toSecrets(caller, "openai:gpt-5")
 
-    await user.click(secretField("API key").getByRole("checkbox", { name: "Save to the hub" }))
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await user.type(screen.getByLabelText("API key"), "sk-private")
+    await user.click(
+      secretField(/^GitHub token/).getByRole("checkbox", { name: "Save to the hub" }),
+    )
+    await create(user)
 
-    expect(secretsSent(caller)).toEqual({ secrets: {}, hub_secrets: {}, save_to_hub: {} })
+    expect(secretsSent(caller)).toEqual({
+      secrets: { api_key: "sk-private" },
+      hub_secrets: {},
+      save_to_hub: {},
+    })
   })
 
   it("asks for a name before it saves a typed value to the hub", async () => {
@@ -949,7 +993,7 @@ describe("the onboarding's secret fields and hub secrets", () => {
     expect(secretField("API key").getByRole("alert").textContent).toBe(
       "Name the hub secret to save it under.",
     )
-    const create = screen.getByRole("button", { name: "Create instance" })
+    const create = screen.getByRole("button", { name: "Create" })
     expect(create.hasAttribute("disabled")).toBe(true)
     await user.click(create)
     expect(sent(caller)).toEqual([])
@@ -967,43 +1011,40 @@ describe("the onboarding's secret fields and hub secrets", () => {
       },
     })
     const { user, clock } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
 
     await user.type(screen.getByLabelText("API key"), "sk-private")
+    await user.type(screen.getByLabelText("GitHub token"), "ghp-typed")
     arrived = true
     await act(() => clock.advance(5_000))
 
     expect(screen.getByRole("combobox", { name: "Hub secret for API key" }).textContent).toContain(
       "Type a value",
     )
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
     expect(secretsSent(caller)).toEqual({
-      secrets: { api_key: "sk-private" },
+      secrets: { api_key: "sk-private", GITHUB_TOKEN: "ghp-typed" },
       hub_secrets: {},
       save_to_hub: {},
     })
   })
 })
 
-describe("the onboarding's role, skills and prompt steps", () => {
+describe("the onboarding's role, skills and prompt", () => {
   it("creates a vanilla instance with no role, the skills ticked and the prompt written", async () => {
     const caller = hub({ "library.list": () => ({ entries: [skill("pr"), skill("tdd")] }) })
     const { user } = await openOnboarding(caller)
-    await next(user)
     await user.type(screen.getByLabelText("Name"), "Ada")
-    await next(user)
 
     expect([ticked("pr"), ticked("tdd")]).toEqual([false, false])
     await user.click(await screen.findByRole("checkbox", { name: "tdd" }))
-    await next(user)
     const prompt = screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
     expect(prompt.value).toBe("You are a personal AI teammate.\n")
     await user.clear(prompt)
     await user.type(prompt, "Answer in haiku.")
-    await next(user)
     await fillSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(sent(caller)).toEqual([
       {
@@ -1023,13 +1064,10 @@ describe("the onboarding's role, skills and prompt steps", () => {
   it("preselects the coder's suggested picks and asks for its setup fields", async () => {
     const { user } = await openOnboarding(softwareHub())
     await pickCoder(user)
-    await next(user)
 
     await screen.findByRole("checkbox", { name: "tdd" })
     expect(SUGGESTED.filter(ticked)).toEqual(SUGGESTED)
     expect(ticked("house-style")).toBe(false)
-    await next(user)
-    await next(user)
     const configuration = within(screen.getByRole("group", { name: "Configuration" }))
     const secrets = within(screen.getByRole("group", { name: "Secrets" }))
     expect(configuration.getByLabelText("Repository")).toBeDefined()
@@ -1040,13 +1078,10 @@ describe("the onboarding's role, skills and prompt steps", () => {
     const caller = softwareHub()
     const { user } = await openOnboarding(caller)
     await pickCoder(user)
-    await next(user)
 
     await user.click(await screen.findByRole("checkbox", { name: "tdd" }))
-    await next(user)
-    await next(user)
     await fillCoderSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(sent(caller)).toEqual([
       {
@@ -1071,15 +1106,12 @@ describe("the onboarding's role, skills and prompt steps", () => {
     const caller = softwareHub()
     const { user } = await openOnboarding(caller)
     await pickCoder(user)
-    await next(user)
-    await next(user)
 
     const prompt = screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
     expect(prompt.value).toBe("You implement tickets.\n")
     await user.type(prompt, "Keep each pull request small.")
-    await next(user)
     await fillCoderSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(sent(caller)[0]).toMatchObject({
       config: { behavior_prompt: "You implement tickets.\nKeep each pull request small." },
@@ -1095,11 +1127,8 @@ describe("the onboarding's role, skills and prompt steps", () => {
     expect(name.value).toBe("software-coder")
     await user.clear(name)
     await user.type(name, "billing-coder")
-    await next(user)
-    await next(user)
-    await next(user)
     await fillCoderSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(sent(caller)[0]).toMatchObject({
       manifest_id: "billing-coder",
@@ -1139,14 +1168,13 @@ describe("the onboarding's role, skills and prompt steps", () => {
     })
     const { user } = await openOnboarding(caller)
     await pickCoder(user)
-    for (const _ of ["identity", "skills", "prompt"]) await next(user)
     await fillCoderSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     const refused = await screen.findByLabelText("Branch prefix")
     expect(refused.getAttribute("aria-invalid")).toBe("true")
     await user.type(refused, "agent/")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(sent(caller)[1]).toMatchObject({
       config: { branch_prefix: "agent/" },
@@ -1171,22 +1199,15 @@ describe("the onboarding's role, skills and prompt steps", () => {
     })
     const { user } = await openOnboarding(caller)
     await pickCoder(user)
-    await next(user)
-    await next(user)
-    await next(user)
     await fillCoderSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(
       await screen.findByText('An instance named "software-coder" exists already.'),
     ).toBeDefined()
-    for (const _ of ["prompt", "skills", "identity"]) {
-      await user.click(screen.getByRole("button", { name: "Back" }))
-    }
     await user.clear(screen.getByLabelText("Name"))
     await user.type(screen.getByLabelText("Name"), "billing-coder")
-    for (const _ of ["identity", "skills", "prompt"]) await next(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
 
     expect(sent(caller)).toMatchObject([
       { manifest_id: "software-coder" },
@@ -1196,7 +1217,7 @@ describe("the onboarding's role, skills and prompt steps", () => {
   })
 })
 
-describe("the onboarding's start step", () => {
+describe("the onboarding's start", () => {
   const published = operationAnswer({
     operation_id: "op-create",
     instance_id: "instance-1",
@@ -1209,9 +1230,9 @@ describe("the onboarding's start step", () => {
 
   async function createdAda(caller: StubCaller, onPublished = () => {}) {
     const { user, clock } = await openOnboarding(caller, onPublished)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
     await act(() => clock.advance(0))
     return { user, clock }
   }
@@ -1237,7 +1258,7 @@ describe("the onboarding's start step", () => {
 
     await createdAda(hub({}, failed), onPublished)
 
-    expect(await screen.findByRole("button", { name: "Back to setup" })).toBeDefined()
+    expect(await screen.findByRole("button", { name: "Back to the form" })).toBeDefined()
     expect(screen.queryByRole("button", { name: "Start and chat" })).toBeNull()
     expect(onPublished).not.toHaveBeenCalled()
   })
@@ -1307,33 +1328,9 @@ describe("the onboarding's start step", () => {
     expect(caller.calls.some((call) => call.method === "instance.start")).toBe(false)
     expect(window.location.pathname).toBe("/instances/instance-1")
   })
-
-  it("creates the instance with a required secret left empty, and opens it stopped", async () => {
-    const caller = hub({}, published)
-    const { user, clock } = await openOnboarding(caller)
-    await toSetup(user)
-    await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
-    await act(() => clock.advance(0))
-
-    await user.click(await screen.findByRole("button", { name: "Leave it stopped" }))
-
-    expect(caller.calls.find((call) => call.method === "instance.create")?.params).toEqual({
-      manifest_id: "Ada",
-      persona_name: "Ada",
-      model: "openai:gpt-5",
-      config: { behavior_prompt: "Answer in haiku." },
-      secrets: {},
-      hub_secrets: {},
-      save_to_hub: {},
-      avatar: { shape: "circle", color: "blue" },
-      picks: [],
-    })
-    expect(window.location.pathname).toBe("/instances/instance-1")
-  })
 })
 
-describe("the onboarding's sign in step", () => {
+describe("the onboarding's sign-ins", () => {
   const published = operationAnswer({
     operation_id: "op-create",
     instance_id: "instance-1",
@@ -1377,9 +1374,9 @@ describe("the onboarding's sign in step", () => {
 
   async function created(caller: StubCaller) {
     const { user, clock } = await openOnboarding(caller)
-    await toSetup(user)
+    await nameAndPrompt(user)
     await fillSetup(user)
-    await user.click(screen.getByRole("button", { name: "Create instance" }))
+    await create(user)
     await act(() => clock.advance(0))
     return { user, clock }
   }

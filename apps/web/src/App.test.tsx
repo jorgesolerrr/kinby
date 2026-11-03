@@ -1415,7 +1415,7 @@ describe("a page that breaks", () => {
 describe("creating an instance", () => {
   beforeEach(() => window.history.replaceState(null, "", "/"))
 
-  it("opens the onboarding from the sidebar, at its image step", async () => {
+  it("opens the onboarding from the sidebar", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     openApp({ signedIn: true, instances: [ada] })
     const user = userEvent.setup()
@@ -1423,7 +1423,7 @@ describe("creating an instance", () => {
     await user.click(await screen.findByRole("link", { name: "New instance" }))
 
     expect(await screen.findByRole("heading", { name: "New instance" })).toBeDefined()
-    expect(screen.getByRole("button", { name: "Prepare the image" })).toBeDefined()
+    expect(screen.getByRole("button", { name: "Create" })).toBeDefined()
     expect(window.location.pathname).toBe("/new")
     expect(
       (await screen.findByRole("link", { name: "New instance" })).getAttribute("aria-current"),
