@@ -1,5 +1,5 @@
 import { CallError } from "@kinby/contract"
-import type { Client, LibraryListResult } from "@kinby/contract"
+import type { Client, InstanceSummary, LibraryListResult } from "@kinby/contract"
 import { fakeClock } from "@kinby/contract/testing"
 import { render, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -19,10 +19,15 @@ export const tdd = "---\nname: tdd\ndescription: Test first.\n---\nRed, green, r
 
 export const commit = "0123456789abcdef0123456789abcdef01234567"
 
-/** The Library page at `path`, on `caller`. */
-export function openLibrary(caller: Pick<Client, "call">, path = "/library", clock = fakeClock()) {
+/** The Library page at `path`, on `caller`, with `home` as the hub's home instance. */
+export function openLibrary(
+  caller: Pick<Client, "call">,
+  path = "/library",
+  clock = fakeClock(),
+  home?: InstanceSummary,
+) {
   window.history.replaceState(null, "", path)
-  render(<LibraryPage client={caller} clock={clock} />)
+  render(<LibraryPage client={caller} clock={clock} home={home} />)
   return userEvent.setup()
 }
 

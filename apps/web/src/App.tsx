@@ -105,7 +105,11 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
               {creating ? (
                 <Onboarding caller={client} clock={clock} onPublished={listAgain} />
               ) : libraryOpen ? (
-                <LibraryPage client={client} clock={clock} />
+                <LibraryPage
+                  client={client}
+                  clock={clock}
+                  home={instances?.find((instance) => instance.home)}
+                />
               ) : (
                 <MainPanel
                   caller={client}

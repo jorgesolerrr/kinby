@@ -1,11 +1,16 @@
-import type { Client, Clock, LibraryEntry, LibraryKind } from "@kinby/contract"
+import type { Client, Clock, InstanceSummary, LibraryEntry, LibraryKind } from "@kinby/contract"
 import {
   ChevronDownIcon,
   ChevronUpIcon,
+  FactoryIcon,
   GitBranchIcon,
+  type LucideIcon,
+  MessageSquareIcon,
   PenLineIcon,
+  PlugIcon,
   PlusIcon,
   SearchIcon,
+  SparklesIcon,
 } from "lucide-react"
 import { type ReactNode, useCallback, useId, useState } from "react"
 
@@ -24,24 +29,65 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
+import { instanceName } from "@/lib/instances"
 import { type InstancePick, readPicks } from "@/lib/picks"
-import { openLibraryTab, useLibraryTab } from "@/lib/selection"
+import { homePath, navigate, openLibraryTab, useLibraryTab } from "@/lib/selection"
 
 type Caller = Pick<Client, "call">
 
-const KINDS: { kind: LibraryKind; title: string; noun: string; none: string }[] = [
-  { kind: "skill", title: "Skills", noun: "skill", none: "No skills yet" },
-  { kind: "mcp_server", title: "MCP servers", noun: "MCP server", none: "No MCP servers yet" },
-  { kind: "factory", title: "Factories", noun: "factory", none: "No factories yet" },
-]
-
 type Form = "write" | "git" | "mcp_server"
+
+const KINDS: {
+  kind: LibraryKind
+  title: string
+  noun: string
+  icon: LucideIcon
+  none: string
+  /** What the kind is for, said when it holds nothing. */
+  lead: string
+  /** The add action an empty tab offers, when the page can add one. */
+  add?: { form: Form; label: string }
+}[] = [
+  {
+    kind: "skill",
+    title: "Skills",
+    noun: "skill",
+    icon: SparklesIcon,
+    none: "No skills yet",
+    lead: "A skill teaches an instance one kind of task. Write one, or add some from a git repository.",
+    add: { form: "write", label: "Write a skill" },
+  },
+  {
+    kind: "mcp_server",
+    title: "MCP servers",
+    noun: "MCP server",
+    icon: PlugIcon,
+    none: "No MCP servers yet",
+    lead: "An MCP server gives an instance tools from outside kinby, like GitHub or Notion. Add one here, then pick it for an instance.",
+    add: { form: "mcp_server", label: "Add MCP server" },
+  },
+  {
+    kind: "factory",
+    title: "Factories",
+    noun: "factory",
+    icon: FactoryIcon,
+    none: "No factories yet",
+    lead: "A factory runs work through steps across instances. Ask an instance with the write-factory skill to make one.",
+  },
+]
 
 const FORMS: Record<Form, string> = {
   write: "Write a skill",
@@ -60,9 +106,18 @@ const focusFirstField = (panel: HTMLElement | null) =>
  * The hub's library: a header that stays put, with the search and the open tab's action, over a
  * tab per kind, at its own path. Each tab lists its entries as rows under section headers, and a
  * row unfolds in place to read the entry, and a skill or a server to edit or delete. Adding a skill
- * or a server opens its form at the top of the list.
+ * or a server opens its form at the top of the list. A tab whose kind holds nothing says what the
+ * kind is for, and offers its add action and asking the `home` instance to add one.
  */
-export function LibraryPage({ client, clock }: { client: Caller; clock: Clock }) {
+export function LibraryPage({
+  client,
+  clock,
+  home,
+}: {
+  client: Caller
+  clock: Clock
+  home: InstanceSummary | undefined
+}) {
   const list = useCallback(() => client.call("library.list", {}), [client])
   const { value: listed, failure, readAgain } = useRead(list, clock)
   const picks = useCallback(() => readPicks(client), [client])
@@ -211,13 +266,13 @@ export function LibraryPage({ client, clock }: { client: Caller; clock: Clock })
           {failure !== undefined && <Failure error={failure} />}
           {entries === undefined ? (
             failure === undefined && <Skeleton className="h-72 w-full" />
+          ) : entries.length === 0 && wanted === "" && shownKind !== undefined ? (
+            <EmptyKind kind={shownKind} home={home} onAdd={(form) => show({ form })} />
           ) : entries.length === 0 ? (
             <Empty>
               <EmptyHeader>
-                <EmptyTitle>
-                  {wanted === "" ? shownKind?.none : `Nothing here matches "${query.trim()}"`}
-                </EmptyTitle>
-                {wanted !== "" && elsewhere.length > 0 && (
+                <EmptyTitle>Nothing here matches &quot;{query.trim()}&quot;</EmptyTitle>
+                {elsewhere.length > 0 && (
                   <EmptyDescription>
                     {elsewhere.map((each) => (
                       <Button
@@ -281,6 +336,43 @@ function SkillSections({
         </SectionFrame>
       )}
     </>
+  )
+}
+
+/** A kind that holds nothing: what it is for, its add action, and asking `home` to add one. */
+function EmptyKind({
+  kind: { icon: Icon, none, lead, add },
+  home,
+  onAdd,
+}: {
+  kind: (typeof KINDS)[number]
+  home: InstanceSummary | undefined
+  onAdd: (form: Form) => void
+}) {
+  return (
+    <Empty variant="outline">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Icon />
+        </EmptyMedia>
+        <EmptyTitle>{none}</EmptyTitle>
+        <EmptyDescription>{lead}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="flex-row flex-wrap justify-center">
+        {add !== undefined && (
+          <Button onClick={() => onAdd(add.form)}>
+            <PlusIcon data-icon="inline-start" />
+            {add.label}
+          </Button>
+        )}
+        {home !== undefined && (
+          <Button variant="outline" onClick={() => navigate(homePath(home.instance_id))}>
+            <MessageSquareIcon data-icon="inline-start" />
+            Ask {instanceName(home)} to add one
+          </Button>
+        )}
+      </EmptyContent>
+    </Empty>
   )
 }
 
