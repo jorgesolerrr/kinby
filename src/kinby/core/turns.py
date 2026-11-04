@@ -289,8 +289,8 @@ class Turns:
         return {**self._live(), **self._parked()}
 
     def holding(self) -> dict[UUID, Origin]:
-        """What holds the instance: what is running, except a dreaming stage parked on an
-        approval, which holds only its own thread (ADR 0099)."""
+        """What holds the instance: what is running, except a routine parked on an approval,
+        which holds only its own thread (ADR 0115)."""
         parked = {
             thread: origin
             for thread, origin in self._parked().items()
@@ -300,7 +300,7 @@ class Turns:
 
     @staticmethod
     def _holds_only_its_thread(origin: Origin) -> bool:
-        return isinstance(origin, RoutineOrigin) and origin.dreaming_stage
+        return isinstance(origin, RoutineOrigin)
 
     def _live(self) -> dict[UUID, Origin]:
         origins = {
@@ -383,8 +383,8 @@ class Turns:
             await self._changed.wait()
 
     async def wait_idle(self) -> None:
-        """Wait until nothing holds the instance: no live turn, no parked approval but a dreaming
-        stage's, no claim."""
+        """Wait until nothing holds the instance: no live turn, no parked approval but a
+        routine's, no claim."""
         while True:
             self._changed.clear()
             if not self.holding() and not self._claims:
@@ -835,7 +835,7 @@ class Turns:
     ) -> AcceptedResult:
         """Resume the turn parked at *parked* with *answer*."""
         if self._holds_only_its_thread(origin):
-            # A parked stage let other work in, so it takes the instance back like a new turn.
+            # A parked routine let other work in, so it takes the instance back like a new turn.
             self.require_available(origin)
         # The parked turn itself owns the instance reservation.
         claim = TurnClaim(origin)
