@@ -42,14 +42,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
 import {
   Select,
   SelectContent,
@@ -66,6 +59,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useFollowing } from "@/hooks/use-following"
 import { useRead } from "@/hooks/use-read"
 import {
+  BUILT_IN_FIELDS,
   type Creation,
   createCommand,
   type FieldInput,
@@ -204,10 +198,11 @@ export function Onboarding({
       .filter((field) => field.kind === "secret")
       .map((field) => [field.name, secretSource(sources[field.name], variable(field), kept)]),
   )
+  const left = requiredLeft(fields, values, resolved)
   const blocked = blocker(
     preparation,
     identity.name,
-    requiredLeft(fields, values, resolved),
+    left,
     Object.values(resolved).some(unnamedSave),
   )
 
@@ -348,25 +343,35 @@ export function Onboarding({
                 />
               )}
             </SectionFrame>
-            <SectionFrame variant="page" title="Setup" lead="What the image and the role ask for.">
+            <SectionFrame
+              variant="page"
+              title="Setup"
+              lead="What the image and the role ask for. Secrets are write-only: the hub keeps them with the instance and never sends them back."
+              actions={
+                left > 0 && (
+                  <span className="text-sm text-muted-foreground">
+                    {left} required {left === 1 ? "field" : "fields"} left
+                  </span>
+                )
+              }
+            >
               {preparation.state === "prepared" ? (
-                <>
-                  <SetupFields
-                    fields={fields.filter((field) => field.name !== PROMPT_FIELD)}
-                    values={values}
-                    sources={resolved}
-                    errors={refused}
-                    kept={kept}
-                    variable={variable}
-                    onChange={(name, value) =>
-                      setValues((current) => ({ ...current, [name]: value }))
-                    }
-                    onSource={(name, source) =>
-                      setSources((current) => ({ ...current, [name]: source }))
-                    }
-                  />
-                  <Logins logins={description?.logins ?? []} />
-                </>
+                <SetupRows
+                  fields={fields.filter((field) => field.name !== PROMPT_FIELD)}
+                  logins={description?.logins ?? []}
+                  role={offer?.role.name}
+                  values={values}
+                  sources={resolved}
+                  errors={refused}
+                  kept={kept}
+                  variable={variable}
+                  onChange={(name, value) =>
+                    setValues((current) => ({ ...current, [name]: value }))
+                  }
+                  onSource={(name, source) =>
+                    setSources((current) => ({ ...current, [name]: source }))
+                  }
+                />
               ) : (
                 <p className="text-sm text-muted-foreground">
                   The setup fields show once the image is prepared.
@@ -749,11 +754,14 @@ function PromptRow({
 }
 
 /**
- * The setup fields. Each secret field takes the hub secret named after the variable it is held
- * under until the user picks another source.
+ * The setup fields as rows, each saying who asks for it, then the subscription logins the user
+ * signs in to once the instance exists. Each secret field takes the hub secret named after the
+ * variable it is held under until the user picks another source.
  */
-function SetupFields({
+function SetupRows({
   fields,
+  logins,
+  role,
   values,
   sources,
   errors,
@@ -763,6 +771,9 @@ function SetupFields({
   onSource,
 }: {
   fields: SetupField[]
+  logins: SubscriptionLogin[]
+  /** The picked factory role's name, or nothing for none. */
+  role: string | undefined
   values: Record<string, FieldInput>
   sources: Record<string, SecretSource>
   errors: Record<string, string>
@@ -771,14 +782,16 @@ function SetupFields({
   onChange: (name: string, value: FieldInput) => void
   onSource: (name: string, source: SecretSource) => void
 }) {
-  const inputs = (kind: SetupField["kind"]) =>
-    fields
-      .filter((field) => field.kind === kind)
-      .map((field) =>
-        kind === "secret" ? (
-          <SecretInput
+  const asker = (field: SetupField) =>
+    BUILT_IN_FIELDS.includes(field.name) ? "every instance" : `asked by ${role ?? "the image"}`
+  return (
+    <ul aria-label="Setup" className="flex flex-col divide-y">
+      {fields.map((field) =>
+        field.kind === "secret" ? (
+          <SecretRow
             key={field.name}
             field={field}
+            asker={asker(field)}
             value={values[field.name] ?? initialInput(field)}
             error={errors[field.name]}
             kept={kept}
@@ -788,30 +801,101 @@ function SetupFields({
             onSource={(source) => onSource(field.name, source)}
           />
         ) : (
-          <SetupInput
+          <ConfigRow
             key={field.name}
             field={field}
+            asker={asker(field)}
             value={values[field.name] ?? initialInput(field)}
             error={errors[field.name]}
             onChange={(value) => onChange(field.name, value)}
           />
         ),
-      )
+      )}
+      {logins.map((login) => (
+        <li key={login.id} aria-label={login.label}>
+          <Item size="row" className="items-start">
+            <ItemContent className="min-w-0 basis-56">
+              <ItemTitle>{login.label}</ItemTitle>
+              <ItemDescription lines="all">{login.description}</ItemDescription>
+            </ItemContent>
+            <div className="w-full sm:w-72">
+              <Badge variant="outline">Sign in after it's created</Badge>
+            </div>
+          </Item>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** One setup field's row: its label, description and who asks for it, with its control beside. */
+function SetupRow({
+  field,
+  asker,
+  htmlFor,
+  error,
+  children,
+}: {
+  field: SetupField
+  asker: string
+  htmlFor: string
+  error: string | undefined
+  children: ReactNode
+}) {
   return (
-    <FieldGroup className="max-w-xl">
-      <FieldSet>
-        <FieldLegend>Configuration</FieldLegend>
-        {inputs("config")}
-      </FieldSet>
-      <FieldSet>
-        <FieldLegend>Secrets</FieldLegend>
-        <FieldDescription>
-          Write-only. The hub keeps them with the instance and never sends them back. A field can
-          take a hub secret instead.
-        </FieldDescription>
-        {inputs("secret")}
-      </FieldSet>
-    </FieldGroup>
+    <li>
+      <Item size="row" className="items-start">
+        <ItemContent className="min-w-0 basis-56">
+          <ItemTitle>
+            <SetupLabel field={field} htmlFor={htmlFor} />
+          </ItemTitle>
+          <ItemDescription lines="all">
+            {field.description} · {asker}
+          </ItemDescription>
+        </ItemContent>
+        <div className="flex w-full flex-col gap-3 sm:w-72">
+          {children}
+          <FieldError>{error}</FieldError>
+        </div>
+      </Item>
+    </li>
+  )
+}
+
+function ConfigRow({
+  field,
+  asker,
+  value,
+  error,
+  onChange,
+}: {
+  field: SetupField
+  asker: string
+  value: FieldInput | undefined
+  error: string | undefined
+  onChange: (value: FieldInput) => void
+}) {
+  const id = `setup-${field.name}`
+  const invalid = error !== undefined || undefined
+  return (
+    <SetupRow field={field} asker={asker} htmlFor={id} error={error}>
+      {field.type === "boolean" ? (
+        <Switch
+          id={id}
+          checked={value === true}
+          aria-invalid={invalid}
+          onCheckedChange={(checked) => onChange(checked)}
+        />
+      ) : (
+        <SetupControl
+          id={id}
+          field={field}
+          value={typeof value === "string" ? value : ""}
+          invalid={invalid}
+          onChange={(next) => onChange(next)}
+        />
+      )}
+    </SetupRow>
   )
 }
 
@@ -878,8 +962,9 @@ const unnamedSave = (source: SecretSource) => source.save?.trim() === ""
  * A secret field: a hub secret it takes, or a value typed, which can be saved to the hub under a
  * name that starts as the field's variable.
  */
-function SecretInput({
+function SecretRow({
   field,
+  asker,
   value,
   error,
   kept,
@@ -889,6 +974,7 @@ function SecretInput({
   onSource,
 }: {
   field: SetupField
+  asker: string
   value: FieldInput | undefined
   error: string | undefined
   kept: string[]
@@ -900,8 +986,12 @@ function SecretInput({
   const id = `setup-${field.name}`
   const invalid = error !== undefined || undefined
   return (
-    <Field data-invalid={invalid}>
-      <SetupLabel field={field} htmlFor={source.hubSecret === undefined ? id : `${id}-hub`} />
+    <SetupRow
+      field={field}
+      asker={asker}
+      htmlFor={source.hubSecret === undefined ? id : `${id}-hub`}
+      error={error}
+    >
       {kept.length > 0 && (
         <HubSecretPicker
           id={`${id}-hub`}
@@ -950,9 +1040,7 @@ function SecretInput({
           )}
         </>
       )}
-      <FieldDescription>{field.description}</FieldDescription>
-      <FieldError>{error}</FieldError>
-    </Field>
+    </SetupRow>
   )
 }
 
@@ -1139,26 +1227,5 @@ function StartStep({
         </Button>
       </div>
     </>
-  )
-}
-
-/** The subscription logins the image declares. The user signs in once the instance exists. */
-function Logins({ logins }: { logins: SubscriptionLogin[] }) {
-  if (logins.length === 0) return null
-  return (
-    <ItemGroup aria-label="Subscription logins">
-      {logins.map((login) => (
-        <Item key={login.id} render={<li />} aria-label={login.label} variant="outline" size="sm">
-          <ItemContent>
-            <ItemTitle>{login.label}</ItemTitle>
-            <ItemDescription lines="all">{login.description}</ItemDescription>
-          </ItemContent>
-          <ItemActions>
-            <Badge variant="outline">Sign-in</Badge>
-            <Badge variant="secondary">After creation</Badge>
-          </ItemActions>
-        </Item>
-      ))}
-    </ItemGroup>
   )
 }
