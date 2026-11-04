@@ -1,8 +1,10 @@
-import type { Client, InstanceSummary } from "@kinby/contract"
-import { useState, useSyncExternalStore } from "react"
+import type { Client, Clock, InstanceSummary } from "@kinby/contract"
+import { CirclePauseIcon, CircleXIcon, PlayIcon } from "lucide-react"
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react"
 
 import { Composer } from "@/components/composer"
-import { FieldDescription } from "@/components/ui/field"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectContent,
@@ -11,40 +13,78 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Spinner } from "@/components/ui/spinner"
 import { useInstanceClient } from "@/hooks/use-instance-client"
+import { type Start, useStart } from "@/hooks/use-start"
 import { instanceName } from "@/lib/instances"
 import { selectThread } from "@/lib/selection"
 
+/** A message written to a stopped instance, sent once it runs, and kept if another is picked. */
+interface Queued {
+  instanceId: string
+  message: string
+  /** Ends the composer's send: `false` keeps the message, and a send clears it once it succeeds. */
+  settle: (sent: false | Promise<unknown>) => void
+}
+
 /**
  * Where the app opens: a greeting and a composer that starts a thread on the instance picked in
- * "Send to", then opens it. "Send to" lists the running instances and opens on `to`, the home
- * instance, or the first running one, in that order.
+ * "Send to", then opens it. "Send to" lists every instance, the running ones first with the home
+ * instance first among them, and opens on `to` or the first listed. `instances` holds at least one.
+ * A stopped instance picked shows an alert over the composer with Start, and Send becomes Start
+ * and send: it starts the instance as the instance header does, and sends once it runs. A failed
+ * start says why in the alert and keeps the message. `onChanged` lists the instances again once
+ * the start succeeds, and must keep its identity.
  */
 export function HomeScreen({
   caller,
+  clock,
   instances,
   to,
+  onChanged,
 }: {
-  caller: Pick<Client, "instance">
+  caller: Pick<Client, "call" | "instance">
+  clock: Clock
   instances: InstanceSummary[]
   to: string | undefined
+  onChanged: () => void
 }) {
   const running = instances.filter((instance) => instance.process === "running")
+  const listed = [
+    ...running.filter((instance) => instance.home),
+    ...running.filter((instance) => !instance.home),
+    ...instances.filter((instance) => instance.process !== "running"),
+  ]
   const [choice, setChoice] = useState(to)
-  const picked =
-    running.find((instance) => instance.instance_id === choice) ??
-    running.find((instance) => instance.home) ??
-    running[0]
-  const client = useInstanceClient(caller, picked?.instance_id)
+  const picked = listed.find((instance) => instance.instance_id === choice) ?? listed[0]
+  const stopped = picked.process !== "running"
+  const start = useStart(caller, clock, picked, onChanged)
+  const queued = useRef<Queued>(undefined)
+  const client = useInstanceClient(caller, stopped ? undefined : picked.instance_id)
   const connected =
     useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
     "connected"
   const send = async (message: string) => {
-    if (client === undefined || picked === undefined) return
+    if (client === undefined) return
     const created = await client.call("thread.create", {})
     await client.call("thread.turn.start", { thread_id: created.id, message })
     selectThread(picked.instance_id, created.id)
   }
+  const failed = start.starting?.state === "failed"
+  const settleQueued = useEffectEvent(() => {
+    const waiting = queued.current
+    if (waiting === undefined) return
+    const elsewhere = waiting.instanceId !== picked.instance_id
+    if (!(failed || connected || elsewhere)) return
+    queued.current = undefined
+    waiting.settle(failed || elsewhere ? false : send(waiting.message))
+  })
+  useEffect(() => settleQueued(), [failed, connected, picked.instance_id])
+  const startAndSend = (message: string) =>
+    new Promise<unknown>((settle) => {
+      queued.current = { instanceId: picked.instance_id, message, settle }
+      start.ask()
+    })
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center gap-6 p-6">
@@ -52,29 +92,30 @@ export function HomeScreen({
         {greeting(new Date().getHours())}
       </h1>
       <div className="flex flex-col gap-2">
+        {stopped && <StoppedAlert name={instanceName(picked)} start={start} />}
         <Composer
           label="Message"
           placeholder="How can I help?"
-          name={picked && instanceName(picked)}
-          disabled={picked === undefined}
-          connected={connected}
-          onSend={send}
+          name={instanceName(picked)}
+          connected={stopped || connected}
+          sendLabel={stopped ? "Start and send" : "Send"}
+          onSend={stopped ? startAndSend : send}
         >
           <Select
-            items={running.map((instance) => ({
+            items={listed.map((instance) => ({
               value: instance.instance_id,
               label: label(instance),
             }))}
-            value={picked?.instance_id ?? null}
+            value={picked.instance_id}
             onValueChange={(next) => next !== null && setChoice(next)}
-            disabled={picked === undefined}
+            disabled={start.busy}
           >
             <SelectTrigger size="sm" aria-label="Send to" className="min-w-0">
-              <SelectValue placeholder="No instance" />
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                {running.map((instance) => (
+                {listed.map((instance) => (
                   <SelectItem key={instance.instance_id} value={instance.instance_id}>
                     {label(instance)}
                   </SelectItem>
@@ -83,13 +124,36 @@ export function HomeScreen({
             </SelectContent>
           </Select>
         </Composer>
-        {picked === undefined && (
-          <FieldDescription>
-            No instance is running. Start one from its page to send it a message.
-          </FieldDescription>
-        )}
       </div>
     </div>
+  )
+}
+
+/** Says the picked instance is stopped and that sending starts it, with Start, or why it did not. */
+function StoppedAlert({ name, start }: { name: string; start: Start }) {
+  const failure = start.starting?.state === "failed" ? start.starting.detail : undefined
+  return (
+    <Alert variant={failure === undefined ? "default" : "destructive"}>
+      {failure === undefined ? <CirclePauseIcon /> : <CircleXIcon />}
+      <AlertTitle>
+        {start.busy
+          ? `${name} is starting`
+          : failure === undefined
+            ? `${name} is stopped`
+            : `${name} did not start`}
+      </AlertTitle>
+      <AlertDescription>{failure ?? "Write anyway: sending starts it first."}</AlertDescription>
+      <AlertAction>
+        <Button size="sm" variant="outline" disabled={start.busy} onClick={start.ask}>
+          {start.busy ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <PlayIcon data-icon="inline-start" />
+          )}
+          Start
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }
 
@@ -98,7 +162,12 @@ function unsubscribed(): () => void {
 }
 
 function label(instance: InstanceSummary): string {
-  return instance.home ? `${instanceName(instance)} (home)` : instanceName(instance)
+  const marks = [instance.home && "home", instance.process !== "running" && "stopped"].filter(
+    Boolean,
+  )
+  return marks.length === 0
+    ? instanceName(instance)
+    : `${instanceName(instance)} (${marks.join(", ")})`
 }
 
 function greeting(hour: number): string {

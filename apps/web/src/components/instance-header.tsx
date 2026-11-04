@@ -35,8 +35,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
+import { useStart } from "@/hooks/use-start"
 import { type Update, useUpdate } from "@/hooks/use-update"
-import { followStart, type Starting } from "@/lib/creation"
 import {
   type InstanceNotice,
   instanceName,
@@ -169,40 +169,6 @@ export function InstanceHeader({
       {children?.({ start: start.ask, starting: start.busy, stopping: stop.stopping, update })}
     </>
   )
-}
-
-/** The start asked here, and how it goes. */
-function useStart(
-  caller: Pick<Client, "call">,
-  clock: Clock,
-  instance: InstanceSummary,
-  onStarted: () => void,
-) {
-  const [request, setRequest] = useState<{ instanceId: string }>()
-  const follow = useCallback(
-    (asked: { instanceId: string }, report: (starting: Starting) => void) =>
-      followStart(
-        caller,
-        asked.instanceId,
-        (starting) => {
-          report(starting)
-          if (starting.state === "started") onStarted()
-        },
-        clock,
-      ),
-    [caller, clock, onStarted],
-  )
-  const starting = useFollowing(request, follow)
-  // A start ends once the instances are listed again with the instance meant to run, so Start
-  // offered after a later stop is not busy.
-  if (starting?.state === "started" && instance.intended_state === "running") {
-    setRequest(undefined)
-  }
-  return {
-    starting,
-    busy: request !== undefined && starting?.state !== "failed",
-    ask: () => setRequest({ instanceId: instance.instance_id }),
-  }
 }
 
 type Stop = ReturnType<typeof useStop>

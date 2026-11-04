@@ -148,7 +148,16 @@ export function MainPanel({
       </EmptyState>
     )
   }
-  return <HomeScreen key={to} caller={caller} instances={instances} to={to} />
+  return (
+    <HomeScreen
+      key={to}
+      caller={caller}
+      clock={clock}
+      instances={instances}
+      to={to}
+      onChanged={onChanged}
+    />
+  )
 }
 
 /**
