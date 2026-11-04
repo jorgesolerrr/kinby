@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { useFollowing } from "@/hooks/use-following"
 import { useRead } from "@/hooks/use-read"
+import { type SecretSource, secretSource } from "@/lib/creation"
 import { type Followed, followOperation } from "@/lib/operation"
 import { CircleCheckIcon } from "lucide-react"
 
@@ -81,7 +82,8 @@ export function SecretsSection({
 
 /**
  * One row per secret the instance declares, with whether it holds a value, the hub secret it
- * links, and Set or Replace, by typing a value or picking a hub secret. No value is ever read
+ * links, and Set or Replace, by typing a value or picking a hub secret. The hub secret named
+ * after the secret's variable is picked until the user picks another. No value is ever read
  * back. `onSet` hears each value the hub wrote, and must keep its identity.
  */
 export function Secrets({
@@ -134,7 +136,9 @@ function SecretRow({
   const id = useId()
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState("")
-  const [hubSecret, setHubSecret] = useState<string>()
+  const [chosen, setChosen] = useState<SecretSource>()
+  // No hub secret has an empty name.
+  const hubSecret = secretSource(chosen, secret.variable ?? "", kept).hubSecret
   // A new object for each save, so saving again follows a new operation.
   const [request, setRequest] = useState<Source>()
   const follow = useCallback(
@@ -155,7 +159,7 @@ function SecretRow({
           // The value leaves the page once the hub holds it.
           setEditing(false)
           setValue("")
-          setHubSecret(undefined)
+          setChosen(undefined)
           setRequest(undefined)
           onSet()
         },
@@ -168,7 +172,7 @@ function SecretRow({
   const close = () => {
     setEditing(false)
     setValue("")
-    setHubSecret(undefined)
+    setChosen(undefined)
     setRequest(undefined)
   }
   const failed = followed?.state === "failed" || undefined
@@ -220,7 +224,7 @@ function SecretRow({
                   kept={kept}
                   picked={hubSecret}
                   invalid={failed}
-                  onPick={setHubSecret}
+                  onPick={(picked) => setChosen(picked === undefined ? {} : { hubSecret: picked })}
                 />
               )}
               {hubSecret === undefined && (
@@ -233,7 +237,11 @@ function SecretRow({
                     value={value}
                     readOnly={saving}
                     aria-invalid={failed}
-                    onChange={(event) => setValue(event.target.value)}
+                    onChange={(event) => {
+                      setValue(event.target.value)
+                      // Hub secrets read later must not take over a field the user typed into.
+                      setChosen((last) => last ?? {})
+                    }}
                   />
                 </>
               )}

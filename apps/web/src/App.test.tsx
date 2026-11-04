@@ -1,5 +1,5 @@
 import { createClient } from "@kinby/contract"
-import type { InstanceSummary, ThreadSummary } from "@kinby/contract"
+import type { InstanceSetup, InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -21,13 +21,15 @@ function openApp({
   instances = [],
   removed = [],
   threads = {},
+  setups = {},
 }: {
   signedIn: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
   threads?: Record<string, ThreadSummary[]>
+  setups?: Record<string, InstanceSetup>
 }) {
-  const hub = fakeHub({ signedIn, instances, removed, threads })
+  const hub = fakeHub({ signedIn, instances, removed, threads, setups })
   const clock = fakeClock()
   const { unmount } = render(
     <App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />,
@@ -1673,6 +1675,174 @@ describe("the home screen", () => {
     expect(screen.queryByRole("alert")).toBeNull()
     expect(screen.queryByRole("button", { name: "Start and send" })).toBeNull()
     expect((await sendTo()).textContent).toContain("research")
+  })
+
+  describe("with a required secret missing", () => {
+    const apiKey = {
+      name: "api_key",
+      label: "API key",
+      variable: "ANTHROPIC_API_KEY",
+      required: true,
+      is_set: false,
+    }
+    const missing = (setup: Partial<InstanceSetup> = {}): InstanceSetup => ({
+      logins: [],
+      missing_commands: [],
+      secrets: [
+        apiKey,
+        {
+          name: "TAVILY_API_KEY",
+          label: "Search key",
+          variable: "TAVILY_API_KEY",
+          required: false,
+          is_set: false,
+        },
+        {
+          name: "GITHUB_TOKEN",
+          label: "GitHub token",
+          variable: "GITHUB_TOKEN",
+          required: true,
+          is_set: true,
+        },
+      ],
+      ...setup,
+    })
+    const card = async (name: string) => within(await screen.findByRole("region", { name }))
+    const saved = (state: "succeeded" | "failed") => ({
+      operation_id: "op-secrets",
+      instance_id: "hub-kinby",
+      kind: "secrets",
+      state,
+      detail: "",
+      steps: [],
+    })
+
+    it("welcomes the user on the home instance's first run, with the card over a disabled composer", async () => {
+      openApp({ signedIn: true, instances: [kinby, ada], setups: { "hub-kinby": missing() } })
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Welcome to kinby" }),
+      ).toBeDefined()
+      expect(
+        screen.getByText(
+          "Kinby is your home instance. It does personal work for you and builds the rest of kinby on your behalf.",
+        ),
+      ).toBeDefined()
+      const setup = await card("Kinby needs setup to answer")
+      expect(setup.getAllByRole("listitem").map((row) => row.getAttribute("aria-label"))).toEqual([
+        "API key",
+      ])
+      const box = await message()
+      expect(box.hasAttribute("disabled")).toBe(true)
+      expect(box.getAttribute("placeholder")).toBe("Add Kinby's key to start")
+      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+        "true",
+      )
+    })
+
+    it("saves a secret from the card with instance.secrets.set, then drops it and enables the composer", async () => {
+      const { hub } = openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing() },
+      })
+      const user = userEvent.setup()
+
+      const setup = await card("Kinby needs setup to answer")
+      await user.click(setup.getByRole("button", { name: "Set" }))
+      await user.type(setup.getByLabelText("New value for API key"), "sk-the-key")
+      await user.click(setup.getByRole("button", { name: "Save" }))
+      expect(hubCalls(hub, "instance.secrets.set")).toEqual([
+        { instance_id: "hub-kinby", secrets: { api_key: "sk-the-key" } },
+      ])
+      hub.setups = {}
+      await answerHub(hub, "instance.secrets.set", {
+        operation_id: "op-secrets",
+        instance_id: "hub-kinby",
+      })
+      await answerHub(hub, "operation.get", saved("succeeded"))
+
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: "Kinby needs setup to answer" })).toBeNull(),
+      )
+      expect(screen.queryByRole("heading", { name: "Welcome to kinby" })).toBeNull()
+      expect((await message()).hasAttribute("disabled")).toBe(false)
+      expect((await message()).getAttribute("placeholder")).toBe("How can I help?")
+    })
+
+    it("takes the hub secret named after the key's variable", async () => {
+      const { hub } = openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing() },
+      })
+      const user = userEvent.setup()
+
+      const setup = await card("Kinby needs setup to answer")
+      await answerHub(hub, "hub.secret.list", {
+        secrets: [{ name: "OPENAI_API_KEY" }, { name: "ANTHROPIC_API_KEY" }],
+      })
+      await user.click(setup.getByRole("button", { name: "Set" }))
+      expect(setup.getByRole("combobox", { name: "Hub secret for API key" }).textContent).toContain(
+        "ANTHROPIC_API_KEY",
+      )
+      await user.click(setup.getByRole("button", { name: "Save" }))
+
+      expect(hubCalls(hub, "instance.secrets.set")).toEqual([
+        { instance_id: "hub-kinby", hub_secrets: { api_key: "ANTHROPIC_API_KEY" } },
+      ])
+    })
+
+    it("says another instance missing one needs setup to answer, over a stopped one's alert", async () => {
+      window.history.replaceState(null, "", "/?to=hub-unnamed")
+      openApp({
+        signedIn: true,
+        instances: [kinby, unnamed],
+        setups: { "hub-unnamed": missing() },
+      })
+
+      expect(await card("research needs setup to answer")).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "Welcome to kinby" })).toBeNull()
+      expect(screen.queryByRole("alert")).toBeNull()
+      expect((await message()).hasAttribute("disabled")).toBe(true)
+    })
+
+    it.each([
+      [
+        "a login",
+        {
+          logins: [{ id: "claude", label: "Claude", description: "", state: "pending" as const }],
+        },
+      ],
+      ["a list of repository commands", { missing_commands: ["checks"] }],
+    ])("links to the instance's page when %s is pending", async (_, pending) => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({ signedIn: true, instances: [kinby, ada], setups: { "hub-ada": missing(pending) } })
+      const user = userEvent.setup()
+
+      await user.click(
+        (await card("Ada needs setup to answer")).getByRole("button", { name: "Open Ada" }),
+      )
+
+      expect(window.location.pathname).toBe("/instances/hub-ada")
+    })
+
+    it("does not link to the instance's page with only its secrets left", async () => {
+      const signedIn = {
+        id: "claude",
+        label: "Claude",
+        description: "",
+        state: "signed_in" as const,
+      }
+      openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing({ logins: [signedIn] }) },
+      })
+
+      const setup = await card("Kinby needs setup to answer")
+      expect(setup.queryByRole("button", { name: "Open Kinby" })).toBeNull()
+    })
   })
 
   it("points to New instance when the hub has none", async () => {

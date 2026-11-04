@@ -11,7 +11,7 @@ import {
   type SubscriptionMethod,
   type Transport,
 } from "./client"
-import type { InstanceSummary, OperationGetResult, ThreadSummary } from "./contract"
+import type { InstanceSetup, InstanceSummary, OperationGetResult, ThreadSummary } from "./contract"
 
 /** The one token the fake hub accepts at its login route. */
 export const ACCESS_TOKEN = "the-access-token"
@@ -40,6 +40,8 @@ export interface FakeHub {
   removed: InstanceSummary[]
   /** What `thread.list` answers with on an instance's connection, newest first, by instance. */
   threads: Record<string, ThreadSummary[]>
+  /** What `instance.status` answers with as each instance's setup, by instance. */
+  setups: Record<string, InstanceSetup>
 }
 
 /**
@@ -48,18 +50,21 @@ export interface FakeHub {
  * it from the removed list. Their operations have already succeeded when first read. A deletion
  * previews the instance's directory under /srv/kinby/instances. An instance's connection answers
  * `thread.list` for an instance `threads` names, `thread.create` with `thread-1`, `thread-2` and on,
- * and accepts every `thread.turn.start`.
+ * and accepts every `thread.turn.start`. `instance.status` answers with the setup `setups` holds
+ * for the instance, or nothing left to set up.
  */
 export function fakeHub({
   signedIn = true,
   instances = [],
   removed = [],
   threads = {},
+  setups = {},
 }: {
   signedIn?: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
   threads?: Record<string, ThreadSummary[]>
+  setups?: Record<string, InstanceSetup>
 } = {}): FakeHub {
   const operations = new Map<string, OperationGetResult>()
   let created = 0
@@ -81,6 +86,7 @@ export function fakeHub({
     instances,
     removed,
     threads,
+    setups,
     sockets: [],
     transport: {
       openSocket(url, events) {
@@ -141,13 +147,17 @@ export function fakeHub({
           if (method === "operation.get" && isRecord(params)) {
             return operations.get(String(params.operation_id))
           }
-          // Nothing left to set up. A page waits for this read before its empty state.
-          if (method === "instance.status") {
+          // A page waits for this read before its empty state.
+          if (method === "instance.status" && isRecord(params)) {
             return {
               instance_id: "",
               process: "created",
               readiness: "not-running",
-              setup: { logins: [], secrets: [], missing_commands: [] },
+              setup: hub.setups[String(params.instance_id)] ?? {
+                logins: [],
+                secrets: [],
+                missing_commands: [],
+              },
               home: false,
               recreate_reasons: [],
               repository_commands: [],

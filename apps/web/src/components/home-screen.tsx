@@ -1,10 +1,27 @@
-import type { Client, Clock, InstanceSummary } from "@kinby/contract"
-import { CirclePauseIcon, CircleXIcon, PlayIcon } from "lucide-react"
-import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react"
+import type { Client, Clock, InstanceSetup, InstanceSummary, SecretSetup } from "@kinby/contract"
+import { CirclePauseIcon, CircleXIcon, KeyRoundIcon, PlayIcon } from "lucide-react"
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { Composer } from "@/components/composer"
+import { Secrets } from "@/components/secrets-section"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -15,9 +32,10 @@ import {
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { useInstanceClient } from "@/hooks/use-instance-client"
+import { useRead } from "@/hooks/use-read"
 import { type Start, useStart } from "@/hooks/use-start"
 import { instanceName } from "@/lib/instances"
-import { selectThread } from "@/lib/selection"
+import { selectInstance, selectThread } from "@/lib/selection"
 
 /** A message written to a stopped instance, sent once it runs, and kept if another is picked. */
 interface Queued {
@@ -33,8 +51,10 @@ interface Queued {
  * instance first among them, and opens on `to` or the first listed. `instances` holds at least one.
  * A stopped instance picked shows an alert over the composer with Start, and Send becomes Start
  * and send: it starts the instance as the instance header does, and sends once it runs. A failed
- * start says why in the alert and keeps the message. `onChanged` lists the instances again once
- * the start succeeds, and must keep its identity.
+ * start says why in the alert and keeps the message. An instance whose status says a required
+ * secret is missing shows a card over a disabled composer instead, asking for each such secret.
+ * For the home instance that is its first run, and the screen welcomes the user. `onChanged`
+ * lists the instances again once a start or a secret succeeds, and must keep its identity.
  */
 export function HomeScreen({
   caller,
@@ -58,6 +78,9 @@ export function HomeScreen({
   const [choice, setChoice] = useState(to)
   const picked = listed.find((instance) => instance.instance_id === choice) ?? listed[0]
   const stopped = picked.process !== "running"
+  const { setup, onSet } = useSetup(caller, clock, picked.instance_id, onChanged)
+  const missing = setup?.secrets.filter((secret) => secret.required && !secret.is_set) ?? []
+  const needsSetup = setup !== undefined && missing.length > 0
   const start = useStart(caller, clock, picked, onChanged)
   const queued = useRef<Queued>(undefined)
   const client = useInstanceClient(caller, stopped ? undefined : picked.instance_id)
@@ -88,15 +111,39 @@ export function HomeScreen({
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center gap-6 p-6">
-      <h1 className="text-center font-heading text-3xl font-semibold">
-        {greeting(new Date().getHours())}
-      </h1>
+      {needsSetup && picked.home ? (
+        <div className="flex flex-col gap-2 text-center">
+          <h1 className="font-heading text-3xl font-semibold">Welcome to kinby</h1>
+          <p className="text-sm text-muted-foreground">
+            {instanceName(picked)} is your home instance. It does personal work for you and builds
+            the rest of kinby on your behalf.
+          </p>
+        </div>
+      ) : (
+        <h1 className="text-center font-heading text-3xl font-semibold">
+          {greeting(new Date().getHours())}
+        </h1>
+      )}
       <div className="flex flex-col gap-2">
-        {stopped && <StoppedAlert name={instanceName(picked)} start={start} />}
+        {needsSetup ? (
+          <SetupCard
+            caller={caller}
+            clock={clock}
+            instance={picked}
+            setup={setup}
+            missing={missing}
+            onSet={onSet}
+          />
+        ) : (
+          stopped && <StoppedAlert name={instanceName(picked)} start={start} />
+        )}
         <Composer
           label="Message"
-          placeholder="How can I help?"
+          placeholder={
+            needsSetup ? `Add ${instanceName(picked)}'s key to start` : "How can I help?"
+          }
           name={instanceName(picked)}
+          disabled={needsSetup}
           connected={stopped || connected}
           sendLabel={stopped ? "Start and send" : "Send"}
           onSend={stopped ? startAndSend : send}
@@ -126,6 +173,95 @@ export function HomeScreen({
         </Composer>
       </div>
     </div>
+  )
+}
+
+/**
+ * The instance's setup, as its status has it, undefined until read. `onSet` reads it again and
+ * calls `onChanged`, and keeps its identity while `onChanged` does.
+ */
+function useSetup(
+  caller: Pick<Client, "call">,
+  clock: Clock,
+  instanceId: string,
+  onChanged: () => void,
+): { setup: InstanceSetup | undefined; onSet: () => void } {
+  const read = useCallback(
+    () => caller.call("instance.status", { instance_id: instanceId }),
+    [caller, instanceId],
+  )
+  const { value, readAgain } = useRead(read, clock)
+  const onSet = useCallback(() => {
+    readAgain()
+    onChanged()
+  }, [readAgain, onChanged])
+  return { setup: value?.setup, onSet }
+}
+
+/**
+ * Asks for each required secret the instance lacks, as its page's setup card does, and links to
+ * its page while a login or a list of repository commands is pending there too.
+ */
+function SetupCard({
+  caller,
+  clock,
+  instance,
+  setup,
+  missing,
+  onSet,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+  setup: InstanceSetup
+  missing: SecretSetup[]
+  onSet: () => void
+}) {
+  const titleId = useId()
+  const name = instanceName(instance)
+  const elsewhere =
+    setup.logins.some((login) => login.state !== "signed_in") || setup.missing_commands.length > 0
+  return (
+    <section aria-labelledby={titleId}>
+      <Card size="sm" variant="attention">
+        <CardHeader>
+          <CardTitle id={titleId}>
+            <span className="flex items-center gap-2">
+              <KeyRoundIcon aria-hidden className="size-4 shrink-0 text-ember" />
+              {name} needs setup to answer
+            </span>
+          </CardTitle>
+          <CardDescription>
+            Set what it needs. The hub keeps each secret and never shows it back.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Secrets
+            caller={caller}
+            clock={clock}
+            instanceId={instance.instance_id}
+            secrets={missing}
+            onSet={onSet}
+          />
+        </CardContent>
+        {elsewhere && (
+          <CardFooter>
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <p className="text-muted-foreground">
+                Finish its sign-ins and repository commands on its page.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => selectInstance(instance.instance_id)}
+              >
+                Open {name}
+              </Button>
+            </div>
+          </CardFooter>
+        )}
+      </Card>
+    </section>
   )
 }
 
