@@ -1022,10 +1022,11 @@ def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News")
         clock = FakeClock(datetime(2026, 9, 6, tzinfo=UTC))
-        dispatcher = runtime(instance, clock, ApprovalReplRunner())
-        await call(dispatcher, "routine.run", name="news")
-        await dispatcher.scheduler.drain()
+        runner = ApprovalReplRunner()
+        dispatcher = runtime(instance, clock, runner)
         user = await call(dispatcher, "thread.create")
+        await call(dispatcher, "thread.turn.start", thread_id=user.id, message="Note this")
+        await runner.parked.wait()
         for _ in range(thread_count - 1):
             await call(dispatcher, "thread.create")
         restarted = runtime(instance, clock)
@@ -1038,9 +1039,11 @@ def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
             return all_events(log)
 
         monkeypatch.setattr(EventLog, "all_events", counted_events)
-        busy = await call(restarted, "thread.turn.start", thread_id=user.id, message="Hello")
+        busy = await call(restarted, "routine.run", name="news")
         assert busy.code == "INSTANCE_BUSY"
-        assert reads == 1
+        # One read resets the routine's failures and one checks availability, however many
+        # threads the instance has.
+        assert reads == 2
 
     asyncio.run(scenario())
 
@@ -1286,7 +1289,30 @@ def test_repl_startup_explains_an_automatically_disabled_routine(tmp_path: Path)
     asyncio.run(scenario())
 
 
-def test_parked_routine_reserves_instance_and_interruption_is_neutral(tmp_path):
+def test_a_routine_parked_on_an_approval_lets_another_routine_run(tmp_path):
+    from tests.test_repl import ApprovalReplRunner
+
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: Reflect", name="reflection")
+        routine_file(instance, "description: Scan\nschedule: * * * * *", name="scan")
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        runner = ApprovalReplRunner()
+        dispatcher = runtime(instance, clock, runner)
+        await dispatcher.scheduler.tick()
+        await call(dispatcher, "routine.run", name="reflection")
+        await runner.parked.wait()
+        clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
+        async with asyncio.timeout(5):
+            await dispatcher.scheduler.tick()
+        routines = {item.name: item for item in (await call(dispatcher, "routine.list")).routines}
+        assert routines["reflection"].last_run.outcome == "parked"
+        assert routines["scan"].last_run is not None
+
+    asyncio.run(scenario())
+
+
+def test_parked_routine_holds_only_its_thread_and_interruption_is_neutral(tmp_path):
     from tests.test_repl import ApprovalReplRunner
 
     async def scenario():
@@ -1308,8 +1334,8 @@ def test_parked_routine_reserves_instance_and_interruption_is_neutral(tmp_path):
         routine = (await call(restarted, "routine.list")).routines[0]
         assert routine.last_run.outcome == "parked"
         user = await call(restarted, "thread.create")
-        busy = await call(restarted, "thread.turn.start", thread_id=user.id, message="Hello")
-        assert busy.code == "INSTANCE_BUSY"
+        started = await call(restarted, "thread.turn.start", thread_id=user.id, message="Hello")
+        assert isinstance(started, AcceptedResult)
         await call(restarted, "thread.turn.interrupt", thread_id=accepted.thread_id)
         await restarted.scheduler.drain()
         routine = (await call(restarted, "routine.list")).routines[0]

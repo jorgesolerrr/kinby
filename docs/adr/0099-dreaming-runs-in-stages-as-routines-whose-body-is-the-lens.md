@@ -32,5 +32,5 @@ Ticket [#108](https://github.com/jorgesolerrr/kinby/issues/108) designs **dreami
 
 - Facts gain an optional `sources` list in their frontmatter.
 - With consolidation disabled, nothing is covered and nothing is pruned.
-- A reflection waiting on an approval holds only its own thread. Consolidation keeps running.
+- A reflection waiting on an approval holds only its own thread. Consolidation keeps running. [ADR 0115](0115-a-routine-parked-on-an-approval-holds-only-its-own-thread.md) extends this to every routine.
 - Notifying the user of a dream report, a manual recap sweep, and agent-written code are outside this decision.

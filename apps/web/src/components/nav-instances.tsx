@@ -47,6 +47,7 @@ import {
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
 import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
+import { useSidebarThreads } from "@/hooks/use-sidebar-threads"
 import { INSTANCE_TABS, instanceName, shownState } from "@/lib/instances"
 import {
   CREATE_PATH,
@@ -60,7 +61,7 @@ import {
   useViewOpen,
   viewPath,
 } from "@/lib/selection"
-import { needsYou, threadList, threadTitle } from "@/lib/thread-list"
+import { needsYou, threadTitle } from "@/lib/thread-list"
 
 type Reached = Pick<InstanceClient, "call" | "state" | "onStateChange">
 
@@ -267,16 +268,6 @@ function InstanceGroup({
   )
 }
 
-/**
- * The sidebar set of `client`'s instance, listed again as `usePolled` says. It is the list the open
- * thread reads and changes, so a change there shows here at once. Undefined until it is listed.
- */
-function useSidebarThreads(client: Reached | undefined, clock: Clock): ThreadSummary[] | undefined {
-  const list = client === undefined ? undefined : threadList(client, "sidebar")
-  usePolled(list?.list ?? listNothing, clock, useConnected(client), POLL_INTERVAL_MS)
-  return useSyncExternalStore(list?.onChange ?? unsubscribed, () => list?.view())?.threads
-}
-
 /** `client`'s instance's views, listed again as `usePolled` says. Undefined until they are listed. */
 function useViews(client: Reached | undefined, clock: Clock): ViewSummary[] | undefined {
   const list = useCallback(async () => (await client?.call("view.list", {}))?.views, [client])
@@ -293,8 +284,6 @@ function useConnected(client: Reached | undefined): boolean {
 function unsubscribed(): () => void {
   return () => {}
 }
-
-async function listNothing(): Promise<void> {}
 
 /**
  * The row's "…" menu: a new thread with the instance, which only a running one can take, then each

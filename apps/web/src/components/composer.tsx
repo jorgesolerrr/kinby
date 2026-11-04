@@ -14,7 +14,8 @@ import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
 /**
  * One box where the user writes to an instance: the text, then a foot with `children` and Send.
  * Enter sends, and Shift+Enter starts a new line. While a turn runs, Send becomes Stop, and Escape
- * stops it too. Under the box, a note names `name`, the instance the message goes to.
+ * stops it too. Under the box, a note names `name`, the instance the message goes to. The message
+ * stays in the box until `onSend` resolves, and when it resolves `false`.
  */
 export function Composer({
   ref,
@@ -23,6 +24,7 @@ export function Composer({
   name,
   disabled = false,
   connected = true,
+  sendLabel = "Send",
   running = false,
   failure,
   onSend,
@@ -37,6 +39,7 @@ export function Composer({
   disabled?: boolean
   /** Whether the instance can take a message now. */
   connected?: boolean
+  sendLabel?: string
   running?: boolean
   /** Why the last change made from the foot failed. */
   failure?: string
@@ -58,8 +61,7 @@ export function Composer({
     if (text === "" || sending || running || !connected) return
     setSending(true)
     try {
-      await onSend(text)
-      setMessage("")
+      if ((await onSend(text)) !== false) setMessage("")
       setSendFailure(undefined)
     } catch (error) {
       setSendFailure(reason(error))
@@ -121,7 +123,7 @@ export function Composer({
               aria-disabled={text === "" || sending || !connected}
               onClick={() => void send()}
             >
-              Send
+              {sendLabel}
               <CornerDownLeftIcon data-icon="inline-end" />
             </InputGroupButton>
           )}

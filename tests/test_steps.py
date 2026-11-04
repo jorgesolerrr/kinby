@@ -18,6 +18,7 @@ import tomlkit
 from langchain_core.messages import AIMessageChunk, BaseMessage
 
 from kinby.contracts import (
+    AcceptedResult,
     AgentStepRun,
     ApprovalRequested,
     ClientStepRun,
@@ -309,6 +310,38 @@ def test_a_step_waits_for_a_running_turn_and_holds_the_instance_like_one(tmp_pat
         assert isinstance(result, StepResult)
         assert result.ending is StepEnding.CLEAN
         assert (workspace / "finished").is_file()
+
+    asyncio.run(scenario())
+
+
+def test_a_step_goes_ahead_of_a_routine_parked_on_an_approval(tmp_path):
+    from tests.test_repl import ApprovalReplRunner
+
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: News")
+    workspace = instance.manifest.workspace.path
+    workspace.mkdir(parents=True, exist_ok=True)
+    runner = ApprovalReplRunner()
+    runtime = booted(instance, runner)
+
+    async def scenario() -> None:
+        parked = await call(runtime.dispatcher, "routine.run", name="news")
+        assert isinstance(parked, AcceptedResult)
+        await asyncio.wait_for(runner.parked.wait(), timeout=5)
+        result = await asyncio.wait_for(run_step(runtime.dispatcher, "touch made"), timeout=5)
+        resumed = await call(
+            runtime.dispatcher,
+            "thread.approval.respond",
+            thread_id=str(parked.thread_id),
+            approval_id="11111111-1111-1111-1111-111111111111",
+            decision="approve",
+        )
+
+        assert isinstance(result, StepResult)
+        assert result.ending is StepEnding.CLEAN
+        assert (workspace / "made").is_file()
+        assert isinstance(resumed, AcceptedResult)
+        assert resumed.thread_id == parked.thread_id
 
     asyncio.run(scenario())
 

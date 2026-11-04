@@ -1,5 +1,10 @@
 import { createClient } from "@kinby/contract"
-import type { InstanceSummary, ThreadSummary } from "@kinby/contract"
+import type {
+  InstancePicksResult,
+  InstanceSetup,
+  InstanceSummary,
+  ThreadSummary,
+} from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -21,13 +26,17 @@ function openApp({
   instances = [],
   removed = [],
   threads = {},
+  setups = {},
+  picks = {},
 }: {
   signedIn: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
   threads?: Record<string, ThreadSummary[]>
+  setups?: Record<string, InstanceSetup>
+  picks?: Record<string, InstancePicksResult>
 }) {
-  const hub = fakeHub({ signedIn, instances, removed, threads })
+  const hub = fakeHub({ signedIn, instances, removed, threads, setups, picks })
   const clock = fakeClock()
   const { unmount } = render(
     <App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />,
@@ -63,6 +72,27 @@ describe("the app", () => {
     )
     expect(screen.getAllByRole("alert")).toHaveLength(1)
     expect(screen.queryByRole("button", { name: /You/ })).toBeNull()
+  })
+
+  it("signs in from one focused token box, and folds out how to rotate a lost token", async () => {
+    openApp({ signedIn: false })
+    const user = userEvent.setup()
+
+    const token = await screen.findByLabelText("Access token")
+    expect(document.activeElement).toBe(token)
+    expect(token.getAttribute("type")).toBe("password")
+    expect(screen.getByRole("button", { name: "Sign in" })).toHaveProperty("disabled", true)
+    expect(screen.getByText(window.location.host)).toBeDefined()
+
+    await user.type(token, "a-guessed-token{Enter}")
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Could not sign in. Check the token and that the hub is reachable, then sign in again.",
+    )
+
+    expect(screen.queryByText("uv run kinby hub .kinby/hub token rotate")).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Lost the token?" }))
+    expect(screen.getByText("uv run kinby hub .kinby/hub token rotate")).toBeDefined()
+    expect(screen.getByText(/Every browser signed in with the old one signs out/)).toBeDefined()
   })
 
   it("opens straight to the shell while the browser session is open", async () => {
@@ -1460,6 +1490,26 @@ describe("the home screen", () => {
   const sendTo = () => screen.findByRole("combobox", { name: "Send to" })
   const message = () => screen.findByRole("textbox", { name: "Message" })
 
+  /** The start's operation, in `state`. */
+  const started = (state: "succeeded" | "failed", detail = "") => ({
+    operation_id: "op-start",
+    instance_id: "hub-unnamed",
+    kind: "start",
+    state,
+    detail,
+    steps: [],
+  })
+
+  /** Answer the last `method` call the app sent the hub itself with `result`. */
+  async function answerHub(hub: ReturnType<typeof fakeHub>, method: string, result: unknown) {
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    const socket = hub.sockets.find((socket) => socket.url === "ws://hub.test/ws")
+    const frame = socket?.sent.findLast(
+      (frame) => (frame as { method?: string }).method === method,
+    ) as { id: string } | undefined
+    act(() => socket?.receive({ type: "result", id: frame?.id, result }))
+  }
+
   /** The thread.create and thread.turn.start calls an instance's connections were sent, oldest first. */
   async function threadStarts(hub: ReturnType<typeof fakeHub>, instanceId: string) {
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
@@ -1487,15 +1537,16 @@ describe("the home screen", () => {
     },
   )
 
-  it("sends to the running instances only, the home one first picked and marked", async () => {
+  it("sends to every instance, the running first with the home one picked, the stopped marked", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed, kinby] })
     const user = userEvent.setup()
 
     expect((await sendTo()).textContent).toContain("Kinby (home)")
     await user.click(await sendTo())
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
-      "Ada",
       "Kinby (home)",
+      "Ada",
+      "research (stopped)",
     ])
   })
 
@@ -1552,11 +1603,385 @@ describe("the home screen", () => {
     expect(await screen.findByText(note("Ada"))).toBeDefined()
   })
 
-  it("is disabled and says why when no instance is running", async () => {
-    openApp({ signedIn: true, instances: [unnamed, stopped(kinby)] })
+  it("says over the composer that a stopped instance picked starts once sent to", async () => {
+    window.history.replaceState(null, "", "/?to=hub-unnamed")
+    openApp({ signedIn: true, instances: [kinby, unnamed] })
 
-    expect((await message()).hasAttribute("disabled")).toBe(true)
-    expect(screen.getByText(/^No instance is running/)).toBeDefined()
+    const alert = within(await screen.findByRole("alert"))
+    expect(alert.getByText("research is stopped")).toBeDefined()
+    expect(alert.getByText("Write anyway: sending starts it first.")).toBeDefined()
+    expect(alert.getByRole("button", { name: "Start" })).toBeDefined()
+    expect((await message()).hasAttribute("disabled")).toBe(false)
+    expect(screen.getByRole("button", { name: "Start and send" })).toBeDefined()
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
+  })
+
+  it("starts a stopped instance from Start and send, then sends the message and opens the thread", async () => {
+    window.history.replaceState(null, "", "/?to=hub-unnamed")
+    const { hub } = openApp({ signedIn: true, instances: [kinby, unnamed] })
+    const user = userEvent.setup()
+
+    await user.type(await message(), "What is on today?")
+    await user.click(screen.getByRole("button", { name: "Start and send" }))
+
+    expect(within(screen.getByRole("alert")).getByText("research is starting")).toBeDefined()
+    await answerHub(hub, "instance.start", { operation_id: "op-start", instance_id: "hub-unnamed" })
+    hub.instances = [kinby, { ...unnamed, intended_state: "running", process: "running" }]
+    await answerHub(hub, "operation.get", started("succeeded"))
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/instances/hub-unnamed/threads/thread-1"),
+    )
+    expect(hubCalls(hub, "instance.start")).toEqual([{ instance_id: "hub-unnamed" }])
+    expect(await threadStarts(hub, "hub-unnamed")).toEqual([
+      { method: "thread.create", params: {} },
+      {
+        method: "thread.turn.start",
+        params: { thread_id: "thread-1", message: "What is on today?" },
+      },
+    ])
+  })
+
+  it("says why a start failed in the alert, and keeps the message", async () => {
+    window.history.replaceState(null, "", "/?to=hub-unnamed")
+    const { hub } = openApp({ signedIn: true, instances: [kinby, unnamed] })
+    const user = userEvent.setup()
+
+    await user.type(await message(), "What is on today?")
+    await user.click(screen.getByRole("button", { name: "Start and send" }))
+    await answerHub(hub, "instance.start", { operation_id: "op-start", instance_id: "hub-unnamed" })
+    await answerHub(hub, "operation.get", started("failed", "The image is gone."))
+
+    const alert = within(await screen.findByRole("alert"))
+    expect(await alert.findByText("The image is gone.")).toBeDefined()
+    expect(alert.getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(false)
+    expect((await message()) as HTMLTextAreaElement).toHaveProperty("value", "What is on today?")
+    expect(
+      screen.getByRole("button", { name: "Start and send" }).getAttribute("aria-disabled"),
+    ).toBe("false")
+    expect(screen.getAllByText("The image is gone.")).toHaveLength(1)
+    expect(window.location.pathname).toBe("/")
+  })
+
+  it("forgets a failed start once another stopped instance is picked", async () => {
+    window.history.replaceState(null, "", "/?to=hub-unnamed")
+    const { hub } = openApp({ signedIn: true, instances: [kinby, unnamed, stopped(ada)] })
+    const user = userEvent.setup()
+
+    await user.click(
+      within(await screen.findByRole("alert")).getByRole("button", { name: "Start" }),
+    )
+    await answerHub(hub, "instance.start", { operation_id: "op-start", instance_id: "hub-unnamed" })
+    await answerHub(hub, "operation.get", started("failed", "The image is gone."))
+    expect(await screen.findByText("The image is gone.")).toBeDefined()
+    await user.click(await sendTo())
+    await user.click(await screen.findByRole("option", { name: "Ada (stopped)" }))
+
+    const alert = within(await screen.findByRole("alert"))
+    expect(alert.getByText("Ada is stopped")).toBeDefined()
+    expect(alert.queryByText("The image is gone.")).toBeNull()
+  })
+
+  it("drops the alert and offers Send again once the instance started from it runs", async () => {
+    window.history.replaceState(null, "", "/?to=hub-unnamed")
+    const { hub } = openApp({ signedIn: true, instances: [kinby, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(
+      within(await screen.findByRole("alert")).getByRole("button", { name: "Start" }),
+    )
+    await answerHub(hub, "instance.start", { operation_id: "op-start", instance_id: "hub-unnamed" })
+    hub.instances = [kinby, { ...unnamed, intended_state: "running", process: "running" }]
+    await answerHub(hub, "operation.get", started("succeeded"))
+
+    expect(await screen.findByRole("button", { name: "Send" })).toBeDefined()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Start and send" })).toBeNull()
+    expect((await sendTo()).textContent).toContain("research")
+  })
+
+  describe("on an instance with no threads", () => {
+    const held: InstancePicksResult = {
+      hash: "picks-hash",
+      picks: [
+        { name: "research", source: "shipped", state: "up-to-date" },
+        { name: "trip-planner", source: "written", state: "edited" },
+      ],
+      mcp_servers: [],
+    }
+    /** Matches the paragraph that reads `text`, its skill names set apart in a span. */
+    const sentence = (text: string) => (_: string, element: Element | null) =>
+      element?.tagName === "P" && element.textContent === text
+
+    it("greets with its avatar, says it is ready with no threads, and names its picked skills", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({
+        signedIn: true,
+        instances: [kinby, { ...ada, avatar: { shape: "squircle", color: "green" } }],
+        threads: { "hub-ada": [] },
+        picks: { "hub-ada": held },
+      })
+
+      expect(await screen.findByRole("heading", { level: 1, name: "Ada is ready" })).toBeDefined()
+      const main = within(screen.getByRole("main"))
+      expect(
+        await main.findByText(
+          sentence("No threads yet. It holds 2 skills: research, trip-planner."),
+        ),
+      ).toBeDefined()
+      const avatar = screen.getByRole("main").querySelector("[data-slot=avatar]")
+      expect(avatar?.getAttribute("data-shape")).toBe("squircle")
+      expect(avatar?.textContent).toBe("A")
+    })
+
+    it("starts its first thread from the composer under the greeting", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      const { hub } = openApp({
+        signedIn: true,
+        instances: [kinby, ada],
+        threads: { "hub-ada": [] },
+        picks: { "hub-ada": held },
+      })
+      const user = userEvent.setup()
+
+      expect(await screen.findByRole("heading", { name: "Ada is ready" })).toBeDefined()
+      await user.type(await message(), "Plan a weekend")
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+          "false",
+        ),
+      )
+      await user.click(screen.getByRole("button", { name: "Send" }))
+
+      await waitFor(() =>
+        expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-1"),
+      )
+      expect(await threadStarts(hub, "hub-ada")).toEqual([
+        { method: "thread.create", params: {} },
+        {
+          method: "thread.turn.start",
+          params: { thread_id: "thread-1", message: "Plan a weekend" },
+        },
+      ])
+    })
+
+    it("says it holds no skills when it picked none", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({ signedIn: true, instances: [kinby, ada], threads: { "hub-ada": [] } })
+
+      expect(await screen.findByText("No threads yet. It holds no skills.")).toBeDefined()
+    })
+
+    it("keeps the usual greeting on an instance with a thread", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({
+        signedIn: true,
+        instances: [kinby, ada],
+        threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+      })
+
+      expect(await screen.findByRole("button", { name: "Send" })).toBeDefined()
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      expect(screen.getByRole("heading", { level: 1, name: /^Good / })).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "Ada is ready" })).toBeNull()
+    })
+
+    it("gives way to the setup card while a required secret is missing", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({
+        signedIn: true,
+        instances: [kinby, ada],
+        threads: { "hub-ada": [] },
+        setups: {
+          "hub-ada": {
+            logins: [],
+            missing_commands: [],
+            secrets: [
+              { name: "api_key", label: "API key", variable: "K", required: true, is_set: false },
+            ],
+          },
+        },
+      })
+
+      expect(await screen.findByRole("region", { name: "Ada needs setup to answer" })).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "Ada is ready" })).toBeNull()
+    })
+
+    it("gives way to the stopped alert on a stopped instance", async () => {
+      window.history.replaceState(null, "", "/?to=hub-unnamed")
+      openApp({ signedIn: true, instances: [kinby, unnamed], threads: { "hub-unnamed": [] } })
+
+      expect(await screen.findByRole("alert")).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "research is ready" })).toBeNull()
+    })
+  })
+
+  describe("with a required secret missing", () => {
+    const apiKey = {
+      name: "api_key",
+      label: "API key",
+      variable: "ANTHROPIC_API_KEY",
+      required: true,
+      is_set: false,
+    }
+    const missing = (setup: Partial<InstanceSetup> = {}): InstanceSetup => ({
+      logins: [],
+      missing_commands: [],
+      secrets: [
+        apiKey,
+        {
+          name: "TAVILY_API_KEY",
+          label: "Search key",
+          variable: "TAVILY_API_KEY",
+          required: false,
+          is_set: false,
+        },
+        {
+          name: "GITHUB_TOKEN",
+          label: "GitHub token",
+          variable: "GITHUB_TOKEN",
+          required: true,
+          is_set: true,
+        },
+      ],
+      ...setup,
+    })
+    const card = async (name: string) => within(await screen.findByRole("region", { name }))
+    const saved = (state: "succeeded" | "failed") => ({
+      operation_id: "op-secrets",
+      instance_id: "hub-kinby",
+      kind: "secrets",
+      state,
+      detail: "",
+      steps: [],
+    })
+
+    it("welcomes the user on the home instance's first run, with the card over a disabled composer", async () => {
+      openApp({ signedIn: true, instances: [kinby, ada], setups: { "hub-kinby": missing() } })
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Welcome to kinby" }),
+      ).toBeDefined()
+      expect(
+        screen.getByText(
+          "Kinby is your home instance. It does personal work for you and builds the rest of kinby on your behalf.",
+        ),
+      ).toBeDefined()
+      const setup = await card("Kinby needs setup to answer")
+      expect(setup.getAllByRole("listitem").map((row) => row.getAttribute("aria-label"))).toEqual([
+        "API key",
+      ])
+      const box = await message()
+      expect(box.hasAttribute("disabled")).toBe(true)
+      expect(box.getAttribute("placeholder")).toBe("Add Kinby's key to start")
+      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+        "true",
+      )
+    })
+
+    it("saves a secret from the card with instance.secrets.set, then drops it and enables the composer", async () => {
+      const { hub } = openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing() },
+      })
+      const user = userEvent.setup()
+
+      const setup = await card("Kinby needs setup to answer")
+      await user.click(setup.getByRole("button", { name: "Set" }))
+      await user.type(setup.getByLabelText("New value for API key"), "sk-the-key")
+      await user.click(setup.getByRole("button", { name: "Save" }))
+      expect(hubCalls(hub, "instance.secrets.set")).toEqual([
+        { instance_id: "hub-kinby", secrets: { api_key: "sk-the-key" } },
+      ])
+      hub.setups = {}
+      await answerHub(hub, "instance.secrets.set", {
+        operation_id: "op-secrets",
+        instance_id: "hub-kinby",
+      })
+      await answerHub(hub, "operation.get", saved("succeeded"))
+
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: "Kinby needs setup to answer" })).toBeNull(),
+      )
+      expect(screen.queryByRole("heading", { name: "Welcome to kinby" })).toBeNull()
+      expect((await message()).hasAttribute("disabled")).toBe(false)
+      expect((await message()).getAttribute("placeholder")).toBe("How can I help?")
+    })
+
+    it("takes the hub secret named after the key's variable", async () => {
+      const { hub } = openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing() },
+      })
+      const user = userEvent.setup()
+
+      const setup = await card("Kinby needs setup to answer")
+      await answerHub(hub, "hub.secret.list", {
+        secrets: [{ name: "OPENAI_API_KEY" }, { name: "ANTHROPIC_API_KEY" }],
+      })
+      await user.click(setup.getByRole("button", { name: "Set" }))
+      expect(setup.getByRole("combobox", { name: "Hub secret for API key" }).textContent).toContain(
+        "ANTHROPIC_API_KEY",
+      )
+      await user.click(setup.getByRole("button", { name: "Save" }))
+
+      expect(hubCalls(hub, "instance.secrets.set")).toEqual([
+        { instance_id: "hub-kinby", hub_secrets: { api_key: "ANTHROPIC_API_KEY" } },
+      ])
+    })
+
+    it("says another instance missing one needs setup to answer, over a stopped one's alert", async () => {
+      window.history.replaceState(null, "", "/?to=hub-unnamed")
+      openApp({
+        signedIn: true,
+        instances: [kinby, unnamed],
+        setups: { "hub-unnamed": missing() },
+      })
+
+      expect(await card("research needs setup to answer")).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "Welcome to kinby" })).toBeNull()
+      expect(screen.queryByRole("alert")).toBeNull()
+      expect((await message()).hasAttribute("disabled")).toBe(true)
+    })
+
+    it.each([
+      [
+        "a login",
+        {
+          logins: [{ id: "claude", label: "Claude", description: "", state: "pending" as const }],
+        },
+      ],
+      ["a list of repository commands", { missing_commands: ["checks"] }],
+    ])("links to the instance's page when %s is pending", async (_, pending) => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({ signedIn: true, instances: [kinby, ada], setups: { "hub-ada": missing(pending) } })
+      const user = userEvent.setup()
+
+      await user.click(
+        (await card("Ada needs setup to answer")).getByRole("button", { name: "Open Ada" }),
+      )
+
+      expect(window.location.pathname).toBe("/instances/hub-ada")
+    })
+
+    it("does not link to the instance's page with only its secrets left", async () => {
+      const signedIn = {
+        id: "claude",
+        label: "Claude",
+        description: "",
+        state: "signed_in" as const,
+      }
+      openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing({ logins: [signedIn] }) },
+      })
+
+      const setup = await card("Kinby needs setup to answer")
+      expect(setup.queryByRole("button", { name: "Open Kinby" })).toBeNull()
+    })
   })
 
   it("points to New instance when the hub has none", async () => {
