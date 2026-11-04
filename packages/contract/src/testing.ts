@@ -57,10 +57,10 @@ export interface FakeHub {
  * A removal or a restoration moves the instance between the lists at once, and a deletion drops
  * it from the removed list. Their operations have already succeeded when first read. A deletion
  * previews the instance's directory under /srv/kinby/instances. An instance's connection answers
- * `thread.list` for an instance `threads` names, `thread.create` with `thread-1`, `thread-2` and on,
- * and accepts every `thread.turn.start`. `instance.status` answers with the setup `setups` holds
- * for the instance, or nothing left to set up. `instance.picks.get` answers with what `picks`
- * holds for the instance, or no picks.
+ * `thread.list` for an instance `threads` names, `view.list` with no views, `thread.create` with
+ * `thread-1`, `thread-2` and on, and accepts every `thread.turn.start`. `instance.status` answers
+ * with the setup `setups` holds for the instance, or nothing left to set up. `instance.picks.get`
+ * answers with what `picks` holds for the instance, or no picks.
  */
 export function fakeHub({
   signedIn = true,
@@ -108,6 +108,7 @@ export function fakeHub({
           if (method === "thread.list" && listed) {
             return { threads: listed, ceiling: "full-access", cursor: null }
           }
+          if (method === "view.list" && instanceId) return { views: [] }
           if (method === "thread.create" && instanceId) {
             created += 1
             return { id: `thread-${created}`, created_at: "2026-10-01T10:00:00Z" }

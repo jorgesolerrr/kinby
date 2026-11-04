@@ -426,6 +426,26 @@ describe("a running instance's group", () => {
     expect(group.getByRole("link", { name: "Job board" })).toBeDefined()
   })
 
+  it("says No threads yet until it lists a thread", async () => {
+    const { hub, clock, group } = kinbyGroup([])
+    expect(await group.findByRole("link", { name: "No threads yet" })).toBeDefined()
+
+    hub.threads["instance-1"] = [thread({ id: "t1", title: "Deploy notes" })]
+    await act(() => clock.advance(5_000))
+
+    expect(links(group)).toEqual(["Deploy notes", "All threads"])
+  })
+
+  it("says No threads yet until it lists a view", async () => {
+    const { hub, clock, group } = kinbyGroup([])
+    expect(await group.findByRole("link", { name: "No threads yet" })).toBeDefined()
+
+    hub.views["instance-1"] = [board]
+    await act(() => clock.advance(5_000))
+
+    expect(links(group)).toEqual(["Job board", "All threads"])
+  })
+
   it("lists the selected instance on its connection, marking the open thread", async () => {
     window.history.replaceState(null, "", "/instances/instance-1/threads/t2")
     const selectedClient = fakeHub({

@@ -1,4 +1,11 @@
-import type { Client, Clock, InstanceClient, InstanceSummary, ThreadSummary } from "@kinby/contract"
+import type {
+  Client,
+  Clock,
+  InstanceClient,
+  InstanceSummary,
+  ThreadSummary,
+  ViewSummary,
+} from "@kinby/contract"
 import { cn } from "cn"
 import {
   BellDotIcon,
@@ -212,8 +219,9 @@ function InstanceGroup({
     onReach(instance.instance_id, reached)
     return () => onReach(instance.instance_id, undefined)
   }, [onReach, instance.instance_id, reached])
-  const threads = useSidebarThreads(reached, clock) ?? []
-  const count = threads.filter(needsYou).length + instance.needs_human
+  const threads = useSidebarThreads(reached, clock)
+  const views = useViews(reached, clock)
+  const count = (threads ?? []).filter(needsYou).length + instance.needs_human
   // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.
   const [opened, setOpened] = useState(false)
   if (!opened && (instance.home || count > 0 || isSelected)) setOpened(true)
@@ -241,13 +249,15 @@ function InstanceGroup({
         <CollapsibleContent>
           <SidebarMenuSub>
             <InstanceViews
-              client={reached}
-              clock={clock}
+              views={views ?? []}
               instanceId={instance.instance_id}
               isSelected={isSelected}
             />
+            {threads?.length === 0 && views?.length === 0 && (
+              <NoThreads instanceId={instance.instance_id} />
+            )}
             <RecentThreads
-              threads={threads.slice(0, RECENT)}
+              threads={(threads ?? []).slice(0, RECENT)}
               instanceId={instance.instance_id}
               isSelected={isSelected}
             />
@@ -256,6 +266,23 @@ function InstanceGroup({
       )}
     </Collapsible>
   )
+}
+
+/** `client`'s instance's views, listed again as `usePolled` says. Undefined until they are listed. */
+function useViews(client: Reached | undefined, clock: Clock): ViewSummary[] | undefined {
+  const list = useCallback(async () => (await client?.call("view.list", {}))?.views, [client])
+  return usePolled(list, clock, useConnected(client), POLL_INTERVAL_MS)[0]
+}
+
+function useConnected(client: Reached | undefined): boolean {
+  return (
+    useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
+    "connected"
+  )
+}
+
+function unsubscribed(): () => void {
+  return () => {}
 }
 
 /**
@@ -302,19 +329,14 @@ function InstanceMenu({
 
 /** An instance's views, each linking to its page, with the one the URL opens marked current. */
 function InstanceViews({
-  client,
-  clock,
+  views,
   instanceId,
   isSelected,
 }: {
-  client: Reached
-  clock: Clock
+  views: ViewSummary[]
   instanceId: string
   isSelected: boolean
 }) {
-  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const list = useCallback(() => client.call("view.list", {}).then(({ views }) => views), [client])
-  const [views = []] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
   const openedView = useViewOpen()
   const open = useOpenFromSidebar()
   return views.map((view) => {
@@ -336,6 +358,26 @@ function InstanceViews({
       </SidebarMenuSubItem>
     )
   })
+}
+
+/** The muted row of a group with no threads and no views, opening the home screen sent to it. */
+function NoThreads({ instanceId }: { instanceId: string }) {
+  const open = useOpenFromSidebar()
+  const path = homePath(instanceId)
+  return (
+    <SidebarMenuSubItem>
+      <SidebarMenuSubButton
+        variant="muted"
+        href={path}
+        onClick={(event) => {
+          event.preventDefault()
+          open(path)
+        }}
+      >
+        <span>No threads yet</span>
+      </SidebarMenuSubButton>
+    </SidebarMenuSubItem>
+  )
 }
 
 /** The instance's most recent threads, then "All threads", with the one the URL opens marked. */
