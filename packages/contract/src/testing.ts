@@ -11,7 +11,13 @@ import {
   type SubscriptionMethod,
   type Transport,
 } from "./client"
-import type { InstanceSetup, InstanceSummary, OperationGetResult, ThreadSummary } from "./contract"
+import type {
+  InstancePicksResult,
+  InstanceSetup,
+  InstanceSummary,
+  OperationGetResult,
+  ThreadSummary,
+} from "./contract"
 
 /** The one token the fake hub accepts at its login route. */
 export const ACCESS_TOKEN = "the-access-token"
@@ -42,6 +48,8 @@ export interface FakeHub {
   threads: Record<string, ThreadSummary[]>
   /** What `instance.status` answers with as each instance's setup, by instance. */
   setups: Record<string, InstanceSetup>
+  /** What `instance.picks.get` answers with, by instance. */
+  picks: Record<string, InstancePicksResult>
 }
 
 /**
@@ -51,7 +59,8 @@ export interface FakeHub {
  * previews the instance's directory under /srv/kinby/instances. An instance's connection answers
  * `thread.list` for an instance `threads` names, `thread.create` with `thread-1`, `thread-2` and on,
  * and accepts every `thread.turn.start`. `instance.status` answers with the setup `setups` holds
- * for the instance, or nothing left to set up.
+ * for the instance, or nothing left to set up. `instance.picks.get` answers with what `picks`
+ * holds for the instance, or no picks.
  */
 export function fakeHub({
   signedIn = true,
@@ -59,12 +68,14 @@ export function fakeHub({
   removed = [],
   threads = {},
   setups = {},
+  picks = {},
 }: {
   signedIn?: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
   threads?: Record<string, ThreadSummary[]>
   setups?: Record<string, InstanceSetup>
+  picks?: Record<string, InstancePicksResult>
 } = {}): FakeHub {
   const operations = new Map<string, OperationGetResult>()
   let created = 0
@@ -87,6 +98,7 @@ export function fakeHub({
     removed,
     threads,
     setups,
+    picks,
     sockets: [],
     transport: {
       openSocket(url, events) {
@@ -162,6 +174,11 @@ export function fakeHub({
               recreate_reasons: [],
               repository_commands: [],
             }
+          }
+          if (method === "instance.picks.get" && isRecord(params)) {
+            return (
+              hub.picks[String(params.instance_id)] ?? { hash: null, picks: [], mcp_servers: [] }
+            )
           }
           return undefined
         })

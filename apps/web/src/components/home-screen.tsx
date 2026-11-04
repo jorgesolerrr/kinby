@@ -11,6 +11,7 @@ import {
 } from "react"
 
 import { Composer } from "@/components/composer"
+import { InstanceAvatar } from "@/components/instance-avatar"
 import { Secrets } from "@/components/secrets-section"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -33,6 +34,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useRead } from "@/hooks/use-read"
+import { useSidebarThreads } from "@/hooks/use-sidebar-threads"
 import { type Start, useStart } from "@/hooks/use-start"
 import { instanceName } from "@/lib/instances"
 import { selectInstance, selectThread } from "@/lib/selection"
@@ -53,8 +55,10 @@ interface Queued {
  * and send: it starts the instance as the instance header does, and sends once it runs. A failed
  * start says why in the alert and keeps the message. An instance whose status says a required
  * secret is missing shows a card over a disabled composer instead, asking for each such secret.
- * For the home instance that is its first run, and the screen welcomes the user. `onChanged`
- * lists the instances again once a start or a secret succeeds, and must keep its identity.
+ * For the home instance that is its first run, and the screen welcomes the user. Otherwise a
+ * running instance whose sidebar set of threads is empty is greeted by its avatar, with the skills
+ * it holds. `onChanged` lists the instances again once a start or a secret succeeds, and must keep
+ * its identity.
  */
 export function HomeScreen({
   caller,
@@ -87,6 +91,8 @@ export function HomeScreen({
   const connected =
     useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
     "connected"
+  const threads = useSidebarThreads(client, clock)
+  const noThreads = !needsSetup && threads?.length === 0
   const send = async (message: string) => {
     if (client === undefined) return
     const created = await client.call("thread.create", {})
@@ -119,6 +125,8 @@ export function HomeScreen({
             the rest of kinby on your behalf.
           </p>
         </div>
+      ) : noThreads ? (
+        <Ready caller={caller} clock={clock} instance={picked} />
       ) : (
         <h1 className="text-center font-heading text-3xl font-semibold">
           {greeting(new Date().getHours())}
@@ -196,6 +204,42 @@ function useSetup(
     onChanged()
   }, [readAgain, onChanged])
   return { setup: value?.setup, onSet }
+}
+
+/** Greets an instance with no threads by its avatar and its name, and names the skills it holds. */
+function Ready({
+  caller,
+  clock,
+  instance,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instance: InstanceSummary
+}) {
+  const read = useCallback(
+    () => caller.call("instance.picks.get", { instance_id: instance.instance_id }),
+    [caller, instance.instance_id],
+  )
+  const skills = useRead(read, clock).value?.picks.map((pick) => pick.name)
+  const name = instanceName(instance)
+  return (
+    <div className="flex flex-col items-center gap-3 text-center">
+      <InstanceAvatar avatar={instance.avatar} name={name} size="lg" />
+      <h1 className="font-heading text-3xl font-semibold">{name} is ready</h1>
+      <p className="text-sm text-muted-foreground">
+        No threads yet.
+        {skills !== undefined &&
+          (skills.length === 0 ? (
+            " It holds no skills."
+          ) : (
+            <>
+              {` It holds ${skills.length} ${skills.length === 1 ? "skill" : "skills"}: `}
+              <span className="font-mono text-foreground">{skills.join(", ")}</span>.
+            </>
+          ))}
+      </p>
+    </div>
+  )
 }
 
 /**
