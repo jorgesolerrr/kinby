@@ -15,10 +15,9 @@ import {
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type * as React from "react"
-import { useState } from "react"
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { type Folds, NavInstances } from "@/components/nav-instances"
+import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { threadList } from "@/lib/thread-list"
 
@@ -94,29 +93,17 @@ function sidebar(
 ): React.ReactElement {
   return (
     <SidebarProvider>
-      <Folding
-        client={hub}
-        clock={clock}
+      <AppSidebar
         instances={instances}
         selected={selected}
         creating={false}
+        libraryOpen={false}
+        client={hub}
+        clock={clock}
         selectedClient={selectedClient}
-        searching={false}
-        onSearchingChange={() => {}}
+        onSignOut={() => {}}
       />
     </SidebarProvider>
-  )
-}
-
-/** The groups, keeping the user's folds as the sidebar above them does. */
-function Folding(props: Omit<React.ComponentProps<typeof NavInstances>, "folds" | "onFold">) {
-  const [folds, setFolds] = useState<Folds>({})
-  return (
-    <NavInstances
-      {...props}
-      folds={folds}
-      onFold={(instanceId, open) => setFolds((kept) => ({ ...kept, [instanceId]: open }))}
-    />
   )
 }
 

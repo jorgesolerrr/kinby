@@ -295,13 +295,10 @@ describe("a thread's header", () => {
             instances={[ada]}
             selected={ada}
             creating={false}
-            client={{ instance: () => expect.unreachable() }}
             clock={clock}
-            selectedClient={instance}
+            reached={new Map([["hub-ada", instance]])}
             folds={{}}
             onFold={() => {}}
-            searching={false}
-            onSearchingChange={() => {}}
           />
           <ThreadHeader client={instance} threadId="t1" />
         </SidebarProvider>,
