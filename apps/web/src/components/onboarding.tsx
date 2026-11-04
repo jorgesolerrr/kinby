@@ -10,13 +10,14 @@ import type {
   SetupField,
   SubscriptionLogin,
 } from "@kinby/contract"
-import { CircleXIcon } from "lucide-react"
+import { CircleCheckIcon, CircleXIcon } from "lucide-react"
 import { useCallback, useEffect, useId, useRef, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { HubSecretPicker } from "@/components/hub-secret-picker"
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { Progress } from "@/components/operation-progress"
+import { SectionFrame } from "@/components/section-frame"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -97,27 +98,15 @@ const NEW_IDENTITY: Identity = { name: "", avatar: { shape: "circle", color: "bl
 
 const CREATING: Creation = { state: "creating", steps: [] }
 
-type Stage = "image" | "role" | "identity" | "skills" | "prompt" | "setup"
-
-const HINTS: Record<Stage | "create", string> = {
-  image: "Image: prepare the image the instance runs on.",
-  role: "Factory role: pick the part the instance plays in a factory, or none.",
-  identity: "Identity: name the instance and pick its avatar.",
-  skills: "Skills: pick the library skills the instance starts with.",
-  prompt: "Prompt: write the instructions the instance follows in every turn.",
-  setup: "Setup: fill in what the image or the role asks for.",
-  create:
-    "Create: the hub builds the instance. Sign in to what it declares, then start it or leave " +
-    "it stopped.",
-}
+const PREPARING: Preparation = { state: "preparing", steps: [] }
 
 const noop = () => {}
 
 /**
- * The onboarding: prepare the image, pick a factory role or none, name the instance, pick its
- * skills, write its prompt, fill in its setup fields, create it, then start it. `onPublished`
- * lists the instances again. It waits for the list that follows a start before it opens the
- * instance, so the page reads that instance as running.
+ * The onboarding, on one page: while the image prepares, pick a factory role or none, name the
+ * instance, pick its skills, write its prompt and fill in its setup fields. Then create it and
+ * start it. `onPublished` lists the instances again. It waits for the list that follows a start
+ * before it opens the instance, so the page reads that instance as running.
  */
 export function Onboarding({
   caller,
@@ -128,9 +117,8 @@ export function Onboarding({
   clock?: Clock
   onPublished?: () => void | Promise<void>
 }) {
-  // Each click on Prepare counts, so preparing again after a failure follows a new preparation.
-  const [attempt, setAttempt] = useState<number>()
-  const [stage, setStage] = useState<Stage>("image")
+  // Each Prepare again counts, so preparing again after a failure follows a new preparation.
+  const [attempt, setAttempt] = useState(1)
   const [offer, setOffer] = useState<RoleOffer>()
   const [skills, setSkills] = useState<string[]>([])
   const [identity, setIdentity] = useState(NEW_IDENTITY)
@@ -141,6 +129,7 @@ export function Onboarding({
   // A later read wins. The one from the failed validate can still be in flight when
   // the hub answers invalid_setup.
   const declarationRead = useRef(0)
+  const reasonId = useId()
 
   const prepare = useCallback(
     (_: number, report: (preparation: Preparation) => void) =>
@@ -152,23 +141,22 @@ export function Onboarding({
       followCreation(caller, command, report, clock),
     [caller, clock],
   )
-  const preparation =
-    useFollowing(attempt, prepare) ??
-    (attempt === undefined ? undefined : { state: "preparing", steps: [] })
+  const preparation = useFollowing(attempt, prepare) ?? PREPARING
   const creation =
     useFollowing(submitted, create) ?? (submitted === undefined ? undefined : CREATING)
+  const readSecrets = useCallback(() => caller.call("hub.secret.list", {}), [caller])
+  const kept = useRead(readSecrets, clock).value?.secrets.map(({ name }) => name) ?? []
 
   const createdId = creation?.state === "created" ? creation.instanceId : undefined
   useEffect(() => {
     if (createdId !== undefined) void onPublished()
   }, [createdId, onPublished])
 
-  const preparedDescription =
-    preparation?.state === "prepared" ? preparation.description : undefined
+  const preparedDescription = preparation.state === "prepared" ? preparation.description : undefined
   const description = offer?.setup ?? declared ?? preparedDescription
   // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
-  // fields the user was shown, and Prepare stays disabled, so read the stored descriptor. A role
-  // edited since it was picked is refused the same way, so read its template's again.
+  // fields the user was shown, so read the stored descriptor. A role edited since it was picked is
+  // refused the same way, so read its template's again.
   useEffect(() => {
     if (submitted === undefined || !setupWasRefused(creation)) return
     const request = ++declarationRead.current
@@ -197,6 +185,24 @@ export function Onboarding({
   const refused = creation?.state === "invalid" ? creation.fields : {}
   const creating = creation !== undefined && creation.state !== "invalid"
 
+  // The setup fields wait for the image, which may ask for other fields than the role does.
+  const fields =
+    preparation.state === "prepared" && description !== undefined ? description.setup_fields : []
+  const model = values[MODEL_FIELD]
+  const variable = (field: SetupField) =>
+    heldVariable(field, typeof model === "string" ? model : "")
+  const resolved = Object.fromEntries(
+    fields
+      .filter((field) => field.kind === "secret")
+      .map((field) => [field.name, secretSource(sources[field.name], variable(field), kept)]),
+  )
+  const blocked = blocker(
+    preparation,
+    identity.name,
+    requiredLeft(fields, values, resolved),
+    Object.values(resolved).some(unnamedSave),
+  )
+
   // Another role brings its own suggested picks, prompt and fields, and its name if the user
   // kept the one proposed.
   const pickRole = (next: RoleOffer | undefined) => {
@@ -211,93 +217,147 @@ export function Onboarding({
     setSources({})
   }
   const promptField = description?.setup_fields.find((field) => field.name === PROMPT_FIELD)
+  // A refusal of no field shown here, such as a name another instance holds.
+  const others = Object.entries(refused)
+    .filter(([name]) => !fields.some((field) => field.name === name))
+    .map(([, message]) => message)
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold">New instance</h1>
-        <p className="text-sm text-muted-foreground">{HINTS[creating ? "create" : stage]}</p>
+    <div className="flex flex-col">
+      <header className="sticky top-0 z-10 border-b bg-background">
+        <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-3 px-4 py-6 md:px-8">
+          <InstanceAvatar
+            avatar={identity.avatar}
+            name={identity.name}
+            size="lg"
+            label={`Avatar of ${identity.name}`}
+          />
+          <div className="flex min-w-48 flex-1 flex-col gap-1">
+            <h1 className="truncate font-heading text-xl font-semibold">
+              {identity.name.trim() === "" ? "New instance" : identity.name}
+            </h1>
+            <ImageState
+              preparation={preparation}
+              onPrepare={() => {
+                setDeclared(undefined)
+                setAttempt((count) => count + 1)
+              }}
+            />
+          </div>
+          {!creating && (
+            <div className="ml-auto flex items-center gap-3">
+              {blocked !== undefined && (
+                <span id={reasonId} className="text-sm text-muted-foreground">
+                  {blocked}
+                </span>
+              )}
+              <Button
+                disabled={blocked !== undefined}
+                aria-describedby={blocked === undefined ? undefined : reasonId}
+                onClick={() =>
+                  setSubmitted(
+                    createCommand(
+                      fields,
+                      values,
+                      identity,
+                      { role: offer?.role, skills },
+                      resolved,
+                    ),
+                  )
+                }
+              >
+                Create
+              </Button>
+            </div>
+          )}
+        </div>
       </header>
-      {creating ? (
-        <CreationView
-          caller={caller}
-          clock={clock}
-          name={identity.name}
-          logins={description?.logins ?? []}
-          creation={creation}
-          onBack={() => setSubmitted(undefined)}
-          onPublished={onPublished}
-        />
-      ) : stage === "setup" && description !== undefined ? (
-        <SetupStep
-          caller={caller}
-          clock={clock}
-          fields={description.setup_fields.filter((field) => field.name !== PROMPT_FIELD)}
-          values={values}
-          sources={sources}
-          errors={refused}
-          onChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
-          onSource={(name, source) => setSources((current) => ({ ...current, [name]: source }))}
-          onBack={() => setStage("prompt")}
-          onCreate={(resolved) =>
-            setSubmitted(
-              createCommand(
-                description.setup_fields,
-                values,
-                identity,
-                { role: offer?.role, skills },
-                resolved,
-              ),
-            )
-          }
-        />
-      ) : stage === "prompt" ? (
-        <PromptStep
-          field={promptField}
-          value={values[PROMPT_FIELD]}
-          onChange={(value) => setValues((current) => ({ ...current, [PROMPT_FIELD]: value }))}
-          onBack={() => setStage("skills")}
-          onContinue={() => setStage("setup")}
-        />
-      ) : stage === "skills" ? (
-        <SkillsStep
-          caller={caller}
-          clock={clock}
-          picked={skills}
-          onChange={setSkills}
-          onBack={() => setStage("identity")}
-          onContinue={() => setStage("prompt")}
-        />
-      ) : stage === "identity" ? (
-        <IdentityStep
-          identity={identity}
-          onChange={setIdentity}
-          onBack={() => setStage("role")}
-          onContinue={() => setStage("skills")}
-        />
-      ) : stage === "role" ? (
-        <RoleStep
-          caller={caller}
-          clock={clock}
-          offer={offer}
-          onPick={pickRole}
-          onBack={() => setStage("image")}
-          onContinue={() => setStage("identity")}
-        />
-      ) : (
-        <ImageStep
-          preparation={
-            preparation?.state === "prepared" && declared !== undefined
-              ? { ...preparation, description: declared }
-              : preparation
-          }
-          onPrepare={() => {
-            setDeclared(undefined)
-            setAttempt((count) => (count ?? 0) + 1)
-          }}
-          onContinue={() => setStage("role")}
-        />
-      )}
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8">
+        {creating ? (
+          <CreationView
+            caller={caller}
+            clock={clock}
+            name={identity.name}
+            logins={description?.logins ?? []}
+            creation={creation}
+            onBack={() => setSubmitted(undefined)}
+            onPublished={onPublished}
+          />
+        ) : (
+          <>
+            {others.length > 0 && (
+              <Alert variant="destructive">
+                <CircleXIcon />
+                <AlertTitle>The hub refused it</AlertTitle>
+                <AlertDescription>{others.join(" ")}</AlertDescription>
+              </Alert>
+            )}
+            <SectionFrame
+              variant="page"
+              title="Role"
+              lead="A role brings its factory's hooks, tools, intake and setup fields. The instance keeps it for life."
+            >
+              <RoleControl caller={caller} clock={clock} offer={offer} onPick={pickRole} />
+            </SectionFrame>
+            <SectionFrame
+              variant="page"
+              title="Name and look"
+              lead="The name it answers as, and the avatar it shows."
+            >
+              <IdentityFields identity={identity} onChange={setIdentity} />
+            </SectionFrame>
+            <SectionFrame
+              variant="page"
+              title="Skills"
+              lead="Each one ticked is copied into the instance. You can add or drop skills later."
+            >
+              <SkillChoice caller={caller} clock={clock} picked={skills} onChange={setSkills} />
+            </SectionFrame>
+            <SectionFrame
+              variant="page"
+              title="Prompt"
+              lead="The instructions the instance follows in every turn."
+            >
+              {description === undefined ? (
+                <Skeleton className="h-72 w-full" />
+              ) : (
+                <PromptInput
+                  field={promptField}
+                  value={values[PROMPT_FIELD]}
+                  onChange={(value) =>
+                    setValues((current) => ({ ...current, [PROMPT_FIELD]: value }))
+                  }
+                />
+              )}
+            </SectionFrame>
+            <SectionFrame variant="page" title="Setup" lead="What the image and the role ask for.">
+              {preparation.state === "prepared" ? (
+                <>
+                  <SetupFields
+                    fields={fields.filter((field) => field.name !== PROMPT_FIELD)}
+                    values={values}
+                    sources={resolved}
+                    errors={refused}
+                    kept={kept}
+                    variable={variable}
+                    onChange={(name, value) =>
+                      setValues((current) => ({ ...current, [name]: value }))
+                    }
+                    onSource={(name, source) =>
+                      setSources((current) => ({ ...current, [name]: source }))
+                    }
+                  />
+                  <Logins logins={description?.logins ?? []} />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  The setup fields show once the image is prepared.
+                </p>
+              )}
+            </SectionFrame>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -311,119 +371,128 @@ function setupWasRefused(creation: Creation | undefined): boolean {
   )
 }
 
-function ImageStep({
+/** The first thing Create waits for, or nothing once it can create. */
+function blocker(
+  preparation: Preparation,
+  name: string,
+  left: number,
+  unnamed: boolean,
+): string | undefined {
+  if (preparation.state === "preparing") return "The image is preparing"
+  if (preparation.state === "failed") return "The image did not prepare"
+  if (name.trim() === "") return "Name it"
+  if (left > 0) return `${left} required setup ${left === 1 ? "field" : "fields"} left`
+  if (unnamed) return "Name the hub secret to save it under"
+  return undefined
+}
+
+/** How many required fields hold no value and take no hub secret. */
+function requiredLeft(
+  fields: SetupField[],
+  values: Record<string, FieldInput>,
+  sources: Record<string, SecretSource>,
+): number {
+  return fields.filter((field) => {
+    if (!field.required || sources[field.name]?.hubSecret !== undefined) return false
+    const input = values[field.name] ?? initialInput(field)
+    return input === undefined || (typeof input === "string" && input.trim() === "")
+  }).length
+}
+
+/** How the image stands: the step its preparation runs, ready, or the step that failed and why. */
+function ImageState({
   preparation,
   onPrepare,
-  onContinue,
 }: {
-  preparation: Preparation | undefined
+  preparation: Preparation
   onPrepare: () => void
-  onContinue: () => void
 }) {
-  const busy = preparation?.state === "preparing" || preparation?.state === "prepared"
-  return (
-    <>
-      <p className="max-w-2xl text-sm text-muted-foreground">
-        The hub builds kinby's image from its own checkout, or reuses the one it built, then reads
-        what an instance on it asks for.
-      </p>
-      <div>
-        <Button disabled={busy} onClick={onPrepare}>
-          Prepare the image
+  if (preparation.state === "failed") {
+    const failed = preparation.steps.find((step) => step.state === "failed")
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <p role="alert" className="text-sm text-destructive">
+          {failed === undefined
+            ? "The preparation failed"
+            : `The preparation failed at ${failed.name}`}
+          : {preparation.detail}
+        </p>
+        <Button variant="outline" size="sm" onClick={onPrepare}>
+          Prepare again
         </Button>
       </div>
-      {preparation !== undefined && (
-        <section className="flex max-w-2xl flex-col gap-3">
-          <h2 className="text-base font-semibold">Preparing the image</h2>
-          <Progress
-            label="Preparation steps"
-            failure="The preparation failed"
-            operation={preparation}
-          />
-          {preparation.state === "prepared" && (
-            <>
-              <h2 className="text-base font-semibold">What it asks for</h2>
-              <Fields fields={preparation.description.setup_fields} />
-              <Logins logins={preparation.description.logins ?? []} />
-              <div>
-                <Button onClick={onContinue}>Continue</Button>
-              </div>
-            </>
-          )}
-        </section>
-      )}
-    </>
+    )
+  }
+  if (preparation.state === "prepared") {
+    return (
+      <p className="flex items-center gap-1.5 text-sm text-muted-foreground [&>svg]:size-4">
+        <CircleCheckIcon />
+        Image ready
+      </p>
+    )
+  }
+  const running = preparation.steps.find((step) => step.state === "running")
+  return (
+    <p className="flex items-center gap-1.5 text-sm text-muted-foreground [&>svg]:size-4">
+      <Spinner />
+      {running === undefined ? "Preparing the image" : `Preparing the image · ${running.detail}`}
+    </p>
   )
 }
 
-function IdentityStep({
+function IdentityFields({
   identity,
   onChange,
-  onBack,
-  onContinue,
 }: {
   identity: Identity
   onChange: (identity: Identity) => void
-  onBack: () => void
-  onContinue: () => void
 }) {
   const { name, avatar } = identity
   return (
-    <section className="flex max-w-md flex-col gap-6">
-      <InstanceAvatar avatar={avatar} name={name} size="lg" label={`Avatar of ${name}`} />
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="instance-name">Name</FieldLabel>
-          <Input
-            id="instance-name"
-            value={name}
-            onChange={(event) => onChange({ ...identity, name: event.target.value })}
-          />
-        </Field>
-        <FieldSet>
-          <FieldLegend variant="label">Shape</FieldLegend>
-          <ToggleGroup
-            value={[avatar.shape]}
-            onValueChange={([shape]) => {
-              if (isShape(shape)) onChange({ ...identity, avatar: { ...avatar, shape } })
-            }}
-          >
-            {Object.entries(SHAPES).map(([shape, label]) => (
-              <ToggleGroupItem key={shape} value={shape} aria-label={label}>
-                <InstanceAvatar avatar={{ ...avatar, shape: shape as AvatarShape }} name={name} />
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </FieldSet>
-        <FieldSet>
-          <FieldLegend variant="label">Color</FieldLegend>
-          <ToggleGroup
-            value={[avatar.color]}
-            onValueChange={([color]) => {
-              if (isColor(color)) onChange({ ...identity, avatar: { ...avatar, color } })
-            }}
-          >
-            {Object.entries(COLORS).map(([color, label]) => (
-              <ToggleGroupItem key={color} value={color} aria-label={label}>
-                <InstanceAvatar
-                  avatar={{ ...avatar, color: color as AvatarColor }}
-                  name={name}
-                  size="sm"
-                />
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </FieldSet>
-      </FieldGroup>
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={onBack}>
-          Back
-        </Button>
-        <Button disabled={name.trim() === ""} onClick={onContinue}>
-          Continue
-        </Button>
-      </div>
-    </section>
+    <FieldGroup className="max-w-md">
+      <Field>
+        <FieldLabel htmlFor="instance-name">Name</FieldLabel>
+        <Input
+          id="instance-name"
+          value={name}
+          onChange={(event) => onChange({ ...identity, name: event.target.value })}
+        />
+      </Field>
+      <FieldSet>
+        <FieldLegend variant="label">Shape</FieldLegend>
+        <ToggleGroup
+          value={[avatar.shape]}
+          onValueChange={([shape]) => {
+            if (isShape(shape)) onChange({ ...identity, avatar: { ...avatar, shape } })
+          }}
+        >
+          {Object.entries(SHAPES).map(([shape, label]) => (
+            <ToggleGroupItem key={shape} value={shape} aria-label={label}>
+              <InstanceAvatar avatar={{ ...avatar, shape: shape as AvatarShape }} name={name} />
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </FieldSet>
+      <FieldSet>
+        <FieldLegend variant="label">Color</FieldLegend>
+        <ToggleGroup
+          value={[avatar.color]}
+          onValueChange={([color]) => {
+            if (isColor(color)) onChange({ ...identity, avatar: { ...avatar, color } })
+          }}
+        >
+          {Object.entries(COLORS).map(([color, label]) => (
+            <ToggleGroupItem key={color} value={color} aria-label={label}>
+              <InstanceAvatar
+                avatar={{ ...avatar, color: color as AvatarColor }}
+                name={name}
+                size="sm"
+              />
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </FieldSet>
+    </FieldGroup>
   )
 }
 
@@ -440,20 +509,16 @@ const NO_ROLE = "none"
 const roleKey = ({ factory, name }: FactoryRole) => `${factory}/${name}`
 
 /** Pick one role of a factory in the library, or none for a vanilla instance. */
-function RoleStep({
+function RoleControl({
   caller,
   clock,
   offer,
   onPick,
-  onBack,
-  onContinue,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   offer: RoleOffer | undefined
   onPick: (offer: RoleOffer | undefined) => void
-  onBack: () => void
-  onContinue: () => void
 }) {
   const id = useId()
   const read = useCallback(() => offeredRoles(caller), [caller])
@@ -466,9 +531,9 @@ function RoleStep({
     })),
   ]
   return (
-    <section className="flex max-w-md flex-col gap-6">
+    <>
       {failure !== undefined && <Failure error={failure} />}
-      <Field>
+      <Field className="max-w-md">
         <FieldLabel htmlFor={id}>Factory role</FieldLabel>
         <Select
           items={items}
@@ -488,119 +553,81 @@ function RoleStep({
             </SelectGroup>
           </SelectContent>
         </Select>
-        <FieldDescription>
-          A role brings its factory&apos;s hooks, tools, intake and setup fields. The instance keeps
-          it for life.
-        </FieldDescription>
       </Field>
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={onBack}>
-          Back
-        </Button>
-        <Button onClick={onContinue}>Continue</Button>
-      </div>
-    </section>
+    </>
   )
 }
 
 /** Tick the library skills the instance copies in. A role's suggested picks start ticked. */
-function SkillsStep({
+function SkillChoice({
   caller,
   clock,
   picked,
   onChange,
-  onBack,
-  onContinue,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   picked: string[]
   onChange: (picked: string[]) => void
-  onBack: () => void
-  onContinue: () => void
 }) {
   const id = useId()
   const read = useCallback(() => caller.call("library.list", {}), [caller])
   const { value: listed, failure } = useRead(read, clock)
   const offered = listed?.entries.filter((entry) => entry.kind === "skill") ?? []
   return (
-    <section className="flex max-w-xl flex-col gap-6">
+    <>
       {failure !== undefined && <Failure error={failure} />}
       {listed === undefined ? (
         failure === undefined && <Skeleton className="h-48 w-full" />
+      ) : offered.length === 0 ? (
+        <p className="text-sm text-muted-foreground">The library holds no skill.</p>
       ) : (
-        <FieldSet>
-          <FieldLegend>Skills</FieldLegend>
-          <FieldDescription>
-            {offered.length === 0
-              ? "The library holds no skill."
-              : "Each one ticked is copied into the instance."}
-          </FieldDescription>
-          <FieldGroup>
-            {offered.map(({ name, description }) => (
-              <Field key={name} orientation="horizontal">
-                <Checkbox
-                  id={`${id}-${name}`}
-                  checked={picked.includes(name)}
-                  onCheckedChange={(on) =>
-                    onChange(on ? [...picked, name] : picked.filter((each) => each !== name))
-                  }
-                />
-                <FieldContent>
-                  <FieldLabel htmlFor={`${id}-${name}`}>{name}</FieldLabel>
-                  {description !== null && <FieldDescription>{description}</FieldDescription>}
-                </FieldContent>
-              </Field>
-            ))}
-          </FieldGroup>
-        </FieldSet>
+        <FieldGroup>
+          {offered.map(({ name, description }) => (
+            <Field key={name} orientation="horizontal">
+              <Checkbox
+                id={`${id}-${name}`}
+                checked={picked.includes(name)}
+                onCheckedChange={(on) =>
+                  onChange(on ? [...picked, name] : picked.filter((each) => each !== name))
+                }
+              />
+              <FieldContent>
+                <FieldLabel htmlFor={`${id}-${name}`}>{name}</FieldLabel>
+                {description !== null && <FieldDescription>{description}</FieldDescription>}
+              </FieldContent>
+            </Field>
+          ))}
+        </FieldGroup>
       )}
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={onBack}>
-          Back
-        </Button>
-        <Button onClick={onContinue}>Continue</Button>
-      </div>
-    </section>
+    </>
   )
 }
 
 /** The behavior prompt, starting from the role's or kinby's default, for the user to edit. */
-function PromptStep({
+function PromptInput({
   field,
   value,
   onChange,
-  onBack,
-  onContinue,
 }: {
   field: SetupField | undefined
   value: FieldInput | undefined
   onChange: (value: string) => void
-  onBack: () => void
-  onContinue: () => void
 }) {
   const id = useId()
   const start = field === undefined ? "" : initialInput(field)
   const text = value ?? start
   return (
-    <section className="flex max-w-2xl flex-col gap-6">
-      <Field>
-        <FieldLabel htmlFor={id}>Behavior prompt</FieldLabel>
-        <Textarea
-          id={id}
-          className="min-h-72"
-          value={typeof text === "string" ? text : ""}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <FieldDescription>{field?.description}</FieldDescription>
-      </Field>
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={onBack}>
-          Back
-        </Button>
-        <Button onClick={onContinue}>Continue</Button>
-      </div>
-    </section>
+    <Field>
+      <FieldLabel htmlFor={id}>Behavior prompt</FieldLabel>
+      <Textarea
+        id={id}
+        className="min-h-72"
+        value={typeof text === "string" ? text : ""}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <FieldDescription>{field?.description}</FieldDescription>
+    </Field>
   )
 }
 
@@ -608,40 +635,25 @@ function PromptStep({
  * The setup fields. Each secret field takes the hub secret named after the variable it is held
  * under until the user picks another source.
  */
-function SetupStep({
-  caller,
-  clock,
+function SetupFields({
   fields,
   values,
   sources,
   errors,
+  kept,
+  variable,
   onChange,
   onSource,
-  onBack,
-  onCreate,
 }: {
-  caller: Pick<Client, "call">
-  clock: Clock
   fields: SetupField[]
   values: Record<string, FieldInput>
   sources: Record<string, SecretSource>
   errors: Record<string, string>
+  kept: string[]
+  variable: (field: SetupField) => string
   onChange: (name: string, value: FieldInput) => void
   onSource: (name: string, source: SecretSource) => void
-  onBack: () => void
-  onCreate: (sources: Record<string, SecretSource>) => void
 }) {
-  const read = useCallback(() => caller.call("hub.secret.list", {}), [caller])
-  const kept = useRead(read, clock).value?.secrets.map(({ name }) => name) ?? []
-  const model = values[MODEL_FIELD]
-  const variable = (field: SetupField) =>
-    heldVariable(field, typeof model === "string" ? model : "")
-  const resolved = Object.fromEntries(
-    fields
-      .filter((field) => field.kind === "secret")
-      .map((field) => [field.name, secretSource(sources[field.name], variable(field), kept)]),
-  )
-  const unnamed = Object.values(resolved).some(unnamedSave)
   const inputs = (kind: SetupField["kind"]) =>
     fields
       .filter((field) => field.kind === kind)
@@ -654,7 +666,7 @@ function SetupStep({
             error={errors[field.name]}
             kept={kept}
             variable={variable(field)}
-            source={resolved[field.name] ?? {}}
+            source={sources[field.name] ?? {}}
             onChange={(value) => onChange(field.name, value)}
             onSource={(source) => onSource(field.name, source)}
           />
@@ -668,42 +680,21 @@ function SetupStep({
           />
         ),
       )
-  // A refusal of no field shown here, such as a name another instance holds.
-  const others = Object.entries(errors)
-    .filter(([name]) => !fields.some((field) => field.name === name))
-    .map(([, message]) => message)
   return (
-    <section className="flex max-w-xl flex-col gap-6">
-      {others.length > 0 && (
-        <Alert variant="destructive">
-          <CircleXIcon />
-          <AlertTitle>The hub refused it</AlertTitle>
-          <AlertDescription>{others.join(" ")}</AlertDescription>
-        </Alert>
-      )}
-      <FieldGroup>
-        <FieldSet>
-          <FieldLegend>Configuration</FieldLegend>
-          {inputs("config")}
-        </FieldSet>
-        <FieldSet>
-          <FieldLegend>Secrets</FieldLegend>
-          <FieldDescription>
-            Write-only. The hub keeps them with the instance and never sends them back. A field can
-            take a hub secret instead.
-          </FieldDescription>
-          {inputs("secret")}
-        </FieldSet>
-      </FieldGroup>
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={onBack}>
-          Back
-        </Button>
-        <Button disabled={unnamed} onClick={() => onCreate(resolved)}>
-          Create instance
-        </Button>
-      </div>
-    </section>
+    <FieldGroup className="max-w-xl">
+      <FieldSet>
+        <FieldLegend>Configuration</FieldLegend>
+        {inputs("config")}
+      </FieldSet>
+      <FieldSet>
+        <FieldLegend>Secrets</FieldLegend>
+        <FieldDescription>
+          Write-only. The hub keeps them with the instance and never sends them back. A field can
+          take a hub secret instead.
+        </FieldDescription>
+        {inputs("secret")}
+      </FieldSet>
+    </FieldGroup>
   )
 }
 
@@ -953,7 +944,7 @@ function CreationView({
       {creation.state === "failed" && (
         <div>
           <Button variant="outline" onClick={onBack}>
-            Back to setup
+            Back to the form
           </Button>
         </div>
       )}
@@ -1031,25 +1022,6 @@ function StartStep({
         </Button>
       </div>
     </>
-  )
-}
-
-function Fields({ fields }: { fields: SetupField[] }) {
-  return (
-    <ItemGroup aria-label="Setup fields">
-      {fields.map((field) => (
-        <Item key={field.name} render={<li />} aria-label={field.label} variant="outline" size="sm">
-          <ItemContent>
-            <ItemTitle>{field.label}</ItemTitle>
-            <ItemDescription lines="all">{field.description}</ItemDescription>
-          </ItemContent>
-          <ItemActions>
-            <Badge variant="outline">{field.kind === "secret" ? "Secret" : "Configuration"}</Badge>
-            {!field.required && <Badge variant="secondary">Optional</Badge>}
-          </ItemActions>
-        </Item>
-      ))}
-    </ItemGroup>
   )
 }
 
