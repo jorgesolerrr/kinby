@@ -65,6 +65,27 @@ describe("the app", () => {
     expect(screen.queryByRole("button", { name: /You/ })).toBeNull()
   })
 
+  it("signs in from one focused token box, and folds out how to rotate a lost token", async () => {
+    openApp({ signedIn: false })
+    const user = userEvent.setup()
+
+    const token = await screen.findByLabelText("Access token")
+    expect(document.activeElement).toBe(token)
+    expect(token.getAttribute("type")).toBe("password")
+    expect(screen.getByRole("button", { name: "Sign in" })).toHaveProperty("disabled", true)
+    expect(screen.getByText(window.location.host)).toBeDefined()
+
+    await user.type(token, "a-guessed-token{Enter}")
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Could not sign in. Check the token and that the hub is reachable, then sign in again.",
+    )
+
+    expect(screen.queryByText("uv run kinby hub .kinby/hub token rotate")).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Lost the token?" }))
+    expect(screen.getByText("uv run kinby hub .kinby/hub token rotate")).toBeDefined()
+    expect(screen.getByText(/Every browser signed in with the old one signs out/)).toBeDefined()
+  })
+
   it("opens straight to the shell while the browser session is open", async () => {
     openApp({ signedIn: true })
 
