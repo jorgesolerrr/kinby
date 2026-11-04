@@ -14,6 +14,7 @@ ADR 0006 holds: one process owns appends and live delivery. ADR 0072 holds: even
 
 ## Consequences
 
-- Reading a transcript takes `sqlite3` or a `kinby` command that prints a thread as JSONL. The playground host has no `sqlite3` binary.
-- The torn-tail handling in `kinby/jsonl.py` is no longer needed for events.
+- kinby keeps no JSONL stores of its own. Thread records, config changes and a coding session's recalls move into `instance.sqlite` too, and `kinby/jsonl.py` goes away. Claude Code's session files stay in Claude Code's format.
+- The move is a clean cut. A one-off script migrates each instance once, with the instance stopped, and is deleted afterwards. kinby has no code that imports or falls back to JSONL. An instance whose state directory was never migrated refuses to start.
+- Reading a transcript takes `sqlite3` or `kinby thread show`, which prints a thread's events as JSON. The playground host has no `sqlite3` binary.
 - LangGraph's `checkpoints.sqlite` stays a separate file that LangGraph owns.
