@@ -85,6 +85,9 @@ export function secretSource(
 /** The field the onboarding asks for in its own step, starting from kinby's or the role's. */
 export const PROMPT_FIELD = "behavior_prompt"
 
+/** The fields every instance asks for, whose values kinby writes itself. */
+export const BUILT_IN_FIELDS = [MODEL_FIELD, API_KEY_FIELD, PROMPT_FIELD]
+
 /** What the user named the instance and how it is drawn. */
 export interface Identity {
   name: string
