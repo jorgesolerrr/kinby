@@ -10,8 +10,14 @@ import type {
   SetupField,
   SubscriptionLogin,
 } from "@kinby/contract"
-import { CircleCheckIcon, CircleXIcon } from "lucide-react"
-import { useCallback, useEffect, useId, useRef, useState } from "react"
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CircleCheckIcon,
+  CircleXIcon,
+} from "lucide-react"
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { HubSecretPicker } from "@/components/hub-secret-picker"
@@ -23,6 +29,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   Field,
   FieldContent,
@@ -34,6 +41,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Item,
   ItemActions,
@@ -297,7 +305,7 @@ export function Onboarding({
               title="Role"
               lead="A role brings its factory's hooks, tools, intake and setup fields. The instance keeps it for life."
             >
-              <RoleControl caller={caller} clock={clock} offer={offer} onPick={pickRole} />
+              <RoleRows caller={caller} clock={clock} offer={offer} onPick={pickRole} />
             </SectionFrame>
             <SectionFrame
               variant="page"
@@ -310,8 +318,17 @@ export function Onboarding({
               variant="page"
               title="Skills"
               lead="Each one ticked is copied into the instance. You can add or drop skills later."
+              actions={
+                <span className="text-sm text-muted-foreground">{skills.length} picked</span>
+              }
             >
-              <SkillChoice caller={caller} clock={clock} picked={skills} onChange={setSkills} />
+              <SkillRows
+                caller={caller}
+                clock={clock}
+                offer={offer}
+                picked={skills}
+                onChange={setSkills}
+              />
             </SectionFrame>
             <SectionFrame
               variant="page"
@@ -321,8 +338,9 @@ export function Onboarding({
               {description === undefined ? (
                 <Skeleton className="h-72 w-full" />
               ) : (
-                <PromptInput
+                <PromptRow
                   field={promptField}
+                  owner={offer === undefined ? "kinby's default" : `${offer.role.name}'s default`}
                   value={values[PROMPT_FIELD]}
                   onChange={(value) =>
                     setValues((current) => ({ ...current, [PROMPT_FIELD]: value }))
@@ -449,50 +467,54 @@ function IdentityFields({
 }) {
   const { name, avatar } = identity
   return (
-    <FieldGroup className="max-w-md">
-      <Field>
-        <FieldLabel htmlFor="instance-name">Name</FieldLabel>
-        <Input
-          id="instance-name"
-          value={name}
-          onChange={(event) => onChange({ ...identity, name: event.target.value })}
-        />
-      </Field>
-      <FieldSet>
-        <FieldLegend variant="label">Shape</FieldLegend>
-        <ToggleGroup
-          value={[avatar.shape]}
-          onValueChange={([shape]) => {
-            if (isShape(shape)) onChange({ ...identity, avatar: { ...avatar, shape } })
-          }}
-        >
-          {Object.entries(SHAPES).map(([shape, label]) => (
-            <ToggleGroupItem key={shape} value={shape} aria-label={label}>
-              <InstanceAvatar avatar={{ ...avatar, shape: shape as AvatarShape }} name={name} />
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </FieldSet>
-      <FieldSet>
-        <FieldLegend variant="label">Color</FieldLegend>
-        <ToggleGroup
-          value={[avatar.color]}
-          onValueChange={([color]) => {
-            if (isColor(color)) onChange({ ...identity, avatar: { ...avatar, color } })
-          }}
-        >
-          {Object.entries(COLORS).map(([color, label]) => (
-            <ToggleGroupItem key={color} value={color} aria-label={label}>
-              <InstanceAvatar
-                avatar={{ ...avatar, color: color as AvatarColor }}
-                name={name}
-                size="sm"
-              />
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </FieldSet>
-    </FieldGroup>
+    <div className="flex items-start gap-4">
+      <InstanceAvatar avatar={avatar} name={name} size="lg" />
+      <FieldGroup className="max-w-md min-w-0 flex-1">
+        <Field>
+          <FieldLabel htmlFor="instance-name">Name</FieldLabel>
+          <Input
+            id="instance-name"
+            value={name}
+            onChange={(event) => onChange({ ...identity, name: event.target.value })}
+          />
+        </Field>
+        <FieldSet>
+          <FieldLegend variant="label">Shape</FieldLegend>
+          <ToggleGroup
+            value={[avatar.shape]}
+            onValueChange={([shape]) => {
+              if (isShape(shape)) onChange({ ...identity, avatar: { ...avatar, shape } })
+            }}
+          >
+            {Object.entries(SHAPES).map(([shape, label]) => (
+              <ToggleGroupItem key={shape} value={shape} aria-label={label}>
+                <InstanceAvatar avatar={{ ...avatar, shape: shape as AvatarShape }} name={name} />
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </FieldSet>
+        <FieldSet>
+          <FieldLegend variant="label">Color</FieldLegend>
+          <ToggleGroup
+            className="flex-wrap"
+            value={[avatar.color]}
+            onValueChange={([color]) => {
+              if (isColor(color)) onChange({ ...identity, avatar: { ...avatar, color } })
+            }}
+          >
+            {Object.entries(COLORS).map(([color, label]) => (
+              <ToggleGroupItem key={color} value={color} aria-label={label}>
+                <InstanceAvatar
+                  avatar={{ ...avatar, color: color as AvatarColor }}
+                  name={name}
+                  size="sm"
+                />
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </FieldSet>
+      </FieldGroup>
+    </div>
   )
 }
 
@@ -504,12 +526,10 @@ function isColor(value: unknown): value is AvatarColor {
   return typeof value === "string" && Object.hasOwn(COLORS, value)
 }
 
-const NO_ROLE = "none"
-
 const roleKey = ({ factory, name }: FactoryRole) => `${factory}/${name}`
 
 /** Pick one role of a factory in the library, or none for a vanilla instance. */
-function RoleControl({
+function RoleRows({
   caller,
   clock,
   offer,
@@ -520,53 +540,90 @@ function RoleControl({
   offer: RoleOffer | undefined
   onPick: (offer: RoleOffer | undefined) => void
 }) {
-  const id = useId()
   const read = useCallback(() => offeredRoles(caller), [caller])
   const { value: offers = [], failure } = useRead(read, clock)
-  const items = [
-    { value: NO_ROLE, label: "None: a vanilla instance" },
-    ...offers.map(({ role }) => ({
-      value: roleKey(role),
-      label: `${role.name} in ${role.factory}`,
-    })),
-  ]
+  const pick = (next: RoleOffer | undefined) => {
+    if (next !== offer) onPick(next)
+  }
   return (
     <>
       {failure !== undefined && <Failure error={failure} />}
-      <Field className="max-w-md">
-        <FieldLabel htmlFor={id}>Factory role</FieldLabel>
-        <Select
-          items={items}
-          value={offer === undefined ? NO_ROLE : roleKey(offer.role)}
-          onValueChange={(picked) => onPick(offers.find(({ role }) => roleKey(role) === picked))}
-        >
-          <SelectTrigger id={id}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {items.map(({ value, label }) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
+      <ul aria-label="Roles" className="flex flex-col divide-y">
+        <RoleRow
+          label="None"
+          title="None"
+          description="A vanilla instance, from kinby's built-in defaults."
+          picked={offer === undefined}
+          onPick={() => pick(undefined)}
+        />
+        {offers.map((each) => (
+          <RoleRow
+            key={roleKey(each.role)}
+            label={`${each.role.name} in ${each.role.factory}`}
+            title={
+              <>
+                <span className="font-mono">{each.role.name}</span>{" "}
+                <span className="font-normal text-muted-foreground">in {each.role.factory}</span>
+              </>
+            }
+            description={suggests(each.suggestedPicks.length)}
+            picked={offer !== undefined && roleKey(offer.role) === roleKey(each.role)}
+            onPick={() => pick(each)}
+          />
+        ))}
+      </ul>
     </>
   )
 }
 
-/** Tick the library skills the instance copies in. A role's suggested picks start ticked. */
-function SkillChoice({
+function suggests(count: number): string {
+  if (count === 0) return "Suggests no skills."
+  return `Suggests ${count} ${count === 1 ? "skill" : "skills"}.`
+}
+
+function RoleRow({
+  label,
+  title,
+  description,
+  picked,
+  onPick,
+}: {
+  label: string
+  title: ReactNode
+  description: string
+  picked: boolean
+  onPick: () => void
+}) {
+  return (
+    <li>
+      <Item
+        size="row"
+        render={<button type="button" aria-label={label} aria-pressed={picked} onClick={onPick} />}
+      >
+        <ItemContent className="min-w-0">
+          <ItemTitle>{title}</ItemTitle>
+          <ItemDescription lines="one">{description}</ItemDescription>
+        </ItemContent>
+        <ItemActions>{picked && <CheckIcon />}</ItemActions>
+      </Item>
+    </li>
+  )
+}
+
+/**
+ * Tick the library skills the instance copies in. A role's suggested picks come first, badged,
+ * and start ticked.
+ */
+function SkillRows({
   caller,
   clock,
+  offer,
   picked,
   onChange,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
+  offer: RoleOffer | undefined
   picked: string[]
   onChange: (picked: string[]) => void
 }) {
@@ -574,6 +631,11 @@ function SkillChoice({
   const read = useCallback(() => caller.call("library.list", {}), [caller])
   const { value: listed, failure } = useRead(read, clock)
   const offered = listed?.entries.filter((entry) => entry.kind === "skill") ?? []
+  const suggested = offer?.suggestedPicks ?? []
+  const ordered = [
+    ...offered.filter(({ name }) => suggested.includes(name)),
+    ...offered.filter(({ name }) => !suggested.includes(name)),
+  ]
   return (
     <>
       {failure !== undefined && <Failure error={failure} />}
@@ -582,52 +644,107 @@ function SkillChoice({
       ) : offered.length === 0 ? (
         <p className="text-sm text-muted-foreground">The library holds no skill.</p>
       ) : (
-        <FieldGroup>
-          {offered.map(({ name, description }) => (
-            <Field key={name} orientation="horizontal">
-              <Checkbox
-                id={`${id}-${name}`}
-                checked={picked.includes(name)}
-                onCheckedChange={(on) =>
-                  onChange(on ? [...picked, name] : picked.filter((each) => each !== name))
-                }
-              />
-              <FieldContent>
-                <FieldLabel htmlFor={`${id}-${name}`}>{name}</FieldLabel>
-                {description !== null && <FieldDescription>{description}</FieldDescription>}
-              </FieldContent>
-            </Field>
+        <ul aria-label="Skills" className="flex flex-col divide-y">
+          {ordered.map(({ name, description }) => (
+            <li key={name} aria-label={name}>
+              <Item size="row">
+                <Checkbox
+                  id={`${id}-${name}`}
+                  checked={picked.includes(name)}
+                  onCheckedChange={(on) =>
+                    onChange(on ? [...picked, name] : picked.filter((each) => each !== name))
+                  }
+                />
+                <ItemContent className="min-w-0">
+                  <ItemTitle>
+                    <Label htmlFor={`${id}-${name}`}>
+                      <span className="truncate font-mono">{name}</span>
+                    </Label>
+                    {offer !== undefined && suggested.includes(name) && (
+                      <Badge variant="secondary">Suggested by {offer.role.name}</Badge>
+                    )}
+                  </ItemTitle>
+                  {description !== null && (
+                    <ItemDescription lines="one">{description}</ItemDescription>
+                  )}
+                </ItemContent>
+              </Item>
+            </li>
           ))}
-        </FieldGroup>
+        </ul>
       )}
     </>
   )
 }
 
-/** The behavior prompt, starting from the role's or kinby's default, for the user to edit. */
-function PromptInput({
+/**
+ * The behavior prompt folded to its first line and whose default it starts from. It unfolds in
+ * place to edit, and an edit can go back to the default.
+ */
+function PromptRow({
   field,
+  owner,
   value,
   onChange,
 }: {
   field: SetupField | undefined
+  /** Whose default the prompt starts from. */
+  owner: string
   value: FieldInput | undefined
   onChange: (value: string) => void
 }) {
-  const id = useId()
+  const [open, setOpen] = useState(false)
   const start = field === undefined ? "" : initialInput(field)
-  const text = value ?? start
+  const initial = typeof start === "string" ? start : ""
+  const text = typeof value === "string" ? value : initial
+  const edited = text !== initial
   return (
-    <Field>
-      <FieldLabel htmlFor={id}>Behavior prompt</FieldLabel>
-      <Textarea
-        id={id}
-        className="min-h-72"
-        value={typeof text === "string" ? text : ""}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <FieldDescription>{field?.description}</FieldDescription>
-    </Field>
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger
+        render={
+          <Item
+            size="row"
+            render={
+              <button type="button" aria-label={`Behavior prompt, ${edited ? "edited" : owner}`} />
+            }
+          />
+        }
+      >
+        <ItemContent className="min-w-0">
+          <ItemTitle>
+            Behavior prompt
+            {edited ? (
+              <Badge variant="outline">Edited</Badge>
+            ) : (
+              <span className="font-normal text-muted-foreground">{owner}</span>
+            )}
+          </ItemTitle>
+          <ItemDescription lines="one">{text.split("\n")[0]}</ItemDescription>
+        </ItemContent>
+        <ItemActions>
+          {open ? (
+            <ChevronUpIcon className="text-muted-foreground" />
+          ) : (
+            <ChevronDownIcon className="text-muted-foreground" />
+          )}
+        </ItemActions>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="flex flex-col items-start gap-2 pb-4">
+          <Textarea
+            aria-label="Behavior prompt"
+            className="min-h-72"
+            value={text}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          {edited && (
+            <Button variant="outline" size="sm" onClick={() => onChange(initial)}>
+              Back to the default
+            </Button>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

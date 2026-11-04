@@ -393,10 +393,19 @@ async function openOnboarding(caller: StubCaller, onPublished = () => {}) {
 
 const create = (user: UserEvent) => user.click(screen.getByRole("button", { name: "Create" }))
 
+/** The prompt's row, folded or not. */
+const promptRow = () => screen.getByRole("button", { name: /^Behavior prompt/ })
+
+/** Unfold the prompt's row and return its editor. */
+async function openPrompt(user: UserEvent) {
+  await user.click(promptRow())
+  return screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
+}
+
 /** Pick no role, name the instance, keep the skills, and write a prompt. */
 async function nameAndPrompt(user: UserEvent, name = "Ada") {
   await user.type(screen.getByLabelText("Name"), name)
-  const prompt = screen.getByLabelText("Behavior prompt")
+  const prompt = await openPrompt(user)
   await user.clear(prompt)
   await user.type(prompt, "Answer in haiku.")
 }
@@ -495,8 +504,9 @@ describe("the onboarding's setup", () => {
     const { user } = await openOnboarding(caller)
     await user.type(screen.getByLabelText("Name"), "Ada")
     await user.click(screen.getByRole("button", { name: "Square" }))
-    await user.clear(screen.getByLabelText("Behavior prompt"))
-    await user.type(screen.getByLabelText("Behavior prompt"), "Answer in haiku.")
+    const prompt = await openPrompt(user)
+    await user.clear(prompt)
+    await user.type(prompt, "Answer in haiku.")
     await fillSetup(user)
 
     await create(user)
@@ -826,10 +836,21 @@ function softwareHub(answers: Answers = {}) {
   })
 }
 
+const roleRow = (name: RegExp) =>
+  within(screen.getByRole("list", { name: "Roles" })).findByRole("button", { name })
+
 async function pickCoder(user: UserEvent) {
-  await user.click(await screen.findByRole("combobox", { name: "Factory role" }))
-  await user.click(await screen.findByRole("option", { name: "coder in software" }))
+  await user.click(await roleRow(/^coder in software/))
 }
+
+/** The skills' rows in order, by name. */
+const skillRows = () =>
+  within(screen.getByRole("list", { name: "Skills" }))
+    .getAllByRole("listitem")
+    .map((row) => row.getAttribute("aria-label"))
+
+const skillRow = (name: string) =>
+  within(within(screen.getByRole("list", { name: "Skills" })).getByRole("listitem", { name }))
 
 async function fillCoderSetup(user: UserEvent) {
   await user.type(screen.getByLabelText("Model"), "anthropic:claude-sonnet-5")
@@ -1039,7 +1060,7 @@ describe("the onboarding's role, skills and prompt", () => {
 
     expect([ticked("pr"), ticked("tdd")]).toEqual([false, false])
     await user.click(await screen.findByRole("checkbox", { name: "tdd" }))
-    const prompt = screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
+    const prompt = await openPrompt(user)
     expect(prompt.value).toBe("You are a personal AI teammate.\n")
     await user.clear(prompt)
     await user.type(prompt, "Answer in haiku.")
@@ -1059,6 +1080,86 @@ describe("the onboarding's role, skills and prompt", () => {
         picks: ["tdd"],
       },
     ])
+  })
+
+  it("lists the roles as rows, None first, each with its factory and the skills it suggests", async () => {
+    const { user } = await openOnboarding(softwareHub())
+
+    const coderRow = await roleRow(/^coder in software/)
+    const noneRow = await roleRow(/^None/)
+    const roles = within(screen.getByRole("list", { name: "Roles" }))
+    expect(roles.getAllByRole("button")).toEqual([noneRow, coderRow])
+    expect(
+      within(noneRow).getByText("A vanilla instance, from kinby's built-in defaults."),
+    ).toBeDefined()
+    expect(within(coderRow).getByText("Suggests 8 skills.")).toBeDefined()
+    expect([noneRow, coderRow].map((row) => row.getAttribute("aria-pressed"))).toEqual([
+      "true",
+      "false",
+    ])
+    await user.click(coderRow)
+
+    expect([noneRow, coderRow].map((row) => row.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "true",
+    ])
+  })
+
+  it("puts the role's suggested picks first, ticked and badged, and counts the picked", async () => {
+    const { user } = await openOnboarding(
+      softwareHub({
+        "library.list": () => ({ entries: ["house-style", ...SUGGESTED].map(skill) }),
+      }),
+    )
+    await screen.findByRole("checkbox", { name: "tdd" })
+    const skills = within(screen.getByRole("region", { name: "Skills" }))
+
+    expect(skillRows()).toEqual(["house-style", ...SUGGESTED])
+    expect(skills.getByText("0 picked")).toBeDefined()
+    await pickCoder(user)
+
+    expect(skillRows()).toEqual([...SUGGESTED, "house-style"])
+    expect(SUGGESTED.filter(ticked)).toEqual(SUGGESTED)
+    expect(skillRow("tdd").getByText("Suggested by coder")).toBeDefined()
+    expect(skillRow("house-style").queryByText(/Suggested by/)).toBeNull()
+    expect(skills.getByText("8 picked")).toBeDefined()
+    await user.click(screen.getByRole("checkbox", { name: "house-style" }))
+    expect(skills.getByText("9 picked")).toBeDefined()
+  })
+
+  it("folds the prompt to its first line and whose default it is", async () => {
+    const { user } = await openOnboarding(softwareHub())
+
+    expect(within(promptRow()).getByText("kinby's default")).toBeDefined()
+    expect(within(promptRow()).getByText("You are a personal AI teammate.")).toBeDefined()
+    expect(screen.queryByLabelText("Behavior prompt")).toBeNull()
+    await pickCoder(user)
+
+    expect(within(promptRow()).getByText("coder's default")).toBeDefined()
+    expect(within(promptRow()).getByText("You implement tickets.")).toBeDefined()
+  })
+
+  it("marks an edited prompt, and Back to the default restores it", async () => {
+    const caller = softwareHub()
+    const { user } = await openOnboarding(caller)
+    await pickCoder(user)
+
+    const prompt = await openPrompt(user)
+    expect(screen.queryByRole("button", { name: "Back to the default" })).toBeNull()
+    await user.clear(prompt)
+    await user.type(prompt, "Answer in haiku.")
+    expect(within(promptRow()).getByText("Edited")).toBeDefined()
+    expect(within(promptRow()).getByText("Answer in haiku.")).toBeDefined()
+    await user.click(screen.getByRole("button", { name: "Back to the default" }))
+
+    expect(prompt.value).toBe("You implement tickets.\n")
+    expect(within(promptRow()).queryByText("Edited")).toBeNull()
+    expect(within(promptRow()).getByText("coder's default")).toBeDefined()
+    await fillCoderSetup(user)
+    await create(user)
+    expect(sent(caller)[0]).toMatchObject({
+      config: { behavior_prompt: "You implement tickets.\n" },
+    })
   })
 
   it("preselects the coder's suggested picks and asks for its setup fields", async () => {
@@ -1107,7 +1208,7 @@ describe("the onboarding's role, skills and prompt", () => {
     const { user } = await openOnboarding(caller)
     await pickCoder(user)
 
-    const prompt = screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
+    const prompt = await openPrompt(user)
     expect(prompt.value).toBe("You implement tickets.\n")
     await user.type(prompt, "Keep each pull request small.")
     await fillCoderSetup(user)
@@ -1134,6 +1235,15 @@ describe("the onboarding's role, skills and prompt", () => {
       manifest_id: "billing-coder",
       persona_name: "billing-coder",
     })
+  })
+
+  it("keeps a name the user typed when a role is picked", async () => {
+    const { user } = await openOnboarding(softwareHub())
+
+    await user.type(screen.getByLabelText("Name"), "Ada")
+    await pickCoder(user)
+
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Ada")
   })
 
   it("asks for the fields of a role edited since it was picked, once the hub refuses", async () => {
