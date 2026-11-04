@@ -1,5 +1,10 @@
 import { createClient } from "@kinby/contract"
-import type { InstanceSetup, InstanceSummary, ThreadSummary } from "@kinby/contract"
+import type {
+  InstancePicksResult,
+  InstanceSetup,
+  InstanceSummary,
+  ThreadSummary,
+} from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -22,14 +27,16 @@ function openApp({
   removed = [],
   threads = {},
   setups = {},
+  picks = {},
 }: {
   signedIn: boolean
   instances?: InstanceSummary[]
   removed?: InstanceSummary[]
   threads?: Record<string, ThreadSummary[]>
   setups?: Record<string, InstanceSetup>
+  picks?: Record<string, InstancePicksResult>
 }) {
-  const hub = fakeHub({ signedIn, instances, removed, threads, setups })
+  const hub = fakeHub({ signedIn, instances, removed, threads, setups, picks })
   const clock = fakeClock()
   const { unmount } = render(
     <App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />,
@@ -1654,6 +1661,122 @@ describe("the home screen", () => {
     expect(screen.queryByRole("alert")).toBeNull()
     expect(screen.queryByRole("button", { name: "Start and send" })).toBeNull()
     expect((await sendTo()).textContent).toContain("research")
+  })
+
+  describe("on an instance with no threads", () => {
+    const held: InstancePicksResult = {
+      hash: "picks-hash",
+      picks: [
+        { name: "research", source: "shipped", state: "up-to-date" },
+        { name: "trip-planner", source: "written", state: "edited" },
+      ],
+      mcp_servers: [],
+    }
+    /** Matches the paragraph that reads `text`, its skill names set apart in a span. */
+    const sentence = (text: string) => (_: string, element: Element | null) =>
+      element?.tagName === "P" && element.textContent === text
+
+    it("greets with its avatar, says it is ready with no threads, and names its picked skills", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({
+        signedIn: true,
+        instances: [kinby, { ...ada, avatar: { shape: "squircle", color: "green" } }],
+        threads: { "hub-ada": [] },
+        picks: { "hub-ada": held },
+      })
+
+      expect(await screen.findByRole("heading", { level: 1, name: "Ada is ready" })).toBeDefined()
+      const main = within(screen.getByRole("main"))
+      expect(
+        await main.findByText(
+          sentence("No threads yet. It holds 2 skills: research, trip-planner."),
+        ),
+      ).toBeDefined()
+      const avatar = screen.getByRole("main").querySelector("[data-slot=avatar]")
+      expect(avatar?.getAttribute("data-shape")).toBe("squircle")
+      expect(avatar?.textContent).toBe("A")
+    })
+
+    it("starts its first thread from the composer under the greeting", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      const { hub } = openApp({
+        signedIn: true,
+        instances: [kinby, ada],
+        threads: { "hub-ada": [] },
+        picks: { "hub-ada": held },
+      })
+      const user = userEvent.setup()
+
+      expect(await screen.findByRole("heading", { name: "Ada is ready" })).toBeDefined()
+      await user.type(await message(), "Plan a weekend")
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+          "false",
+        ),
+      )
+      await user.click(screen.getByRole("button", { name: "Send" }))
+
+      await waitFor(() =>
+        expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-1"),
+      )
+      expect(await threadStarts(hub, "hub-ada")).toEqual([
+        { method: "thread.create", params: {} },
+        {
+          method: "thread.turn.start",
+          params: { thread_id: "thread-1", message: "Plan a weekend" },
+        },
+      ])
+    })
+
+    it("says it holds no skills when it picked none", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({ signedIn: true, instances: [kinby, ada], threads: { "hub-ada": [] } })
+
+      expect(await screen.findByText("No threads yet. It holds no skills.")).toBeDefined()
+    })
+
+    it("keeps the usual greeting on an instance with a thread", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({
+        signedIn: true,
+        instances: [kinby, ada],
+        threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+      })
+
+      expect(await screen.findByRole("button", { name: "Send" })).toBeDefined()
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      expect(screen.getByRole("heading", { level: 1, name: /^Good / })).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "Ada is ready" })).toBeNull()
+    })
+
+    it("gives way to the setup card while a required secret is missing", async () => {
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({
+        signedIn: true,
+        instances: [kinby, ada],
+        threads: { "hub-ada": [] },
+        setups: {
+          "hub-ada": {
+            logins: [],
+            missing_commands: [],
+            secrets: [
+              { name: "api_key", label: "API key", variable: "K", required: true, is_set: false },
+            ],
+          },
+        },
+      })
+
+      expect(await screen.findByRole("region", { name: "Ada needs setup to answer" })).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "Ada is ready" })).toBeNull()
+    })
+
+    it("gives way to the stopped alert on a stopped instance", async () => {
+      window.history.replaceState(null, "", "/?to=hub-unnamed")
+      openApp({ signedIn: true, instances: [kinby, unnamed], threads: { "hub-unnamed": [] } })
+
+      expect(await screen.findByRole("alert")).toBeDefined()
+      expect(screen.queryByRole("heading", { name: "research is ready" })).toBeNull()
+    })
   })
 
   describe("with a required secret missing", () => {

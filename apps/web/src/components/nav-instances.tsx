@@ -40,6 +40,7 @@ import {
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
 import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
+import { useSidebarThreads } from "@/hooks/use-sidebar-threads"
 import { INSTANCE_TABS, instanceName, shownState } from "@/lib/instances"
 import {
   CREATE_PATH,
@@ -53,7 +54,7 @@ import {
   useViewOpen,
   viewPath,
 } from "@/lib/selection"
-import { needsYou, threadList, threadTitle } from "@/lib/thread-list"
+import { needsYou, threadTitle } from "@/lib/thread-list"
 
 type Reached = Pick<InstanceClient, "call" | "state" | "onStateChange">
 
@@ -211,7 +212,7 @@ function InstanceGroup({
     onReach(instance.instance_id, reached)
     return () => onReach(instance.instance_id, undefined)
   }, [onReach, instance.instance_id, reached])
-  const threads = useSidebarThreads(reached, clock)
+  const threads = useSidebarThreads(reached, clock) ?? []
   const count = threads.filter(needsYou).length + instance.needs_human
   // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.
   const [opened, setOpened] = useState(false)
@@ -256,25 +257,6 @@ function InstanceGroup({
     </Collapsible>
   )
 }
-
-/**
- * The sidebar set of `client`'s instance, listed again as `usePolled` says. It is the list the open
- * thread reads and changes, so a change there shows here at once. None while nothing reaches it.
- */
-function useSidebarThreads(client: Reached | undefined, clock: Clock): ThreadSummary[] {
-  const list = client === undefined ? undefined : threadList(client, "sidebar")
-  const connected =
-    useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
-    "connected"
-  usePolled(list?.list ?? listNothing, clock, connected, POLL_INTERVAL_MS)
-  return useSyncExternalStore(list?.onChange ?? unsubscribed, () => list?.view())?.threads ?? []
-}
-
-function unsubscribed(): () => void {
-  return () => {}
-}
-
-async function listNothing(): Promise<void> {}
 
 /**
  * The row's "…" menu: a new thread with the instance, which only a running one can take, then each
