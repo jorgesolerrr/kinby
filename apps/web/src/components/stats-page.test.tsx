@@ -843,7 +843,7 @@ describe("the Quality section", () => {
 
     const memory = screen.getByRole("region", { name: "Memory" })
     expect(rows(await within(memory).findByRole("table"))).toEqual([
-      ["Recalled a fact", "2", "2,001", "0.5"],
+      ["Recalled a fact", "2", "2k", "0.5"],
       ["Recalled none", "1", "500", "2"],
     ])
     expect(within(memory).getByText(/need not come from memory/)).toBeTruthy()
@@ -1030,6 +1030,30 @@ describe("the Origin section", () => {
 
     expect(within(table).queryByRole("link", { name: /morning/ })).toBeNull()
     expect(window.location.pathname).toBe("/instances/hub-ada/routines/inbox")
+  })
+
+  it("wraps a long routine name inside its Origin cell, linked or removed", async () => {
+    const long = "a-routine-with-a-rather-long-name"
+    openStats({
+      "stats.get": () =>
+        stats({
+          total: summary({
+            origins: [originUse(null), originUse(long), originUse(`${long}-gone`)],
+          }),
+        }),
+      "routine.list": () => ({ routines: [routine({ name: long })], warnings: [] }),
+    })
+    await totals()
+    const table = screen.getByRole("table", { name: "Turns by origin" })
+
+    const link = await within(table).findByRole("link", { name: long })
+    const removed = within(table).getByText(`${long}-gone`)
+
+    for (const name of [link, removed]) {
+      expect(name.className).toMatch(/wrap-anywhere/)
+      expect(name.className).not.toMatch(/whitespace-nowrap/)
+      expect(name.closest("td")?.className).not.toMatch(/whitespace-nowrap/)
+    }
   })
 
   it("filters the drill-down to a clicked row, listing it under what opened it", async () => {

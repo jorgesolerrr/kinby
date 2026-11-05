@@ -6,6 +6,7 @@ import type {
   StatsGetResult,
 } from "@kinby/contract"
 import { type ReactNode, useEffect, useId, useState } from "react"
+import { cn } from "cn"
 
 import { Failure } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
@@ -107,7 +108,7 @@ function OriginTable({
         </h3>
         <p className="text-sm text-muted-foreground">Click a row to list its turns.</p>
       </div>
-      <Table aria-labelledby={titleId}>
+      <Table aria-labelledby={titleId} size="fit">
         <TableHeader>
           <TableRow>
             <TableHead>Origin</TableHead>
@@ -134,7 +135,7 @@ function OriginTable({
                 if (event.key === "Enter") onPick(origin)
               }}
             >
-              <TableCell>
+              <TableCell className="whitespace-normal">
                 <OriginCell origin={origin} routines={routines} instanceId={instanceId} />
               </TableCell>
               <TableCell className="text-right">{origin.turns}</TableCell>
@@ -173,15 +174,18 @@ function OriginCell({
   if (name === null || routines === undefined) return originName(origin)
   if (!routines.some((listed) => listed.name === name)) {
     return (
-      <span className="flex items-center gap-2">
-        {name}
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="wrap-anywhere">{name}</span>
         <Badge variant="secondary">removed or renamed</Badge>
       </span>
     )
   }
   return (
     <a
-      className={buttonVariants({ variant: "link", size: "sm" })}
+      className={cn(
+        buttonVariants({ variant: "link", size: "sm" }),
+        "h-auto min-h-8 wrap-anywhere whitespace-normal",
+      )}
       href={routinePath(instanceId, name)}
       onClick={(event) => {
         event.preventDefault()
