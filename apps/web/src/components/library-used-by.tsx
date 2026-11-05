@@ -27,7 +27,7 @@ const STATES: Record<PickState, string> = {
 export function PickedAvatars({ picks }: { picks: InstancePick[] }) {
   if (picks.length === 0) return <span className="text-xs text-muted-foreground">Not picked</span>
   return (
-    <AvatarGroup>
+    <AvatarGroup overlap="less">
       {picks.map(({ instance }) => (
         <InstanceAvatar
           key={instance.instance_id}

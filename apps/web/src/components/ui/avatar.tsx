@@ -87,14 +87,31 @@ function AvatarBadge({ className, ...props }: React.ComponentProps<"span">) {
   )
 }
 
-function AvatarGroup({ className, ...props }: React.ComponentProps<"div">) {
+const avatarGroupVariants = cva(
+  "group/avatar-group flex *:data-[slot=avatar]:ring-2 *:data-[slot=avatar]:ring-background",
+  {
+    variants: {
+      overlap: {
+        default: "-space-x-2",
+        less: "-space-x-1.5",
+      },
+    },
+    defaultVariants: {
+      overlap: "default",
+    },
+  },
+)
+
+function AvatarGroup({
+  className,
+  overlap = "default",
+  ...props
+}: React.ComponentProps<"div"> & VariantProps<typeof avatarGroupVariants>) {
   return (
     <div
       data-slot="avatar-group"
-      className={cn(
-        "group/avatar-group flex -space-x-2 *:data-[slot=avatar]:ring-2 *:data-[slot=avatar]:ring-background",
-        className,
-      )}
+      data-overlap={overlap}
+      className={cn(avatarGroupVariants({ overlap }), className)}
       {...props}
     />
   )
