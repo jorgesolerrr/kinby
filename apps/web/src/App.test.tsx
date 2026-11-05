@@ -870,6 +870,18 @@ describe("an instance's tabs", () => {
     expect(tabs("Ada").getByRole("tab", { name: "Overview", selected: true })).toBeDefined()
   })
 
+  it("holds its header, its tab strip and the open tab in the page column", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    const column = '[data-slot="page-column"]'
+    const name = await screen.findByRole("heading", { name: "Ada", level: 1 })
+    expect(name.closest(column)).not.toBeNull()
+    expect(screen.getByRole("tablist", { name: "Ada" }).closest(column)).not.toBeNull()
+    expect(screen.getByText(/^Start a thread with/).closest(column)).not.toBeNull()
+  })
+
   it("opens each tab at its own path, and Back moves between them", async () => {
     window.history.replaceState(null, "", "/instances/hub-ada")
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })

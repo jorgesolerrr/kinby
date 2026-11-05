@@ -12,6 +12,7 @@ import { type ReactNode, useCallback, useState } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { OperationSteps } from "@/components/operation-steps"
+import { PageColumn } from "@/components/page-column"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -118,53 +119,55 @@ export function InstanceHeader({
         : `${state} · core ${revision}`
   return (
     <>
-      <header className="flex shrink-0 flex-col gap-4 px-6 pt-6 max-md:px-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <InstanceAvatar avatar={instance.avatar} name={name} size="lg" />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate font-heading text-xl font-semibold">{name}</h1>
-              {instance.home && <Badge variant="outline">Home</Badge>}
+      <header className="shrink-0">
+        <PageColumn className="flex flex-col gap-4 pt-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <InstanceAvatar avatar={instance.avatar} name={name} size="lg" />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate font-heading text-xl font-semibold">{name}</h1>
+                {instance.home && <Badge variant="outline">Home</Badge>}
+              </div>
+              <p className="truncate text-sm text-muted-foreground">{status}</p>
             </div>
-            <p className="truncate text-sm text-muted-foreground">{status}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {intended === "stopped" && (
+                <Button disabled={start.busy} onClick={start.ask}>
+                  {start.busy ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <PlayIcon data-icon="inline-start" />
+                  )}
+                  Start
+                </Button>
+              )}
+              {intended === "running" && <StopButton name={name} stop={stop} />}
+              {removal.state === "running" && (
+                <Button variant="destructive" disabled={removal.forcing} onClick={removal.force}>
+                  Force stop
+                </Button>
+              )}
+              <MoreMenu instance={instance} name={name} removal={removal} />
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {intended === "stopped" && (
-              <Button disabled={start.busy} onClick={start.ask}>
-                {start.busy ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <PlayIcon data-icon="inline-start" />
-                )}
-                Start
-              </Button>
-            )}
-            {intended === "running" && <StopButton name={name} stop={stop} />}
-            {removal.state === "running" && (
-              <Button variant="destructive" disabled={removal.forcing} onClick={removal.force}>
-                Force stop
-              </Button>
-            )}
-            <MoreMenu instance={instance} name={name} removal={removal} />
-          </div>
-        </div>
-        {intended === "running" && <ProcessAlert instance={instance} name={name} />}
-        <UpdateAlert instance={instance} update={update} />
-        {start.starting?.state === "failed" && (
-          <Failure title="The start failed" detail={start.starting.detail}>
-            Start it again to retry.
-          </Failure>
-        )}
-        {stop.followed?.state === "failed" && (
-          <Failure title="The stop failed" detail={stop.followed.detail}>
-            Stop it again, or Force stop to end its work now.
-          </Failure>
-        )}
-        {removal.followed?.state === "failed" && (
-          <Failure title="The removal failed" detail={removal.followed.detail}>
-            Remove it again from the ⋯ menu.
-          </Failure>
-        )}
+          {intended === "running" && <ProcessAlert instance={instance} name={name} />}
+          <UpdateAlert instance={instance} update={update} />
+          {start.starting?.state === "failed" && (
+            <Failure title="The start failed" detail={start.starting.detail}>
+              Start it again to retry.
+            </Failure>
+          )}
+          {stop.followed?.state === "failed" && (
+            <Failure title="The stop failed" detail={stop.followed.detail}>
+              Stop it again, or Force stop to end its work now.
+            </Failure>
+          )}
+          {removal.followed?.state === "failed" && (
+            <Failure title="The removal failed" detail={removal.followed.detail}>
+              Remove it again from the ⋯ menu.
+            </Failure>
+          )}
+        </PageColumn>
       </header>
       {children?.({ start: start.ask, starting: start.busy, stopping: stop.stopping, update })}
     </>
@@ -411,7 +414,7 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
   const state = observedState(instance)
   if (state !== "restarting" && state !== "failed") return null
   return (
-    <Alert variant="destructive" className="max-w-2xl">
+    <Alert variant="destructive">
       <CircleXIcon />
       <AlertTitle>{state === "restarting" ? `${name} is restarting` : `${name} failed`}</AlertTitle>
       <AlertDescription>
@@ -444,7 +447,7 @@ function UpdateAlert({ instance, update }: { instance: InstanceSummary; update: 
   const failed = updating?.state === "failed" || updating?.state === "blocked"
   if (notice === undefined && !update.busy && !failed) return null
   return (
-    <Alert variant={failed ? "destructive" : "default"} className="max-w-2xl">
+    <Alert variant={failed ? "destructive" : "default"}>
       {failed ? <CircleXIcon /> : <DownloadIcon />}
       <AlertTitle>
         {notice === undefined
@@ -498,7 +501,7 @@ function Failure({
   children: ReactNode
 }) {
   return (
-    <Alert variant="destructive" className="max-w-2xl">
+    <Alert variant="destructive">
       <CircleXIcon />
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>

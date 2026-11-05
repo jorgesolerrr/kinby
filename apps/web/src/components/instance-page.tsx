@@ -171,7 +171,7 @@ export function InstancePage({
 
 /** Overview's sections, one under the other. */
 function Sections({ children }: { children: ReactNode }) {
-  return <div className="flex max-w-2xl flex-col gap-8 p-6">{children}</div>
+  return <div className="flex flex-col gap-8 py-6">{children}</div>
 }
 
 /** The instance's views as rows, read again as the sidebar reads them. Picking one opens its page. */
@@ -286,8 +286,8 @@ function SetupCard({
   const titleId = useId()
   const { logins, secrets, missing_commands: missing } = status.setup
   return (
-    <section aria-labelledby={titleId} className="p-6">
-      <Card className="max-w-2xl">
+    <section aria-labelledby={titleId} className="py-6">
+      <Card>
         <CardHeader>
           <CardTitle id={titleId}>Finish setting up {name}</CardTitle>
           <CardDescription>

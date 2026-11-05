@@ -6,6 +6,7 @@ import { ConfigPanel } from "@/components/config-panel"
 import { InstanceHeader, type Lifecycle } from "@/components/instance-header"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
+import { PageColumn } from "@/components/page-column"
 import { HomeScreen } from "@/components/home-screen"
 import { RoutinesSection } from "@/components/routines-section"
 import { StatsPage } from "@/components/stats-page"
@@ -180,22 +181,24 @@ function InstanceTabs({
       onValueChange={(picked: InstanceTab) => openTab(instance.instance_id, picked)}
       className="md:min-h-0 md:flex-1"
     >
-      <div className="sticky top-0 z-10 shrink-0 border-b bg-background px-4 pt-2">
-        <TabsList
-          variant="line"
-          aria-label={instanceName(instance)}
-          className="w-full justify-start overflow-x-auto"
-        >
-          {INSTANCE_TABS.map(({ id, label }) => (
-            <TabsTrigger key={id} value={id} className="flex-none">
-              {label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+      <div className="sticky top-0 z-10 shrink-0 border-b bg-background pt-2">
+        <PageColumn>
+          <TabsList
+            variant="line"
+            aria-label={instanceName(instance)}
+            className="w-full justify-start overflow-x-auto"
+          >
+            {INSTANCE_TABS.map(({ id, label }) => (
+              <TabsTrigger key={id} value={id} className="flex-none">
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </PageColumn>
       </div>
       <TabsContent value={tab} className="flex min-w-0 flex-col md:min-h-0 md:overflow-y-auto">
         {/* The tab panel sets small text, and the pages keep the base size they had before. */}
-        <div className="flex min-h-0 flex-1 flex-col text-base">{children}</div>
+        <PageColumn className="flex min-h-0 flex-1 flex-col text-base">{children}</PageColumn>
       </TabsContent>
     </Tabs>
   )
@@ -264,7 +267,7 @@ function TabBody({
       )
     case "routines":
       return (
-        <div className="p-6">
+        <div className="py-6">
           <OlderCore value={behind(instance) ? () => openCore(instanceId) : undefined}>
             <RoutinesSection
               key={instanceId}
