@@ -272,13 +272,10 @@ describe("the thread list page", () => {
           instances={[ada]}
           selected={ada}
           creating={false}
-          client={{ instance: () => expect.unreachable() }}
           clock={clock}
-          selectedClient={client}
+          reached={new Map([["hub-ada", client]])}
           folds={{}}
           onFold={() => {}}
-          searching={false}
-          onSearchingChange={() => {}}
         />
         <ThreadListPage client={client} clock={clock} instanceId="hub-ada" />
       </SidebarProvider>,

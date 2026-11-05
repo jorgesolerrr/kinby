@@ -626,7 +626,8 @@ describe("the sidebar", () => {
       window.matchMedia = wide
     })
 
-    const drawer = () => screen.queryByRole("dialog", { name: "Sidebar" })
+    // By its slot: a palette open over the drawer hides the drawer from the accessibility tree.
+    const drawer = () => document.querySelector("[data-slot=sidebar][data-mobile]")
 
     async function openDrawer() {
       const user = userEvent.setup()
@@ -689,6 +690,46 @@ describe("the sidebar", () => {
 
       expect(window.location.pathname).toBe("/instances/hub-ada/stats")
       await waitFor(() => expect(drawer()).toBeNull())
+    })
+
+    it("closes on Search, and the palette lists each running instance's threads alone", async () => {
+      const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+      openApp({
+        signedIn: true,
+        instances: [ada, kinby],
+        threads: {
+          "hub-kinby": [thread({ id: "k1", title: "Weekly plan" })],
+          "hub-ada": [thread({ id: "a1", title: "Deploy notes" })],
+        },
+      })
+      await screen.findByRole("textbox", { name: "Message" })
+
+      const { user, drawer: opened } = await openDrawer()
+      await user.click(opened.getByRole("button", { name: "Search" }))
+
+      await waitFor(() => expect(drawer()).toBeNull())
+      const shown = await palette()
+      await waitFor(() =>
+        expect(shown.getAllByRole("option").map((option) => option.textContent)).toEqual([
+          "Weekly plan",
+          "Deploy notes",
+        ]),
+      )
+    })
+
+    it("opens the palette alone on Ctrl K, leaving the drawer closed", async () => {
+      openApp({
+        signedIn: true,
+        instances: [ada],
+        threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+      })
+      await screen.findByRole("textbox", { name: "Message" })
+      const user = userEvent.setup()
+
+      await user.keyboard("{Control>}k{/Control}")
+
+      expect(await (await palette()).findByRole("option", { name: "Deploy notes" })).toBeDefined()
+      expect(drawer()).toBeNull()
     })
 
     it("closes with the palette on a thread picked there", async () => {

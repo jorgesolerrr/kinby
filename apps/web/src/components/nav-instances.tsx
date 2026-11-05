@@ -1,5 +1,4 @@
 import type {
-  Client,
   Clock,
   InstanceClient,
   InstanceSummary,
@@ -19,10 +18,9 @@ import {
   ShieldAlertIcon,
   SquarePenIcon,
 } from "lucide-react"
-import { useCallback, useEffect, useId, useState, useSyncExternalStore } from "react"
+import { useCallback, useId, useState, useSyncExternalStore } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
-import { SearchPalette } from "@/components/search-palette"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   DropdownMenu,
@@ -44,7 +42,6 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
 import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
 import { useSidebarThreads } from "@/hooks/use-sidebar-threads"
@@ -63,7 +60,7 @@ import {
 } from "@/lib/selection"
 import { needsYou, threadTitle } from "@/lib/thread-list"
 
-type Reached = Pick<InstanceClient, "call" | "state" | "onStateChange">
+export type Reached = Pick<InstanceClient, "call" | "state" | "onStateChange">
 
 /** How many of an instance's most recent threads its group lists. */
 const RECENT = 4
@@ -96,63 +93,38 @@ export function NavInstances({
   instances,
   selected,
   creating,
-  client,
   clock,
-  selectedClient,
+  reached,
   folds,
   onFold,
-  searching,
-  onSearchingChange,
 }: {
+  /** Home first. */
   instances: InstanceSummary[]
   selected: InstanceSummary | undefined
   creating: boolean
-  /** Reaches the instances that are not selected, to list their threads and views. */
-  client: Pick<Client, "instance">
   clock: Clock
-  /** The selected instance's connection, whose thread list the open thread reads and changes. */
-  selectedClient: Reached | undefined
+  /** The connection each running instance is reached on, by instance. */
+  reached: ReadonlyMap<string, Reached>
   /** Kept above the phone's drawer, which unmounts the groups each time it closes. */
   folds: Folds
   onFold: (instanceId: string, open: boolean) => void
-  /** Whether the search palette is open. It searches the threads the groups list. */
-  searching: boolean
-  onSearchingChange: (searching: boolean) => void
 }) {
   const open = useOpenFromSidebar()
-  const home = instances.filter((instance) => instance.home)
-  const others = instances.filter((instance) => !instance.home)
-  const ordered = [...home, ...others]
-  // Each running instance's group says which connection it lists the instance's threads on.
-  const [reached, setReached] = useState<ReadonlyMap<string, Reached>>(new Map())
-  const reach = useCallback((instanceId: string, client: Reached | undefined) => {
-    setReached((was) => {
-      const next = new Map(was)
-      if (client === undefined) next.delete(instanceId)
-      else next.set(instanceId, client)
-      return next
-    })
-  }, [])
   return (
     <SidebarGroup>
       <SidebarGroupLabel>Instances</SidebarGroupLabel>
       <SidebarMenu>
-        {ordered.map((instance) => {
-          const isSelected = instance === selected
-          return (
-            <InstanceGroup
-              key={instance.instance_id}
-              instance={instance}
-              isSelected={isSelected}
-              client={client}
-              clock={clock}
-              selectedClient={isSelected ? selectedClient : undefined}
-              folded={folds[instance.instance_id]}
-              onFold={(open) => onFold(instance.instance_id, open)}
-              onReach={reach}
-            />
-          )
-        })}
+        {instances.map((instance) => (
+          <InstanceGroup
+            key={instance.instance_id}
+            instance={instance}
+            isSelected={instance === selected}
+            clock={clock}
+            reached={reached.get(instance.instance_id)}
+            folded={folds[instance.instance_id]}
+            onFold={(open) => onFold(instance.instance_id, open)}
+          />
+        ))}
         <SidebarMenuItem>
           <SidebarMenuButton
             isActive={creating}
@@ -170,14 +142,6 @@ export function NavInstances({
           />
         </SidebarMenuItem>
       </SidebarMenu>
-      <SearchPalette
-        open={searching}
-        onOpenChange={onSearchingChange}
-        instances={ordered.flatMap((instance) => {
-          const client = reached.get(instance.instance_id)
-          return client === undefined ? [] : [{ instance, client }]
-        })}
-      />
     </SidebarGroup>
   )
 }
@@ -185,40 +149,26 @@ export function NavInstances({
 /**
  * An instance's row, which folds the group under it, and its menu. The row says when the instance
  * is not running, and shows an ember dot while its sidebar threads or factory runs need the user.
- * Under a running instance come its views, its most recent sidebar threads, and "All threads". The
- * selected instance lists on the connection the open thread uses, and the others on their own, and
- * `onReach` hears which one it is.
+ * Under a running instance, listed on the connection `reached`, come its views, its most recent
+ * sidebar threads, and "All threads".
  */
 function InstanceGroup({
   instance,
   isSelected,
-  client,
   clock,
-  selectedClient,
+  reached,
   folded,
   onFold,
-  onReach,
 }: {
   instance: InstanceSummary
   isSelected: boolean
-  client: Pick<Client, "instance">
   clock: Clock
-  selectedClient: Reached | undefined
+  reached: Reached | undefined
   folded: boolean | undefined
   onFold: (open: boolean) => void
-  onReach: (instanceId: string, client: Reached | undefined) => void
 }) {
   const name = instanceName(instance)
   const running = instance.process === "running"
-  const ownClient = useInstanceClient(
-    client,
-    !isSelected && running ? instance.instance_id : undefined,
-  )
-  const reached = running ? (selectedClient ?? ownClient) : undefined
-  useEffect(() => {
-    onReach(instance.instance_id, reached)
-    return () => onReach(instance.instance_id, undefined)
-  }, [onReach, instance.instance_id, reached])
   const threads = useSidebarThreads(reached, clock)
   const views = useViews(reached, clock)
   const count = (threads ?? []).filter(needsYou).length + instance.needs_human

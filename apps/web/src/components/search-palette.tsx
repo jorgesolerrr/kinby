@@ -1,5 +1,4 @@
-import type { InstanceClient, InstanceSummary } from "@kinby/contract"
-import { useSyncExternalStore } from "react"
+import type { Clock, InstanceSummary } from "@kinby/contract"
 
 import {
   Command,
@@ -10,25 +9,27 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command"
+import type { Reached } from "@/components/nav-instances"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
+import { useSidebarThreads } from "@/hooks/use-sidebar-threads"
 import { instanceName } from "@/lib/instances"
 import { threadPath } from "@/lib/selection"
-import { threadList, threadTitle } from "@/lib/thread-list"
-
-type Lister = Pick<InstanceClient, "call">
+import { threadTitle } from "@/lib/thread-list"
 
 /**
- * The palette that finds a thread by its title on any of `instances`, each listing the sidebar
- * threads its group keeps on `client`. Picking one opens it and closes the palette.
+ * The palette that finds a thread by its title on any of `instances`, each listing its sidebar
+ * threads on `client` while the palette is open. Picking one opens it and closes the palette.
  */
 export function SearchPalette({
   open,
   onOpenChange,
+  clock,
   instances,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  instances: { instance: InstanceSummary; client: Lister }[]
+  clock: Clock
+  instances: { instance: InstanceSummary; client: Reached }[]
 }) {
   const openFromSidebar = useOpenFromSidebar()
   const pick = (path: string) => {
@@ -51,6 +52,7 @@ export function SearchPalette({
               key={instance.instance_id}
               instance={instance}
               client={client}
+              clock={clock}
               onPick={pick}
             />
           ))}
@@ -63,14 +65,15 @@ export function SearchPalette({
 function InstanceThreads({
   instance,
   client,
+  clock,
   onPick,
 }: {
   instance: InstanceSummary
-  client: Lister
+  client: Reached
+  clock: Clock
   onPick: (path: string) => void
 }) {
-  const list = threadList(client, "sidebar")
-  const threads = useSyncExternalStore(list.onChange, list.view)?.threads ?? []
+  const threads = useSidebarThreads(client, clock) ?? []
   if (threads.length === 0) return null
   return (
     <CommandGroup heading={instanceName(instance)}>
