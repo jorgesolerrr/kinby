@@ -19,6 +19,7 @@ import aiohttp
 import httpx
 import pytest
 from aiohttp import web
+from playwright.async_api import CDPSession
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
@@ -753,11 +754,120 @@ async def _watched(
     return stream
 
 
-async def _first_frame(stream: Stream[ContractModel]) -> bytes:
-    async with asyncio.timeout(10):
+async def _first_frame(stream: Stream[ContractModel], seconds: float = 10) -> bytes:
+    async with asyncio.timeout(seconds):
         frame = await anext(stream.items)
     assert isinstance(frame, TakeoverFrame)
     return base64.b64decode(frame.data)
+
+
+#: How soon the user sees a page they open the live view of.
+_SOON = 2
+
+
+async def _changed_from(stream: Stream[ContractModel], shown: bytes) -> bytes:
+    """The first frame of *stream* that is not *shown*."""
+    async with asyncio.timeout(_SOON):
+        while (frame := await _first_frame(stream)) == shown:
+            pass
+    return frame
+
+
+@pytest.mark.browser
+def test_watching_a_still_page_again_shows_it_at_once(browser_server) -> None:
+    async def scenario() -> list[bytes]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address) as hub,
+        ):
+            with as_instance(hub, hub.alice) as browser:
+                turn = uuid4()
+                await browser.open(turn)
+                await browser.run(turn, Navigate(f"http://site.test:{port}/blue"))
+                frames = []
+                for _ in range(2):
+                    watched = await _watched(
+                        hub, THREAD_TAKEOVER_START.name, {"instance_id": hub.alice, "turn_id": turn}
+                    )
+                    frames.append(await _first_frame(watched, _SOON))
+                    await watched.aclose()
+                await browser.close(turn)
+                return frames
+
+    first, again = asyncio.run(scenario())
+
+    assert first.startswith(b"\xff\xd8")
+    assert again == first
+
+
+@pytest.mark.browser
+def test_two_watchers_of_a_page_each_see_it_at_once_and_see_it_change(browser_server) -> None:
+    async def scenario() -> tuple[list[bytes], list[bytes]]:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address) as hub,
+        ):
+            with as_instance(hub, hub.alice) as browser:
+                turn = uuid4()
+                await browser.open(turn)
+                await browser.run(turn, Navigate(f"http://site.test:{port}/blue"))
+                takeover = {"instance_id": hub.alice, "turn_id": turn}
+                watchers = [
+                    await _watched(hub, THREAD_TAKEOVER_START.name, takeover) for _ in range(2)
+                ]
+                firsts = [await _first_frame(watched, _SOON) for watched in watchers]
+                await browser.run(turn, Navigate(f"http://site.test:{port}/opener"))
+                changed = [
+                    await _changed_from(watched, first)
+                    for watched, first in zip(watchers, firsts, strict=True)
+                ]
+                for watched in watchers:
+                    await watched.aclose()
+                await browser.close(turn)
+                return firsts, changed
+
+    firsts, changed = asyncio.run(scenario())
+
+    assert firsts[0] == firsts[1]
+    assert changed[0] == changed[1] != firsts[0]
+
+
+@pytest.mark.browser
+def test_a_page_whose_live_view_paints_no_frame_is_still_shown(
+    browser_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    send = CDPSession.send
+
+    async def painting_nothing(
+        session: CDPSession, method: str, params: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        if method == "Page.startScreencast":
+            return {}
+        return await send(session, method, params)
+
+    monkeypatch.setattr(CDPSession, "send", painting_nothing)
+
+    async def scenario() -> bytes:
+        async with (
+            site() as port,
+            proxy(port) as address,
+            browsers(browser_server, address) as hub,
+        ):
+            with as_instance(hub, hub.alice) as browser:
+                turn = uuid4()
+                await browser.open(turn)
+                await browser.run(turn, Navigate(f"http://site.test:{port}/blue"))
+                watched = await _watched(
+                    hub, THREAD_TAKEOVER_START.name, {"instance_id": hub.alice, "turn_id": turn}
+                )
+                frame = await _first_frame(watched, _SOON)
+                await watched.aclose()
+                await browser.close(turn)
+                return frame
+
+    assert asyncio.run(scenario()).startswith(b"\xff\xd8")
 
 
 @pytest.mark.browser
