@@ -99,7 +99,7 @@ from kinby.hub import (
 )
 from kinby.hub.service import HubAlreadyRunning
 from kinby.instance import inspect_instance
-from kinby.setup import vanilla_description
+from kinby.setup import vanilla_description, with_search_key
 
 
 def secret_field(name: str, label: str, description: str) -> SetupField:
@@ -655,7 +655,7 @@ def test_a_registry_from_before_factories_keeps_its_instances_and_drops_its_pack
             ("api_key", True),
             ("BRAVE_API_KEY", False),
         ]
-        assert described == declared
+        assert described == with_search_key(declared, "BRAVE_API_KEY")
         with sqlite3.connect(directory / "registry.sqlite") as connection:
             tables = [
                 row[0]

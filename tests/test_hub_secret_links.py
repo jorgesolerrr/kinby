@@ -8,12 +8,14 @@ import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    IMAGE_DESCRIBE,
     INSTANCE_CREATE,
     INSTANCE_SECRETS_SET,
     INSTANCE_START,
     INSTANCE_STATUS,
     ErrorCode,
     ErrorEnvelope,
+    ImageDescribeCommand,
     InstanceCreateCommand,
     InstanceSecretsSetCommand,
     InstanceSetup,
@@ -94,6 +96,36 @@ def test_linked_fields_hold_the_hub_secrets_values_and_status_shows_the_links(tm
         environment = instance_environment(hub, status.instance_id)
         assert environment["ANTHROPIC_API_KEY"] == "sk-hub"
         assert environment["GITHUB_TOKEN"] == "ghp-work"
+
+    asyncio.run(scenario())
+
+
+def test_a_vanilla_instance_linked_to_the_web_search_key_it_was_shown_needs_no_setup(tmp_path):
+    async def scenario() -> None:
+        client = hub_client(hub_at(tmp_path / "hub"))
+        await prepared(client)
+        await set_hub_secret(client, "BRAVE_API_KEY", "brave-key")
+        described = await client.call(IMAGE_DESCRIBE, ImageDescribeCommand())
+        assert not isinstance(described, ErrorEnvelope)
+        [search_key] = [
+            field.name for field in described.setup_fields if field.label == "Web search key"
+        ]
+
+        status = await _status(
+            client,
+            InstanceCreateCommand(
+                manifest_id="ada",
+                model="openai:gpt-5",
+                secrets={"api_key": "sk-test"},
+                hub_secrets={search_key: "BRAVE_API_KEY"},
+            ),
+        )
+
+        assert not status.setup.pending
+        assert [(secret.name, secret.is_set) for secret in status.setup.secrets] == [
+            ("api_key", True),
+            ("BRAVE_API_KEY", True),
+        ]
 
     asyncio.run(scenario())
 

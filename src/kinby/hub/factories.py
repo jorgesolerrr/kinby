@@ -36,9 +36,15 @@ from kinby.factories.file import (
     RecipeName,
     read_factory_file,
 )
+from kinby.instance import template_tools
 from kinby.instance.config_changes import file_hash, files_hash
 from kinby.instance.layout import MANIFEST_NAME
-from kinby.setup import behavior_prompt_field, readable_template_files, with_built_in_fields
+from kinby.setup import (
+    behavior_prompt_field,
+    readable_template_files,
+    with_built_in_fields,
+    with_search_key,
+)
 
 
 @dataclass(frozen=True)
@@ -110,7 +116,13 @@ class FactoryStore:
     async def describe(self, command: FactoryDescribeCommand) -> FactoryDescription:
         templates = await self.templates(command.name)
         return FactoryDescription(
-            instances={template.name: template.setup for template in templates},
+            instances={
+                template.name: with_search_key(
+                    template.setup,
+                    template_tools(template.files.get(MANIFEST_NAME, "")).search_key,
+                )
+                for template in templates
+            },
             suggested_picks={
                 template.name: list(template.suggested_picks) for template in templates
             },

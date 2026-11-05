@@ -448,10 +448,11 @@ describe("the onboarding's name and look", () => {
 })
 
 describe("the onboarding's Create", () => {
-  it("waits for the image, then the name, then each required setup field", async () => {
+  it("waits for the image, then the name, then each required configuration field", async () => {
     let state: "running" | "succeeded" = "running"
     const caller = hub({
       "operation.get": () => operationAnswer({ state }),
+      "image.describe": () => typed,
     })
     const { user, clock } = await openOnboarding(caller)
 
@@ -460,22 +461,19 @@ describe("the onboarding's Create", () => {
     await act(() => clock.advance(5_000))
     expect(blocking()).toEqual({ disabled: true, reason: "Name it" })
     await user.type(screen.getByLabelText("Name"), "Ada")
-    expect(blocking()).toEqual({ disabled: true, reason: "2 required setup fields left" })
+    expect(blocking()).toEqual({ disabled: true, reason: "1 required configuration field left" })
     await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
-    expect(blocking()).toEqual({ disabled: true, reason: "1 required setup field left" })
-    await user.type(screen.getByLabelText("API key"), "sk-private")
 
     expect(blocking()).toEqual({ disabled: false, reason: undefined })
   })
 
-  it("takes a hub secret as the value of a required secret field", async () => {
-    const { user } = await openOnboarding(
-      hub({ "hub.secret.list": () => ({ secrets: [{ name: "OPENAI_API_KEY" }] }) }),
-    )
+  it("creates with a required secret left empty and no hub secret picked", async () => {
+    const { user } = await openOnboarding(hub({}))
 
     await user.type(screen.getByLabelText("Name"), "Ada")
     await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
 
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("")
     expect(blocking()).toEqual({ disabled: false, reason: undefined })
   })
 
@@ -513,16 +511,14 @@ describe("the onboarding's setup", () => {
     expect(setupRow("Tone").getByText("How drafts sound. · asked by the image")).toBeDefined()
   })
 
-  it("counts the required fields left", async () => {
+  it("counts the required configuration fields left, not the secrets", async () => {
     const { user } = await openOnboarding(hub({}))
     const setup = within(screen.getByRole("region", { name: "Setup" }))
 
-    expect(setup.getByText("2 required fields left")).toBeDefined()
+    expect(setup.getByText("1 required configuration field left")).toBeDefined()
     await user.type(screen.getByLabelText("Model"), "openai:gpt-5")
-    expect(setup.getByText("1 required field left")).toBeDefined()
-    await user.type(screen.getByLabelText("API key"), "sk-private")
 
-    expect(setup.queryByText(/required fields? left/)).toBeNull()
+    expect(setup.queryByText(/required configuration fields? left/)).toBeNull()
   })
 
   it("creates the instance from the values and the identity", async () => {
@@ -784,7 +780,7 @@ describe("the onboarding's setup", () => {
     await user.click(await screen.findByRole("button", { name: "Back to the form" }))
 
     const region = await screen.findByLabelText("Search region")
-    expect(blocking()).toEqual({ disabled: true, reason: "1 required setup field left" })
+    expect(blocking()).toEqual({ disabled: true, reason: "1 required configuration field left" })
     expect(screen.queryByRole("button", { name: /Prepare/ })).toBeNull()
     await user.type(region, "eu")
     await create(user)
@@ -938,6 +934,42 @@ describe("the onboarding's secret fields and hub secrets", () => {
     expect(secretsSent(caller)).toEqual({
       secrets: {},
       hub_secrets: { api_key: "ANTHROPIC_API_KEY", GITHUB_TOKEN: "GITHUB_TOKEN" },
+      save_to_hub: {},
+    })
+  })
+
+  it("asks for the web search key the image describes, starting on its hub secret", async () => {
+    const searching: DeclaredSetup = {
+      ...vanilla,
+      setup_fields: [
+        ...vanilla.setup_fields,
+        {
+          name: "BRAVE_API_KEY",
+          label: "Web search key",
+          description: "The key of the search backend the instance's web search queries.",
+          kind: "secret",
+          type: "text",
+          required: true,
+        },
+      ],
+    }
+    const caller = hub({
+      "image.describe": () => searching,
+      "hub.secret.list": () => ({ secrets: [{ name: "BRAVE_API_KEY" }] }),
+    })
+    const user = await toSecrets(caller, "openai:gpt-5")
+
+    const row = setupRow(/Web search key/)
+    expect(row.getByText(/asked by the image/)).toBeDefined()
+    expect(row.queryByText("(optional)")).toBeNull()
+    expect(
+      screen.getByRole("combobox", { name: "Hub secret for Web search key" }).textContent,
+    ).toContain("BRAVE_API_KEY")
+    await create(user)
+
+    expect(secretsSent(caller)).toEqual({
+      secrets: {},
+      hub_secrets: { BRAVE_API_KEY: "BRAVE_API_KEY" },
       save_to_hub: {},
     })
   })

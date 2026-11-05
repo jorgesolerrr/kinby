@@ -35,7 +35,7 @@ from kinby.contracts import (
 )
 from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
-from kinby.setup import vanilla_description, with_built_in_fields
+from kinby.setup import vanilla_description, with_built_in_fields, with_search_key
 from tests.test_factory_templates import FILES, created_roles, factory_hub
 from tests.test_hub import (
     FakeImages,
@@ -250,7 +250,7 @@ def test_values_the_rebuilt_image_does_not_take_fail_validation_and_publish_noth
         assert not isinstance(listed, ErrorEnvelope)
         assert listed.instances == []
         assert not isinstance(described, ErrorEnvelope)
-        assert described.setup_fields[-1].name == "search_region"
+        assert "search_region" in [field.name for field in described.setup_fields]
 
     asyncio.run(scenario())
 
@@ -314,7 +314,7 @@ def test_a_creation_refused_by_an_image_described_before_shows_that_images_field
             "sha256:searching",
             "sha256:plain",
         ]
-        assert described == searching
+        assert described == with_search_key(searching, "BRAVE_API_KEY")
 
     asyncio.run(scenario())
 

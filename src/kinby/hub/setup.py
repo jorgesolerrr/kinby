@@ -29,6 +29,7 @@ from kinby.setup import (
     resolved_values,
     template_fields,
     value_problem,
+    with_search_key,
 )
 
 ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -174,8 +175,7 @@ def instance_setup(
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
     Blank text counts as not set, the way creation reads it.
     """
-    if description is None:
-        description = DeclaredSetup(setup_fields=[])
+    description = with_search_key(description or DeclaredSetup(setup_fields=[]), search_key)
 
     def variable(field: SetupField) -> str | None:
         if field.name != API_KEY_FIELD.name:
@@ -197,15 +197,11 @@ def instance_setup(
             field.name,
             variable(field),
             field.label,
-            required=field.required
-            or variable(field) in code_secrets
-            or (search_key is not None and variable(field) == search_key),
+            required=field.required or variable(field) in code_secrets,
         )
         for field in description.setup_fields
         if field.kind is SetupFieldKind.SECRET
     ]
-    if search_key is not None and search_key not in {held.variable for held in needed}:
-        needed.append(secret(search_key, search_key, "Web search key", required=True))
     held = {row.variable for row in needed}
     needed += [secret(name, name, name, required=True) for name in code_secrets if name not in held]
     return InstanceSetup(

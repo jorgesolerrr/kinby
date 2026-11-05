@@ -25,6 +25,7 @@ from kinby.contracts import (
     InstanceUpdateCommand,
     LifecycleOperationResult,
     OperationState,
+    SetupFieldKind,
 )
 from kinby.hub import Hub, ImageSelection
 from kinby.instance import inspect_instance
@@ -202,6 +203,7 @@ def test_each_template_asks_for_the_built_in_fields_first_then_its_own_and_its_l
         ("GITHUB_TOKEN", None),
         ("steps", 40),
         ("behavior_prompt", "You implement issues.\n"),
+        ("BRAVE_API_KEY", None),
     ]
     assert [login.id for login in coder.logins] == ["claude"]
     reviewer = described.instances["reviewer"]
@@ -209,8 +211,48 @@ def test_each_template_asks_for_the_built_in_fields_first_then_its_own_and_its_l
         "model",
         "api_key",
         "behavior_prompt",
+        "BRAVE_API_KEY",
     ]
     assert reviewer.logins == []
+
+
+#: The coder switches web search off. The reviewer asks for the Brave key itself, as optional.
+SEARCH_KEY_SETUP = """\
+  reviewer:
+    setup_fields:
+      - name: BRAVE_API_KEY
+        label: Brave key
+        description: Searches the web.
+        kind: secret
+        type: text
+        required: false
+"""
+
+
+def test_a_template_asks_for_the_web_search_key_only_while_its_manifest_leaves_it_on(tmp_path):
+    files = FILES | {
+        "factory.yaml": FACTORY.replace("  reviewer: {}\n", SEARCH_KEY_SETUP),
+        "instances/coder/kinby.toml": '[tools]\noff = ["web_search"]\n',
+    }
+    client = hub_client(factory_hub(tmp_path, files))
+
+    async def scenario() -> FactoryDescription:
+        described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="tickets"))
+        assert isinstance(described, FactoryDescription)
+        return described
+
+    described = asyncio.run(scenario())
+
+    assert [
+        (field.name, field.label, field.required)
+        for field in described.instances["coder"].setup_fields
+        if field.kind is SetupFieldKind.SECRET
+    ] == [("api_key", "API key", True)]
+    assert [
+        (field.name, field.label, field.required)
+        for field in described.instances["reviewer"].setup_fields
+        if field.kind is SetupFieldKind.SECRET
+    ] == [("api_key", "API key", True), ("BRAVE_API_KEY", "Brave key", True)]
 
 
 def test_an_update_of_a_factory_instance_keeps_its_templates_image_recipe(tmp_path):

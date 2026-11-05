@@ -198,7 +198,7 @@ export function Onboarding({
       .filter((field) => field.kind === "secret")
       .map((field) => [field.name, secretSource(sources[field.name], variable(field), kept)]),
   )
-  const left = requiredLeft(fields, values, resolved)
+  const left = requiredLeft(fields, values)
   const blocked = blocker(
     preparation,
     identity.name,
@@ -350,7 +350,7 @@ export function Onboarding({
               actions={
                 left > 0 && (
                   <span className="text-sm text-muted-foreground">
-                    {left} required {left === 1 ? "field" : "fields"} left
+                    {left} required configuration {left === 1 ? "field" : "fields"} left
                   </span>
                 )
               }
@@ -404,19 +404,18 @@ function blocker(
   if (preparation.state === "preparing") return "The image is preparing"
   if (preparation.state === "failed") return "The image did not prepare"
   if (name.trim() === "") return "Name it"
-  if (left > 0) return `${left} required setup ${left === 1 ? "field" : "fields"} left`
+  if (left > 0) return `${left} required configuration ${left === 1 ? "field" : "fields"} left`
   if (unnamed) return "Name the hub secret to save it under"
   return undefined
 }
 
-/** How many required fields hold no value and take no hub secret. */
-function requiredLeft(
-  fields: SetupField[],
-  values: Record<string, FieldInput>,
-  sources: Record<string, SecretSource>,
-): number {
+/**
+ * How many required configuration fields hold no value. A required secret left empty is pending
+ * setup, which the instance asks for once it exists.
+ */
+function requiredLeft(fields: SetupField[], values: Record<string, FieldInput>): number {
   return fields.filter((field) => {
-    if (!field.required || sources[field.name]?.hubSecret !== undefined) return false
+    if (!field.required || field.kind !== "config") return false
     const input = values[field.name] ?? initialInput(field)
     return input === undefined || (typeof input === "string" && input.trim() === "")
   }).length

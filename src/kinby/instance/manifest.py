@@ -196,6 +196,21 @@ def parse_manifest(text: str) -> RawManifest:
     return RawManifest.model_validate(tomllib.loads(text))
 
 
+def template_tools(text: str) -> Tools:
+    """How an instance template's ``kinby.toml`` configures the tools. The starter manifest it
+    merges over leaves them all to their defaults."""
+    return _tools(RawTools.model_validate(tomllib.loads(text).get("tools", {})))
+
+
+def _tools(raw: RawTools) -> Tools:
+    return Tools(
+        defaults=raw.defaults,
+        off=frozenset(raw.off),
+        search=raw.search,
+        bash_timeout_seconds=raw.bash_timeout_seconds,
+    )
+
+
 def offered_values(raw: RawManifest) -> ManifestValues:
     """The fields of the manifest a client may change."""
     return ManifestValues.model_validate(raw.model_dump(include=_fields(ManifestValues)))
@@ -330,12 +345,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         ),
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
-        tools=Tools(
-            defaults=raw.tools.defaults,
-            off=frozenset(raw.tools.off),
-            search=raw.tools.search,
-            bash_timeout_seconds=raw.tools.bash_timeout_seconds,
-        ),
+        tools=_tools(raw.tools),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
         serve=raw.serve.listen if raw.serve is not None else None,
         browser=raw.browser,
