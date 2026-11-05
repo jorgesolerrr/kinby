@@ -111,9 +111,7 @@ describe("a thread's panel", () => {
         true,
       ])
       expect(
-        modes.map((mode) =>
-          mode.textContent?.includes("Above the ceiling. Raise it in Configure."),
-        ),
+        modes.map((mode) => mode.textContent?.includes("Above the ceiling. Raise it in Config.")),
       ).toEqual([false, false, true, true])
     })
 
