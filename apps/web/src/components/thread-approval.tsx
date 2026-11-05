@@ -22,7 +22,7 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { reason } from "@/lib/operation"
-import { mainArgument, type ParkedApproval } from "@/lib/timeline"
+import { mainArgument, type ParkedApproval, ruleInWords } from "@/lib/timeline"
 import { CheckIcon, ChevronDownIcon, ShieldAlertIcon, XIcon } from "lucide-react"
 
 /** The gate rule of a call to an authored tool, which the user can mark read-only. */
@@ -59,6 +59,7 @@ export function ApprovalCard({
   const [answering, setAnswering] = useState<Answer>()
   const [failure, setFailure] = useState<string>()
   const call = [approval.name, mainArgument(approval.arguments)].filter(Boolean).join(" ")
+  const words = ruleInWords(approval.rule, approval.name)
 
   const answer = async (pressed: Answer, work: () => Promise<unknown>) => {
     setAnswering(pressed)
@@ -103,8 +104,8 @@ export function ApprovalCard({
               Can I run {approval.name}?
             </span>
           </CardTitle>
-          <CardDescription>
-            <span className="font-mono text-xs wrap-anywhere">{approval.rule}</span>
+          <CardDescription className="wrap-anywhere">
+            {words ?? <span className="font-mono text-xs">{approval.rule}</span>}
           </CardDescription>
         </CardHeader>
         <CardContent>
