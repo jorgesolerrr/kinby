@@ -46,6 +46,9 @@ _NOT_FORWARDED = frozenset(
 _SIGNAL_TIMEOUT_SECONDS = 30
 #: A turn waits on a relayed read, so a hung instance must fail rather than hold the turn open.
 RELAYED_CALL_SECONDS = 30
+#: A browser holds every later socket to the hub behind one still connecting, so a hung instance
+#: must fail its client's upgrade rather than hold it.
+SOCKET_CONNECT_SECONDS = 10
 
 
 def unreachable(reason: InstanceUnreachable) -> web.HTTPException:
@@ -62,11 +65,12 @@ async def relay_socket(
     instance's socket, *approvals* sees each frame first."""
     session = aiohttp.ClientSession()
     try:
-        upstream = await session.ws_connect(
-            f"{endpoint.url}/ws",
-            headers={"Authorization": f"Bearer {endpoint.control_token}"},
-            heartbeat=HEARTBEAT_SECONDS,
-        )
+        async with asyncio.timeout(SOCKET_CONNECT_SECONDS):
+            upstream = await session.ws_connect(
+                f"{endpoint.url}/ws",
+                headers={"Authorization": f"Bearer {endpoint.control_token}"},
+                heartbeat=HEARTBEAT_SECONDS,
+            )
     except (aiohttp.ClientError, TimeoutError) as exc:
         await session.close()
         raise unreachable(InstanceUnreachable.UNAVAILABLE) from exc

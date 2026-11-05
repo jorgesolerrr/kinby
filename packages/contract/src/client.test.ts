@@ -346,6 +346,47 @@ describe("client", () => {
     expect(client.state()).toBe("reconnecting")
   })
 
+  it("gives up on a socket that has not opened in 10 s, and tries again after the backoff", async () => {
+    const hub = fakeHub()
+    const clock = fakeClock({ draw: 1 })
+    hub.holding = true
+    const client = createClient(ORIGIN, hub.transport, clock)
+
+    await clock.advance(9_999)
+    expect(lastSocket(hub).closed).toBe(false)
+    expect(client.state()).toBe("connecting")
+    await clock.advance(1)
+    expect(lastSocket(hub).closed).toBe(true)
+    expect(client.state()).toBe("reconnecting")
+    hub.holding = false
+    await clock.advance(500)
+
+    expect(hub.sockets).toHaveLength(2)
+    expect(client.state()).toBe("connected")
+  })
+
+  it("never gives up on a socket that opened before its connect timer ran out", async () => {
+    const { client, hub, socket, clock } = await connected()
+
+    await clock.advance(60_000)
+
+    expect(socket.closed).toBe(false)
+    expect(hub.sockets).toHaveLength(1)
+    expect(client.state()).toBe("connected")
+  })
+
+  it("stops trying when an instance is closed while its socket is still connecting", async () => {
+    const { client, hub, clock } = await connected()
+    hub.holding = true
+    const ada = client.instance("hub-ada")
+
+    ada.close()
+    await clock.advance(60_000)
+
+    expect(hub.sockets).toHaveLength(2)
+    expect(lastSocket(hub).closed).toBe(true)
+  })
+
   it("tries again at once when the draw is at the bottom of its range", async () => {
     const { client, hub, socket, clock } = await connected(fakeHub(), fakeClock({ draw: 0 }))
 
