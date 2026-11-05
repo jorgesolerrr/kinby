@@ -109,8 +109,24 @@ describe("a thread's panel", () => {
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy()
       expect(screen.getByText("Deploy it")).toBeDefined()
-      expect(approval.textContent).toContain("mode.ask.write")
+      expect(within(approval).getByText("bash writes, and writes ask in Ask mode")).toBeDefined()
+      expect(approval.textContent).not.toContain("mode.ask.write")
       expect(approval.textContent).toContain('"command": "make deploy"')
+    })
+
+    it("shows a rule it has no words for as its code", async () => {
+      const opened = openThread()
+      const future = parked.map((event) =>
+        event.payload.type === "approval.requested"
+          ? { ...event, payload: { ...event.payload, rule: "future.rule" } }
+          : event,
+      )
+      await act(async () => {
+        opened.subscription().subscribed(future.length)
+        for (const event of future) opened.subscription().deliver(event)
+      })
+
+      expect(within(card()).getByText("future.rule").className).toContain("font-mono")
     })
 
     it("leaves the composer in place, with Stop in place of Send", async () => {

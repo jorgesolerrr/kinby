@@ -25,22 +25,24 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 ## Variants and behaviour
 
 - **alert**: the `stack` layout, whose action sits under the title and description below `md` and at the top right from `md`, for the Library's newer-version notice.
-- **avatar**: the `circle`, `squircle` and `square` shapes, and the colour variants blue, violet, green, amber, red and gray, drawn from the `--avatar-*` tokens.
+- **avatar**: the `circle`, `squircle` and `square` shapes, and the colour variants blue, violet, green, amber, red and gray, drawn from the `--avatar-*` tokens. The group's `overlap` variant: `less` overlaps by `-space-x-1.5`, so a Library row's small avatars keep their letters readable.
 - **badge**: the `success` and `attention` variants. Attention fills with ember.
 - **button**: the `aria-disabled` state looks and acts like `disabled`, and the `nav` variant, start-aligned and quiet, filled while it is `aria-current="page"`, for the Settings section list.
 - **card**: the `attention` variant, ringed in ember, for a card that waits on the user.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
+- **collapsible**: the content's `muted` variant, a panel under a top border on a muted tint with padding, for an unfolded row's detail in a bordered row group.
 - **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
 - **dialog**: the title's `lg` size, on the section title scale, for the Settings dialog's own title. The content's `lg` size, with no padding or gap, for a dialog that lays out its own body, as Settings does. Below `md` it fills the screen as a column with square corners; from `md` it is a wide, tall row.
 - **drawer**: the content's `tall` size, 92% of the screen's height, for the side pane on a phone.
 - **empty**: the title at `text-base`, on the section title scale. The `outline` variant, a dashed border, for an empty Library tab.
 - **input-group**: the group's `raised` variant, a card with a shadow for the composer, and an addon click focuses a textarea as well as an input.
 - **input**: the `mono` variant, in the mono font, for a hub secret's name and Discord's URL.
-- **item**: the description's `lines` variant: `one` truncates to a line, as a hub secret's links, `two` clamps to two, `all` shows every line. The `row` size, flush with no side padding and its description at `text-xs`, for the rows of a Settings section's flat list. The media's `tile` variant, an icon on a muted 32px square, for a channel's kind.
+- **item**: the description's `lines` variant: `one` truncates to a line, as a hub secret's links, `two` clamps to two, `all` shows every line. The `row` size, flush with no side padding and its description at `text-xs`, for the rows of a Settings section's flat list. The media's `tile` variant, an icon on a muted 32px square, for a channel's kind. The group's `outline` variant, its rows in one bordered `rounded-xl` group with dividers between them and no gap, for the Library's rows. Each row sits in its own `li` (a divider doesn't show on an `Item` that is the `li`), and the row's `Item` there has square corners.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).
 - **progress**: as the registry has it, for Usage's plan meters.
 - **resizable**: the handle's `ghost` variant, whose line shows only under the pointer, for the split between a thread and the pane beside it.
 - **sidebar**: the softer hover on menu buttons, the sub-button's `muted` variant for a group's "No threads yet" row, the selected row's icon in the sidebar primary (kin), the action and badge centred on the lg menu button at `top-4.5`, and `SidebarContext` exported, so a component that may render outside the provider reads the sidebar without `useSidebar` throwing.
+- **table**: the `fit` size, for the Stats tables: its headers may wrap, and below `md` its cells pad 8px a side, so a phone fits every column the table shows.
 - **tabs**: the root passes `orientation` on to Base UI, so a vertical tab list reads and moves with the arrow keys as vertical. The list and its triggers take their orientation styles from their own `data-orientation` rather than from a `group/tabs` ancestor, so horizontal tabs inside a vertical tabs panel, as the Usage charts in Settings, stay horizontal.
 - **trace**: the description's `destructive` variant.

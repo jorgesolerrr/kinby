@@ -10,6 +10,7 @@ import type {
   TurnMetrics,
 } from "@kinby/contract"
 import { useCallback, useId, useState } from "react"
+import { cn } from "cn"
 import { Bar, BarChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
@@ -129,7 +130,7 @@ export function StatsPage({
 
   return (
     <OlderCore value={openUpdate}>
-      <div className="flex flex-col gap-8 p-6">
+      <div className="flex flex-col gap-8 py-6">
         <div className="flex flex-col gap-4">
           <RangeHeader
             range={range}
@@ -380,7 +381,7 @@ function DrilledTurns({
           <XIcon />
         </Button>
       </div>
-      <Table aria-labelledby={titleId}>
+      <Table aria-labelledby={titleId} size="fit">
         <TableHeader>
           <TableRow>
             <TableHead>Origin</TableHead>
@@ -396,7 +397,9 @@ function DrilledTurns({
         <TableBody>
           {turns.map((turn) => (
             <TableRow key={`${turn.thread_id} ${turn.turn_id}`}>
-              <TableCell>{originLabel(turn.origin)}</TableCell>
+              <TableCell className="wrap-anywhere whitespace-normal">
+                {originLabel(turn.origin)}
+              </TableCell>
               <TableCell>
                 <OutcomeBadge turn={turn} />
               </TableCell>
@@ -411,7 +414,10 @@ function DrilledTurns({
               <TableCell className="text-right">{money(turn.cost)}</TableCell>
               <TableCell className="text-right">
                 <a
-                  className={buttonVariants({ variant: "link", size: "sm" })}
+                  className={cn(
+                    buttonVariants({ variant: "link", size: "sm" }),
+                    "h-auto min-h-8 whitespace-normal max-md:px-0",
+                  )}
                   href={turnPath(instanceId, turn.thread_id, turn.turn_id)}
                   onClick={(event) => {
                     event.preventDefault()

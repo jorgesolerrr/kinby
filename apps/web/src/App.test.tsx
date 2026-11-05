@@ -626,7 +626,8 @@ describe("the sidebar", () => {
       window.matchMedia = wide
     })
 
-    const drawer = () => screen.queryByRole("dialog", { name: "Sidebar" })
+    // By its slot: a palette open over the drawer hides the drawer from the accessibility tree.
+    const drawer = () => document.querySelector("[data-slot=sidebar][data-mobile]")
 
     async function openDrawer() {
       const user = userEvent.setup()
@@ -689,6 +690,46 @@ describe("the sidebar", () => {
 
       expect(window.location.pathname).toBe("/instances/hub-ada/stats")
       await waitFor(() => expect(drawer()).toBeNull())
+    })
+
+    it("closes on Search, and the palette lists each running instance's threads alone", async () => {
+      const kinby = instanceSummary({ instance_id: "hub-kinby", persona_name: "Kinby", home: true })
+      openApp({
+        signedIn: true,
+        instances: [ada, kinby],
+        threads: {
+          "hub-kinby": [thread({ id: "k1", title: "Weekly plan" })],
+          "hub-ada": [thread({ id: "a1", title: "Deploy notes" })],
+        },
+      })
+      await screen.findByRole("textbox", { name: "Message" })
+
+      const { user, drawer: opened } = await openDrawer()
+      await user.click(opened.getByRole("button", { name: "Search" }))
+
+      await waitFor(() => expect(drawer()).toBeNull())
+      const shown = await palette()
+      await waitFor(() =>
+        expect(shown.getAllByRole("option").map((option) => option.textContent)).toEqual([
+          "Weekly plan",
+          "Deploy notes",
+        ]),
+      )
+    })
+
+    it("opens the palette alone on Ctrl K, leaving the drawer closed", async () => {
+      openApp({
+        signedIn: true,
+        instances: [ada],
+        threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes" })] },
+      })
+      await screen.findByRole("textbox", { name: "Message" })
+      const user = userEvent.setup()
+
+      await user.keyboard("{Control>}k{/Control}")
+
+      expect(await (await palette()).findByRole("option", { name: "Deploy notes" })).toBeDefined()
+      expect(drawer()).toBeNull()
     })
 
     it("closes with the palette on a thread picked there", async () => {
@@ -868,6 +909,18 @@ describe("an instance's tabs", () => {
         .map((tab) => tab.textContent),
     ).toEqual(["Overview", "Config", "Routines", "Memory", "Stats"])
     expect(tabs("Ada").getByRole("tab", { name: "Overview", selected: true })).toBeDefined()
+  })
+
+  it("holds its header, its tab strip and the open tab in the page column", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada")
+
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+
+    const column = '[data-slot="page-column"]'
+    const name = await screen.findByRole("heading", { name: "Ada", level: 1 })
+    expect(name.closest(column)).not.toBeNull()
+    expect(screen.getByRole("tablist", { name: "Ada" }).closest(column)).not.toBeNull()
+    expect(screen.getByText(/^Start a thread with/).closest(column)).not.toBeNull()
   })
 
   it("opens each tab at its own path, and Back moves between them", async () => {

@@ -141,7 +141,7 @@ function Sources({ stats: { total } }: { stats: StatsGetResult }) {
         <CardDescription>Plans are counted, never priced.</CardDescription>
       </CardHeader>
       <CardContent>
-        <Table aria-label="Usage by source">
+        <Table aria-label="Usage by source" size="fit">
           <TableHeader>
             <TableRow>
               <TableHead>Source</TableHead>

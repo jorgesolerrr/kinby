@@ -223,6 +223,24 @@ describe("LibraryPage, writing, editing and deleting a skill", () => {
     expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull()
   })
 
+  it("sets Create and Cancel on one row, and Cancel closes the form unwritten", async () => {
+    const { caller, user } = openEditablePage()
+
+    await newSkill(user, "Write a skill")
+    const create = screen.getByRole("button", { name: "Create" })
+    const row = create.closest<HTMLElement>("[data-slot=field]")!
+    expect(row.dataset.orientation).toBe("horizontal")
+    expect(
+      within(row)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Create", "Cancel"])
+    await user.click(within(row).getByRole("button", { name: "Cancel" }))
+
+    expect(screen.queryByRole("region", { name: "Write a skill" })).toBeNull()
+    expect(writes(caller)).toEqual([])
+  })
+
   it("shows the hub's refusal of a name the library already holds", async () => {
     const { user } = openEditablePage(() => {
       throw refused({ name: 'The library already holds a skill "tdd".' })

@@ -18,7 +18,7 @@ from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.receiver import Receiver
 from kinby.core.scheduler import Scheduler
-from kinby.hub import Hub
+from kinby.hub import Hub, relay
 from kinby.instance import Instance, Serve
 from tests.test_hub import FakeRuntime
 from tests.test_hub_server import call, created_instance, finished, frame, hub_at, served, url
@@ -156,6 +156,47 @@ def test_a_stopped_instance_is_unavailable_and_an_unknown_one_is_missing(tmp_pat
         assert unknown.value.status == 404
         assert stopped_signal.status == 503
         assert unknown_signal.status == 404
+
+    asyncio.run(scenario())
+
+
+@asynccontextmanager
+async def hung_instance() -> AsyncIterator[Serve]:
+    """Stand in for a hung instance: it accepts the connection and never answers the upgrade."""
+
+    async def hold(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()
+        writer.close()
+
+    server = await asyncio.start_server(hold, "127.0.0.1", 0)
+    try:
+        yield Serve("127.0.0.1", server.sockets[0].getsockname()[1])
+    finally:
+        server.close()
+
+
+def test_a_hung_instance_is_unavailable_once_its_socket_misses_the_connect_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setattr(relay, "SOCKET_CONNECT_SECONDS", 0.2)
+        hub_runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", hub_runtime)
+        token = hub.access.issue()
+        assert token is not None
+        headers = {"Authorization": f"Bearer {token}"}
+        async with served(hub) as address, aiohttp.ClientSession(headers=headers) as session:
+            instance_id = await running_instance(hub, session, address)
+            async with hung_instance() as private:
+                hub_runtime.addresses[instance_id] = f"http://{private.host}:{private.port}"
+                async with asyncio.timeout(5):
+                    with pytest.raises(aiohttp.WSServerHandshakeError) as hung:
+                        await session.ws_connect(url(address, f"/instances/{instance_id}/ws"))
+
+        assert hung.value.status == 503
+        assert not [record for record in caplog.records if record.levelname == "ERROR"]
 
     asyncio.run(scenario())
 

@@ -715,6 +715,9 @@ describe("the update alert", () => {
 })
 
 describe("the process alert", () => {
+  const checkConfig =
+    "Check its settings in Config before you stop it. A stopped instance has no Config."
+
   it("says it is restarting when its container restarts in a loop, and opens Config", async () => {
     window.history.replaceState(null, "", "/instances/instance-1/routines")
     const { user } = await openHeader({}, { ...running, process: "starting", detail: "restarting" })
@@ -724,7 +727,10 @@ describe("the process alert", () => {
     expect(
       alert.getByText("Its container keeps stopping, and the runtime keeps starting it again."),
     ).toBeDefined()
-    await user.click(alert.getByRole("button", { name: "Open Config" }))
+    expect(alert.getByText(checkConfig)).toBeDefined()
+    const open = alert.getByRole("button", { name: "Open Config" })
+    expect(open.closest("[data-slot=alert-action]")).not.toBeNull()
+    await user.click(open)
 
     expect(window.location.pathname).toBe("/instances/instance-1/config")
   })
@@ -735,7 +741,7 @@ describe("the process alert", () => {
     const alert = within(screen.getByRole("alert"))
     expect(alert.getByText("Ada failed")).toBeDefined()
     expect(alert.getByText("exited (1)")).toBeDefined()
-    expect(alert.getByText(/^Check its settings in Configure before you stop it/)).toBeDefined()
+    expect(alert.getByText(checkConfig)).toBeDefined()
   })
 
   it.each([

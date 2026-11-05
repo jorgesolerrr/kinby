@@ -78,6 +78,9 @@ _NAVIGATION_MS = 30_000
 _SCREENCAST_QUALITY = 70
 #: How long a live view waits for the page to change before it gets the frame it has again.
 _FRAME_SECONDS = 10
+#: How long a live view waits for the screencast's first frame before it takes a screenshot,
+#: which waits on the page's scripts while the screencast does not.
+_FIRST_FRAME_SECONDS = 0.5
 _ELEMENT_MS = 5_000
 #: How long a click or a key press waits for a download it may have started.
 _DOWNLOAD_SECONDS = 1
@@ -122,25 +125,37 @@ _STATE = TypeAdapter(StorageState)
 
 @dataclass
 class _Screencast:
-    """A takeover's live view of *page*: its newest frame, and whether it changed since the last
-    one the view got."""
+    """A takeover's live view of *page*: its newest frame, and how many frames it has shown,
+    which each watcher compares with the count of the last one it got."""
 
     page: PlaywrightPage
     session: CDPSession
     latest: str | None = None
+    shown: int = 0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
     def show(self, frame: str) -> None:
-        self.latest = frame
+        self.latest, self.shown = frame, self.shown + 1
+        # Each frame gets an event of its own, so no watcher clears the one another waits on.
         self.changed.set()
+        self.changed = asyncio.Event()
 
-    async def next(self) -> str:
-        with suppress(TimeoutError):
-            await asyncio.wait_for(self.changed.wait(), _FRAME_SECONDS)
-        self.changed.clear()
+    async def next(self, seen: int) -> tuple[int, str]:
+        """The count and the newest frame, once the page shows one after the *seen*th."""
+        if seen == self.shown:
+            waited = _FRAME_SECONDS if self.shown else _FIRST_FRAME_SECONDS
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self.changed.wait(), waited)
         if self.latest is None:
-            raise BrowserActionFailed("The page showed no frame to watch.")
-        return self.latest
+            # Chromium sends a frame when the page paints, which a page that sits still may not.
+            with _on_the_page():
+                shot = await self.session.send(
+                    "Page.captureScreenshot", {"format": "jpeg", "quality": _SCREENCAST_QUALITY}
+                )
+            frame = str(shot["data"])
+            self.show(frame)
+            return self.shown, frame
+        return self.shown, self.latest
 
 
 @dataclass
@@ -368,10 +383,12 @@ class PlaywrightBrowser:
     async def _frames(
         self, instance_id: UUID, turn_id: UUID, screencast: _Screencast
     ) -> AsyncGenerator[TakeoverFrame]:
+        seen = 0
         while True:
             # A watched context is not idle, and one that closed ends the view.
             self._turn(instance_id, turn_id)
-            yield TakeoverFrame(data=await screencast.next())
+            seen, frame = await screencast.next(seen)
+            yield TakeoverFrame(data=frame)
 
     def _turn(self, instance_id: UUID, turn_id: UUID) -> _Opened:
         """The context of the instance's turn. Another instance's turn of that id is not open."""
