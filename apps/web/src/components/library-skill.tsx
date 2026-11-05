@@ -431,16 +431,7 @@ export function WriteSkill({
     }
     return undefined
   }
-  return (
-    <div className="flex flex-col gap-3">
-      <NewSkill write={write} onCreated={onWritten} />
-      <div>
-        <Button variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  )
+  return <NewSkill write={write} onCreated={onWritten} onCancel={onCancel} />
 }
 
 /** What the hub showed for an address. */

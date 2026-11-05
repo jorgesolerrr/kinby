@@ -13,13 +13,15 @@ export type WriteNew = (
   content: string,
 ) => Promise<Record<string, string> | undefined>
 
-/** A new skill, written from its name, description, and instructions. */
+/** A new skill, written from its name, description, and instructions, and Cancel when given one. */
 export function NewSkill({
   write,
   onCreated,
+  onCancel,
 }: {
   write: WriteNew
   onCreated: (name: string) => void
+  onCancel?: () => void
 }) {
   const id = useId()
   const [name, setName] = useState("")
@@ -81,12 +83,17 @@ export function NewSkill({
           {refusal.content !== undefined && <FieldError>{refusal.content}</FieldError>}
         </Field>
       </FieldGroup>
-      <div>
+      <Field orientation="horizontal">
         <Button disabled={busy || name === "" || description === ""} onClick={() => void create()}>
           {busy && <Spinner data-icon="inline-start" />}
           Create
         </Button>
-      </div>
+        {onCancel !== undefined && (
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </Field>
     </div>
   )
 }
