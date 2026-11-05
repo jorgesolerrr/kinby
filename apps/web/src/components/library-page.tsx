@@ -19,6 +19,7 @@ import { FactoryEntry } from "@/components/library-factory"
 import { McpServerEntry, NewMcpServer } from "@/components/library-mcp-server"
 import { AddFromGit, SkillEntry, WriteSkill } from "@/components/library-skill"
 import { PickedAvatars, UsedBy } from "@/components/library-used-by"
+import { PageColumn } from "@/components/page-column"
 import { SectionFrame } from "@/components/section-frame"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -213,7 +214,7 @@ export function LibraryPage({
   return (
     <Tabs value={kind} onValueChange={(picked: LibraryKind) => openLibraryTab(picked)}>
       <header className="sticky top-0 z-10 border-b bg-background">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 pt-6 md:px-8">
+        <PageColumn className="flex flex-col gap-4 pt-6">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <h1 className="font-heading text-xl font-semibold">Library</h1>
@@ -243,10 +244,10 @@ export function LibraryPage({
               </TabsTrigger>
             ))}
           </TabsList>
-        </div>
+        </PageColumn>
       </header>
       <TabsContent value={kind}>
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 text-base md:px-8">
+        <PageColumn className="flex flex-col gap-8 py-6 text-base">
           {open !== undefined && "form" in open && (
             <AddPanel title={FORMS[open.form]}>
               {open.form === "write" ? (
@@ -307,7 +308,7 @@ export function LibraryPage({
               {rows("Factories", entries)}
             </SectionFrame>
           )}
-        </div>
+        </PageColumn>
       </TabsContent>
     </Tabs>
   )

@@ -225,7 +225,7 @@ export function ConfigPanel({
     open,
   }
   return (
-    <div className="flex flex-col gap-6 p-6 max-md:p-4 md:flex-row md:gap-8">
+    <div className="flex flex-col gap-6 py-6 max-md:py-4 md:flex-row md:gap-8">
       {isMobile ? (
         <SectionPicker needs={needs} selected={selected} onSelect={open} />
       ) : (
