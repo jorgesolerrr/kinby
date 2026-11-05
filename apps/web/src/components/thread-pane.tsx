@@ -52,11 +52,15 @@ export function ThreadSplit({
   const open = pane !== undefined
   const isMobile = useIsMobile()
   const [hidden, setHidden] = useState(false)
-  // Hiding the thread belongs to the pane it was hidden for, so the next open shows the thread.
+  const [opens, setOpens] = useState(0)
+  // Hiding the thread belongs to the pane it was hidden for, so the next open shows the thread. The
+  // group remembers a split for each set of panel ids, so each open gives the pane a new id, and
+  // the pane starts from its default size.
   const [wasOpen, setWasOpen] = useState(open)
   if (open !== wasOpen) {
     setWasOpen(open)
     setHidden(false)
+    if (open) setOpens(opens + 1)
   }
   useFoldSidebar(open && !isMobile)
 
@@ -75,7 +79,7 @@ export function ThreadSplit({
       {!isMobile && pane !== undefined && (
         <>
           <ResizableHandle withHandle variant="ghost" hidden={hidden} className="mx-1" />
-          <ResizablePanel id="pane" defaultSize="56%" minSize="380px">
+          <ResizablePanel id={`pane-${opens}`} defaultSize="56%" minSize="380px">
             <div className={hidden ? "flex h-full flex-col p-2" : "flex h-full flex-col p-2 pl-0"}>
               <section
                 aria-label={pane.title}
