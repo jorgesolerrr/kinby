@@ -413,22 +413,22 @@ function ProcessAlert({ instance, name }: { instance: InstanceSummary; name: str
   return (
     <Alert variant="destructive" className="max-w-2xl">
       <CircleXIcon />
-      <AlertTitle>{state === "restarting" ? `${name} is restarting` : `${name} failed`}</AlertTitle>
-      <AlertDescription>
+      <AlertTitle className="mr-14">
+        {state === "restarting" ? `${name} is restarting` : `${name} failed`}
+      </AlertTitle>
+      <AlertDescription className="mr-14">
         <p>
           {state === "restarting"
             ? "Its container keeps stopping, and the runtime keeps starting it again."
             : instance.detail}
         </p>
-        <p>
-          Check its settings in Configure before you stop it. A stopped instance has no Configure.
-        </p>
-        <div className="pt-1">
-          <Button size="sm" variant="outline" onClick={() => openConfig(instance.instance_id)}>
-            Open Config
-          </Button>
-        </div>
+        <p>Check its settings in Config before you stop it. A stopped instance has no Config.</p>
       </AlertDescription>
+      <AlertAction>
+        <Button size="sm" variant="outline" onClick={() => openConfig(instance.instance_id)}>
+          Open Config
+        </Button>
+      </AlertAction>
     </Alert>
   )
 }
