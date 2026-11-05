@@ -1528,6 +1528,14 @@ describe("creating an instance", () => {
       (await screen.findByRole("link", { name: "New instance" })).getAttribute("aria-current"),
     ).toBe("page")
   })
+
+  it("holds the page to the window's height, so the sections scroll under the header", async () => {
+    window.history.replaceState(null, "", "/new")
+    openApp({ signedIn: true, instances: [ada] })
+
+    expect(await screen.findByRole("heading", { name: "New instance" })).toBeDefined()
+    expect(screen.getByRole("main").classList).toContain("h-svh")
+  })
 })
 
 describe("the home screen", () => {
