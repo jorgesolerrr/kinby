@@ -1,7 +1,7 @@
 import type { Event, NotificationRaised } from "@kinby/contract"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
-import { EMPTY_TIMELINE, project, type Timeline } from "@/lib/timeline"
+import { EMPTY_TIMELINE, project, ruleInWords, type Timeline } from "@/lib/timeline"
 
 type Payload = Event["payload"]
 
@@ -512,5 +512,29 @@ describe("a thread's timeline", () => {
         ).toMatchObject({ approval: { settled: "deny" } })
       })
     })
+  })
+})
+
+describe("a gate rule in words", () => {
+  it.each([
+    ["mode.ask.write", "bash", "bash writes, and writes ask in Ask mode"],
+    ["mode.auto.write", "write_file", "In Auto mode, writes outside the workspace ask"],
+    ["tools.deploy", "deploy", "deploy has its own rule in Permissions: Ask"],
+    ["bash.ask[2]", "bash", "The command matches an ask pattern in Permissions"],
+    ["hub.write", "instance.create", "instance.create changes the hub, so it always asks"],
+    ["authored.write", "echo", "echo is an authored tool, so it asks as a write"],
+    ["web.unseen_url", "web_fetch", "This URL isn't in the thread yet, so opening it asks"],
+  ])("says why %s asks", (rule, name, words) => {
+    expect(ruleInWords(rule, name)).toBe(words)
+  })
+
+  it("takes the tool's name from a tools rule, dots and all", () => {
+    expect(ruleInWords("tools.github.create_issue", "github.create_issue")).toBe(
+      "github.create_issue has its own rule in Permissions: Ask",
+    )
+  })
+
+  it.each(["future.rule", "tools.", "bash.ask[]", "bash.ask[x]"])("has no words for %s", (rule) => {
+    expect(ruleInWords(rule, "bash")).toBeUndefined()
   })
 })

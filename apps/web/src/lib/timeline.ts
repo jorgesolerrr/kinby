@@ -362,3 +362,24 @@ function startedBy(origin: TurnStarted["origin"]): TurnBlock["startedBy"] {
 export function mainArgument(args: Record<string, JsonValue>): string | undefined {
   return Object.values(args).find((value): value is string => typeof value === "string")
 }
+
+/** Why a call with gate rule `rule` asks, in words, or nothing for a rule the web app doesn't know. */
+export function ruleInWords(rule: string, name: string): string | undefined {
+  const tool = /^tools\.(.+)$/.exec(rule)?.[1]
+  if (tool !== undefined) return `${tool} has its own rule in Permissions: Ask`
+  if (/^bash\.ask\[\d+\]$/.test(rule)) return "The command matches an ask pattern in Permissions"
+  switch (rule) {
+    case "mode.ask.write":
+      return `${name} writes, and writes ask in Ask mode`
+    case "mode.auto.write":
+      return "In Auto mode, writes outside the workspace ask"
+    case "hub.write":
+      return `${name} changes the hub, so it always asks`
+    case "authored.write":
+      return `${name} is an authored tool, so it asks as a write`
+    case "web.unseen_url":
+      return "This URL isn't in the thread yet, so opening it asks"
+    default:
+      return undefined
+  }
+}
