@@ -6,15 +6,29 @@ import { cn } from "cn"
 
 import { Separator } from "@/components/ui/separator"
 
-function ItemGroup({ className, ...props }: React.ComponentProps<"div">) {
+const itemGroupVariants = cva("group/item-group flex w-full flex-col", {
+  variants: {
+    variant: {
+      default: "gap-4 has-data-[size=sm]:gap-2.5 has-data-[size=xs]:gap-2",
+      outline: "divide-y overflow-hidden rounded-xl border *:*:data-[slot=item]:rounded-none",
+    },
+  },
+  defaultVariants: {
+    variant: "default",
+  },
+})
+
+function ItemGroup({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<"div"> & VariantProps<typeof itemGroupVariants>) {
   return (
     <div
       role="list"
       data-slot="item-group"
-      className={cn(
-        "group/item-group flex w-full flex-col gap-4 has-data-[size=sm]:gap-2.5 has-data-[size=xs]:gap-2",
-        className,
-      )}
+      data-variant={variant}
+      className={cn(itemGroupVariants({ variant, className }))}
       {...props}
     />
   )

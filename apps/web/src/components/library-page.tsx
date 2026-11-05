@@ -38,7 +38,14 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
@@ -165,7 +172,7 @@ export function LibraryPage({
   }
 
   const rows = (title: string, listedEntries: LibraryEntry[]) => (
-    <ul aria-label={title} className="flex flex-col divide-y">
+    <ItemGroup variant="outline" aria-label={title}>
       {listedEntries.map((entry) => (
         <EntryRow
           key={entry.name}
@@ -207,7 +214,7 @@ export function LibraryPage({
           )}
         </EntryRow>
       ))}
-    </ul>
+    </ItemGroup>
   )
 
   return (
@@ -459,7 +466,7 @@ function EntryRow({
       <CollapsibleTrigger
         render={
           <Item
-            size="row"
+            size="sm"
             render={
               <button
                 type="button"
@@ -491,8 +498,8 @@ function EntryRow({
           )}
         </ItemActions>
       </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="flex flex-col gap-4 pb-4 text-sm">{children}</div>
+      <CollapsibleContent variant="muted">
+        <div className="flex flex-col gap-4 text-sm">{children}</div>
       </CollapsibleContent>
     </Collapsible>
   )
