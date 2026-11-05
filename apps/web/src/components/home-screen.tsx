@@ -166,9 +166,17 @@ export function HomeScreen({
             disabled={start.busy}
           >
             <SelectTrigger size="sm" aria-label="Send to" className="min-w-0">
-              <SelectValue />
+              <SelectValue>
+                <span className="truncate">{instanceName(picked)}</span>
+                {marks(picked) !== undefined && (
+                  <>
+                    {" "}
+                    <span className="shrink-0">({marks(picked)})</span>
+                  </>
+                )}
+              </SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="w-auto">
               <SelectGroup>
                 {listed.map((instance) => (
                   <SelectItem key={instance.instance_id} value={instance.instance_id}>
@@ -342,12 +350,16 @@ function unsubscribed(): () => void {
 }
 
 function label(instance: InstanceSummary): string {
-  const marks = [instance.home && "home", instance.process !== "running" && "stopped"].filter(
+  const marked = marks(instance)
+  return marked === undefined ? instanceName(instance) : `${instanceName(instance)} (${marked})`
+}
+
+/** "home" and "stopped", the ones that hold for the instance, or undefined when neither does. */
+function marks(instance: InstanceSummary): string | undefined {
+  const held = [instance.home && "home", instance.process !== "running" && "stopped"].filter(
     Boolean,
   )
-  return marks.length === 0
-    ? instanceName(instance)
-    : `${instanceName(instance)} (${marks.join(", ")})`
+  return held.length === 0 ? undefined : held.join(", ")
 }
 
 function greeting(hour: number): string {
