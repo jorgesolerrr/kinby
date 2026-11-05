@@ -171,6 +171,27 @@ describe("LibraryPage", () => {
     expect(within(unslop).getByRole("textbox", { name: "SKILL.md" })).toBeTruthy()
   })
 
+  it("sits each section's rows in one bordered group, and an unfolded row's detail in a panel", async () => {
+    const { user } = openPage([...listed.entries, ...yours])
+
+    for (const section of ["Yours", "Shipped with kinby"]) {
+      const list = await screen.findByRole("list", { name: section })
+      expect(list.getAttribute("data-variant")).toBe("outline")
+      for (const row of within(list).getAllByRole("button")) {
+        expect(row.getAttribute("data-size")).toBe("sm")
+      }
+    }
+    await user.click(screen.getByRole("button", { name: "tdd, shipped skill" }))
+
+    const editor = await screen.findByRole("textbox", { name: "SKILL.md" })
+    expect(editor.closest("[data-slot=collapsible-content]")?.getAttribute("data-variant")).toBe(
+      "muted",
+    )
+    await user.click(tab("Factories"))
+    const factories = await screen.findByRole("list", { name: "Factories" })
+    expect(factories.getAttribute("data-variant")).toBe("outline")
+  })
+
   it.each([
     ["Write a skill", "Name"],
     ["Add from git", "Address"],
