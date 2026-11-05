@@ -1564,6 +1564,16 @@ describe("the home screen", () => {
     expect((await sendTo()).textContent).toContain("Ada")
   })
 
+  // jsdom lays nothing out, so the layout shows only in the classes.
+  it("shortens only the picked instance's name in Send to, and keeps its marks whole", async () => {
+    openApp({ signedIn: true, instances: [stopped(kinby)] })
+
+    const trigger = await sendTo()
+    expect(trigger.textContent).toContain("Kinby (home, stopped)")
+    expect(within(trigger).getByText("Kinby").classList).toContain("truncate")
+    expect(within(trigger).getByText("(home, stopped)").classList).toContain("shrink-0")
+  })
+
   it("starts a thread on the picked instance with the message, and opens it", async () => {
     const { hub } = openApp({ signedIn: true, instances: [kinby, ada] })
     const user = userEvent.setup()
