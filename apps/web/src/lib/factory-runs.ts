@@ -2,7 +2,8 @@ import type { FactoryRun, FactoryRunStatus } from "@kinby/contract"
 
 import { when } from "@/lib/config-changes"
 
-const STATUSES: Record<FactoryRunStatus, string> = {
+/** What each status of a run is called. */
+export const STATUSES: Record<FactoryRunStatus, string> = {
   running: "Running",
   queued: "Queued",
   parked: "Parked",
@@ -27,8 +28,20 @@ export function standing(run: FactoryRun): string {
   return run.wakes_at == null ? status : `${status} until ${when(run.wakes_at)}`
 }
 
-/** The runs that need a human, then the others, each in the order given. */
-export function needingHumanFirst(runs: FactoryRun[]): FactoryRun[] {
+/** Whether a run has ended, done or cancelled. */
+export function finished(run: FactoryRun): boolean {
+  return run.status === "done" || run.status === "cancelled"
+}
+
+/**
+ * The runs that need a human, then the others in flight, each in the order given, then the finished
+ * ones, newest first.
+ */
+export function byAttention(runs: FactoryRun[]): FactoryRun[] {
   const needing = (run: FactoryRun) => run.status === "needs-human"
-  return [...runs.filter(needing), ...runs.filter((run) => !needing(run))]
+  return [
+    ...runs.filter(needing),
+    ...runs.filter((run) => !needing(run) && !finished(run)),
+    ...runs.filter(finished).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+  ]
 }
