@@ -41,5 +41,6 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **progress**: as the registry has it, for Usage's plan meters.
 - **resizable**: the handle's `ghost` variant, whose line shows only under the pointer, for the split between a thread and the pane beside it.
 - **sidebar**: the softer hover on menu buttons, the sub-button's `muted` variant for a group's "No threads yet" row, the selected row's icon in the sidebar primary (kin), the action and badge centred on the lg menu button at `top-4.5`, and `SidebarContext` exported, so a component that may render outside the provider reads the sidebar without `useSidebar` throwing.
+- **table**: the `fit` size, for the Stats tables: its headers may wrap, and below `md` its cells pad 8px a side, so a phone fits every column the table shows.
 - **tabs**: the root passes `orientation` on to Base UI, so a vertical tab list reads and moves with the arrow keys as vertical. The list and its triggers take their orientation styles from their own `data-orientation` rather than from a `group/tabs` ancestor, so horizontal tabs inside a vertical tabs panel, as the Usage charts in Settings, stay horizontal.
 - **trace**: the description's `destructive` variant.

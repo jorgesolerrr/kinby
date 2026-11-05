@@ -26,6 +26,7 @@ import {
   median,
   type NavigationPoint,
   navigationTrend,
+  shortTokens,
   tokens,
   turnCount,
 } from "@/lib/stats"
@@ -170,35 +171,38 @@ function RecallSplit({ usage, failure }: RunUsageState) {
     ["Recalled a fact", usage.runs.filter((run) => run.recalled_fact)],
     ["Recalled none", usage.runs.filter((run) => !run.recalled_fact)],
   ]
+  // The outer cells pad as far as the counts above are inset, so the columns line up with them.
   return (
-    <Table>
-      <TableCaption>
-        Median tokens and send-backs per run. Runs do different work, so a gap need not come from
-        memory.
-      </TableCaption>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Factory runs</TableHead>
-          <TableHead className="text-right">Runs</TableHead>
-          <TableHead className="text-right">Tokens</TableHead>
-          <TableHead className="text-right">Send-backs</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {groups.map(([name, runs]) => (
-          <TableRow key={name}>
-            <TableCell>{name}</TableCell>
-            <TableCell className="text-right">{runs.length}</TableCell>
-            <TableCell className="text-right">
-              {runs.length ? tokens(Math.round(median(runs.map((run) => run.tokens)))) : "—"}
-            </TableCell>
-            <TableCell className="text-right">
-              {runs.length ? median(runs.map((run) => run.send_backs)) : "—"}
-            </TableCell>
+    <div className="-mx-2 md:-mx-3">
+      <Table size="fit">
+        <TableCaption>
+          Median tokens and send-backs per run. Runs do different work, so a gap need not come from
+          memory.
+        </TableCaption>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Factory runs</TableHead>
+            <TableHead className="text-right">Runs</TableHead>
+            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Send-backs</TableHead>
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {groups.map(([name, runs]) => (
+            <TableRow key={name}>
+              <TableCell className="whitespace-normal">{name}</TableCell>
+              <TableCell className="text-right">{runs.length}</TableCell>
+              <TableCell className="text-right">
+                {runs.length ? shortTokens(median(runs.map((run) => run.tokens))) : "—"}
+              </TableCell>
+              <TableCell className="text-right">
+                {runs.length ? median(runs.map((run) => run.send_backs)) : "—"}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 

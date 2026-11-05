@@ -70,7 +70,7 @@ function WeekTable({ weeks }: { weeks: RunWeek[] }) {
       <h3 id={titleId} className="font-semibold">
         Weekly medians
       </h3>
-      <Table aria-labelledby={titleId}>
+      <Table aria-labelledby={titleId} size="fit">
         <TableHeader>
           <TableRow>
             <TableHead>Week of</TableHead>
@@ -106,7 +106,7 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
       <h3 id={titleId} className="font-semibold">
         Each run
       </h3>
-      <Table aria-labelledby={titleId}>
+      <Table aria-labelledby={titleId} size="fit">
         <TableHeader>
           <TableRow>
             <TableHead>Work item</TableHead>
@@ -123,8 +123,8 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
         <TableBody>
           {runs.map((usage) => (
             <TableRow key={usage.run.run_id}>
-              <TableCell>{workItem(usage.run)}</TableCell>
-              <TableCell>{standing(usage.run)}</TableCell>
+              <TableCell className="whitespace-normal">{workItem(usage.run)}</TableCell>
+              <TableCell className="whitespace-normal">{standing(usage.run)}</TableCell>
               <TableCell className="text-right">{tokens(usage.tokens)}</TableCell>
               <TableCell className="text-right">{money(usage.api.cost)}</TableCell>
               <TableCell className="hidden md:table-cell">{planRuns(usage)}</TableCell>
