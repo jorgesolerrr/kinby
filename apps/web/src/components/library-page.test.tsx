@@ -192,6 +192,15 @@ describe("LibraryPage", () => {
     expect(factories.getAttribute("data-variant")).toBe("outline")
   })
 
+  it("marks an entry with a newer version with an ember dot, and one without none", async () => {
+    openPage([{ ...listed.entries[2], newer: true }, listed.entries[3]])
+
+    const newer = await screen.findByRole("button", { name: "tdd, shipped skill, newer" })
+    const current = screen.getByRole("button", { name: "unslop, shipped skill" })
+    expect(newer.querySelector("[aria-hidden].rounded-full")?.classList).toContain("bg-ember")
+    expect(current.querySelector("[aria-hidden].rounded-full")).toBeNull()
+  })
+
   it.each([
     ["Write a skill", "Name"],
     ["Add from git", "Address"],
