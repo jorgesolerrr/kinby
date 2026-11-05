@@ -388,7 +388,7 @@ function EmptyKind({
 function TabAction({ kind, onAdd }: { kind: LibraryKind; onAdd: (form: Form) => void }) {
   if (kind === "factory") {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="w-full text-xs text-muted-foreground md:w-auto md:max-w-56 md:text-right">
         An instance with the write-factory skill makes or changes a factory.
       </p>
     )
