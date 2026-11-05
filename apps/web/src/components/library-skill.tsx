@@ -321,7 +321,7 @@ function NewerVersionNotice({
       {version.refusal !== undefined && <Refusal reason={version.refusal} />}
       {newer != null ? (
         <>
-          <Alert>
+          <Alert layout="stack">
             <AlertTitle>A newer version is out</AlertTitle>
             <AlertDescription>
               <p>
@@ -373,7 +373,7 @@ function NewerVersionNotice({
           </Field>
         </>
       ) : known ? (
-        <Alert>
+        <Alert layout="stack">
           <AlertTitle>A newer version is out</AlertTitle>
           <AlertDescription>
             Read the diff, then move the library&apos;s copy to it. Instances that picked it keep
