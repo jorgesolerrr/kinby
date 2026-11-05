@@ -75,8 +75,9 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
       : undefined
   const instanceClient = useInstanceClient(client, running)
   const threadId = useSelectedThreadId()
-  // An open thread, an instance's tab, or the library scrolls inside the window, not the page.
-  const fixed = threadId !== undefined || tab !== undefined || libraryOpen
+  // An open thread, an instance's tab, the library, or New instance scrolls inside the window, not
+  // the page.
+  const fixed = threadId !== undefined || tab !== undefined || libraryOpen || creating
 
   return (
     <TooltipProvider>
