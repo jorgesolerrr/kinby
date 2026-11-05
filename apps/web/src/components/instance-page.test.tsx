@@ -150,12 +150,7 @@ function reached(answers: Answers) {
 }
 
 const card = () => within(screen.getByRole("region", { name: "Finish setting up Ada" }))
-const login = (name: string) =>
-  within(
-    within(screen.getByRole("list", { name: "Subscription logins" })).getByRole("listitem", {
-      name,
-    }),
-  )
+const login = (name: string) => within(screen.getByRole("listitem", { name }))
 const secret = (name: string) =>
   within(within(screen.getByRole("list", { name: "Secrets" })).getByRole("listitem", { name }))
 
@@ -529,7 +524,6 @@ describe("what needs the user on a running instance", () => {
     await openPage({ "instance.status": () => status({ setup: { ...setup, logins } }) }, running)
 
     expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
-    expect(screen.queryByRole("list", { name: "Subscription logins" })).toBeNull()
     expect(screen.getByText("Nothing needs you")).toBeDefined()
     expect(screen.getByText(/^Start a thread with New thread above Ada's threads/)).toBeDefined()
   })
@@ -763,6 +757,68 @@ describe("the browser profiles and the vault of an instance", () => {
 
     expect(screen.queryByRole("heading", { name: "Browser profiles" })).toBeNull()
     expect(screen.queryByRole("heading", { name: "Vault" })).toBeNull()
+  })
+})
+
+describe("the row groups of Overview", () => {
+  it("sits each section's rows in one bordered group, Needs you's logins and failed servers too", async () => {
+    const caller = {
+      ...stubCaller({
+        "instance.status": () =>
+          status({
+            process: "running",
+            browser: true,
+            setup: { ...setup, missing_commands: ["deploy"] },
+            repository_commands: [{ name: "checks", commands: ["uv run pytest"] }],
+          }),
+        "instance.toolset.get": () => toolset,
+        "browser.profile.list": () => ({
+          profiles: [{ name: "LinkedIn", site: "www.linkedin.com" }],
+        }),
+        "browser.vault.list": () => ({
+          entries: [{ name: "Indeed", site: "https://secure.indeed.com" }],
+        }),
+      }),
+      ...stubSubscriber(),
+    }
+    const client = reached({
+      "view.list": () => ({
+        views: [{ id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" }],
+      }),
+    })
+    const instance: InstanceSummary = {
+      ...stopped,
+      intended_state: "running",
+      process: "running",
+      notices: [{ code: "mcp_server_failed", server: "fetch", message: "fetch exited." }],
+    }
+    render(
+      <InstancePage
+        caller={caller}
+        client={client}
+        clock={fakeClock()}
+        instance={instance}
+        onChanged={vi.fn()}
+      />,
+    )
+
+    const needsYou = await within(
+      await screen.findByRole("region", { name: "Needs you" }),
+    ).findByRole("list")
+    expect(within(needsYou).getByRole("listitem", { name: "Codex" })).toBeDefined()
+    expect(
+      within(needsYou).getByRole("listitem", { name: "MCP server fetch failed" }),
+    ).toBeDefined()
+    const lists = [needsYou]
+    for (const name of ["Views", "Browser profiles", "Vault", "Toolset", "Repository commands"]) {
+      lists.push(await screen.findByRole("list", { name }))
+    }
+    for (const list of lists) {
+      expect(list.getAttribute("data-variant")).toBe("outline")
+      const rows = list.querySelectorAll(":scope > li > [data-slot=item]")
+      expect(rows.length).toBe(list.querySelectorAll(":scope > li").length)
+      for (const row of rows) expect(row.getAttribute("data-size")).toBe("sm")
+    }
   })
 })
 

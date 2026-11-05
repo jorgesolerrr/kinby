@@ -28,7 +28,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -193,7 +200,7 @@ export function RoutinesSection({
       {routines === undefined ? (
         failure === undefined && <Skeleton className="h-40 w-full" />
       ) : (
-        <ul aria-label="Routines" className="flex flex-col divide-y">
+        <ItemGroup variant="outline" aria-label="Routines">
           {routines.map((listed) => (
             <RoutineRow
               key={listed.summary.name}
@@ -211,7 +218,7 @@ export function RoutinesSection({
               onClose={closed}
             />
           ))}
-        </ul>
+        </ItemGroup>
       )}
     </SectionFrame>
   )
@@ -248,7 +255,7 @@ function RoutineRow({
   const failures = summary.failure_count ?? 0
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} render={<li aria-label={summary.name} />}>
-      <Item size="row">
+      <Item size="sm">
         <ItemContent className="min-w-0">
           <ItemTitle>
             <span className="font-mono">{summary.name}</span>
@@ -275,8 +282,8 @@ function RoutineRow({
           </CollapsibleTrigger>
         </ItemActions>
       </Item>
-      <CollapsibleContent>
-        <div className="flex flex-col gap-4 pb-4 text-sm">
+      <CollapsibleContent variant="muted">
+        <div className="flex flex-col gap-4 text-sm">
           <p>{summary.description}</p>
           <dl className="flex flex-col gap-1">
             <div className="flex gap-2">

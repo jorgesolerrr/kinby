@@ -112,6 +112,22 @@ describe("RoutinesSection", () => {
     expect(schedule.className).not.toMatch(/line-clamp-\d/)
   })
 
+  it("sits the routines in one bordered group, and an unfolded routine's details in a panel", async () => {
+    const { user } = openSection()
+
+    const list = await screen.findByRole("list", { name: "Routines" })
+    expect(list.getAttribute("data-variant")).toBe("outline")
+    const rows = list.querySelectorAll(":scope > li > [data-slot=item]")
+    expect(rows.length).toBe(2)
+    for (const row of rows) expect(row.getAttribute("data-size")).toBe("sm")
+    const newsRow = await unfold(user, "news")
+
+    const editor = await within(newsRow).findByRole("textbox", { name: "ROUTINE.md" })
+    expect(editor.closest("[data-slot=collapsible-content]")?.getAttribute("data-variant")).toBe(
+      "muted",
+    )
+  })
+
   it("unfolds one routine at a time to its details and its editor", async () => {
     const { user } = openSection()
 
