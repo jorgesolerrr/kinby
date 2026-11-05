@@ -39,6 +39,8 @@ const FIRST_BACKOFF_MS = 500
 const LAST_BACKOFF_MS = 16_000
 /** How long the socket stays up before its drops are forgotten. */
 const STEADY_MS = 30_000
+/** How long a socket may take to open before it counts as dropped. */
+const CONNECT_MS = 10_000
 
 export interface SocketEvents {
   open(): void
@@ -178,7 +180,8 @@ function connect(
   const subscriptions = new Map<string, OpenSubscription>()
   const listeners = new Set<() => void>()
   let settleGeneration = 0
-  // Either the wait before the next try, or the one until an open socket counts as steady.
+  // The wait before the next try, the one until a socket counts as dropped, or the one until an
+  // open socket counts as steady.
   let cancelTimer = () => {}
   const route = (path: string) => new URL(path, origin).href
 
@@ -234,9 +237,18 @@ function connect(
 
   const open = () => {
     cancelTimer()
+    const dropped = () => {
+      if (socket !== opened) return
+      socket = undefined
+      cancelTimer()
+      for (const call of pending.values()) call.reject(new CallError(CONNECTION_LOST))
+      pending.clear()
+      if (!closed) void settle()
+    }
     const opened = transport.openSocket(socketUrl(origin, path), {
       open: () => {
         if (socket !== opened) return
+        cancelTimer()
         for (const [id, subscription] of subscriptions) sendSubscribe(id, subscription)
         dispatch("opened")
         cancelTimer = clock.after(STEADY_MS, () => dispatch("steady"))
@@ -245,16 +257,15 @@ function connect(
         const frame = parseReply(data)
         if (frame !== undefined) answer(frame)
       },
-      close: () => {
-        if (socket !== opened) return
-        socket = undefined
-        cancelTimer()
-        for (const call of pending.values()) call.reject(new CallError(CONNECTION_LOST))
-        pending.clear()
-        if (!closed) void settle()
-      },
+      close: dropped,
     })
     socket = opened
+    // A held upgrade fires no event at all, and the browser queues every later socket to the hub
+    // behind it.
+    cancelTimer = clock.after(CONNECT_MS, () => {
+      dropped()
+      opened.close()
+    })
   }
 
   open()

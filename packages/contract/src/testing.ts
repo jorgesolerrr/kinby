@@ -30,6 +30,8 @@ export interface FakeSocket extends Socket {
   receive(frame: unknown): void
   /** The connection drops under the client. */
   drop(): void
+  /** Whether either end closed the socket. */
+  readonly closed: boolean
 }
 
 export interface FakeHub {
@@ -40,6 +42,8 @@ export interface FakeHub {
   signedIn: boolean
   /** False while the hub is down, as during a restart: no upgrade and no route answers. */
   reachable: boolean
+  /** True while the hub holds each upgrade unanswered: a socket neither opens nor drops. */
+  holding: boolean
   /** What `instance.list` answers with. */
   instances: InstanceSummary[]
   /** What `instance.list` answers with when asked for the removed instances. */
@@ -94,6 +98,7 @@ export function fakeHub({
   const hub: FakeHub = {
     signedIn,
     reachable: true,
+    holding: false,
     instances,
     removed,
     threads,
@@ -184,7 +189,11 @@ export function fakeHub({
           return undefined
         })
         hub.sockets.push(socket)
-        queueMicrotask(() => (hub.reachable && hub.signedIn ? socket.accept() : socket.drop()))
+        queueMicrotask(() => {
+          if (hub.holding) return
+          if (hub.reachable && hub.signedIn) socket.accept()
+          else socket.drop()
+        })
         return socket
       },
       async fetch(url, init) {
@@ -395,6 +404,9 @@ function fakeSocket(
     close,
     receive,
     drop: close,
+    get closed() {
+      return closed
+    },
     accept: () => {
       if (!closed) events.open()
     },
