@@ -262,7 +262,7 @@ function RoutineRow({
               <Badge variant="attention">Waiting on an approval</Badge>
             )}
           </ItemTitle>
-          <ItemDescription>
+          <ItemDescription lines="all">
             {[triggerInWords(summary), nextFiring(summary), lastFiring(summary)].join(" · ")}
           </ItemDescription>
         </ItemContent>

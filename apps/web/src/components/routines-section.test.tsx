@@ -103,6 +103,15 @@ describe("RoutinesSection", () => {
     expect(screen.queryByRole("textbox")).toBeNull()
   })
 
+  // jsdom lays nothing out, so the wrapping shows only in the classes.
+  it("wraps a routine's schedule line in full on a phone instead of clamping it", async () => {
+    openSection()
+
+    const newsRow = await screen.findByRole("listitem", { name: "news" })
+    const schedule = within(newsRow).getByText(/^Daily at 09:00 · /)
+    expect(schedule.className).not.toMatch(/line-clamp-\d/)
+  })
+
   it("unfolds one routine at a time to its details and its editor", async () => {
     const { user } = openSection()
 
