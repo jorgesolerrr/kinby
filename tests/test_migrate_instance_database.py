@@ -69,9 +69,10 @@ def test_the_migration_moves_every_store_into_the_database_and_deletes_the_jsonl
     ]
     scan_events = _turn(scan, 1, started, closed)
     interleaved = [*chat_events[:2], *scan_events, *chat_events[2:]]
-    (state_dir / "events.jsonl").write_text(
-        _lines(*(event.model_dump_json() for event in interleaved)) + '{"sequence": 6, "thr',
-        encoding="utf-8",
+    # The append cut short stopped inside a character of two bytes.
+    (state_dir / "events.jsonl").write_bytes(
+        _lines(*(event.model_dump_json() for event in interleaved)).encode()
+        + '{"payload": {"text": "café'.encode()[:-1]
     )
     created = ThreadRecord(id=chat, title="Launch", created_at=_AT)
     renamed = created.model_copy(update={"title": "Launch notes"})
@@ -131,3 +132,29 @@ def test_a_failed_check_keeps_the_jsonl_files_and_makes_no_database(tmp_path: Pa
     assert str(thread_id) in migrated.stdout
     assert (state_dir / "events.jsonl").read_text(encoding="utf-8") == jsonl
     assert not (state_dir / "instance.sqlite").exists()
+
+
+def test_a_migration_stopped_after_deleting_the_events_finishes_on_the_next_run(
+    tmp_path: Path,
+) -> None:
+    instance = load_instance(init_instance(tmp_path / "alice"))
+    state_dir = instance.manifest.state_dir
+    state_dir.mkdir(exist_ok=True)
+    thread_id = uuid4()
+    events = _turn(thread_id, 1, TurnStarted(message="Hi", model="openai:gpt-5"))
+    (state_dir / "events.jsonl").write_text(
+        _lines(*(event.model_dump_json() for event in events)), encoding="utf-8"
+    )
+    thread = ThreadRecord(id=thread_id, title="Launch", created_at=_AT)
+    threads = _lines(thread.model_dump_json())
+    (state_dir / "threads.jsonl").write_text(threads, encoding="utf-8")
+    assert _migrate(instance.path).returncode == 0
+    # The first run deleted events.jsonl and stopped before threads.jsonl.
+    (state_dir / "threads.jsonl").write_text(threads, encoding="utf-8")
+
+    migrated = _migrate(instance.path)
+
+    assert migrated.returncode == 0, migrated.stdout
+    assert not (state_dir / "threads.jsonl").exists()
+    assert EventLog(state_dir).stored(thread_id) == events
+    assert ThreadStore(state_dir).threads() == [thread]

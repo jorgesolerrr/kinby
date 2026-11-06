@@ -5,8 +5,9 @@
 Run it with the instances stopped. For each one it imports the events, thread records, config
 changes and coding-session recalls into a new database in one transaction. It then checks that
 every thread has as many events and the same turns as in events.jsonl, and only when every check
-passes does it put the database in place and delete the JSONL files. A crash or a failed check
-leaves the JSONL files as they were, so the script can run again. kinby never imports it.
+passes does it put the database in place and delete the JSONL files. A failed check, or a crash
+before the database is in place, leaves the JSONL files as they were. A crash while deleting them
+leaves the rest for the next run. kinby never imports it.
 """
 
 import argparse
@@ -47,7 +48,8 @@ def migrate(state_dir: Path) -> str:
     if not old and not recalls:
         return "nothing to migrate"
     database = state_dir / DATABASE_NAME
-    # A database already in place was imported by a run that stopped before deleting the files.
+    # The database goes in place only once its check passed, so one already there was made by a run
+    # that stopped while deleting the files.
     if not database.exists():
         partial = state_dir / f"{DATABASE_NAME}.partial"
         for leftover in ("", "-wal", "-shm"):
@@ -56,16 +58,17 @@ def migrate(state_dir: Path) -> str:
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 _import(db, state_dir, recalls)
-            shapes = _check(db, state_dir / _EVENTS)
+            _check(db, state_dir / _EVENTS)
         partial.replace(database)
-    else:
-        with closing(connect(database)) as db:
-            shapes = _check(db, state_dir / _EVENTS)
     for path in [*old, *recalls]:
         path.unlink()
     if recalls:
         (state_dir / _RECALLS).rmdir()
-    return f"migrated {sum(count for count, _ in shapes.values())} events in {len(shapes)} threads"
+    with closing(connect(database)) as db:
+        events, threads = db.execute(
+            "SELECT count(*), count(DISTINCT thread_id) FROM events"
+        ).fetchone()
+    return f"migrated {events} events in {threads} threads"
 
 
 def _import(db: sqlite3.Connection, state_dir: Path, recalls: list[Path]) -> None:
@@ -115,8 +118,8 @@ def _import(db: sqlite3.Connection, state_dir: Path, recalls: list[Path]) -> Non
     )
 
 
-def _check(db: sqlite3.Connection, events: Path) -> dict[str, Shape]:
-    """Each thread's shape, once the database and *events* agree on every thread's."""
+def _check(db: sqlite3.Connection, events: Path) -> None:
+    """Raise unless the database and *events* agree on every thread's shape."""
     before = _shapes((record["thread_id"], record["turn_id"]) for record in _records(events))
     after = _shapes(
         db.execute("SELECT thread_id, turn_id FROM events ORDER BY thread_id, sequence")
@@ -132,7 +135,6 @@ def _check(db: sqlite3.Connection, events: Path) -> dict[str, Shape]:
                 for thread in differing
             )
         )
-    return after
 
 
 def _shapes(events: Iterator[tuple[str, str]]) -> dict[str, Shape]:
@@ -155,13 +157,14 @@ def _records(path: Path) -> Iterator[dict[str, str]]:
 
 
 def _whole_lines(path: Path) -> Iterator[str]:
-    """Each line of *path* that a newline ends. The last line of an append cut short has none."""
+    """Each line of *path* that a newline ends. The last line of an append cut short has none, and
+    may stop inside a character."""
     if not path.exists():
         return
-    with path.open(encoding="utf-8") as lines:
+    with path.open("rb") as lines:
         for line in lines:
-            if line.endswith("\n"):
-                yield line.removesuffix("\n")
+            if line.endswith(b"\n"):
+                yield line.removesuffix(b"\n").decode()
 
 
 def _compact(payload: object) -> str:

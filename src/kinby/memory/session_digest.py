@@ -158,10 +158,10 @@ def _result_tokens(calls: list[_ModelCall]) -> dict[str, int]:
 
 def _entries(transcript: Path) -> Iterator[dict[str, object]]:
     """Each whole JSON line of a Claude transcript, read one at a time. A session killed mid-write
-    leaves a last line with no newline."""
-    with transcript.open(encoding="utf-8") as lines:
+    leaves a last line with no newline, which may stop inside a character."""
+    with transcript.open("rb") as lines:
         for line in lines:
-            if line.endswith("\n"):
+            if line.endswith(b"\n"):
                 yield json.loads(line)
 
 
