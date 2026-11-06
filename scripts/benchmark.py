@@ -4,10 +4,10 @@
 
 It prints the idle memory of a fresh instance before its first model call and after a few turns,
 the idle memory of the hub, the peak memory of the readers that cover long ranges over a generated
-history, and how long reading one thread and one scheduler tick take on that history. A local
-stand-in answers for the model provider and for Docker, so it needs no key and no daemon. Each
-number comes from a process of its own. It reads /proc, so it runs on Linux. It is not part of
-the gate.
+history, and how long reading one thread, one scheduler tick and waking a thread take on that
+history. A local stand-in answers for the model provider and for Docker, so it needs no key and no
+daemon. Each number comes from a process of its own. It reads /proc, so it runs on Linux. It is
+not part of the gate.
 """
 
 import argparse
@@ -309,6 +309,7 @@ async def _run(events: int) -> None:
             reads = await _probe(env, "reads", history, thread_id)
             print(f"read one thread of {_THREAD_EVENTS} events: {reads['thread_read_ms']:,.1f} ms")
             print(f"one scheduler tick's reads: {reads['tick_ms']:,.1f} ms")
+            print(f"wake a thread: {reads['wake_ms']:,.1f} ms")
 
 
 def main() -> None:

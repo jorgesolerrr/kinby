@@ -18,6 +18,7 @@ from kinby.contracts import (
     RoutineRunCommand,
     RoutineTrigger,
     SignalReceived,
+    TakeoverRequested,
     ToolCall,
     ToolResult,
     TurnCompleted,
@@ -269,6 +270,34 @@ def test_a_type_read_returns_those_types_in_the_order_appended(tmp_path: Path) -
             since=datetime(2026, 9, 6, 11, tzinfo=UTC),
             until=datetime(2026, 9, 6, 13, tzinfo=UTC),
         ) == [eleven, twelve]
+
+    asyncio.run(scenario())
+
+
+def test_an_open_turn_read_returns_each_threads_latest_of_those_types_while_its_turn_is_open(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+        closed = TurnCompleted(input_tokens=0, output_tokens=0)
+
+        def requested() -> TakeoverRequested:
+            return TakeoverRequested(takeover_id=uuid4(), reason="A sign-in")
+
+        answered, superseded, latest_closed = uuid4(), uuid4(), uuid4()
+        answered_turn = uuid4()
+        await event_log.append(answered, answered_turn, requested())
+        await event_log.append(answered, answered_turn, closed)
+        await event_log.append(superseded, uuid4(), requested())
+        waiting = await event_log.append(superseded, uuid4(), requested())
+        await event_log.append(superseded, uuid4(), MessageDelta(text="another turn"))
+        await event_log.append(latest_closed, uuid4(), requested())
+        latest_turn = uuid4()
+        await event_log.append(latest_closed, latest_turn, requested())
+        await event_log.append(latest_closed, latest_turn, closed)
+        parked = await event_log.append(uuid4(), uuid4(), requested())
+
+        assert event_log.latest_in_open_turns({EventType.TAKEOVER_REQUESTED}) == [waiting, parked]
 
     asyncio.run(scenario())
 

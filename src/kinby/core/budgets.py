@@ -6,10 +6,21 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 
-from kinby.contracts import Event
+from kinby.contracts import Event, EventType
 from kinby.core.errors import BudgetExceeded, ModelUnpriced
 from kinby.core.turn_metrics import TurnKey, UnpricedModel, closing_day, turn_metrics
 from kinby.instance import ModelPrice
+
+#: The events daily_cost folds.
+DAILY_COST_EVENTS = frozenset(
+    {
+        EventType.TURN_STARTED,
+        EventType.TURN_COMPLETED,
+        EventType.TURN_FAILED,
+        EventType.TURN_INTERRUPTED,
+        EventType.MEMORY_RECAPPED,
+    }
+)
 
 
 @dataclass(frozen=True)
