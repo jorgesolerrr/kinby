@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from itertools import pairwise
-from typing import NewType
+from typing import TYPE_CHECKING, NewType
 from uuid import UUID
 
 from kinby.contracts import (
@@ -15,6 +15,7 @@ from kinby.contracts import (
     CompletionOutcome,
     DenyCounts,
     Event,
+    EventType,
     GateOutcome,
     MemoryCallCounts,
     MemoryRecalled,
@@ -46,6 +47,9 @@ from kinby.contracts import (
 from kinby.core.pricing import SHIPPED_PRICES, cache_read_cost, token_cost
 from kinby.instance import ModelPrice
 
+if TYPE_CHECKING:
+    from kinby.core.events import EventReader
+
 _MEMORY_CALL_KINDS = {
     "memory_search": "search",
     "memory_open": "open",
@@ -56,6 +60,39 @@ _SKILL_TOOL = "skill"
 _NAVIGATION_EXCLUDED = frozenset((*_MEMORY_CALL_KINDS, _SKILL_TOOL))
 
 UnpricedModel = NewType("UnpricedModel", str)
+
+#: What turn_metrics folds from before a range, whatever turn it belongs to.
+_STATE_EVENTS = frozenset({EventType.RUN_STOPPED, EventType.PROFILE_COUNTED})
+#: The events turn_metrics folds.
+METRICS_EVENTS = frozenset(
+    {
+        *_STATE_EVENTS,
+        EventType.TURN_STARTED,
+        EventType.MODEL_COMPLETED,
+        EventType.TOOL_CALL,
+        EventType.TOOL_GATED,
+        EventType.TOOL_RESULT,
+        EventType.MEMORY_RECALLED,
+        EventType.APPROVAL_REQUESTED,
+        EventType.RUN_DELEGATED,
+        EventType.TURN_COMPLETED,
+        EventType.TURN_FAILED,
+        EventType.TURN_INTERRUPTED,
+        EventType.MEMORY_RECAPPED,
+        EventType.TURN_RATED,
+    }
+)
+#: A turn's start, and the events turn_metrics folds differently once their turn started.
+_JOINED_EVENTS = frozenset(
+    {
+        EventType.TURN_STARTED,
+        EventType.TURN_COMPLETED,
+        EventType.TURN_FAILED,
+        EventType.TURN_INTERRUPTED,
+        EventType.RUN_DELEGATED,
+        EventType.MEMORY_RECALLED,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -150,6 +187,33 @@ class TurnMetricsResult:
     step_runs: list[StepRun]
     run_recaps: list[RunRecap]
     run_recalls: list[RunRecall]
+
+
+def metrics_events(reader: EventReader, since: datetime | None) -> Iterator[Event]:
+    """The events turn_metrics folds for what happened from *since* on: those stored since then,
+    after the runs stopped and the profiles counted before it, and what each turn that started
+    before it stored then."""
+    if since is None:
+        yield from reader.events_of(METRICS_EVENTS)
+        return
+    yield from reader.events_of(_STATE_EVENTS, until=since)
+    started: set[TurnKey] = set()
+    earlier: dict[TurnKey, None] = {}
+    for event in reader.events_of(_JOINED_EVENTS, since=since):
+        key = TurnKey(event.thread_id, event.turn_id)
+        if isinstance(event.payload, TurnStarted):
+            started.add(key)
+        elif key not in started:
+            earlier[key] = None
+    for key in earlier:
+        yield from (
+            event
+            for event in reader.turn_events(key.turn_id)
+            if event.thread_id == key.thread_id
+            and event.timestamp < since
+            and event.payload.type in METRICS_EVENTS - _STATE_EVENTS
+        )
+    yield from reader.events_of(METRICS_EVENTS, since=since)
 
 
 def turn_metrics(

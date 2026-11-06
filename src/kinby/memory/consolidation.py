@@ -12,7 +12,7 @@ from uuid import UUID
 from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 
-from kinby.contracts import MemoryConsolidated, NodeId, ToolResult
+from kinby.contracts import EventType, MemoryConsolidated, NodeId, ToolResult
 from kinby.memory.facade import Episode, Fact, new_node_id
 from kinby.plugins.tools import Tool, tool
 
@@ -141,12 +141,13 @@ def consolidation_step(
     def consolidate() -> str | None:
         """Prune old episodes, then frame the oldest uncovered ones with what is on their
         subjects: earlier episodes no fact cites, facts, and forgotten facts."""
-        covered = {
-            node
-            for event in log.all_events()
-            if isinstance(event.payload, MemoryConsolidated)
-            for node in event.payload.episodes
-        }
+        with log.reader() as reader:
+            covered = {
+                node
+                for event in reader.events_of({EventType.MEMORY_CONSOLIDATED})
+                if isinstance(event.payload, MemoryConsolidated)
+                for node in event.payload.episodes
+            }
         cutoff = today() - PRUNE_AGE
         if prune:
             _prune(graph, covered, cutoff)
@@ -319,7 +320,7 @@ def _about(subject: str, nodes: list[Episode] | list[Fact]) -> tuple[NodeId, ...
 
 def _turn_frame(log: EventLog, thread_id: UUID, turn_id: UUID) -> _ConsolidationFrame:
     """The frame this turn's code step returned, which the event log keeps across a restart."""
-    payloads = [event.payload for event in log.stored(thread_id) if event.turn_id == turn_id]
+    payloads = [event.payload for event in log.turn_events(turn_id) if event.thread_id == thread_id]
     if any(isinstance(payload, MemoryConsolidated) for payload in payloads):
         raise ConsolidationRefused("Nothing was written. This turn already covered its batch.")
     return _FRAME.validate_json(

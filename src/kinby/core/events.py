@@ -72,6 +72,13 @@ class EventReader:
             [*types],
         )
 
+    def last_activity(self) -> dict[UUID, datetime]:
+        """When each thread's latest event was stored, from its head."""
+        return {
+            UUID(thread_id): datetime.fromisoformat(at)
+            for thread_id, at in self._db.execute("SELECT thread_id, last_activity_at FROM heads")
+        }
+
     def delivery(self, name: RoutineName, delivery_id: DeliveryId) -> Event | None:
         """The arrival of the delivery a provider sent *name* under *delivery_id*."""
         return next(

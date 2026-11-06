@@ -302,6 +302,26 @@ def test_an_open_turn_read_returns_each_threads_latest_of_those_types_while_its_
     asyncio.run(scenario())
 
 
+def test_the_last_activity_read_gives_when_each_threads_latest_event_was_stored(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        times = iter(datetime(2026, 9, 6, hour, tzinfo=UTC) for hour in range(9, 12))
+        event_log = EventLog(tmp_path, clock=lambda: next(times))
+        first_thread, second_thread = uuid4(), uuid4()
+        await event_log.append(first_thread, uuid4(), STARTED)
+        await event_log.append(second_thread, uuid4(), STARTED)
+        await event_log.append(first_thread, uuid4(), MessageDelta(text="latest"))
+
+        with event_log.reader() as reader:
+            assert reader.last_activity() == {
+                first_thread: datetime(2026, 9, 6, 11, tzinfo=UTC),
+                second_thread: datetime(2026, 9, 6, 10, tzinfo=UTC),
+            }
+
+    asyncio.run(scenario())
+
+
 def test_a_delivery_is_found_by_its_routine_and_provider_id(tmp_path: Path) -> None:
     async def scenario() -> None:
         event_log = EventLog(tmp_path)

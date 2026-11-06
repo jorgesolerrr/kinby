@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
@@ -13,6 +14,7 @@ from pydantic.dataclasses import dataclass
 
 from kinby.contracts import (
     Event,
+    EventType,
     GateDecider,
     GateOutcome,
     MemoryConsolidated,
@@ -30,7 +32,7 @@ from kinby.memory.facade import Episode, Fact
 from kinby.plugins.tools import Tool, tool
 
 if TYPE_CHECKING:
-    from kinby.core.events import EventLog
+    from kinby.core.events import EventLog, EventReader
     from kinby.memory.graph import GraphStore
 
 #: The tools a proposal is written through. Each is a write, so the gate decides it.
@@ -102,71 +104,93 @@ def reflection_step(graph: GraphStore, log: EventLog, name: RoutineName) -> Tool
     def reflect() -> str | None:
         """Frame the facts consolidation wrote since the last reflection and the earlier dream
         reports."""
-        events = list(log.all_events())
-        written = _facts_since_last_reflection(events, name)
-        nodes = graph.nodes()
-        facts = tuple(node for node in nodes if isinstance(node, Fact) and node.node in written)
-        if not facts:
-            return None
-        cited = {source for fact in facts for source in fact.sources}
-        frame = _ReflectionFrame(
-            rules=_RULES,
-            proposal_kinds=_PROPOSAL_KINDS,
-            contract=_CONTRACT,
-            facts=facts,
-            episodes=tuple(
-                node for node in nodes if isinstance(node, Episode) and node.node in cited
-            ),
-            dream_reports=_dream_reports(events, name),
-        )
+        with log.reader() as reader:
+            written = _facts_since_last_reflection(reader, name)
+            nodes = graph.nodes()
+            facts = tuple(node for node in nodes if isinstance(node, Fact) and node.node in written)
+            if not facts:
+                return None
+            cited = {source for fact in facts for source in fact.sources}
+            frame = _ReflectionFrame(
+                rules=_RULES,
+                proposal_kinds=_PROPOSAL_KINDS,
+                contract=_CONTRACT,
+                facts=facts,
+                episodes=tuple(
+                    node for node in nodes if isinstance(node, Episode) and node.node in cited
+                ),
+                dream_reports=_dream_reports(reader, name),
+            )
         return _FRAME.dump_json(frame, indent=2).decode()
 
     return reflect
 
 
-def _facts_since_last_reflection(events: list[Event], name: RoutineName) -> set[NodeId]:
+def _facts_since_last_reflection(reader: EventReader, name: RoutineName) -> set[NodeId]:
     # Only consolidation writes these facts, and it writes them as it covers, so none arrive late.
-    started: dict[tuple[UUID, UUID], int] = {}
-    since = 0
-    for index, event in enumerate(events):
+    started: set[tuple[UUID, UUID]] = set()
+    last: tuple[UUID, UUID] | None = None
+    for event in reader.events_of({EventType.TURN_STARTED, EventType.TURN_COMPLETED}):
         key = (event.thread_id, event.turn_id)
         match event.payload:
             case TurnStarted(origin=RoutineOrigin(name=origin)) if origin == name:
-                started.setdefault(key, index)
+                started.add(key)
             case TurnCompleted() if key in started:
-                since = started[key]
-    return {
-        fact
-        for event in events[since:]
-        if isinstance(event.payload, MemoryConsolidated)
-        for fact in event.payload.facts
-    }
+                last = key
+    facts: set[NodeId] = set()
+    since = last is None
+    for event in reader.events_of({EventType.TURN_STARTED, EventType.MEMORY_CONSOLIDATED}):
+        match event.payload:
+            case TurnStarted() if (event.thread_id, event.turn_id) == last:
+                since = True
+            case MemoryConsolidated(facts=written) if since:
+                facts.update(written)
+    return facts
 
 
-def _dream_reports(events: list[Event], name: RoutineName) -> tuple[_DreamReport, ...]:
+def _dream_reports(reader: EventReader, name: RoutineName) -> tuple[_DreamReport, ...]:
     """This routine's earlier turns that left a report or a proposal, with what became of each
     proposal."""
-    turns: dict[tuple[UUID, UUID], datetime] = {}
-    texts: dict[tuple[UUID, UUID], str] = {}
-    proposals: dict[tuple[UUID, UUID], dict[str, _Proposal]] = {}
-    for event in events:
+    reports = (
+        _dream_report(started, reader.turn_events(started.turn_id))
+        for started in _starts(reader, name)
+    )
+    return tuple(report for report in reports if report.report or report.proposals)
+
+
+def _starts(reader: EventReader, name: RoutineName) -> Iterator[Event]:
+    """The start of each turn the routine ran."""
+    seen: set[tuple[UUID, UUID]] = set()
+    for event in reader.events_of({EventType.TURN_STARTED}):
         key = (event.thread_id, event.turn_id)
+        match event.payload:
+            case TurnStarted(origin=RoutineOrigin(name=origin)) if (
+                origin == name and key not in seen
+            ):
+                seen.add(key)
+                yield event
+
+
+def _dream_report(started: Event, events: Iterable[Event]) -> _DreamReport:
+    """The report and the proposals of the turn *started* began, read from the turn's events."""
+    text = ""
+    calls: dict[str, _Proposal] = {}
+    begun = False
+    for event in events:
         payload = event.payload
+        if event.thread_id != started.thread_id:
+            continue
         if isinstance(payload, TurnStarted):
-            if isinstance(payload.origin, RoutineOrigin) and payload.origin.name == name:
-                turns.setdefault(key, event.timestamp)
-                texts.setdefault(key, "")
-                proposals.setdefault(key, {})
+            begun = True
             continue
-        if key not in turns:
+        if not begun:
             continue
-        calls = proposals[key]
         match payload:
-            case MessageDelta(text=text):
-                texts[key] += text
+            case MessageDelta(text=delta):
+                text += delta
             case ToolCall(call_id=call_id, name=tool_name, arguments=arguments):
                 # The report is the final message, the text after the last tool call.
-                texts[key] = ""
+                text = ""
                 if tool_name in _PROPOSAL_TOOLS:
                     calls[call_id] = _Proposal(tool_name, arguments, _ProposalStatus.WAITING)
             case ToolGated(call_id=call_id, action=GateOutcome.DENY) if call_id in calls:
@@ -184,8 +208,4 @@ def _dream_reports(events: list[Event], name: RoutineName) -> tuple[_DreamReport
                     status=_ProposalStatus.REFUSED if payload.error else _ProposalStatus.APPLIED,
                     reason=payload.output if payload.error else None,
                 )
-    return tuple(
-        _DreamReport(at=at, report=texts[key], proposals=tuple(proposals[key].values()))
-        for key, at in turns.items()
-        if texts[key] or proposals[key]
-    )
+    return _DreamReport(at=started.timestamp, report=text, proposals=tuple(calls.values()))

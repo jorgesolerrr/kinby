@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from kinby.contracts import (
     Event,
+    EventType,
     FactoryRunOrigin,
     MemoryRecalled,
     NodeId,
@@ -35,6 +36,16 @@ if TYPE_CHECKING:
     from kinby.memory.graph import GraphStore
 
 _WEEK = timedelta(days=7)
+#: The events the review folds.
+_REVIEWED_EVENTS = frozenset(
+    {
+        EventType.TURN_STARTED,
+        EventType.TOOL_RESULT,
+        EventType.TURN_RATED,
+        EventType.MEMORY_RECALLED,
+        EventType.RUN_STOPPED,
+    }
+)
 #: How much of a failed tool's output the frame keeps, from the end, where it says why it failed.
 _OUTPUT_TAIL = 2_000
 
@@ -154,7 +165,11 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
         """Frame the week's turns and factory runs that went badly, each with the facts a memory
         search matches for it and the facts it recalled."""
         until = today()
-        turns, runs = _read(log.all_events(), since=until - _WEEK, until=until)
+        since = until - _WEEK
+        with log.reader() as reader:
+            # A turn of the week stores its events from its start on, so the read starts there.
+            week_on = reader.events_of(_REVIEWED_EVENTS, since=datetime.combine(since, time(), UTC))
+            turns, runs = _read(week_on, since=since, until=until)
         bad_turns = [turn for turn in turns if turn.went_badly]
         bad_runs = {run_id: run for run_id, run in runs.items() if run.went_badly}
         if not bad_turns and not bad_runs:

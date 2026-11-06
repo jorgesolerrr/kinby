@@ -1,6 +1,8 @@
 import json
+from collections import Counter
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Iterable, Mapping
 from contextlib import closing
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -8,6 +10,7 @@ from uuid import UUID
 from kinby.contracts import (
     ContractModel,
     ErrorEnvelope,
+    Event,
     PermissionMode,
     PromptVersion,
     RoutineName,
@@ -17,6 +20,7 @@ from kinby.contracts import (
 )
 from kinby.core.budgets import DailyBudget, DailyCost
 from kinby.core.dispatcher import Dispatcher, TurnConfig
+from kinby.core.events import EventLog
 from kinby.core.snapshots import SnapshotError, SnapshotRef, WorkspaceDiff
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -163,3 +167,20 @@ def write_events(state_dir: Path, records: Iterable[Mapping[str, Any]]) -> None:
                 " last_activity_at = excluded.last_activity_at",
                 (thread_id, sequence, timestamp),
             )
+
+
+def historical_event_log(state_dir: Path, history: Iterable[Event]) -> EventLog:
+    """The transcript store holding *history*, each event at its own timestamp and numbered in its
+    thread as if appended in this order."""
+    sequences: Counter[UUID] = Counter()
+
+    def stored(event: Event) -> dict[str, Any]:
+        sequences[event.thread_id] += 1
+        return {
+            **event.model_dump(mode="json"),
+            "sequence": sequences[event.thread_id],
+            "timestamp": event.timestamp.astimezone(UTC).isoformat(timespec="microseconds"),
+        }
+
+    write_events(state_dir, map(stored, history))
+    return EventLog(state_dir)

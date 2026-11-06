@@ -1,8 +1,6 @@
 import asyncio
-import gc
-import weakref
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -249,44 +247,18 @@ def test_usage_get_includes_recap_tokens_in_turn_and_thread_totals(
     asyncio.run(scenario())
 
 
-def test_usage_get_releases_irrelevant_events_while_reading_log(tmp_path: Path) -> None:
+def test_usage_get_reads_past_irrelevant_events(tmp_path: Path) -> None:
     thread_id = uuid4()
     turn_id = uuid4()
 
-    class StreamingEventLog(EventLog):
-        def all_events(self):
-            irrelevant = Event(
-                sequence=1,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                payload=MessageDelta(text="discarded"),
-                timestamp=datetime.now(UTC),
-            )
-            irrelevant_ref = weakref.ref(irrelevant)
-            yield irrelevant
-            del irrelevant
-            yield Event(
-                sequence=2,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                payload=MessageDelta(text="also discarded"),
-                timestamp=datetime.now(UTC),
-            )
-            gc.collect()
-            assert irrelevant_ref() is None
-            yield Event(
-                sequence=3,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                payload=TurnCompleted(input_tokens=11, output_tokens=7),
-                timestamp=datetime.now(UTC),
-            )
-
     async def scenario() -> None:
-        result = await build_dispatcher(
-            tmp_path,
-            event_log=StreamingEventLog(tmp_path),
-        ).dispatch("usage.get", {}, {Scope.INSTANCE_READ})
+        event_log = EventLog(tmp_path)
+        await event_log.append(thread_id, turn_id, MessageDelta(text="discarded"))
+        await event_log.append(thread_id, turn_id, MessageDelta(text="also discarded"))
+        await event_log.append(thread_id, turn_id, TurnCompleted(input_tokens=11, output_tokens=7))
+        result = await build_dispatcher(tmp_path, event_log=event_log).dispatch(
+            "usage.get", {}, {Scope.INSTANCE_READ}
+        )
 
         assert result == UsageGetResult(
             threads=[
