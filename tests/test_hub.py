@@ -985,6 +985,25 @@ def test_status_distinguishes_missing_starting_unhealthy_and_unavailable(tmp_pat
     asyncio.run(scenario())
 
 
+def test_listing_instances_reads_their_records_in_one_registry_query(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        client = hub_client(hub)
+        created = [(await created_instance(client, name=name)).instance_id for name in ("a", "b")]
+        records = [hub.registry.instance(instance_id) for instance_id in created]
+        statements: list[str] = []
+        hub.registry._connection.set_trace_callback(statements.append)
+
+        listed = hub.registry.listed_instances()
+
+        hub.registry._connection.set_trace_callback(None)
+        assert listed == records
+        assert all(record.storage for record in listed)
+        assert len(statements) == 1
+
+    asyncio.run(scenario())
+
+
 def test_list_carries_the_observed_process_and_lists_an_instance_it_cannot_read(tmp_path):
     async def scenario() -> None:
         runtime = FakeRuntime()
@@ -1021,25 +1040,29 @@ def test_list_carries_the_observed_process_and_lists_an_instance_it_cannot_read(
     asyncio.run(scenario())
 
 
-def test_the_hub_holds_its_registry_open_only_during_a_call(tmp_path):
-    """An unclosed sqlite connection outlives its call until a garbage collection, and enough of
-    them at once run the process out of file descriptors."""
+def test_the_hub_holds_one_registry_connection_however_many_calls_it_makes(tmp_path):
+    """A connection per call outlives its call until a garbage collection, and enough of them at
+    once run the process out of file descriptors."""
 
     def registry_files() -> list[str]:
         descriptors = Path("/proc/self/fd")
-        return [
-            target
+        return sorted(
+            Path(target).name
             for descriptor in descriptors.iterdir()
             if (target := os.path.realpath(descriptor)).startswith(str(tmp_path / "hub"))
             and "registry.sqlite" in target
-        ]
+        )
 
     collecting = gc.isenabled()
     gc.disable()
     try:
         hub = hub_at(tmp_path / "hub", images=FakeImages())
-        asyncio.run(created_instance(hub_client(hub)))
+        asyncio.run(created_instance(hub_client(hub), name="alice"))
+        asyncio.run(created_instance(hub_client(hub), name="bob"))
+        held = registry_files()
+        hub.close()
 
+        assert held == ["registry.sqlite", "registry.sqlite-shm", "registry.sqlite-wal"]
         assert registry_files() == []
     finally:
         if collecting:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -190,23 +191,25 @@ class HubRegistry:
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / "registry.sqlite"
+        self._connection = sqlite3.connect(self.path, check_same_thread=False)
+        self._connection.execute("PRAGMA journal_mode = WAL")
+        self._lock = threading.Lock()
+        # After the initialization, whose rebuilds drop a table other tables reference.
         self._initialize()
+        self._connection.execute("PRAGMA foreign_keys = ON")
+
+    def close(self) -> None:
+        self._connection.close()
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        """One transaction, committed on success and rolled back on an error, then closed. An
-        unclosed connection holds its file until a garbage collection."""
-        connection = sqlite3.connect(self.path)
-        try:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA foreign_keys = ON")
-            with connection:
-                yield connection
-        finally:
-            connection.close()
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """One transaction on the registry's connection, committed on success and rolled back on
+        an error. One thread at a time holds the connection."""
+        with self._lock, self._connection:
+            yield self._connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS instances (
@@ -455,7 +458,7 @@ class HubRegistry:
         self._let_operations_stand_alone()
         self._let_notifications_go_without_a_thread()
         # After the rebuild, which copies only the columns operations had before preparations.
-        with self._connect() as connection:
+        with self._transaction() as connection:
             # The instance that asked the hub for the operation. Null for one the user started.
             self._add_columns(connection, "operations", {"login_id": "TEXT", "requester": "TEXT"})
             # The approval a notification's options answer, as JSON. Null for any other.
@@ -465,19 +468,42 @@ class HubRegistry:
                 connection, "notifications", {"run_id": "TEXT", "stop_generation": "INTEGER"}
             )
             self._drop_packages(connection)
+            # After the rebuilds, which drop a rebuilt table's indexes.
+            connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS operations_by_instance ON operations (instance_id);
+                CREATE INDEX IF NOT EXISTS operations_by_state ON operations (state);
+                CREATE INDEX IF NOT EXISTS factory_runs_by_status ON factory_runs (status);
+                CREATE INDEX IF NOT EXISTS factory_runs_by_factory
+                    ON factory_runs (factory, status);
+                CREATE INDEX IF NOT EXISTS factory_runs_by_instance
+                    ON factory_runs (instance_id, work_item);
+                CREATE INDEX IF NOT EXISTS factory_runs_by_creation
+                    ON factory_runs (instance_id, created_at);
+                CREATE INDEX IF NOT EXISTS factory_runs_by_ended_call ON factory_runs (ended_call);
+                CREATE INDEX IF NOT EXISTS step_attempts_by_run ON step_attempts (run_id);
+                CREATE INDEX IF NOT EXISTS run_stops_by_told ON run_stops (told);
+                CREATE INDEX IF NOT EXISTS notifications_by_instance ON notifications (instance_id);
+                CREATE INDEX IF NOT EXISTS notifications_raised_by_instance
+                    ON notifications (instance_id, raised_at);
+                CREATE INDEX IF NOT EXISTS notifications_by_thread ON notifications (thread_id);
+                CREATE INDEX IF NOT EXISTS notification_deliveries_by_status
+                    ON notification_deliveries (status);
+                CREATE INDEX IF NOT EXISTS notification_deliveries_by_message
+                    ON notification_deliveries (channel_id, sent_ref);
+                CREATE INDEX IF NOT EXISTS replies_by_notification ON replies (notification_id);
+                CREATE INDEX IF NOT EXISTS replies_by_status ON replies (status);
+                """
+            )
 
     def _let_operations_stand_alone(self) -> None:
         """Rebuild an operations table from before preparations, whose rows all name an instance.
 
         SQLite cannot drop a NOT NULL constraint in place. The copy keeps every row in order.
         """
-        connection = sqlite3.connect(self.path)
-        try:
-            columns = {
-                row[1]: row[3] for row in connection.execute("PRAGMA table_info(operations)")
-            }
-            if not columns["instance_id"]:
-                return
+        connection = self._connection
+        columns = {row[1]: row[3] for row in connection.execute("PRAGMA table_info(operations)")}
+        if columns["instance_id"]:
             connection.executescript(
                 """
                 BEGIN;
@@ -495,8 +521,6 @@ class HubRegistry:
                 COMMIT;
                 """
             )
-        finally:
-            connection.close()
 
     def _let_notifications_go_without_a_thread(self) -> None:
         """Rebuild a notifications table from before instance notices, whose rows all name a
@@ -505,13 +529,9 @@ class HubRegistry:
         SQLite cannot drop a NOT NULL constraint in place. The copy keeps every row in order, and
         the deliveries and replies that reference a notification still find it by its id.
         """
-        connection = sqlite3.connect(self.path)
-        try:
-            columns = {
-                row[1]: row[3] for row in connection.execute("PRAGMA table_info(notifications)")
-            }
-            if not columns["thread_id"]:
-                return
+        connection = self._connection
+        columns = {row[1]: row[3] for row in connection.execute("PRAGMA table_info(notifications)")}
+        if columns["thread_id"]:
             connection.executescript(
                 """
                 BEGIN;
@@ -540,8 +560,6 @@ class HubRegistry:
                 COMMIT;
                 """
             )
-        finally:
-            connection.close()
 
     @classmethod
     def _drop_packages(cls, connection: sqlite3.Connection) -> None:
@@ -600,7 +618,7 @@ class HubRegistry:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     def hub_id(self) -> str:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT value FROM hub_metadata WHERE key = 'hub_id'"
             ).fetchone()
@@ -615,7 +633,7 @@ class HubRegistry:
 
     def signal_alias(self) -> UUID | None:
         """The instance that answers the public signal path, when adoption has claimed it."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT value FROM hub_metadata WHERE key = 'signal_alias'"
             ).fetchone()
@@ -625,14 +643,14 @@ class HubRegistry:
         """Point the public signal path at a managed instance, so its webhook URL keeps working."""
         if self.instance(instance_id) is None:
             raise ValueError(f'Instance "{instance_id}" was not found.')
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO hub_metadata (key, value) VALUES ('signal_alias', ?)",
                 (str(instance_id),),
             )
 
     def access_token_hash(self) -> str | None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT value FROM hub_metadata WHERE key = 'access_token_hash'"
             ).fetchone()
@@ -641,7 +659,7 @@ class HubRegistry:
     def try_set_access_token_hash(self, token_hash: str) -> bool:
         """Store the first hash. A second issuer leaves the existing one in place."""
         try:
-            with self._connect() as connection:
+            with self._transaction() as connection:
                 connection.execute(
                     "INSERT INTO hub_metadata (key, value) VALUES ('access_token_hash', ?)",
                     (token_hash,),
@@ -652,7 +670,7 @@ class HubRegistry:
 
     def replace_access_token_hash(self, token_hash: str) -> None:
         """Swap the hash and drop every session in one transaction."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO hub_metadata (key, value)
@@ -663,14 +681,14 @@ class HubRegistry:
             connection.execute("DELETE FROM sessions")
 
     def update_token_hash(self) -> str | None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT value FROM hub_metadata WHERE key = 'update_token_hash'"
             ).fetchone()
         return row[0] if row is not None else None
 
     def replace_update_token_hash(self, token_hash: str) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO hub_metadata (key, value)
@@ -681,7 +699,7 @@ class HubRegistry:
 
     def open_session_if_current(self, token_hash: str, session_hash: str) -> bool:
         """Insert the session only if this token hash is still the stored one."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             inserted = connection.execute(
                 """
                 INSERT INTO sessions (token_hash)
@@ -695,11 +713,11 @@ class HubRegistry:
             return inserted.rowcount == 1
 
     def close_session(self, token_hash: str) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
 
     def session_open(self, token_hash: str) -> bool:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT 1 FROM sessions WHERE token_hash = ?",
                 (token_hash,),
@@ -712,7 +730,7 @@ class HubRegistry:
         operation_id: UUID,
         requester: UUID | None = None,
     ) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO instances (
@@ -775,7 +793,7 @@ class HubRegistry:
     ) -> None:
         """Open this operation on its own, even while another one is unfinished. One that
         belongs to no instance has no *instance_id*."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             self._insert_operation(connection, operation_id, instance_id, kind, detail, requester)
 
     @staticmethod
@@ -804,7 +822,7 @@ class HubRegistry:
 
     def begin_preparation(self, operation_id: UUID, detail: str) -> UUID:
         """Open this image preparation, or return the unfinished one."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
@@ -843,7 +861,7 @@ class HubRegistry:
         detail: str,
     ) -> UUID:
         """Open this login, or return the unfinished one of the same login on this instance."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._running_login(connection, instance_id, login_id)
             if existing is not None:
@@ -868,7 +886,7 @@ class HubRegistry:
         self, instance_id: UUID, login_id: str | None = None
     ) -> tuple[UUID, str] | None:
         """The operation and login ids of an unfinished login of this instance, or of that login."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = self._running_login(connection, instance_id, login_id)
         return (UUID(row[0]), row[1]) if row is not None else None
 
@@ -899,7 +917,7 @@ class HubRegistry:
     def seed_logins(self, instance_id: UUID, login_ids: Collection[str]) -> None:
         """Track each login a new instance declares, none of them signed in yet."""
         changed_at = _now()
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.executemany(
                 """
                 INSERT OR REPLACE INTO logins (instance_id, login_id, state, changed_at)
@@ -919,7 +937,7 @@ class HubRegistry:
     ) -> None:
         """Link each variable the instance holds to the hub secret it took, and drop the link of
         each variable in `unlinked`."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.executemany(
                 "DELETE FROM secret_links WHERE instance_id = ? AND variable = ?",
                 [(str(instance_id), variable) for variable in unlinked],
@@ -934,7 +952,7 @@ class HubRegistry:
 
     def secret_links(self, instance_id: UUID) -> dict[str, HubSecretName]:
         """The hub secret each linked variable of the instance took, by variable."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT variable, hub_secret FROM secret_links WHERE instance_id = ?",
                 (str(instance_id),),
@@ -943,7 +961,7 @@ class HubRegistry:
 
     def linked_to(self, hub_secret: HubSecretName) -> dict[UUID, list[str]]:
         """The variables linked to the hub secret, by instance."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT instance_id, variable FROM secret_links WHERE hub_secret = ? "
                 "ORDER BY variable",
@@ -955,14 +973,14 @@ class HubRegistry:
         return linked
 
     def unlink_hub_secret(self, hub_secret: HubSecretName) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("DELETE FROM secret_links WHERE hub_secret = ?", (hub_secret,))
 
     def record_template(
         self, instance_id: UUID, setup: DeclaredSetup, baseline: dict[str, FileHash]
     ) -> None:
         """Store the setup and the baseline an update just synced the factory's instance to."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE factory_members SET setup = ?, baseline = ? WHERE instance_id = ?",
                 (setup.model_dump_json(), json.dumps(baseline), str(instance_id)),
@@ -970,7 +988,7 @@ class HubRegistry:
 
     def login_states(self, instance_id: UUID) -> dict[str, LoginState]:
         """How each login the hub tracks for this instance stands, by login id."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT login_id, state FROM logins WHERE instance_id = ?",
                 (str(instance_id),),
@@ -979,7 +997,7 @@ class HubRegistry:
 
     def record_prompt(self, operation_id: UUID, prompt: LoginPrompt) -> None:
         """Show the URL and the code on the step that is running."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE operation_steps SET prompt_url = ?, prompt_code = ?
@@ -990,7 +1008,7 @@ class HubRegistry:
 
     def record_description(self, image_id: str, setup: DeclaredSetup) -> None:
         """Keep what this image declares, so describing it never builds."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO image_descriptions (image_id, setup) VALUES (?, ?)",
                 (image_id, setup.model_dump_json()),
@@ -998,7 +1016,7 @@ class HubRegistry:
 
     def description(self, image_id: str | None = None) -> DeclaredSetup | None:
         """What this image declares, or with no image the one described last, if any was."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT setup FROM image_descriptions
@@ -1015,7 +1033,7 @@ class HubRegistry:
         A start that is still pending after a restart would otherwise be returned
         forever, and nothing would run it.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT id FROM operations WHERE state IN (?, ?)",
                 (OperationState.PENDING.value, OperationState.RUNNING.value),
@@ -1036,7 +1054,7 @@ class HubRegistry:
         A second start while the first is still running would hide the first from
         `instance.status`, and that is how a client finds a response it lost.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
@@ -1059,7 +1077,7 @@ class HubRegistry:
 
     def advance_operation(self, operation_id: UUID, step: str, detail: str) -> None:
         """Succeed the step that was running and open the named one, both operation and step."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             self._close_running_step(connection, operation_id, OperationState.SUCCEEDED, None)
             position = connection.execute(
                 "SELECT COUNT(*) FROM operation_steps WHERE operation_id = ?",
@@ -1079,7 +1097,7 @@ class HubRegistry:
 
     def succeed_step(self, operation_id: UUID, detail: str) -> None:
         """Succeed the step that is running with what it did, leaving the operation running."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             self._close_running_step(connection, operation_id, OperationState.SUCCEEDED, detail)
 
     def finish_operation(
@@ -1095,7 +1113,7 @@ class HubRegistry:
         credentials only when it succeeds, so the ones before it still work (ADR 0068).
         """
         login = LoginState.SIGNED_IN if state is OperationState.SUCCEEDED else LoginState.FAILED
-        with self._connect() as connection:
+        with self._transaction() as connection:
             self._close_running_step(connection, operation_id, state, detail)
             connection.execute(
                 "UPDATE operations SET state = ?, detail = ? WHERE id = ?",
@@ -1142,7 +1160,7 @@ class HubRegistry:
         does not take its place while this one is still running. A login is not one
         of them: it runs beside them, and may wait for the user for many minutes.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT id FROM operations
@@ -1159,7 +1177,7 @@ class HubRegistry:
         return UUID(row[0]) if row is not None else None
 
     def operation(self, operation_id: UUID) -> OperationGetResult | None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT id, instance_id, kind, state, detail, requester FROM operations
@@ -1203,7 +1221,7 @@ class HubRegistry:
         conflict = self.conflicting_storage(instance_id, storage)
         if conflict is not None:
             raise ValueError(f'Storage source "{conflict.item.source}" is already owned.')
-        with self._connect() as connection:
+        with self._transaction() as connection:
             self._insert_storage(connection, instance_id, storage)
             connection.execute(
                 """
@@ -1245,7 +1263,7 @@ class HubRegistry:
         prepared instance, another active operation, or storage another record
         already owns is refused here, in one writer transaction.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT prepared FROM instances WHERE id = ?",
@@ -1341,7 +1359,7 @@ class HubRegistry:
         from. The image this one replaces keeps its artifact row, which is what an
         explicit recovery reads.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             self._write_selection(
                 connection,
                 instance_id,
@@ -1357,7 +1375,7 @@ class HubRegistry:
         this row when the process dies after creating that container and before
         the selection is recorded.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO update_candidates (
@@ -1372,7 +1390,7 @@ class HubRegistry:
             )
 
     def candidate_image(self, instance_id: UUID) -> str | None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT image_id FROM update_candidates WHERE instance_id = ?",
                 (str(instance_id),),
@@ -1381,7 +1399,7 @@ class HubRegistry:
 
     def accept_candidate(self, instance_id: UUID, image_id: str) -> None:
         """Select the staged image when the container that exists is that image."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT requested_revision, source_revision, image_id
@@ -1415,7 +1433,7 @@ class HubRegistry:
         )
 
     def mark_prepared(self, instance_id: UUID) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE instances SET prepared = 1 WHERE id = ?",
                 (str(instance_id),),
@@ -1437,7 +1455,7 @@ class HubRegistry:
         storage: tuple[StorageItem, ...],
     ) -> StorageConflict | None:
         """The first of these writable sources another instance already owns, if any."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             return self._writable_conflict(connection, instance_id, storage)
 
     def shared_storage(
@@ -1446,7 +1464,7 @@ class HubRegistry:
         storage: tuple[StorageItem, ...],
     ) -> StorageConflict | None:
         """The first of these writable sources any other record mounts, even read only."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT instance_id, kind, source FROM storage WHERE instance_id != ?",
                 (str(instance_id),),
@@ -1491,7 +1509,7 @@ class HubRegistry:
         return None
 
     def set_intended_state(self, instance_id: UUID, state: IntendedState) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE instances SET intended_state = ? WHERE id = ?",
                 (state.value, str(instance_id)),
@@ -1499,7 +1517,7 @@ class HubRegistry:
 
     def release_storage(self, instance_id: UUID, items: list[StorageItem]) -> None:
         """Drop inventory entries whose storage is gone, so no retry reaches for it again."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.executemany(
                 "DELETE FROM storage WHERE instance_id = ? AND destination = ?",
                 [(str(instance_id), item.destination) for item in items],
@@ -1512,7 +1530,7 @@ class HubRegistry:
         name stay too, and both columns are unique. A later adoption that reuses
         either one is a finding, not a second row.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("DELETE FROM storage WHERE instance_id = ?", (str(instance_id),))
             connection.execute(
                 "UPDATE instances SET intended_state = ? WHERE id = ?",
@@ -1521,7 +1539,7 @@ class HubRegistry:
 
     def held_identity(self, instance_id: UUID, path: Path, runtime_id: str) -> str | None:
         """Why another record already holds this path or container name, if one does."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             return self._held_identity(connection, instance_id, path, runtime_id)
 
     @staticmethod
@@ -1553,90 +1571,14 @@ class HubRegistry:
         )
 
     def instance(self, instance_id: UUID) -> ManagedInstance | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT id, path, manifest_id, persona_name, requested_revision,
-                       source_revision, image_id, intended_state, runtime_id, prepared,
-                       avatar_shape, avatar_color,
-                       EXISTS (
-                           SELECT 1 FROM hub_metadata
-                           WHERE key = 'home_instance' AND value = instances.id
-                       )
-                FROM instances WHERE id = ?
-                """,
-                (str(instance_id),),
-            ).fetchone()
-            storage_rows = connection.execute(
-                """
-                SELECT kind, source, destination, writable
-                FROM storage WHERE instance_id = ? ORDER BY destination
-                """,
-                (str(instance_id),),
-            ).fetchall()
-            member = connection.execute(
-                """
-                SELECT factory, name, recipe, setup, baseline
-                FROM factory_members WHERE instance_id = ?
-                """,
-                (str(instance_id),),
-            ).fetchone()
-        if row is None:
-            return None
-        return ManagedInstance(
-            instance_id=UUID(row[0]),
-            path=Path(row[1]),
-            manifest_id=row[2],
-            persona_name=row[3],
-            requested_revision=row[4],
-            source_revision=row[5],
-            image_id=row[6],
-            intended_state=IntendedState(row[7]),
-            runtime_id=row[8],
-            prepared=bool(row[9]),
-            storage=tuple(
-                StorageItem(
-                    kind=StorageKind(kind),
-                    source=source,
-                    destination=destination,
-                    writable=bool(writable),
-                )
-                for kind, source, destination, writable in storage_rows
-            ),
-            # Instances from before avatars have none recorded, and draw the default one.
-            avatar=(
-                Avatar(shape=AvatarShape(row[10]), color=AvatarColor(row[11]))
-                if row[10] is not None
-                else DEFAULT_AVATAR
-            ),
-            factory=(
-                FactoryMember(
-                    factory=member[0],
-                    name=member[1],
-                    recipe=member[2],
-                    setup=DeclaredSetup.model_validate_json(member[3]),
-                    baseline=None if member[4] is None else json.loads(member[4]),
-                )
-                if member is not None
-                else None
-            ),
-            home=bool(row[12]),
-        )
+        return next(iter(self._instances("instances.id = ?", (str(instance_id),))), None)
 
     def managed_instances(self) -> list[ManagedInstance]:
         """Every record the hub owns, in creation order, including creations that never finished.
 
         A deleted instance owns nothing any more. Its record stays only for its operations.
         """
-        with self._connect() as connection:
-            ids = [
-                UUID(row[0])
-                for row in connection.execute(
-                    "SELECT id FROM instances WHERE intended_state != ? ORDER BY rowid",
-                    (IntendedState.DELETED.value,),
-                ).fetchall()
-            ]
-        return [record for instance_id in ids if (record := self.instance(instance_id)) is not None]
+        return self._instances("intended_state != ?", (IntendedState.DELETED.value,))
 
     def last_operation(self, instance_id: UUID) -> OperationGetResult | None:
         """The latest operation that changed this instance's container.
@@ -1648,7 +1590,7 @@ class HubRegistry:
         reads it to tell an unfinished handoff from a create, because the container it finds
         still belongs to the previous runtime.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT operations.id FROM operations
@@ -1676,38 +1618,51 @@ class HubRegistry:
 
     def factory_members(self, factory: FactoryName) -> list[ManagedInstance]:
         """The instances holding a role of this factory and not deleted, in creation order."""
-        with self._connect() as connection:
-            ids = [
-                UUID(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT instance_id FROM factory_members
-                    JOIN instances ON instances.id = factory_members.instance_id
-                    WHERE factory = ? AND intended_state != ? ORDER BY instances.rowid
-                    """,
-                    (factory, IntendedState.DELETED.value),
-                ).fetchall()
-            ]
-        return [record for instance_id in ids if (record := self.instance(instance_id)) is not None]
+        return self._instances(
+            "factory = ? AND intended_state != ?", (factory, IntendedState.DELETED.value)
+        )
 
     def listed_instances(self, *, removed: bool = False) -> list[ManagedInstance]:
         """The active instances, or the removed ones whose records and storage the hub retains."""
-        with self._connect() as connection:
-            ids = [
-                UUID(row[0])
-                for row in connection.execute(
-                    "SELECT id FROM instances WHERE prepared = 1 ORDER BY rowid"
-                ).fetchall()
-            ]
-        return [
-            record
-            for instance_id in ids
-            if (record := self.instance(instance_id)) is not None
-            and (record.intended_state is IntendedState.REMOVED if removed else record.active)
-        ]
+        states = (
+            (IntendedState.REMOVED,) if removed else (IntendedState.STOPPED, IntendedState.RUNNING)
+        )
+        return self._instances(
+            f"prepared = 1 AND intended_state IN ({_marks(states)})",
+            tuple(state.value for state in states),
+        )
+
+    def _instances(self, where: str, parameters: tuple[str, ...]) -> list[ManagedInstance]:
+        """The records *where* selects, each with its storage and factory role, in creation
+        order."""
+        with self._transaction() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT instances.id, path, manifest_id, persona_name, requested_revision,
+                    source_revision, image_id, intended_state, runtime_id, prepared,
+                    avatar_shape, avatar_color,
+                    EXISTS (
+                        SELECT 1 FROM hub_metadata
+                        WHERE key = 'home_instance' AND value = instances.id
+                    ),
+                    (
+                        SELECT json_group_array(
+                            json_array(kind, source, destination, writable) ORDER BY destination
+                        )
+                        FROM storage WHERE storage.instance_id = instances.id
+                    ),
+                    factory, name, recipe, setup, baseline
+                FROM instances
+                LEFT JOIN factory_members ON factory_members.instance_id = instances.id
+                WHERE {where}
+                ORDER BY instances.rowid
+                """,
+                parameters,
+            ).fetchall()
+        return [_managed_instance(row) for row in rows]
 
     def image_artifact(self, input_key: str) -> ImageArtifact | None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT image_id, revision, dependency_id, base_images, dependencies
@@ -1726,7 +1681,7 @@ class HubRegistry:
         )
 
     def record_image_artifact(self, input_key: str, artifact: ImageArtifact) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO image_artifacts (
@@ -1744,7 +1699,7 @@ class HubRegistry:
             )
 
     def image_artifacts(self) -> list[ImageArtifact]:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             keys = [
                 row[0]
                 for row in connection.execute(
@@ -1760,7 +1715,7 @@ class HubRegistry:
         whose update failed still names its previous image (ADR 0035). Deletion leaves
         the candidate row a failed update staged.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT image_id FROM image_artifacts
@@ -1780,7 +1735,7 @@ class HubRegistry:
 
     def forget_image(self, image_id: str) -> None:
         """Drop every artifact and description of an image that is gone."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("DELETE FROM image_artifacts WHERE image_id = ?", (image_id,))
             connection.execute("DELETE FROM image_descriptions WHERE image_id = ?", (image_id,))
 
@@ -1789,7 +1744,7 @@ class HubRegistry:
 
         Each one holds an image before any record names it.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT 1 FROM operations WHERE kind IN (?, ?, ?) AND state IN (?, ?) LIMIT 1",
                 (
@@ -1804,19 +1759,19 @@ class HubRegistry:
 
     def shipped_skills(self) -> dict[SkillName, FileHash]:
         """The hash of each shipped skill the hub copied into its library, by name."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute("SELECT name, hash FROM shipped_skills").fetchall()
         return {SkillName(name): FileHash(hash) for name, hash in rows}
 
     def record_shipped_skill(self, name: SkillName, copied: FileHash) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO shipped_skills (name, hash) VALUES (?, ?)", (name, copied)
             )
 
     def git_skills(self) -> dict[SkillName, GitSource]:
         """Where each skill the user added to the library from git came from, by name."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT name, url, path, ref, git_commit FROM git_skills"
             ).fetchall()
@@ -1826,7 +1781,7 @@ class HubRegistry:
         }
 
     def record_git_skill(self, name: SkillName, source: GitSource, landed: FileHash) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO git_skills (name, url, path, ref, git_commit, hash)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
@@ -1834,7 +1789,7 @@ class HubRegistry:
             )
 
     def forget_git_skill(self, name: SkillName) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("DELETE FROM git_skills WHERE name = ?", (name,))
 
     def landed_skills(self) -> dict[SkillName, FileHash]:
@@ -1842,7 +1797,7 @@ class HubRegistry:
 
         A git skill's wins over a shipped one's of the same name, which the user deleted.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             shipped = connection.execute("SELECT name, hash FROM shipped_skills").fetchall()
             git = connection.execute(
                 "SELECT name, hash FROM git_skills WHERE hash IS NOT NULL"
@@ -1851,12 +1806,12 @@ class HubRegistry:
 
     def unhashed_git_skills(self) -> list[SkillName]:
         """Each git skill added before the hub recorded the hash it landed with."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute("SELECT name FROM git_skills WHERE hash IS NULL").fetchall()
         return [SkillName(name) for (name,) in rows]
 
     def record_landed_git_skill(self, name: SkillName, landed: FileHash) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("UPDATE git_skills SET hash = ? WHERE name = ?", (landed, name))
 
     def open_run(
@@ -1872,7 +1827,7 @@ class HubRegistry:
         True when the run is new.
         """
         key = _work_item_key(work_item)
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             open_run = connection.execute(
                 f"""
@@ -1911,7 +1866,7 @@ class HubRegistry:
         *intake* names the factory's instance of the intake. The newest instance by that name gets
         the runs, or the factory's newest instance when none has that name.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             factories = [
                 row[0]
                 for row in connection.execute(
@@ -1933,7 +1888,7 @@ class HubRegistry:
                 )
 
     def run(self, run_id: UUID) -> FactoryRun | None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 f"SELECT {_RUN_COLUMNS} FROM factory_runs WHERE id = ?", (str(run_id),)
             ).fetchone()
@@ -1942,30 +1897,48 @@ class HubRegistry:
     def runs(
         self,
         factory: FactoryName | None,
-        status: FactoryRunStatus | None,
+        statuses: Collection[FactoryRunStatus] | None,
         instance_id: UUID | None = None,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[FactoryRun]:
-        """The factory's runs, or every factory's, oldest first, in one status or in any.
+        """The factory's runs, or every factory's, oldest first, in any of *statuses*, or in any
+        status without them.
 
-        With *instance_id*, only the runs that instance handed in.
+        With *instance_id*, only the runs that instance handed in. With *since* or *until*, only
+        the runs created in that range, both ends included.
         """
-        wanted = status.value if status is not None else None
-        owner = str(instance_id) if instance_id is not None else None
-        with self._connect() as connection:
+        where = ["1"]
+        parameters: list[str] = []
+        if factory is not None:
+            where.append("factory = ?")
+            parameters.append(factory)
+        if statuses is not None:
+            where.append(f"status IN ({_marks(statuses)})")
+            parameters.extend(status.value for status in statuses)
+        if instance_id is not None:
+            where.append("instance_id = ?")
+            parameters.append(str(instance_id))
+        if since is not None:
+            where.append("created_at >= ?")
+            parameters.append(_stored(since))
+        if until is not None:
+            where.append("created_at <= ?")
+            parameters.append(_stored(until))
+        with self._transaction() as connection:
             rows = connection.execute(
                 f"""
-                SELECT {_RUN_COLUMNS} FROM factory_runs
-                WHERE (? IS NULL OR factory = ?) AND (? IS NULL OR status = ?)
-                    AND (? IS NULL OR instance_id = ?)
+                SELECT {_RUN_COLUMNS} FROM factory_runs WHERE {" AND ".join(where)}
                 ORDER BY rowid
                 """,
-                (factory, factory, wanted, wanted, owner, owner),
+                parameters,
             ).fetchall()
         return [_factory_run(row) for row in rows]
 
     def runs_in(self, status: FactoryRunStatus) -> list[FactoryRun]:
         """Every run of every factory in *status*, in the order it moved there."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs WHERE status = ?
@@ -1992,7 +1965,7 @@ class HubRegistry:
         report can no longer claim it. A move to needs_human also resets its reported flag, so
         this fresh stop gets its own report.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE factory_runs
@@ -2032,7 +2005,7 @@ class HubRegistry:
 
     def stop_generation(self, run_id: UUID) -> int:
         """How many times the run has stopped, which names its latest stop."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT stop_generation FROM factory_runs WHERE id = ?", (str(run_id),)
             ).fetchone()
@@ -2044,7 +2017,7 @@ class HubRegistry:
         A later stop already bumped the generation past it, so this leaves that fresher stop's
         reported flag untouched: a report still in flight for an earlier stop can't claim it.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE factory_runs SET reported = 1 WHERE id = ? AND stop_generation = ?",
                 (str(run_id), generation),
@@ -2052,7 +2025,7 @@ class HubRegistry:
 
     def unreported_runs(self) -> list[FactoryRun]:
         """The needs_human runs whose report was not yet delivered, in the order they stopped."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
@@ -2065,14 +2038,14 @@ class HubRegistry:
 
     def mark_ended_called(self, run_id: UUID) -> None:
         """Record that the factory's ended call for the run was made."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE factory_runs SET ended_call = 0 WHERE id = ?", (str(run_id),)
             )
 
     def uncalled_ends(self) -> list[FactoryRun]:
         """The runs that ended and still owe the factory's ended call, in the order they ended."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
@@ -2084,7 +2057,7 @@ class HubRegistry:
 
     def run_stop(self, run_id: UUID, generation: int) -> RunStop:
         """The run's stop of *generation*, with the attempts since the stop before it."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT factory, work_item, run_stops.status, last_attempt, (
@@ -2111,7 +2084,7 @@ class HubRegistry:
 
     def mark_told(self, run_id: UUID, generation: int) -> None:
         """Record that the run's instance took its stop of *generation*."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE run_stops SET told = 1 WHERE run_id = ? AND generation = ?",
                 (str(run_id), generation),
@@ -2119,7 +2092,7 @@ class HubRegistry:
 
     def untold_stops(self) -> list[RunStop]:
         """The stops no instance took yet, in the order the runs stopped."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT run_id, generation FROM run_stops WHERE told = 0 ORDER BY rowid"
             ).fetchall()
@@ -2127,7 +2100,7 @@ class HubRegistry:
 
     def restart_run(self, run_id: UUID, step: StepId | None) -> FactoryRun:
         """Queue the run at *step* for the user, its retries and send-backs counted afresh."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, restarted_after = (
@@ -2150,7 +2123,7 @@ class HubRegistry:
         A run parked at a wait or an approval keeps its attempt open until it moves on.
         """
         now = _now()
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO step_attempts (
@@ -2169,7 +2142,7 @@ class HubRegistry:
 
     def drop_attempt(self, run_id: UUID) -> FactoryRun:
         """Delete the run's open attempt, which is no attempt, and queue the run again."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "DELETE FROM step_attempts WHERE run_id = ? AND ended_at IS NULL", (str(run_id),)
             )
@@ -2181,7 +2154,7 @@ class HubRegistry:
 
     def end_attempt(self, run_id: UUID, result: StepResult) -> None:
         """Record how the run's open attempt ended. Its result is never written again."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE step_attempts
@@ -2206,7 +2179,7 @@ class HubRegistry:
 
     def counted_attempts(self, run_id: UUID) -> list[StepAttempt]:
         """The attempts that count toward retries and send-backs: those since the user's restart."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT restarted_after FROM factory_runs WHERE id = ?", (str(run_id),)
             ).fetchone()
@@ -2216,7 +2189,7 @@ class HubRegistry:
         self, run_id: UUID, after: int, through: int | None = None
     ) -> list[StepAttempt]:
         """The run's attempts whose rowid is past *after*, and up to *through* when given."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT
@@ -2258,7 +2231,7 @@ class HubRegistry:
 
         A parked run's open attempt is not among them: it waits on no process.
         """
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT run_id FROM step_attempts
@@ -2284,7 +2257,7 @@ class HubRegistry:
         settings: Mapping[str, SetupValue],
         pairing: Pairing | None,
     ) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO channels (
@@ -2304,7 +2277,7 @@ class HubRegistry:
 
     def channels(self) -> list[ChannelRecord]:
         """Every channel, in the order the user set them up."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 f"SELECT {_CHANNEL_COLUMNS} FROM channels ORDER BY rowid"
             ).fetchall()
@@ -2329,7 +2302,7 @@ class HubRegistry:
         enabled: bool,
         settings: Mapping[str, SetupValue],
     ) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE channels SET name = ?, enabled = ?, settings = ? WHERE id = ?",
                 (name, int(enabled), json.dumps(settings), str(channel_id)),
@@ -2337,12 +2310,12 @@ class HubRegistry:
 
     def delete_channel(self, channel_id: UUID) -> None:
         """Delete the channel, with its mutes and its deliveries."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute("DELETE FROM channels WHERE id = ?", (str(channel_id),))
 
     def pair_channel(self, channel_id: UUID, code: str, user: ChannelUser) -> None:
         """Pair the channel with *user*, unless another sender of *code* paired it first."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE channels
@@ -2353,28 +2326,28 @@ class HubRegistry:
             )
 
     def mute(self, channel_id: UUID, instance_id: UUID) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO channel_mutes (channel_id, instance_id) VALUES (?, ?)",
                 (str(channel_id), str(instance_id)),
             )
 
     def unmute(self, channel_id: UUID, instance_id: UUID) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "DELETE FROM channel_mutes WHERE channel_id = ? AND instance_id = ?",
                 (str(channel_id), str(instance_id)),
             )
 
     def channel_sent(self, channel_id: UUID, at: datetime) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE channels SET last_sent_at = ? WHERE id = ?",
                 (at.isoformat(), str(channel_id)),
             )
 
     def channel_failed(self, channel_id: UUID, error: str, at: datetime) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE channels SET last_error = ?, last_error_at = ? WHERE id = ?",
                 (error, at.isoformat(), str(channel_id)),
@@ -2382,7 +2355,7 @@ class HubRegistry:
 
     def notification_id(self, instance_id: UUID, key: str) -> UUID | None:
         """The notification the instance raised under *key*, if it did."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT id FROM notifications WHERE instance_id = ? AND source_key = ?",
                 (str(instance_id), key),
@@ -2391,7 +2364,7 @@ class HubRegistry:
 
     def notifications_raised(self, instance_id: UUID, since: datetime) -> int:
         """How many notifications the instance raised since then."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) FROM notifications WHERE instance_id = ? AND raised_at >= ?",
                 (str(instance_id), since.isoformat()),
@@ -2411,7 +2384,7 @@ class HubRegistry:
     ) -> UUID:
         """Record the notification with a delivery on each channel, unless the instance raised
         *key* before. The id of the notification the key names."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             inserted = connection.execute(
                 """
                 INSERT INTO notifications (
@@ -2465,7 +2438,7 @@ class HubRegistry:
     def pending_deliveries(self, notification_id: UUID | None = None) -> list[PendingDelivery]:
         """The deliveries still to send, of one notification or of all, oldest first."""
         only = str(notification_id) if notification_id is not None else None
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT notifications.id, header, title, text, link, options, channel_id,
@@ -2490,7 +2463,7 @@ class HubRegistry:
         self, notification_id: UUID, channel_id: UUID, error: str, next_attempt: datetime
     ) -> None:
         """Count a failed send, and when the next one is due."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE notification_deliveries
@@ -2509,7 +2482,7 @@ class HubRegistry:
         sent_ref: SentRef | None = None,
         error: str | None = None,
     ) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 UPDATE notification_deliveries
@@ -2525,40 +2498,51 @@ class HubRegistry:
         instance_id: UUID | None = None,
         thread_id: UUID | None = None,
         notification_id: UUID | None = None,
+        before: UUID | None = None,
+        limit: int | None = None,
     ) -> list[Notification]:
-        """The notifications each given filter matches, oldest first."""
-        matching = """
-            SELECT id FROM notifications
-            WHERE (:instance IS NULL OR instance_id = :instance)
-                AND (:thread IS NULL OR thread_id = :thread)
-                AND (:notification IS NULL OR id = :notification)
+        """The notifications each given filter matches, oldest first.
+
+        With *before*, only those raised before that notification. With *limit*, only that many
+        of the newest.
         """
-        filters = {
-            "instance": str(instance_id) if instance_id is not None else None,
-            "thread": str(thread_id) if thread_id is not None else None,
-            "notification": str(notification_id) if notification_id is not None else None,
-        }
-        with self._connect() as connection:
+        where = ["1"]
+        parameters: list[str | int] = []
+        for column, value in (
+            ("instance_id", instance_id),
+            ("thread_id", thread_id),
+            ("id", notification_id),
+        ):
+            if value is not None:
+                where.append(f"{column} = ?")
+                parameters.append(str(value))
+        if before is not None:
+            where.append("rowid < (SELECT rowid FROM notifications WHERE id = ?)")
+            parameters.append(str(before))
+        with self._transaction() as connection:
             rows = connection.execute(
                 f"""
                 SELECT id, instance_id, thread_id, header, title, text, link, options, raised_at
-                FROM notifications WHERE id IN ({matching}) ORDER BY rowid
+                FROM notifications WHERE {" AND ".join(where)}
+                ORDER BY rowid DESC LIMIT ?
                 """,
-                filters,
-            ).fetchall()
+                [*parameters, -1 if limit is None else limit],
+            ).fetchall()[::-1]
+            page = json.dumps([row[0] for row in rows])
             deliveries = connection.execute(
-                f"""
+                """
                 SELECT notification_id, channel_id, status FROM notification_deliveries
-                WHERE notification_id IN ({matching}) ORDER BY rowid
+                WHERE notification_id IN (SELECT value FROM json_each(?)) ORDER BY rowid
                 """,
-                filters,
+                (page,),
             ).fetchall()
             replies = connection.execute(
-                f"""
+                """
                 SELECT notification_id, option, channel_id, received_at, status, outcome
-                FROM replies WHERE notification_id IN ({matching}) ORDER BY rowid
+                FROM replies WHERE notification_id IN (SELECT value FROM json_each(?))
+                ORDER BY rowid
                 """,
-                filters,
+                (page,),
             ).fetchall()
         delivered: dict[str, list[NotificationDelivery]] = {}
         for notification, channel_id, status in deliveries:
@@ -2595,7 +2579,7 @@ class HubRegistry:
 
     def sent_notification(self, channel_id: UUID, message: SentRef) -> Notification | None:
         """The notification the channel sent as *message*."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT notification_id FROM notification_deliveries
@@ -2615,7 +2599,7 @@ class HubRegistry:
         option: str | None,
         received_at: datetime,
     ) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO replies (id, notification_id, channel_id, option, received_at, status)
@@ -2634,7 +2618,7 @@ class HubRegistry:
     def received_replies(self, reply_id: UUID | None = None) -> list[ReceivedReply]:
         """The replies still to apply, one or all, oldest first."""
         only = str(reply_id) if reply_id is not None else None
-        with self._connect() as connection:
+        with self._transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT replies.id, replies.notification_id, header, title, text, link, options,
@@ -2678,7 +2662,7 @@ class HubRegistry:
 
     def answered(self, notification_id: UUID) -> bool:
         """Whether a reply with one of the notification's options was applied."""
-        with self._connect() as connection:
+        with self._transaction() as connection:
             row = connection.execute(
                 """
                 SELECT 1 FROM replies
@@ -2689,13 +2673,13 @@ class HubRegistry:
         return row is not None
 
     def reply_calling(self, reply_id: UUID, *, calling: bool) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE replies SET calling = ? WHERE id = ?", (int(calling), str(reply_id))
             )
 
     def settle_reply(self, reply_id: UUID, status: ReplyStatus, outcome: str) -> None:
-        with self._connect() as connection:
+        with self._transaction() as connection:
             connection.execute(
                 "UPDATE replies SET status = ?, outcome = ? WHERE id = ?",
                 (status.value, outcome, str(reply_id)),
@@ -2709,17 +2693,92 @@ _CHANNEL_COLUMNS = (
 )
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
+#: The statuses of a run that is not finished.
+UNFINISHED = tuple(status for status in FactoryRunStatus if status.value not in _FINISHED)
 #: The statuses a run stops in, which the hub tells the instance that handed it in.
 STOPS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED, FactoryRunStatus.NEEDS_HUMAN)
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    return _stored(datetime.now(UTC))
+
+
+def _stored(moment: datetime) -> str:
+    """A moment as the registry stores it: in UTC, so stored moments sort as text."""
+    return moment.astimezone(UTC).isoformat()
 
 
 def _work_item_key(work_item: Mapping[ValueName, StepValue]) -> str:
     """One work item as one string, whatever order its values came in."""
     return json.dumps(work_item, sort_keys=True)
+
+
+def _marks(values: Collection[object]) -> str:
+    """One placeholder for each value, for an IN list."""
+    return ", ".join("?" * len(values))
+
+
+def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
+    (
+        instance_id,
+        path,
+        manifest_id,
+        persona_name,
+        requested_revision,
+        source_revision,
+        image_id,
+        intended_state,
+        runtime_id,
+        prepared,
+        avatar_shape,
+        avatar_color,
+        home,
+        storage,
+        factory,
+        name,
+        recipe,
+        setup,
+        baseline,
+    ) = row
+    return ManagedInstance(
+        instance_id=UUID(instance_id),
+        path=Path(path),
+        manifest_id=manifest_id,
+        persona_name=persona_name,
+        requested_revision=requested_revision,
+        source_revision=source_revision,
+        image_id=image_id,
+        intended_state=IntendedState(intended_state),
+        runtime_id=runtime_id,
+        prepared=bool(prepared),
+        storage=tuple(
+            StorageItem(
+                kind=StorageKind(kind),
+                source=source,
+                destination=destination,
+                writable=bool(writable),
+            )
+            for kind, source, destination, writable in json.loads(storage)
+        ),
+        # Instances from before avatars have none recorded, and draw the default one.
+        avatar=(
+            Avatar(shape=AvatarShape(avatar_shape), color=AvatarColor(avatar_color))
+            if avatar_shape is not None
+            else DEFAULT_AVATAR
+        ),
+        factory=(
+            FactoryMember(
+                factory=factory,
+                name=name,
+                recipe=recipe,
+                setup=DeclaredSetup.model_validate_json(setup),
+                baseline=None if baseline is None else json.loads(baseline),
+            )
+            if factory is not None
+            else None
+        ),
+        home=bool(home),
+    )
 
 
 def _factory_run(row: tuple[str, ...]) -> FactoryRun:

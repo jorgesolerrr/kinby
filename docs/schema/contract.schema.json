@@ -5855,11 +5855,35 @@
       "additionalProperties": false,
       "description": "The notifications of one instance or one thread, or every one without either.",
       "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "instance_id": {
           "anyOf": [
             {
               "format": "uuid",
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
             },
             {
               "type": "null"
@@ -5886,6 +5910,17 @@
     "NotificationListResult": {
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "notifications": {
           "items": {
             "$ref": "#/$defs/Notification"
@@ -5894,7 +5929,8 @@
         }
       },
       "required": [
-        "notifications"
+        "notifications",
+        "cursor"
       ],
       "title": "NotificationListResult",
       "type": "object"

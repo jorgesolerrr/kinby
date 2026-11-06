@@ -145,10 +145,18 @@ class Outbox:
         return raised
 
     async def list(self, command: NotificationListCommand) -> NotificationListResult:
+        """A page of the newest notifications before the cursor. One more than the page is read,
+        to tell whether an older page is left."""
+        found = self._registry.notifications(
+            instance_id=command.instance_id,
+            thread_id=command.thread_id,
+            before=command.cursor,
+            limit=None if command.limit is None else command.limit + 1,
+        )
+        older = command.limit is not None and len(found) > command.limit
+        page = found[1:] if older else found
         return NotificationListResult(
-            notifications=self._registry.notifications(
-                instance_id=command.instance_id, thread_id=command.thread_id
-            )
+            notifications=page, cursor=page[0].notification_id if older else None
         )
 
     def resume(self) -> None:

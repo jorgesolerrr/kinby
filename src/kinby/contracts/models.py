@@ -3420,11 +3420,18 @@ class NotificationListCommand(ContractModel):
 
     instance_id: UUID | None = None
     thread_id: UUID | None = None
+    #: Where the previous page ended. The next page holds the notifications raised before it.
+    cursor: UUID | None = None
+    #: The most notifications on a page, the newest ones. Without one, a single page holds every
+    #: notification.
+    limit: int | None = Field(default=None, ge=1)
 
 
 class NotificationListResult(ContractModel):
     #: Oldest first.
     notifications: list[Notification]
+    #: What the next page holds the notifications raised before, or null on the last page.
+    cursor: UUID | None
 
 
 class NotificationReplyCommand(ContractModel):

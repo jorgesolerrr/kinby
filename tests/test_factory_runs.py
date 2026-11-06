@@ -2500,6 +2500,8 @@ def test_a_run_from_before_runs_named_their_instance_belongs_to_the_factorys_int
     coder, run_id = asyncio.run(before())
     hub.close()
     with sqlite3.connect(directory / "registry.sqlite") as connection:
+        connection.execute("DROP INDEX factory_runs_by_instance")
+        connection.execute("DROP INDEX factory_runs_by_creation")
         connection.execute("ALTER TABLE factory_runs DROP COLUMN instance_id")
     reopened = factory_hub(directory, FakeControl(), FakeRuntime(), files)
 

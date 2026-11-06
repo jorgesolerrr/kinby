@@ -189,6 +189,37 @@ def test_a_signal_moves_on_only_the_runs_its_own_instance_handed_in(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_signal_among_many_closed_runs_moves_on_only_the_open_run_it_matches(tmp_path):
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, WAIT_FILES)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        closed = []
+        for issue, status in [(7, FactoryRunStatus.DONE), (7, FactoryRunStatus.CANCELLED)] + [
+            (issue, FactoryRunStatus.DONE) for issue in range(100, 300)
+        ]:
+            run, _ = hub.registry.open_run(coder, "checks", {"issue": issue}, "babysit")
+            hub.registry.begin_attempt(run.run_id, "babysit", FactoryRunStatus.PARKED)
+            hub.registry.end_attempt(run.run_id, StepResult(ending=StepEnding.CLEAN, summary="."))
+            closed.append(hub.registry.move_run(run.run_id, status, None))
+        own = await handed_in(hub, coder, 7)
+        other = await handed_in(hub, coder, 8)
+        await parked(hub, own.run_id)
+        await parked(hub, other.run_id)
+        await signalled(hub, runtime, coder, COMMENT)
+        finished = await settled(hub, own.run_id)
+        await asyncio.sleep(0.05)
+        waiting = await detail(hub, other.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert (waiting.run.status, waiting.run.step) == (FactoryRunStatus.PARKED, "babysit")
+        assert [hub.registry.run(run.run_id) for run in closed] == closed
+        assert all(len(hub.registry.attempts(run.run_id)) == 1 for run in closed)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("body", "routine", "event", "answer"),
     [

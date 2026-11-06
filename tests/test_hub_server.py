@@ -145,10 +145,11 @@ def test_the_hub_issues_one_access_token_and_stores_only_its_hash(tmp_path: Path
     hub = hub_at(tmp_path / "hub")
     token = hub.access.issue()
     hub.close()
+    reopened = hub_at(tmp_path / "hub")
 
     assert token is not None
-    assert hub_at(tmp_path / "hub").access.issue() is None
-    assert hub.access.accepts(token) is True
+    assert reopened.access.issue() is None
+    assert reopened.access.accepts(token) is True
     stored = (tmp_path / "hub" / "registry.sqlite").read_bytes().decode("utf-8", errors="ignore")
     assert token not in stored
 

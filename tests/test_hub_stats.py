@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from statistics import median
 from uuid import UUID, uuid4
 
@@ -564,6 +564,31 @@ def test_a_failure_that_stopped_the_run_is_no_retry(tmp_path):
             0,
             None,
         )
+
+    asyncio.run(scenario())
+
+
+def test_run_usage_holds_only_the_runs_created_in_the_range_in_any_timezone(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        coder = await started_coder(hub, runtime)
+        runs = [
+            (await settled(hub, (await handed_in(hub, coder, i)).run_id)).run for i in (7, 8, 9)
+        ]
+        control.usage[_address(coder)] = _answer(_used())
+        middle = runs[1].created_at
+        east = timezone(timedelta(hours=5))
+
+        usage = await hub_client(hub, {Scope.HUB_READ}).call(
+            STATS_RUNS,
+            StatsRunsCommand(instance_id=coder, since=middle.astimezone(east), until=middle),
+        )
+
+        assert isinstance(usage, StatsRunsResult), usage
+        assert [run.run.run_id for run in usage.runs] == [runs[1].run_id]
 
     asyncio.run(scenario())
 

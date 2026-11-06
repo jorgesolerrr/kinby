@@ -1,4 +1,10 @@
-import type { Notification, NotificationRaised, View, ViewChange } from "@kinby/contract"
+import type {
+  Notification,
+  NotificationListResult,
+  NotificationRaised,
+  View,
+  ViewChange,
+} from "@kinby/contract"
 import { type Answers, fakeClock } from "@kinby/contract/testing"
 import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -81,14 +87,47 @@ describe("a thread's panel", () => {
 
     it("shows its title, text, options and that it was delivered", async () => {
       const { hub } = await notified([accepted], {
-        "notification.list": () => ({ notifications: [kept()] }),
+        "notification.list": () => ({ notifications: [kept()], cursor: null }),
       })
 
       expect(within(card()).getByText("Three emails need an answer.")).toBeDefined()
       expect(within(card()).getByRole("button", { name: "Archive them" })).toBeDefined()
       expect(within(card()).getByRole("button", { name: "Leave them" })).toBeDefined()
       expect(await within(card()).findByText("Delivered")).toBeDefined()
-      expect(hub.calls).toEqual([{ method: "notification.list", params: { thread_id: "t1" } }])
+      expect(hub.calls).toEqual([
+        { method: "notification.list", params: { thread_id: "t1", limit: 50 } },
+      ])
+    })
+
+    it("shows where one older than the newest page stands once the user asks", async () => {
+      const newer = kept({ notification_id: "n2", title: "Calendar sorted" })
+      const hub = hubClient({
+        "notification.list": ({ limit }): NotificationListResult =>
+          limit === 50
+            ? { notifications: [newer], cursor: "n2" }
+            : { notifications: [kept(), newer], cursor: null },
+      })
+      const events = thread(
+        ["turn-1", started("Sort my inbox")],
+        ["turn-1", raised],
+        ["turn-1", accepted],
+        ["turn-1", { ...raised, title: "Calendar sorted" }],
+        ["turn-1", { type: "notification.accepted", raised: 4, notification_id: "n2" }],
+      )
+      const { subscription } = openThread({}, undefined, hub, fakeClock())
+      await act(async () => {
+        subscription().subscribed(events.length)
+        for (const event of events) subscription().deliver(event)
+      })
+      const calendar = screen.getByRole("article", { name: "Calendar sorted" })
+      await within(calendar).findByText("Delivered")
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Show where “Inbox sorted” stands" }),
+      )
+
+      expect(await within(card()).findByText("Delivered")).toBeDefined()
+      expect(hub.calls.at(-1)?.params).toEqual({ thread_id: "t1", limit: 100 })
     })
 
     it("shows as not delivered when every delivery failed", async () => {
@@ -97,7 +136,7 @@ describe("a thread's panel", () => {
         { channel_id: "c2", status: "failed" as const },
       ]
       await notified([accepted], {
-        "notification.list": () => ({ notifications: [kept({ deliveries })] }),
+        "notification.list": () => ({ notifications: [kept({ deliveries })], cursor: null }),
       })
 
       expect(await within(card()).findByText("Not delivered")).toBeDefined()
@@ -107,7 +146,7 @@ describe("a thread's panel", () => {
       const told: NotificationRaised = { ...raised, options: [] }
       await notified(
         [accepted],
-        { "notification.list": () => ({ notifications: [kept(told)] }) },
+        { "notification.list": () => ({ notifications: [kept(told)], cursor: null }) },
         told,
       )
 
@@ -128,7 +167,7 @@ describe("a thread's panel", () => {
     it("answers an option through the hub, and shows it answering until the hub applies it", async () => {
       let replies: Notification["replies"] = []
       const { hub, clock } = await notified([accepted], {
-        "notification.list": () => ({ notifications: [kept({ replies })] }),
+        "notification.list": () => ({ notifications: [kept({ replies })], cursor: null }),
         "notification.reply": () => {
           replies = [reply("received")]
           return reply("received")
@@ -158,6 +197,7 @@ describe("a thread's panel", () => {
       await notified([accepted], {
         "notification.list": () => ({
           notifications: [kept({ replies: [reply("failed", outcome)] })],
+          cursor: null,
         }),
       })
 
@@ -169,7 +209,7 @@ describe("a thread's panel", () => {
     it("shows an answer sent through a channel once the turn it starts reaches the thread", async () => {
       let replies: Notification["replies"] = []
       const { subscription, sequence } = await notified([accepted], {
-        "notification.list": () => ({ notifications: [kept({ replies })] }),
+        "notification.list": () => ({ notifications: [kept({ replies })], cursor: null }),
       })
       await within(card()).findByText("Delivered")
 
@@ -223,7 +263,7 @@ describe("a thread's panel", () => {
       async function opened(notification: NotificationRaised, hubAnswers: Answers = {}) {
         const { title, options } = notification
         const hub = hubClient({
-          "notification.list": () => ({ notifications: [kept({ title, options })] }),
+          "notification.list": () => ({ notifications: [kept({ title, options })], cursor: null }),
           ...hubAnswers,
         })
         const events = thread(
