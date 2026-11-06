@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -84,6 +83,7 @@ from tests.helpers import (
     fixed_turn_preparation,
     no_routines,
     thread_events,
+    write_events,
 )
 from tests.test_routines import RoutineModel, instance_at
 from tests.test_scheduler import call
@@ -2454,7 +2454,7 @@ def test_stats_get_reads_a_log_from_before_origins_with_every_turn_under_chat(
 ) -> None:
     thread_id = uuid4()
     at = datetime(2026, 9, 1, 10, tzinfo=UTC)
-    lines = []
+    records = []
     for turn_id in (uuid4(), uuid4()):
         for event in _turn_events(
             thread_id,
@@ -2463,10 +2463,10 @@ def test_stats_get_reads_a_log_from_before_origins_with_every_turn_under_chat(
             TurnStarted(message="Hi", model="openai:gpt-5"),
             TurnCompleted(input_tokens=11, output_tokens=7),
         ):
-            stored = event.model_dump(mode="json")
+            stored = event.model_dump(mode="json") | {"sequence": len(records) + 1}
             stored["payload"].pop("origin", None)
-            lines.append(json.dumps(stored))
-    (tmp_path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            records.append(stored)
+    write_events(tmp_path, records)
 
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=EventLog(tmp_path)).dispatch(

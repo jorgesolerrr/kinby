@@ -47,6 +47,7 @@ from tests.helpers import (
     no_routines,
     thread_events,
     turn_config_stub,
+    write_events,
 )
 from tests.test_routines import instance_at, routine_file
 
@@ -197,13 +198,12 @@ def test_start_catches_up_once(tmp_path, catch_up, history, expected):
         if history:
             accepted = await call(dispatcher, "routine.run", name="news")
             await events_for(dispatcher, accepted.thread_id)
-            path = instance.manifest.state_dir / "events.jsonl"
-            events = [Event.model_validate_json(line) for line in path.read_text().splitlines()]
-            path.write_text(
-                "".join(
-                    e.model_copy(update={"timestamp": clock.now}).model_dump_json() + "\n"
-                    for e in events
-                )
+            write_events(
+                instance.manifest.state_dir,
+                [
+                    {**event.model_dump(mode="json"), "timestamp": clock.now.isoformat()}
+                    for event in EventLog(instance.manifest.state_dir).all_events()
+                ],
             )
         clock.now = datetime(2026, 9, 6, 10, tzinfo=UTC)
         dispatcher = runtime(instance, clock)
@@ -234,13 +234,12 @@ def test_interrupted_scheduled_run_does_not_catch_up_after_restart(tmp_path):
         await dispatcher.scheduler.interrupt()
         await ticking
 
-        path = instance.manifest.state_dir / "events.jsonl"
-        events = [Event.model_validate_json(line) for line in path.read_text().splitlines()]
-        path.write_text(
-            "".join(
-                event.model_copy(update={"timestamp": clock.now}).model_dump_json() + "\n"
-                for event in events
-            )
+        write_events(
+            instance.manifest.state_dir,
+            [
+                {**event.model_dump(mode="json"), "timestamp": clock.now.isoformat()}
+                for event in EventLog(instance.manifest.state_dir).all_events()
+            ],
         )
         clock.now = datetime(2026, 9, 6, 9, 3, tzinfo=UTC)
         restarted = runtime(instance, clock)
@@ -1098,17 +1097,12 @@ def test_repl_shows_pending_deliveries_only_for_signal_routines(
         dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, tzinfo=UTC)))
         accepted = await call(dispatcher, "routine.run", name="news")
         await events_for(dispatcher, accepted.thread_id)
-        event_log = EventLog(instance.manifest.state_dir)
-        events = list(event_log.all_events())
-        (instance.manifest.state_dir / "events.jsonl").write_text(
-            "".join(
-                event.model_copy(
-                    update={"timestamp": datetime(2026, 9, 6, 9, tzinfo=UTC)}
-                ).model_dump_json()
-                + "\n"
-                for event in events
-            ),
-            encoding="utf-8",
+        write_events(
+            instance.manifest.state_dir,
+            [
+                {**event.model_dump(mode="json"), "timestamp": "2026-09-06T09:00:00+00:00"}
+                for event in EventLog(instance.manifest.state_dir).all_events()
+            ],
         )
         assert dispatcher.scheduler is not None
         for body in ("opened", "labeled"):

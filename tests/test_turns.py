@@ -1,5 +1,4 @@
 import asyncio
-import json
 from collections.abc import Iterator
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -57,6 +56,7 @@ from tests.helpers import (
     fixed_turn_preparation,
     no_routines,
     thread_events,
+    write_events,
 )
 
 _APPROVAL_ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -1660,15 +1660,9 @@ def test_interrupt_during_approval_restore_prevents_resume(tmp_path: Path) -> No
 def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) -> None:
     async def scenario() -> None:
         _, created, accepted, requested = await _park_turn(tmp_path)
-        records_path = tmp_path / "events.jsonl"
-        records = [
-            json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()
-        ]
+        records = [event.model_dump(mode="json") for event in EventLog(tmp_path).all_events()]
         del records[0]["payload"]["permission_mode"]
-        records_path.write_text(
-            "".join(f"{json.dumps(record)}\n" for record in records),
-            encoding="utf-8",
-        )
+        write_events(tmp_path, records)
         runner = ParkingRunner(
             PreparedTurnRequest(
                 thread_id=created.id,

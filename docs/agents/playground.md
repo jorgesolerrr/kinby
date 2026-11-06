@@ -24,7 +24,7 @@ The deployed hub and the coders run on the playground box (netcup, Debian 13), s
 | CEC-Agent's test services | `cec-agent-test-postgres` and `cec-agent-test-minio`, from `/home/jorge/cec-agent-kinby/compose.yaml` |
 | Hub registry | `/home/jorge/kinby-hub/registry.sqlite`, which is `/hub/registry.sqlite` in the hub |
 | Hub access token | `/home/jorge/kinby-hub/access-token`. Pipe it and never print it. See `.claude/skills/e2e-pass/SKILL.md`. |
-| Instance events | `/home/jorge/kinby-hub/instances/<id>/.state/events.jsonl` |
+| Instance events | `/home/jorge/kinby-hub/instances/<id>/.state/instance.sqlite`. The box has no `sqlite3`: `docker exec <id> kinby thread show <thread-id> /instance` prints one thread's events. |
 
 ## Ready queries
 

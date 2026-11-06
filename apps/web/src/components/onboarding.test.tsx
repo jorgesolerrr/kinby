@@ -875,10 +875,16 @@ const skillRow = (name: string) =>
   within(within(screen.getByRole("list", { name: "Skills" })).getByRole("listitem", { name }))
 
 async function fillCoderSetup(user: UserEvent) {
-  await user.type(screen.getByLabelText("Model"), "anthropic:claude-sonnet-5")
-  await user.type(screen.getByLabelText("API key"), "sk-ant")
-  await user.type(screen.getByLabelText("Repository"), "https://github.com/owner/billing.git")
-  await user.type(screen.getByLabelText("GitHub token"), "ghp-test")
+  await fill(user, "Model", "anthropic:claude-sonnet-5")
+  await fill(user, "API key", "sk-ant")
+  await fill(user, "Repository", "https://github.com/owner/billing.git")
+  await fill(user, "GitHub token", "ghp-test")
+}
+
+/** Paste a value into a field: typing it would re-render the page on every key. */
+async function fill(user: UserEvent, label: string, value: string) {
+  await user.click(screen.getByLabelText(label))
+  await user.paste(value)
 }
 
 const sent = (caller: StubCaller) =>

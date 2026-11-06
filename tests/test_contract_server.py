@@ -40,6 +40,7 @@ from kinby.core.dispatcher import Dispatcher, ScheduledDispatcher
 from kinby.core.receiver import Receiver
 from kinby.core.turns import TurnOutcome
 from kinby.instance import Instance, Serve
+from tests.helpers import write_events
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FakeClock, ScriptedRunner, runtime
 from tests.test_serve import BlockingRoutineRunner
@@ -145,20 +146,21 @@ async def created_thread(dispatcher: ScheduledDispatcher) -> ThreadCreateResult:
 
 
 def store_history(state_dir: Path, thread_id: UUID, payloads: list[Payload]) -> None:
-    """Write a thread's history in one pass: appending event by event is quadratic."""
+    """Write a thread's history in one pass."""
     turn_id = uuid4()
-    records = [
-        Event(
-            sequence=sequence,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            payload=payload,
-            timestamp=datetime(2026, 9, 18, tzinfo=UTC),
-        ).model_dump_json()
-        for sequence, payload in enumerate(payloads, start=1)
-    ]
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "events.jsonl").write_text("".join(f"{record}\n" for record in records))
+    write_events(
+        state_dir,
+        [
+            Event(
+                sequence=sequence,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                payload=payload,
+                timestamp=datetime(2026, 9, 18, tzinfo=UTC),
+            ).model_dump(mode="json")
+            for sequence, payload in enumerate(payloads, start=1)
+        ],
+    )
 
 
 def test_a_call_returns_its_result_and_a_wrong_token_never_upgrades(tmp_path: Path) -> None:

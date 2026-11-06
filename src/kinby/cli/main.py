@@ -65,10 +65,12 @@ from kinby.contracts import (
 from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
 from kinby.core.clock import utc_now, utc_today
 from kinby.core.contract_server import ContractServer
+from kinby.core.events import EventLog
 from kinby.core.pricing import instance_prices
 from kinby.core.receiver import Receiver
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
 from kinby.core.session_recalls import keep_recall
+from kinby.core.threads import ThreadStore
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     FeedbackPolicy,
@@ -82,6 +84,7 @@ from kinby.instance import (
     load_instance,
     parse_listen,
 )
+from kinby.instance.database import UnmigratedStateError
 from kinby.instance.permissions import load_permissions
 from kinby.instance.recap import load_recap_lens
 from kinby.memory import (
@@ -407,6 +410,15 @@ async def _show_stats(
         f"{result.model_dump_json(indent=2)}\n",
         encoding="utf-8",
     )
+    return 0
+
+
+def _show_thread(state_dir: Path, thread_id: UUID) -> int:
+    if not ThreadStore(state_dir).exists(thread_id):
+        print(f'Thread "{thread_id}" was not found.', file=sys.stderr)
+        return 1
+    for event in EventLog(state_dir).stored(thread_id):
+        print(event.model_dump_json())
     return 0
 
 
@@ -915,7 +927,7 @@ def main(
     )
     thread_parser = subparsers.add_parser(
         "thread",
-        help="create, list and archive threads",
+        help="create, list, show and archive threads",
     )
     thread_subparsers = thread_parser.add_subparsers(dest="thread_command")
     thread_create_parser = thread_subparsers.add_parser(
@@ -941,6 +953,12 @@ def main(
         type=RoutineName,
         help="list only this routine's runs, within the filter",
     )
+    thread_show_parser = thread_subparsers.add_parser(
+        "show",
+        help="print a thread's events as JSON, one per line",
+    )
+    thread_show_parser.add_argument("thread_id", type=UUID, help="thread to show")
+    _add_instance_selector(thread_show_parser, "instance that owns the thread")
     thread_archive_parser = thread_subparsers.add_parser(
         "archive",
         help="archive a thread, which leaves the sidebar",
@@ -1108,6 +1126,9 @@ def main(
             case "thread" if args.thread_command == "list":
                 client = _contract_client(_load_selected_instance(args), now)
                 return asyncio.run(_list_threads(client, args.filter, args.routine))
+            case "thread" if args.thread_command == "show":
+                state_dir = _load_selected_instance(args).manifest.state_dir
+                return _show_thread(state_dir, args.thread_id)
             case "thread" if args.thread_command is not None:
                 instance = _load_selected_instance(args)
                 client = _contract_client(instance, now)
@@ -1155,6 +1176,7 @@ def main(
     except (
         InstanceNotFoundError,
         InstanceBusyError,
+        UnmigratedStateError,
         InsecureContractUrl,
         ManifestError,
         NodeNotFound,

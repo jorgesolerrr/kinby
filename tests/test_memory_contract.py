@@ -4,8 +4,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import ErrorCode, ErrorEnvelope, Scope
+from kinby.contracts import ErrorCode, ErrorEnvelope, Event, Scope
 from kinby.core import LangGraphRunner
+from kinby.core.events import EventLog
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
 
@@ -420,9 +421,8 @@ def _graph_files(instance_path: Path) -> dict[str, str]:
     return {path.stem: path.read_text(encoding="utf-8") for path in graph_path.glob("*.md")}
 
 
-def _events(instance_path: Path) -> bytes:
-    events_path = instance_path / ".state" / "events.jsonl"
-    return events_path.read_bytes() if events_path.is_file() else b""
+def _events(instance_path: Path) -> list[Event]:
+    return list(EventLog(instance_path / ".state").all_events())
 
 
 def _refused(result: object, code: ErrorCode) -> ErrorEnvelope:
