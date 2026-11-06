@@ -20,7 +20,7 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
 )
-from kinby.core import LangGraphRunner
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext
 from kinby.instance import Instance, load_instance
 from kinby.instance.config_changes import ConfigChangeLog

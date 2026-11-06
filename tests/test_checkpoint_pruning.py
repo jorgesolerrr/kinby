@@ -16,8 +16,8 @@ from kinby.contracts import (
     TurnCompleted,
     is_turn_closing,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import Instance, load_instance
 from tests.helpers import thread_events
 from tests.test_browser_tools import FakeBrowser

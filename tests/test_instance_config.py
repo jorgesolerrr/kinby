@@ -24,9 +24,9 @@ from kinby.contracts import (
     RoutineTrigger,
     SystemPrompt,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.errors import RoutineNotFound
 from kinby.core.receiver import Receiver
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import Serve
 from kinby.instance.config_changes import ConfigChangeLog

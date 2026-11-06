@@ -27,10 +27,10 @@ from kinby.contracts import (
     TurnStarted,
     is_turn_closing,
 )
-from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher, turn_config
+from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher, turn_config
 from kinby.core.events import EventLog
 from kinby.core.snapshots import SNAPSHOTS_DIR
-from kinby.core.turn_runner import ChatModel
+from kinby.core.turn_runner import ChatModel, LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome, TurnRequest
 from kinby.instance import Budgets, Instance, ModelName, load_instance
 from tests.helpers import GRAPH_EVENT_TIMEOUT, thread_events

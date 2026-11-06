@@ -10,7 +10,6 @@ from html import escape
 from typing import Annotated
 
 import httpx
-import trafilatura
 from pydantic import Field
 
 from kinby.instance import SearchBackend
@@ -64,6 +63,10 @@ async def web_fetch(url: str) -> str:
         response = await _guarded_get(client, url)
     media_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
     if "html" in media_type:
+        # trafilatura loads on the first web read, so an instance that never reads one goes
+        # without it.
+        import trafilatura
+
         page = response.text
         extract = partial(
             trafilatura.extract, output_format="markdown", include_links=True, url=str(response.url)

@@ -30,9 +30,9 @@ from kinby.contracts import (
     TurnStarted,
     Warning,
 )
-from kinby.core import boot_instance
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
+from kinby.core.runtime import boot_instance
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import TurnOutcome
 from kinby.memory import GraphStore, RecapWriter

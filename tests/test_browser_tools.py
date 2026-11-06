@@ -42,9 +42,9 @@ from kinby.contracts import (
     VaultField,
     is_turn_closing,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext
 from kinby.hub.browser import BrowserLimits
 from kinby.instance import Instance, load_instance

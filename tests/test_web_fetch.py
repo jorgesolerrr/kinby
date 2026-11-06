@@ -26,8 +26,8 @@ from kinby.contracts import (
     ToolResult,
     is_turn_closing,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.gate import AUTHORED_RULE, GateDecision, evaluate
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext
 from kinby.instance import Instance, load_instance
 from kinby.instance.permissions import SHIPPED_POLICY, GateAction

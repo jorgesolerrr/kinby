@@ -5,8 +5,8 @@ from pathlib import Path
 from uuid import UUID
 
 from kinby.contracts import ErrorCode, ErrorEnvelope, Event, Scope
-from kinby.core import LangGraphRunner
 from kinby.core.events import EventLog
+from kinby.core.turn_runner import LangGraphRunner
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
 

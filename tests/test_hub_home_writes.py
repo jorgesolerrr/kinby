@@ -44,9 +44,9 @@ from kinby.contracts import (
     TurnStarted,
     is_turn_closing,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn
 from kinby.hub import Hub
 from kinby.hub.approvals import HomeApprovals

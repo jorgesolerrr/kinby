@@ -14,23 +14,10 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from urllib.parse import quote, quote_plus, urljoin, urlsplit
 from uuid import UUID
 
-from playwright.async_api import (
-    Browser,
-    BrowserContext,
-    CDPSession,
-    Locator,
-    Playwright,
-    async_playwright,
-)
-from playwright.async_api import Download as PlaywrightDownload
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page as PlaywrightPage
-from playwright.async_api import StorageState as PlaywrightState
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import TypeAdapter
 
 from kinby.contracts import (
@@ -72,6 +59,18 @@ from kinby.hub.browser import BrowserLimits, BrowserRuntime, HubBrowsers
 from kinby.hub.browser_profiles import BrowserProfiles, StorageState
 from kinby.hub.vault import Vault
 from kinby.plugins.defaults.web import REFUSED_HEADER, capped
+
+if TYPE_CHECKING:
+    from playwright.async_api import (
+        Browser,
+        BrowserContext,
+        CDPSession,
+        Locator,
+        Playwright,
+    )
+    from playwright.async_api import Download as PlaywrightDownload
+    from playwright.async_api import Page as PlaywrightPage
+    from playwright.async_api import StorageState as PlaywrightState
 
 _NAVIGATION_MS = 30_000
 #: How sharp a takeover's live view is, out of 100.
@@ -300,6 +299,8 @@ class PlaywrightBrowser:
             # A tab the page opened since the last takeover is the one the user's input reaches.
             if opened.screencast is None or opened.screencast.page is not page:
                 if opened.screencast is not None:
+                    from playwright.async_api import Error as PlaywrightError
+
                     with suppress(PlaywrightError):
                         await opened.screencast.session.detach()
                 opened.screencast = await _screencast(page)
@@ -372,6 +373,8 @@ class PlaywrightBrowser:
         # A TOTP code is used once, and its six digits could match unrelated text (ADR 0114).
         if action.field != VaultField.TOTP:
             opened.filled.add(value)
+        from playwright.async_api import Error as PlaywrightError
+
         try:
             await element.fill(value, timeout=_ELEMENT_MS)
         except PlaywrightError:
@@ -422,6 +425,8 @@ class PlaywrightBrowser:
             return
         if opened.idle is not None:
             opened.idle.cancel()
+        from playwright.async_api import Error as PlaywrightError
+
         try:
             # The turn has ended, so a browser service that already went away changes nothing.
             with suppress(PlaywrightError):
@@ -439,6 +444,10 @@ async def _connected(
     address: str, state: StorageState | None, profile: BrowserProfileName | None
 ) -> _Opened:
     """A context on the browser at *address*, opened with the profile's *state*."""
+    # Playwright loads when the hub opens its first browser, not when the hub starts.
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import async_playwright
+
     playwright = await async_playwright().start()
     try:
         browser = await playwright.chromium.connect(address)
@@ -465,6 +474,8 @@ def _kept(state: PlaywrightState) -> StorageState:
 def _on_the_page(opened: _Opened | None = None) -> Iterator[None]:
     """Tell the turn what failed on its page, which the hub would otherwise hide, with the
     values the vault filled into *opened* hidden."""
+    from playwright.async_api import Error as PlaywrightError
+
     try:
         yield
     except PlaywrightError as exc:
@@ -521,6 +532,8 @@ async def _run(page: PlaywrightPage, action: BrowserPageAction) -> None:
 
 
 async def _click(element: Locator, ref: str) -> None:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
     try:
         await element.click(timeout=_ELEMENT_MS)
     except PlaywrightTimeoutError as error:
@@ -559,6 +572,8 @@ async def _downloaded(downloads: list[PlaywrightDownload]) -> tuple[BrowserFile,
 
 async def _screencast(page: PlaywrightPage) -> _Screencast:
     """Start the page's live view, which shows a new frame each time the page changes."""
+    from playwright.async_api import Error as PlaywrightError
+
     session = await page.context.new_cdp_session(page)
     screencast = _Screencast(page, session)
 

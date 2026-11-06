@@ -31,11 +31,11 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
 from kinby.core.errors import CodeStepFailed
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE

@@ -23,8 +23,9 @@ from kinby.contracts import (
 )
 from kinby.instance import Instance, inspect_instance
 from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
-from kinby.plugins import mcp
-from kinby.plugins.mcp import STDERR_TAIL, failed_mcp_servers
+from kinby.plugins import mcp_connection
+from kinby.plugins.mcp import failed_mcp_servers
+from kinby.plugins.mcp_connection import STDERR_TAIL
 from tests.test_hub import hub_at, hub_client, started_instance
 from tests.test_instance_code import turn
 from tests.test_routines import instance_at
@@ -214,7 +215,7 @@ def test_only_the_tail_of_a_noisy_servers_stderr_is_told(tmp_path: Path) -> None
 def test_a_server_that_never_answers_is_told_to_have_timed_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(mcp, "CONNECT_SECONDS", 0.1)
+    monkeypatch.setattr(mcp_connection, "CONNECT_SECONDS", 0.1)
 
     message = failure(instance_at(tmp_path), echo("look", package="silent-server"))
 

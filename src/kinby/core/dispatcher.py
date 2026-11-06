@@ -1,21 +1,17 @@
-"""Put scope and payload checks on the one path every client call crosses."""
+"""The instance's contract methods."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping
-from contextlib import aclosing
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import cast, overload
+from typing import overload
 from uuid import UUID, uuid4
-
-from pydantic import ValidationError
 
 from kinby.contracts import (
     CONFIG_HISTORY,
     CONTRACT_VERSION,
-    INSTANCE_DRAIN,
     INSTANCE_PROBE,
     MANIFEST_GET,
     MANIFEST_SET,
@@ -73,25 +69,18 @@ from kinby.contracts import (
     VIEW_LIST,
     VIEW_SUBSCRIBE,
     AcceptedResult,
-    Capability,
-    ContractModel,
-    ErrorCode,
-    ErrorEnvelope,
     Event,
     InstanceProbeCommand,
     InstanceProbeResult,
-    Method,
     NodeId,
     PermissionMode,
     RunStop,
     RunStopped,
-    Scope,
     StatsGetCommand,
     StatsGetResult,
     StepResult,
     StepRunCommand,
     Stream,
-    Subscription,
     ThreadArchiveCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
@@ -111,12 +100,13 @@ from kinby.contracts import (
 )
 from kinby.core.clock import utc_now
 from kinby.core.config import InstanceConfig
-from kinby.core.errors import CoreError, TurnNotFound, TurnOpen
+from kinby.core.errors import TurnNotFound, TurnOpen
 from kinby.core.events import EventLog
 from kinby.core.held_results import HeldResults
 from kinby.core.memory import InstanceMemory
 from kinby.core.models import count_tokens
 from kinby.core.pricing import SHIPPED_PRICES
+from kinby.core.routing import Dispatcher, instance_capabilities
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import (
@@ -130,7 +120,6 @@ from kinby.core.stats import (
 from kinby.core.steps import run_step
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.turn_metrics import TurnKey, turn_metrics
-from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.core.views import InstanceViews
@@ -139,35 +128,6 @@ from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
 from kinby.plugins.browser import BrowserService
 from kinby.plugins.hub_browser import HubBrowser
-
-Handler = Callable[[ContractModel], Awaitable[ContractModel]]
-SubscriptionHandler = Callable[[ContractModel], Awaitable[Stream[ContractModel]]]
-_SUBSCRIPTION_FAILED = ErrorEnvelope(
-    code=ErrorCode.INTERNAL,
-    message="The subscription failed unexpectedly.",
-    retryable=False,
-)
-
-
-async def _guarded(items: AsyncGenerator[ContractModel]) -> AsyncGenerator[ContractModel]:
-    """Turn a failure mid-stream into a last item, so a subscriber always sees why it ended."""
-    try:
-        async with aclosing(items):
-            async for item in items:
-                yield item
-    except Exception:
-        yield _SUBSCRIPTION_FAILED
-
-
-@dataclass(frozen=True)
-class Route[RouteHandler]:
-    scope: Scope
-    command: type[ContractModel]
-    handler: RouteHandler
-    alternative_scope: Scope | None = None
-
-    def admits(self, scopes: Collection[Scope]) -> bool:
-        return self.scope in scopes or self.alternative_scope in scopes
 
 
 @dataclass(frozen=True)
@@ -185,119 +145,6 @@ class TurnConfig:
 class ScheduledTurnConfig:
     turns: TurnConfig
     scheduler: SchedulerConfig
-
-
-class Dispatcher:
-    def __init__(self) -> None:
-        self._routes: dict[str, Route[Handler]] = {}
-        self._subscription_routes: dict[str, Route[SubscriptionHandler]] = {}
-
-    def register[Command: ContractModel, Result: ContractModel](
-        self,
-        method: Method[Command, Result],
-        handler: Callable[[Command], Awaitable[Result]],
-    ) -> None:
-        self._routes[method.name] = Route(
-            method.scope,
-            method.command,
-            cast(Handler, handler),
-            method.alternative_scope,
-        )
-
-    def register_subscription[Command: ContractModel, Item: ContractModel](
-        self,
-        subscription: Subscription[Command, Item],
-        handler: Callable[[Command], Awaitable[Stream[Item]]],
-    ) -> None:
-        self._subscription_routes[subscription.name] = Route(
-            subscription.scope,
-            subscription.command,
-            cast(SubscriptionHandler, handler),
-        )
-
-    @staticmethod
-    def _validate_call[RouteHandler](
-        routes: Mapping[str, Route[RouteHandler]],
-        method: str,
-        payload: Mapping[str, object],
-        scopes: Collection[Scope],
-    ) -> tuple[Route[RouteHandler], ContractModel] | ErrorEnvelope:
-        route = routes.get(method)
-        if route is None:
-            return ErrorEnvelope(
-                code=ErrorCode.NOT_FOUND,
-                message=f'Method "{method}" was not found.',
-                retryable=False,
-            )
-        if not route.admits(scopes):
-            return ErrorEnvelope(
-                code=ErrorCode.PERMISSION_DENIED,
-                message=f'Missing required scope "{route.scope.value}".',
-                retryable=False,
-            )
-        try:
-            command = route.command.model_validate(payload)
-        except ValidationError as exc:
-            return ErrorEnvelope(
-                code=ErrorCode.INVALID_ARGUMENT,
-                message=f'Invalid payload for "{method}": {exc}',
-                retryable=False,
-            )
-        return route, command
-
-    async def dispatch(
-        self,
-        method: str,
-        payload: Mapping[str, object],
-        scopes: Collection[Scope],
-    ) -> ContractModel:
-        call = self._validate_call(self._routes, method, payload, scopes)
-        if isinstance(call, ErrorEnvelope):
-            return call
-        route, command = call
-        try:
-            return await route.handler(command)
-        except CoreError as exc:
-            return exc.envelope()
-        except Exception:
-            return ErrorEnvelope(
-                code=ErrorCode.INTERNAL,
-                message="The method failed unexpectedly.",
-                retryable=False,
-            )
-
-    def handles[Command: ContractModel, Result: ContractModel](
-        self,
-        method: Method[Command, Result],
-    ) -> bool:
-        return method.name in self._routes
-
-    async def subscribe(
-        self,
-        method: str,
-        payload: Mapping[str, object],
-        scopes: Collection[Scope],
-    ) -> Stream[ContractModel] | ErrorEnvelope:
-        call = self._validate_call(self._subscription_routes, method, payload, scopes)
-        if isinstance(call, ErrorEnvelope):
-            return call
-        route, command = call
-        try:
-            stream = await route.handler(command)
-        except CoreError as exc:
-            return exc.envelope()
-        except Exception:
-            return _SUBSCRIPTION_FAILED
-        return Stream(stream.head_sequence, _guarded(stream.items), _close=stream._close)
-
-
-def instance_capabilities(dispatcher: Dispatcher) -> list[Capability]:
-    """What a hub may ask of this instance: the socket, plus the lifecycle methods it serves."""
-    return [
-        Capability.WS,
-        *([Capability.DRAIN] if dispatcher.handles(INSTANCE_DRAIN) else []),
-        *([Capability.STEP_ONCE] if dispatcher.handles(STEP_RUN) else []),
-    ]
 
 
 class ScheduledDispatcher(Dispatcher):
@@ -580,6 +427,9 @@ async def turn_config(
     model_override: str | None = None,
 ) -> TurnConfig:
     """Build model turns from an instance, reloading its model at each turn."""
+    # LangGraph loads where an instance builds its turns, so `kinby hub` goes without it.
+    from kinby.core.turn_runner import LangGraphRunner
+
     browser = HubBrowser()
     runner = LangGraphRunner(
         instance,

@@ -28,10 +28,10 @@ from kinby.contracts import (
     UserOrigin,
     is_turn_closing,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.errors import InstanceUnavailable
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import Turns
 from kinby.hub import Hub, relay
 from kinby.hub.models import InstanceEndpoint

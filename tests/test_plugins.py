@@ -36,7 +36,8 @@ from kinby.contracts import (
     TurnInterrupted,
     Warning,
 )
-from kinby.core import Dispatcher, LangGraphRunner, TurnConfig, build_dispatcher
+from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import Instance, SearchBackend, load_instance
 from kinby.plugins import Tool, ToolContext, tool
 from kinby.plugins.defaults.files import grep
