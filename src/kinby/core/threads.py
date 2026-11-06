@@ -36,10 +36,10 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.errors import ThreadNotFound
+from kinby.instance.database import open_database
 from kinby.instance.permissions import GatePolicy, constrain_mode
-from kinby.jsonl import append_line, whole_lines
 
-THREADS_NAME = "threads.jsonl"
+_COLUMNS = "id, title, created_at, archived"
 #: The most characters a title taken from a thread's first message has.
 TITLE_LENGTH = 60
 _NOTIFYING = (NotificationRaised, NotificationAccepted, NotificationRefused)
@@ -71,16 +71,17 @@ class PendingTakeover:
 
 
 class ThreadStore:
-    """Append-only: a rename or an archive appends the thread's record again, and its latest
-    record wins.
-    """
+    """Each thread's record, which a rename or an archive changes."""
 
     def __init__(self, state_dir: Path) -> None:
-        self._path = state_dir / THREADS_NAME
+        self._db = open_database(state_dir)
 
     def create(self, title: str | None) -> ThreadCreateResult:
         thread = ThreadRecord(id=uuid4(), title=title, created_at=datetime.now(UTC))
-        self._append(thread)
+        self._db.execute(
+            "INSERT INTO threads VALUES (?, ?, ?, ?)",
+            (str(thread.id), thread.title, thread.created_at.isoformat(), thread.archived),
+        )
         return ThreadCreateResult(id=thread.id, created_at=thread.created_at)
 
     def rename(self, thread_id: UUID, title: str) -> ThreadRecord:
@@ -94,14 +95,14 @@ class ThreadStore:
 
     def threads(self) -> list[ThreadRecord]:
         """Each thread once, in the order they were created."""
-        latest = {
-            thread.id: thread
-            for thread in map(ThreadRecord.model_validate_json, whole_lines(self._path))
-        }
-        return list(latest.values())
+        rows = self._db.execute(f"SELECT {_COLUMNS} FROM threads ORDER BY rowid")
+        return [_record(*row) for row in rows]
 
     def thread(self, thread_id: UUID) -> ThreadRecord | None:
-        return next((thread for thread in self.threads() if thread.id == thread_id), None)
+        row = self._db.execute(
+            f"SELECT {_COLUMNS} FROM threads WHERE id = ?", (str(thread_id),)
+        ).fetchone()
+        return None if row is None else _record(*row)
 
     def exists(self, thread_id: UUID) -> bool:
         return self.thread(thread_id) is not None
@@ -113,11 +114,20 @@ class ThreadStore:
             raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
         changed = thread.model_copy(update=update)
         if changed != thread:
-            self._append(changed)
+            self._db.execute(
+                "UPDATE threads SET title = ?, archived = ? WHERE id = ?",
+                (changed.title, changed.archived, str(thread_id)),
+            )
         return changed
 
-    def _append(self, thread: ThreadRecord) -> None:
-        append_line(self._path, thread.model_dump_json())
+
+def _record(thread_id: str, title: str | None, created_at: str, archived: int) -> ThreadRecord:
+    return ThreadRecord(
+        id=UUID(thread_id),
+        title=title,
+        created_at=datetime.fromisoformat(created_at),
+        archived=bool(archived),
+    )
 
 
 def first_message_title(message: str) -> str:

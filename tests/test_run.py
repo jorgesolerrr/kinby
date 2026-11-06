@@ -5,12 +5,13 @@ from pathlib import Path
 from queue import Queue
 from threading import Event as ThreadEvent
 from threading import Thread
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from kinby.cli import main
 from kinby.contracts import (
+    Event,
     MemoryRecapped,
     PermissionMode,
     ToolCall,
@@ -100,12 +101,29 @@ def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeyp
     state_files = {path.name for path in (instance / ".state").iterdir()}
     assert exit_code == 0, (captured.out, captured.err)
     assert state_files <= {
-        "threads.jsonl",
-        "events.jsonl",
+        "instance.sqlite",
+        "instance.sqlite-wal",
+        "instance.sqlite-shm",
         "checkpoints.sqlite",
         "snapshots.git",
         "runtime.lock",
     }
+
+
+def test_an_unmigrated_state_directory_refuses_to_start_and_names_the_script(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    (instance / ".state").mkdir(exist_ok=True)
+    (instance / ".state" / "events.jsonl").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr("sys.stdin", StringIO(""))
+
+    exit_code = main(["repl", str(instance)])
+
+    assert exit_code == 1
+    assert "scripts/migrate_instance_database.py" in capsys.readouterr().err
+    assert not (instance / ".state" / "instance.sqlite").exists()
 
 
 def test_run_catches_up_uncovered_turns_before_waiting_for_input(
@@ -247,6 +265,49 @@ def test_run_resumes_an_archived_thread(
     assert exit_code == 0
     assert run_output.err == ""
     assert run_output.out.endswith("> ")
+
+
+def test_thread_show_prints_the_threads_events_as_json_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    main(["thread", "create", str(instance)])
+    thread_id = UUID(capsys.readouterr().out.splitlines()[0].removeprefix("id: "))
+    event_log = EventLog(load_instance(instance).manifest.state_dir)
+    turn_id = uuid4()
+
+    async def turn() -> list[Event]:
+        await event_log.append(uuid4(), turn_id, TurnStarted(message="Other", model="openai:gpt-5"))
+        return [
+            await event_log.append(
+                thread_id, turn_id, TurnStarted(message="Hello", model="openai:gpt-5")
+            ),
+            await event_log.append(
+                thread_id, turn_id, TurnCompleted(input_tokens=3, output_tokens=2)
+            ),
+        ]
+
+    appended = asyncio.run(turn())
+
+    exit_code = main(["thread", "show", str(thread_id), str(instance)])
+    shown = capsys.readouterr()
+
+    assert exit_code == 0
+    assert [Event.model_validate_json(line) for line in shown.out.splitlines()] == appended
+
+
+def test_thread_show_rejects_an_unknown_thread(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    thread_id = uuid4()
+
+    exit_code = main(["thread", "show", str(thread_id), str(instance)])
+
+    assert exit_code == 1
+    assert f'Thread "{thread_id}" was not found.' in capsys.readouterr().err
 
 
 def test_run_rejects_an_unknown_thread(

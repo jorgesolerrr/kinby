@@ -2207,6 +2207,17 @@ def test_the_session_digest_counts_each_memory_search_by_how_much_the_next_input
     )
 
 
+def test_a_session_killed_mid_write_digests_its_whole_lines(tmp_path: Path) -> None:
+    _implementing_session(tmp_path)
+    claude_dir = tmp_path / ".state" / "claude"
+    whole = digest_session(claude_dir, CodingSessionId(_SESSION))
+    [transcript] = claude_dir.glob(f"projects/*/{_SESSION}.jsonl")
+    with transcript.open("a", encoding="utf-8") as lines:
+        lines.write('{"type": "assistant", "message": {"id": "m9", "usa')
+
+    assert digest_session(claude_dir, CodingSessionId(_SESSION)) == whole
+
+
 def test_a_missing_session_file_still_writes_an_episode(tmp_path: Path) -> None:
     async def scenario() -> None:
         event_log = EventLog(tmp_path / ".state")

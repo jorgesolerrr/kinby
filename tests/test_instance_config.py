@@ -205,30 +205,7 @@ def test_config_history_lists_the_newest_first_by_file(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_config_history_skips_a_torn_last_change_and_the_next_append_drops_it(
-    tmp_path: Path,
-) -> None:
-    def change(diff: str) -> ConfigChange:
-        return ConfigChange(
-            at=datetime(2026, 10, 11, tzinfo=UTC),
-            file=ConfigFile("SYSTEM.md"),
-            actor=ConfigActor.APP,
-            diff=diff,
-        )
-
-    log = ConfigChangeLog(tmp_path)
-    log.append(change("first"))
-    with (tmp_path / "config-changes.jsonl").open("a", encoding="utf-8") as changes:
-        changes.write('{"at": "2026-10-')
-
-    assert log.history(None, 10) == [change("first")]
-
-    log.append(change("second"))
-
-    assert ConfigChangeLog(tmp_path).history(None, 10) == [change("second"), change("first")]
-
-
-def test_config_changes_appended_at_once_over_a_torn_tail_are_all_kept(tmp_path: Path) -> None:
+def test_config_changes_appended_at_once_are_all_kept(tmp_path: Path) -> None:
     writers = 8
 
     def change(diff: str) -> ConfigChange:
@@ -240,21 +217,19 @@ def test_config_changes_appended_at_once_over_a_torn_tail_are_all_kept(tmp_path:
         )
 
     for attempt in range(20):
-        log = ConfigChangeLog(tmp_path / str(attempt))
-        log.append(change("whole"))
-        with (tmp_path / str(attempt) / "config-changes.jsonl").open("a") as changes:
-            changes.write('{"at": "2026-10-')
+        state_dir = tmp_path / str(attempt)
         start = Barrier(writers)
 
-        def append(writer: int, log: ConfigChangeLog = log, start: Barrier = start) -> None:
+        def append(writer: int, state_dir: Path = state_dir, start: Barrier = start) -> None:
+            log = ConfigChangeLog(state_dir)
             start.wait()
             log.append(change(str(writer)))
 
         with ThreadPoolExecutor(writers) as pool:
             list(pool.map(append, range(writers)))
 
-        kept = {kept.diff for kept in log.history(None, writers + 1)}
-        assert kept == {"whole", *map(str, range(writers))}
+        kept = {kept.diff for kept in ConfigChangeLog(state_dir).history(None, writers)}
+        assert kept == set(map(str, range(writers)))
 
 
 def test_an_agent_write_in_a_turn_records_its_thread_and_turn(tmp_path: Path) -> None:
@@ -581,21 +556,13 @@ def test_a_routine_change_records_the_directory_hash_and_a_delete_records_none(
     asyncio.run(scenario())
 
 
-def test_a_log_line_written_before_the_hash_still_reads(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        instance = instance_at(tmp_path)
-        instance.manifest.state_dir.mkdir(parents=True, exist_ok=True)
-        (instance.manifest.state_dir / "config-changes.jsonl").write_text(
-            '{"at":"2026-09-28T10:00:00Z","file":"SYSTEM.md","actor":"app",'
-            '"thread_id":null,"turn_id":null,"diff":""}\n',
-            encoding="utf-8",
-        )
+def test_a_change_recorded_before_the_hash_still_reads() -> None:
+    change = ConfigChange.model_validate_json(
+        '{"at":"2026-09-28T10:00:00Z","file":"SYSTEM.md","actor":"app",'
+        '"thread_id":null,"turn_id":null,"diff":""}'
+    )
 
-        [change] = (await call(_dispatcher(tmp_path), "config.history", limit=10)).changes
-
-        assert (change.file, change.actor, change.hash) == ("SYSTEM.md", "app", None)
-
-    asyncio.run(scenario())
+    assert (change.file, change.actor, change.hash) == ("SYSTEM.md", "app", None)
 
 
 def test_routine_delete_over_a_change_since_the_read_is_stale(tmp_path: Path) -> None:

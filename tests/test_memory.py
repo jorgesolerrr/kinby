@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from kinby.core.events import EventLog
 from kinby.memory import (
     Episode,
     Fact,
@@ -443,9 +444,6 @@ def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
         subjects=("memory backend", "kinby"),
         body="The memory backend uses markdown until evals justify a database.",
     )
-    events_path = tmp_path / ".state" / "events.jsonl"
-    events_path.parent.mkdir()
-    events_path.write_bytes(b"canonical transcript\n")
     memory = _graph_store(tmp_path)
 
     remembered = memory.remember(fact)
@@ -468,7 +466,7 @@ def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
         "---\n"
         "The memory backend uses markdown until evals justify a database.\n"
     )
-    assert events_path.read_bytes() == b"canonical transcript\n"
+    assert list(EventLog(tmp_path / ".state").all_events()) == []
 
 
 def test_remember_writes_a_fact_with_its_source_episodes(tmp_path: Path) -> None:
@@ -532,9 +530,6 @@ def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
         subjects="memory backend, kinby",
         body="The memory backend uses markdown until evals justify a database.",
     )
-    events_path = tmp_path / ".state" / "events.jsonl"
-    events_path.parent.mkdir()
-    events_path.write_bytes(b"canonical transcript\n")
     node_path = tmp_path / "memory" / "graph" / f"{node}.md"
     memory = _graph_store(tmp_path)
 
@@ -545,7 +540,7 @@ def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
     assert memory.recall("memory backend") == ()
     with pytest.raises(NodeNotFound, match="was forgotten"):
         memory.open(node)
-    assert events_path.read_bytes() == b"canonical transcript\n"
+    assert list(EventLog(tmp_path / ".state").all_events()) == []
 
 
 def test_a_fact_without_a_thread_added_by_the_user_is_recalled_and_opened(tmp_path: Path) -> None:

@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 
 from kinby.contracts import CodingSessionId
 from kinby.core.coding_clients import claude_tokens
-from kinby.jsonl import whole_lines
 
 _FAILED_OUTPUT_TAIL_CHARS = 400
 _EXIT_CODE = re.compile(r"Exit code [1-9]\d*")
@@ -87,8 +87,7 @@ def digest_session(claude_dir: Path, session: CodingSessionId) -> SessionDigest 
     calls: list[_ModelCall] = []
     said: list[str] = []
     tools: list[str] = []
-    for line in whole_lines(transcript):
-        entry = json.loads(line)
+    for entry in _entries(transcript):
         message = entry.get("message")
         match entry.get("type"), message:
             case "assistant", {"id": str(message_id), "usage": dict(usage)}:
@@ -155,6 +154,15 @@ def _result_tokens(calls: list[_ModelCall]) -> dict[str, int]:
         for result, size in call.results.items():
             tokens[result] = round(grown * size / characters)
     return tokens
+
+
+def _entries(transcript: Path) -> Iterator[dict[str, object]]:
+    """Each whole JSON line of a Claude transcript, read one at a time. A session killed mid-write
+    leaves a last line with no newline."""
+    with transcript.open(encoding="utf-8") as lines:
+        for line in lines:
+            if line.endswith("\n"):
+                yield json.loads(line)
 
 
 def _memory_search_query(command: str) -> str | None:

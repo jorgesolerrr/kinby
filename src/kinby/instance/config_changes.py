@@ -1,4 +1,4 @@
-"""Keep each edit to an instance's configuration in an append-only log, apart from any thread."""
+"""Keep each edit to an instance's configuration in the instance database, apart from any thread."""
 
 from __future__ import annotations
 
@@ -7,31 +7,33 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from difflib import unified_diff
-from itertools import islice
 from pathlib import Path
 from uuid import UUID
 
 from kinby.contracts import ConfigActor, ConfigChange, ConfigFile, FileHash
+from kinby.instance.database import open_database
 from kinby.instance.dataclasses import Instance
-from kinby.jsonl import append_line, whole_lines
-
-CONFIG_CHANGES_NAME = "config-changes.jsonl"
 
 
 class ConfigChangeLog:
-    """The config changes of one instance, one JSON line each, oldest first on disk."""
+    """The config changes of one instance, kept in the order made."""
 
     def __init__(self, state_dir: Path) -> None:
-        self._path = state_dir / CONFIG_CHANGES_NAME
+        self._db = open_database(state_dir)
 
     def append(self, change: ConfigChange) -> None:
-        append_line(self._path, change.model_dump_json())
+        self._db.execute(
+            "INSERT INTO config_changes VALUES (?, ?)", (change.file, change.model_dump_json())
+        )
 
     def history(self, file: ConfigFile | None, limit: int) -> list[ConfigChange]:
         """The latest *limit* changes, newest first, to *file* or to any file."""
-        lines = list(whole_lines(self._path))
-        changes = (ConfigChange.model_validate_json(line) for line in reversed(lines))
-        return list(islice((c for c in changes if file in (None, c.file)), limit))
+        rows = self._db.execute(
+            "SELECT change FROM config_changes WHERE ?1 IS NULL OR file = ?1"
+            " ORDER BY rowid DESC LIMIT ?2",
+            (file, limit),
+        )
+        return [ConfigChange.model_validate_json(change) for (change,) in rows]
 
 
 @contextmanager

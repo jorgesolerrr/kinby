@@ -1,4 +1,8 @@
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping
+import json
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Iterable, Mapping
+from contextlib import closing
+from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from kinby.contracts import (
@@ -23,6 +27,7 @@ from kinby.core.turns import (
     TurnPreparation,
 )
 from kinby.instance import Budgets
+from kinby.instance.database import open_database
 
 GRAPH_EVENT_TIMEOUT: float = 5
 _READ_ONLY = frozenset({Scope.THREAD_READ})
@@ -126,3 +131,35 @@ async def thread_events(
     stream = await dispatcher.subscribe("thread.subscribe", payload, scopes)
     assert not isinstance(stream, ErrorEnvelope)
     return stream.items
+
+
+def write_events(state_dir: Path, records: Iterable[Mapping[str, Any]]) -> None:
+    """Make *records* the transcript store's events, each an event as its JSON holds it. It stands
+    in for history no append writes any more: an older payload, or a rewritten timestamp."""
+    with closing(open_database(state_dir)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("DELETE FROM events")
+        db.execute("DELETE FROM heads")
+        for record in records:
+            thread_id, sequence, timestamp = (
+                record["thread_id"],
+                record["sequence"],
+                record["timestamp"],
+            )
+            db.execute(
+                "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    sequence,
+                    record["turn_id"],
+                    record["payload"]["type"],
+                    timestamp,
+                    json.dumps(record["payload"]),
+                ),
+            )
+            db.execute(
+                "INSERT INTO heads VALUES (?, ?, ?) ON CONFLICT (thread_id)"
+                " DO UPDATE SET sequence = excluded.sequence,"
+                " last_activity_at = excluded.last_activity_at",
+                (thread_id, sequence, timestamp),
+            )
