@@ -14,7 +14,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import tomlkit
 from cronsim import CronSim
@@ -61,6 +61,9 @@ from kinby.plugins.routines import (
 )
 from kinby.plugins.skills import describe_skill_shadow, load_skill_file
 from kinby.plugins.tools import Tool, ToolContext, tool
+
+if TYPE_CHECKING:
+    from kinby.core.routine_history import RoutineHistory
 
 _INSTANCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 _COMMAND_LIST_NAME = TypeAdapter(CommandListName)
@@ -226,16 +229,21 @@ def enable_routine(
     return routine
 
 
+def _routine_histories(instance: Instance) -> dict[RoutineName, RoutineHistory]:
+    from kinby.core.events import EventLog
+    from kinby.core.routine_history import ROUTINE_EVENTS, routine_history
+
+    with EventLog(instance.manifest.state_dir).reader() as reader:
+        return routine_history(reader.events_of(ROUTINE_EVENTS)).routines
+
+
 def refuse_pending(
     instance: Instance, name: RoutineName, change: Literal["deleted", "renamed"]
 ) -> None:
     """Refuse a *change* that would drop the deliveries waiting on a routine."""
     from kinby.core.errors import RoutinePending
-    from kinby.core.events import EventLog
-    from kinby.core.routine_history import routine_history
 
-    histories = routine_history(EventLog(instance.manifest.state_dir).all_events()).routines
-    history = histories.get(name)
+    history = _routine_histories(instance).get(name)
     pending = len(history.pending) if history is not None else 0
     if pending:
         noun = "delivery" if pending == 1 else "deliveries"
@@ -458,13 +466,8 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
     @tool(write=False)
     def routine_list(context: ToolContext) -> str:
         """List each routine's configuration, signal state, and pending deliveries."""
-        from kinby.core.events import EventLog
-        from kinby.core.routine_history import routine_history
-
         routines, warnings = load_routines(context.instance)
-        histories = routine_history(
-            EventLog(context.instance.manifest.state_dir).all_events()
-        ).routines
+        histories = _routine_histories(context.instance)
         records: dict[str, dict[str, object]] = {}
         for routine in routines:
             history = histories.get(routine.name)

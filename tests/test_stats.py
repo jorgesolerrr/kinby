@@ -81,6 +81,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    historical_event_log,
     no_routines,
     thread_events,
     write_events,
@@ -263,7 +264,7 @@ def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
     result = asyncio.run(
         build_dispatcher(
             instance.manifest.state_dir,
-            event_log=StaticEventLog(instance.manifest.state_dir, events),
+            event_log=historical_event_log(instance.manifest.state_dir, events),
             prices=partial(instance_prices, instance),
         ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
     )
@@ -372,7 +373,7 @@ def test_stats_get_cost_uses_cache_rates(tmp_path: Path) -> None:
     result = asyncio.run(
         build_dispatcher(
             tmp_path,
-            event_log=StaticEventLog(tmp_path, events),
+            event_log=historical_event_log(tmp_path, events),
             prices=lambda: {"openai:gpt-5": ModelPrice(input=1.25, output=10, cache_read=0.125)},
         ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
     )
@@ -425,7 +426,7 @@ def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get", {}, {Scope.INSTANCE_READ}
         )
     )
@@ -477,7 +478,7 @@ def test_stats_does_not_warn_for_no_work_closing_totals(tmp_path: Path) -> None:
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get", {}, {Scope.INSTANCE_READ}
         )
     )
@@ -569,7 +570,7 @@ def test_stats_get_measures_memory_tokens_from_model_call_deltas(tmp_path: Path)
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -605,7 +606,7 @@ def test_stats_get_counts_no_memory_from_a_step_its_input_shrank_across(tmp_path
     )
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -786,7 +787,7 @@ def test_stats_get_lists_the_nodes_each_turn_recalled(tmp_path: Path) -> None:
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -881,7 +882,7 @@ def test_stats_warning_eligibility_is_scoped_to_each_turn(
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get", {}, {Scope.INSTANCE_READ}
         )
     )
@@ -915,7 +916,7 @@ def test_stats_and_daily_budget_count_failed_turn_tokens(tmp_path: Path) -> None
             ),
         ),
     ]
-    log = StaticEventLog(tmp_path, events)
+    log = historical_event_log(tmp_path, events)
 
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=log).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
@@ -968,7 +969,7 @@ def test_stats_get_reports_unpriced_models_and_sums_only_priced_turns(
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1039,7 +1040,7 @@ def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unkn
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1115,7 +1116,7 @@ def test_stats_get_joins_a_factory_runs_turns_delegated_runs_and_recap_on_its_ru
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1221,7 +1222,7 @@ def test_stats_get_marks_a_run_that_recalled_a_fact_in_a_step_turn_or_a_coding_s
 
     result = asyncio.run(
         build_dispatcher(
-            tmp_path, event_log=StaticEventLog(tmp_path, events), facts=graph.fact_ids
+            tmp_path, event_log=historical_event_log(tmp_path, events), facts=graph.fact_ids
         ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
     )
 
@@ -1340,15 +1341,6 @@ def test_a_recap_that_spent_no_tokens_needs_no_price() -> None:
         TurnKey(thread_id, cached_id): frozenset({"custom:unpriced"}),
     }
     check_daily_budget(DailyBudget(limit=1, cost=daily_cost(trace_only, price_map(), now.date())))
-
-
-class StaticEventLog(EventLog):
-    def __init__(self, state_dir: Path, events: list[Event]) -> None:
-        super().__init__(state_dir)
-        self._events = events
-
-    def all_events(self):
-        yield from self._events
 
 
 def test_turn_metrics_reports_denies_and_read_write_tool_time() -> None:
@@ -1670,7 +1662,7 @@ def test_stats_get_averages_navigation_over_turns_that_wrote(tmp_path: Path) -> 
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1755,7 +1747,7 @@ def test_stats_get_marks_missing_start_metadata_as_unknown(tmp_path: Path) -> No
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1796,7 +1788,7 @@ def test_stats_get_carries_the_origin_its_turn_started_with(tmp_path: Path, orig
     )
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1840,7 +1832,7 @@ def test_stats_get_aggregates_closed_turns_by_utc_day(tmp_path: Path) -> None:
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -1946,7 +1938,7 @@ def test_stats_get_skips_a_day_and_week_that_only_an_api_run_touches(tmp_path: P
             TurnCompleted(input_tokens=11, output_tokens=7),
         ),
     ]
-    dispatcher = build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events))
+    dispatcher = build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events))
 
     daily = asyncio.run(dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ}))
     weekly = asyncio.run(dispatcher.dispatch("stats.get", {"by": "week"}, {Scope.INSTANCE_READ}))
@@ -2044,7 +2036,7 @@ def test_stats_get_keeps_recap_latest_rating_and_every_closing_kind(tmp_path: Pa
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -2134,7 +2126,7 @@ def test_stats_get_counts_write_memory_calls_without_marking_consulted(
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
             {},
             {Scope.INSTANCE_READ},
@@ -2213,7 +2205,7 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
             TurnCompleted(input_tokens=3, output_tokens=2),
         ),
     ]
-    dispatcher = build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events))
+    dispatcher = build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events))
 
     weekly = asyncio.run(dispatcher.dispatch("stats.get", {"by": "week"}, {Scope.INSTANCE_READ}))
     bounded = asyncio.run(
@@ -2296,7 +2288,7 @@ def test_stats_get_counts_subscription_runs_in_each_plan_window_whatever_the_ran
         for event in _delegating_turn(thread_id, at, run)
     ]
     dispatcher = build_dispatcher(
-        tmp_path, event_log=StaticEventLog(tmp_path, events), clock=lambda: now
+        tmp_path, event_log=historical_event_log(tmp_path, events), clock=lambda: now
     )
 
     whole = asyncio.run(dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ}))
@@ -2318,6 +2310,45 @@ def test_stats_get_counts_subscription_runs_in_each_plan_window_whatever_the_ran
             (UsageSource.CHATGPT_SUBSCRIPTION, 5 * 60 * 60, 0),
             (UsageSource.CHATGPT_SUBSCRIPTION, 7 * 24 * 60 * 60, 1),
         ]
+
+
+def test_stats_get_from_a_time_leaves_a_run_of_a_turn_still_open_since_before_it_uncounted(
+    tmp_path: Path,
+) -> None:
+    started_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    run = DelegatedRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client="claude-code",
+        models=["claude-opus-5-5"],
+        input_tokens=100,
+        output_tokens=10,
+        duration_ms=1_000,
+        client_turns=1,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+    open_turn = _delegating_turn(uuid4(), started_at, run)[:1]
+    open_turn.append(
+        _event(
+            2,
+            open_turn[0].thread_id,
+            open_turn[0].turn_id,
+            started_at + timedelta(hours=1),
+            RunDelegated(run=run),
+        )
+    )
+    dispatcher = build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, open_turn))
+
+    result = asyncio.run(
+        dispatcher.dispatch(
+            "stats.get",
+            {"since": (started_at + timedelta(minutes=30)).isoformat()},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.runs == []
+    assert [use.runs for use in result.total.subscriptions] == [0, 0]
 
 
 def test_stats_get_splits_each_bucket_and_the_total_by_chat_and_routine(tmp_path: Path) -> None:
@@ -2388,7 +2419,7 @@ def test_stats_get_splits_each_bucket_and_the_total_by_chat_and_routine(tmp_path
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get", {}, {Scope.INSTANCE_READ}
         )
     )
@@ -2435,7 +2466,7 @@ def test_stats_get_keeps_a_renamed_routine_in_two_rows_and_always_totals_chat(
     ]
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=StaticEventLog(tmp_path, events)).dispatch(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get", {}, {Scope.INSTANCE_READ}
         )
     )

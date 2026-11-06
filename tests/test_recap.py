@@ -904,12 +904,12 @@ class BackgroundReadEventLog(EventLog):
         self.require_background_read = False
         self.background_read_seen = False
 
-    def stored(self, thread_id: UUID) -> list[Event]:
+    def turn_events(self, turn_id: UUID) -> list[Event]:
         if self.require_background_read:
             if get_ident() == self.event_loop_thread and not self.background_read_seen:
                 raise AssertionError("recap read the transcript on the event-loop thread")
             self.background_read_seen = True
-        return super().stored(thread_id)
+        return super().turn_events(turn_id)
 
 
 def test_schedule_reads_the_transcript_in_the_worker(tmp_path: Path) -> None:

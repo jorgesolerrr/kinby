@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict  # noqa: TID251 - the store's file boundary
@@ -40,6 +41,9 @@ from kinby.core.errors import ThreadNotFound
 from kinby.instance.database import open_database
 from kinby.instance.permissions import GatePolicy, constrain_mode
 
+if TYPE_CHECKING:
+    from kinby.core.events import EventReader
+
 _COLUMNS = "id, title, created_at, archived"
 #: The most characters a title taken from a thread's first message has.
 TITLE_LENGTH = 60
@@ -47,6 +51,20 @@ _NOTIFYING = (NotificationRaised, NotificationAccepted, NotificationRefused)
 #: The events a turn parks on.
 PARKING_EVENTS = frozenset({EventType.APPROVAL_REQUESTED, EventType.TAKEOVER_REQUESTED})
 _PARKED = frozenset({ThreadStatus.AWAITING_APPROVAL, ThreadStatus.AWAITING_TAKEOVER})
+#: The events a thread's summary folds, but for its last activity and the turn it is parked on.
+SUMMARY_EVENTS = frozenset(
+    {
+        EventType.MODE_PINNED,
+        EventType.SIGNAL_RECEIVED,
+        EventType.TURN_STARTED,
+        EventType.TURN_COMPLETED,
+        EventType.TURN_FAILED,
+        EventType.TURN_INTERRUPTED,
+        *PARKING_EVENTS,
+        EventType.NOTIFICATION_RAISED,
+        EventType.NOTIFICATION_REFUSED,
+    }
+)
 
 
 class ThreadRecord(BaseModel):
@@ -158,17 +176,24 @@ def events_by_thread(
 
 def thread_list(
     threads: Sequence[ThreadRecord],
-    events: Iterable[Event],
+    reader: EventReader,
     policy: GatePolicy,
     command: ThreadListCommand,
 ) -> ThreadListResult:
     """Summarize each thread the command takes from its events, the most recently active first."""
-    grouped = events_by_thread(threads, events)
+    grouped = events_by_thread(threads, reader.events_of(SUMMARY_EVENTS))
+    # Any next event of a parked turn ends the park, so a thread parked on one is read whole.
+    for parking in reader.latest_in_open_turns(PARKING_EVENTS):
+        if parking.thread_id in grouped:
+            grouped[parking.thread_id] = [*reader.thread_events(parking.thread_id)]
+    last_activity = reader.last_activity()
     summaries = [
         summary
         for thread in threads
         if is_in(
-            summary := thread_summary(thread, grouped[thread.id], policy),
+            summary := thread_summary(
+                thread, grouped[thread.id], last_activity.get(thread.id), policy
+            ),
             grouped[thread.id],
             command.filter,
         )
@@ -211,15 +236,19 @@ def is_run_of(summary: ThreadSummary, routine: RoutineName) -> bool:
 
 
 def thread_summary(
-    thread: ThreadRecord, events: Sequence[Event], policy: GatePolicy
+    thread: ThreadRecord,
+    events: Sequence[Event],
+    last_activity_at: datetime | None,
+    policy: GatePolicy,
 ) -> ThreadSummary:
+    """The thread's summary, *last_activity_at* None while it has no events."""
     pinned = pinned_mode(events)
     return ThreadSummary(
         id=thread.id,
         title=thread.title,
         created_at=thread.created_at,
         status=thread_status(events),
-        last_activity_at=events[-1].timestamp if events else thread.created_at,
+        last_activity_at=last_activity_at or thread.created_at,
         mode=constrain_mode(pinned or policy.mode, policy.ceiling),
         mode_pinned=pinned is not None,
         archived=thread.archived,

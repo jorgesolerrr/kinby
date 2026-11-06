@@ -25,6 +25,7 @@ from pydantic import (
 
 from kinby.contracts import (
     CompletionOutcome,
+    EventType,
     MemoryRecapped,
     MessageDelta,
     NodeId,
@@ -54,12 +55,22 @@ from kinby.plugins.hub import hub_read
 
 if TYPE_CHECKING:
     from kinby.contracts import Event
-    from kinby.core.events import EventLog
+    from kinby.core.events import EventLog, EventReader
 
 logger = logging.getLogger(__name__)
 _TOOL_CALL_SUMMARY_MAX_CHARS = 160
 _TRACE_DESCRIPTION_MAX_CHARS = 200
 _TOOL_RESULT_MAX_CHARS = 800
+#: The events catch-up folds: what ends a turn or a factory run, and the recap markers.
+_CATCH_UP_EVENTS = frozenset(
+    {
+        EventType.TURN_COMPLETED,
+        EventType.TURN_FAILED,
+        EventType.TURN_INTERRUPTED,
+        EventType.RUN_STOPPED,
+        EventType.MEMORY_RECAPPED,
+    }
+)
 
 
 class RecapDraft(BaseModel):
@@ -170,24 +181,23 @@ class RecapWriter:
 
     async def catch_up(self) -> None:
         """Queue every closed turn and factory run stop that has no recap marker."""
-        events = await asyncio.to_thread(lambda: list(self._event_log.all_events()))
-        await asyncio.to_thread(
-            _delete_no_work_traces,
-            self._instance.path / MEMORY_DIR / GRAPH_DIR,
-            events,
-        )
-        ended: list[_RecapRequest] = []
-        covered: set[tuple[UUID, UUID]] = set()
-        for event in events:
-            if isinstance(event.payload, MemoryRecapped):
-                covered.add((event.thread_id, event.turn_id))
-            elif isinstance(event.payload, RunStopped):
-                ended.append(_RunRecap(event.payload.stop.run_id, event.payload.stop.generation))
-            elif is_turn_closing(event.payload):
-                ended.append(_TurnRecap(event.thread_id, event.turn_id))
-        for request in ended:
-            if (request.thread_id, request.turn_id) not in covered:
-                self._enqueue(request)
+        for request in await asyncio.to_thread(self._unrecapped):
+            self._enqueue(request)
+
+    def _unrecapped(self) -> list[_RecapRequest]:
+        with self._event_log.reader() as reader:
+            _delete_no_work_traces(self._instance.path / MEMORY_DIR / GRAPH_DIR, reader)
+            ended: list[_RecapRequest] = []
+            covered: set[tuple[UUID, UUID]] = set()
+            for event in reader.events_of(_CATCH_UP_EVENTS):
+                if isinstance(event.payload, MemoryRecapped):
+                    covered.add((event.thread_id, event.turn_id))
+                elif isinstance(event.payload, RunStopped):
+                    stop = event.payload.stop
+                    ended.append(_RunRecap(stop.run_id, stop.generation))
+                elif is_turn_closing(event.payload):
+                    ended.append(_TurnRecap(event.thread_id, event.turn_id))
+        return [request for request in ended if (request.thread_id, request.turn_id) not in covered]
 
     async def drain(self) -> None:
         """Wait until every queued recap has finished."""
@@ -264,7 +274,7 @@ class RecapWriter:
         await self._finish(request, episode, usage, manifest.models.recap)
 
     async def _write_run(self, request: _RunRecap) -> None:
-        events = await asyncio.to_thread(self._event_log.stored, request.run_id)
+        events = await asyncio.to_thread(self._event_log.thread_events, request.run_id)
         if self._is_recapped(event for event in events if event.turn_id == request.turn_id):
             return
         stops = {
@@ -416,7 +426,9 @@ class RecapWriter:
         return parsed, completed
 
     def _turn_events(self, thread_id: UUID, turn_id: UUID) -> list[Event]:
-        return [event for event in self._event_log.stored(thread_id) if event.turn_id == turn_id]
+        return [
+            event for event in self._event_log.turn_events(turn_id) if event.thread_id == thread_id
+        ]
 
     @staticmethod
     def _is_recapped(events: Iterable[Event]) -> bool:
@@ -429,16 +441,16 @@ def _is_dreaming_stage(events: list[Event]) -> bool:
     return isinstance(started.origin, RoutineOrigin) and started.origin.dreaming_stage
 
 
-def _delete_no_work_traces(graph: Path, events: list[Event]) -> None:
+def _delete_no_work_traces(graph: Path, reader: EventReader) -> None:
     """Delete the trace episodes ADR 0021 had no-work turns write, which ADR 0074 retired."""
     no_work = {
         (event.thread_id, event.turn_id)
-        for event in events
+        for event in reader.events_of({EventType.TURN_COMPLETED})
         if isinstance(event.payload, TurnCompleted)
         and event.payload.outcome is CompletionOutcome.NO_WORK
     }
-    for event in events:
-        if isinstance(event.payload, TurnStarted) and (event.thread_id, event.turn_id) in no_work:
+    for event in reader.events_of({EventType.TURN_STARTED}):
+        if (event.thread_id, event.turn_id) in no_work:
             recorded_on = event.timestamp.date().isoformat()
             (graph / f"{recorded_on}-{event.turn_id.hex}-trace.md").unlink(missing_ok=True)
 

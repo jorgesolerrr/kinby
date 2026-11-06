@@ -72,6 +72,13 @@ class EventReader:
             [*types],
         )
 
+    def last_activity(self) -> dict[UUID, datetime]:
+        """When each thread's latest event was stored, from its head."""
+        return {
+            UUID(thread_id): datetime.fromisoformat(at)
+            for thread_id, at in self._db.execute("SELECT thread_id, last_activity_at FROM heads")
+        }
+
     def delivery(self, name: RoutineName, delivery_id: DeliveryId) -> Event | None:
         """The arrival of the delivery a provider sent *name* under *delivery_id*."""
         return next(
@@ -230,9 +237,11 @@ class EventLog:
 
     @contextmanager
     def reader(self) -> Iterator[EventReader]:
-        """Reads on a connection of their own, for a worker thread to iterate a long range. Each
-        read sees the events stored when it began, while appends go on."""
+        """Reads on a connection of their own, for a worker thread to iterate a long range. Every
+        read sees the events stored when the first began, while appends go on."""
         with closing(open_database(self._state_dir)) as db:
+            # One read transaction holds one snapshot, so a fold's reads agree with each other.
+            db.execute("BEGIN")
             yield EventReader(db)
 
     def all_events(self) -> Iterator[Event]:

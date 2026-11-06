@@ -53,6 +53,7 @@ from tests.helpers import (
     does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
+    historical_event_log,
     no_routines,
     thread_events,
     write_events,
@@ -247,20 +248,6 @@ class PausingEventLog(EventLog):
             self.turns_started += 1
             await self.release.wait()
         return await super().append(thread_id, turn_id, payload)
-
-
-def historical_event_log(state_dir: Path, history: list[Event]) -> EventLog:
-    write_events(
-        state_dir,
-        (
-            {
-                **event.model_dump(mode="json"),
-                "timestamp": event.timestamp.isoformat(timespec="microseconds"),
-            }
-            for event in history
-        ),
-    )
-    return EventLog(state_dir)
 
 
 def _historical_turn(

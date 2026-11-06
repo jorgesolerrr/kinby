@@ -13,8 +13,10 @@ from kinby.contracts import (
     ClientStepRun,
     CodeStepRun,
     CommandStepRun,
+    DelegatedRun,
     DelegatedRunOutcome,
     Event,
+    EventType,
     HookName,
     MessageDelta,
     RepositoryCommands,
@@ -148,17 +150,23 @@ async def _run_client_step(
         effort=step.effort,
     )
     if ran.reported is not None:
-        earlier = (
-            event.payload.run
-            for event in log.all_events()
-            if isinstance(event.payload, RunDelegated)
-        )
+        reported = ran.reported
+
+        def own() -> DelegatedRun:
+            with log.reader() as reader:
+                earlier = (
+                    event.payload.run
+                    for event in reader.events_of({EventType.RUN_DELEGATED})
+                    if isinstance(event.payload, RunDelegated)
+                )
+                return own_tokens(reported, earlier)
+
         # The run belongs to no thread or turn. Its events go under the factory run's id.
         await log.append(
             command.origin.run_id,
             uuid4(),
             RunDelegated(
-                run=own_tokens(ran.reported, earlier),
+                run=await asyncio.to_thread(own),
                 step=command.origin.step,
                 attempt=command.attempt,
             ),

@@ -302,6 +302,26 @@ def test_an_open_turn_read_returns_each_threads_latest_of_those_types_while_its_
     asyncio.run(scenario())
 
 
+def test_the_last_activity_read_gives_when_each_threads_latest_event_was_stored(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        times = iter(datetime(2026, 9, 6, hour, tzinfo=UTC) for hour in range(9, 12))
+        event_log = EventLog(tmp_path, clock=lambda: next(times))
+        first_thread, second_thread = uuid4(), uuid4()
+        await event_log.append(first_thread, uuid4(), STARTED)
+        await event_log.append(second_thread, uuid4(), STARTED)
+        await event_log.append(first_thread, uuid4(), MessageDelta(text="latest"))
+
+        with event_log.reader() as reader:
+            assert reader.last_activity() == {
+                first_thread: datetime(2026, 9, 6, 11, tzinfo=UTC),
+                second_thread: datetime(2026, 9, 6, 10, tzinfo=UTC),
+            }
+
+    asyncio.run(scenario())
+
+
 def test_a_delivery_is_found_by_its_routine_and_provider_id(tmp_path: Path) -> None:
     async def scenario() -> None:
         event_log = EventLog(tmp_path)
@@ -358,6 +378,34 @@ def test_a_reader_in_a_worker_thread_iterates_what_was_stored_when_it_began(
         appended.set()
 
         assert await reading == [first, second]
+
+    asyncio.run(scenario())
+
+
+def test_every_read_of_one_reader_sees_what_was_stored_when_its_first_began(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        began = threading.Event()
+        appended = threading.Event()
+
+        def read() -> tuple[list[Event], list[Event]]:
+            with event_log.reader() as reader:
+                before = [*reader.thread_events(thread_id)]
+                began.set()
+                appended.wait()
+                return before, [*reader.turn_events(turn_id)]
+
+        reading = asyncio.create_task(asyncio.to_thread(read))
+        await asyncio.to_thread(began.wait)
+        await event_log.append(thread_id, turn_id, MessageDelta(text="later"))
+        appended.set()
+
+        assert await reading == ([first], [first])
 
     asyncio.run(scenario())
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -70,6 +71,7 @@ from kinby.contracts import (
     VIEW_SUBSCRIBE,
     AcceptedResult,
     Event,
+    EventType,
     InstanceProbeCommand,
     InstanceProbeResult,
     NodeId,
@@ -119,7 +121,7 @@ from kinby.core.stats import (
 )
 from kinby.core.steps import run_step
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
-from kinby.core.turn_metrics import TurnKey, turn_metrics
+from kinby.core.turn_metrics import TurnKey, TurnMetricsResult, metrics_events, turn_metrics
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.core.views import InstanceViews
@@ -225,10 +227,19 @@ def build_dispatcher(
         return store.create(command.title)
 
     async def list_threads(command: ThreadListCommand) -> ThreadListResult:
-        return thread_list(store.threads(), event_log.all_events(), permissions(), command)
+        threads, policy = store.threads(), permissions()
+
+        def listed() -> ThreadListResult:
+            with event_log.reader() as reader:
+                return thread_list(threads, reader, policy, command)
+
+        return await asyncio.to_thread(listed)
 
     def summary(thread: ThreadRecord) -> ThreadSummary:
-        return thread_summary(thread, event_log.stored(thread.id), permissions())
+        events = event_log.thread_events(thread.id)
+        return thread_summary(
+            thread, events, events[-1].timestamp if events else None, permissions()
+        )
 
     async def rename_thread(command: ThreadRenameCommand) -> ThreadSummary:
         return summary(store.rename(command.thread_id, command.title))
@@ -240,16 +251,25 @@ def build_dispatcher(
         return summary(store.unarchive(command.thread_id))
 
     async def get_usage(command: UsageGetCommand) -> UsageGetResult:
-        return usage_totals(
-            event_log.all_events(),
-            TimeRange(command.since, command.until),
-        )
+        time_range = TimeRange(command.since, command.until)
+
+        def totals() -> UsageGetResult:
+            with event_log.reader() as reader:
+                return usage_totals(metrics_events(reader, command.since), time_range)
+
+        return await asyncio.to_thread(totals)
 
     async def get_stats(command: StatsGetCommand) -> StatsGetResult:
-        events = list(event_log.all_events())
         now = clock()
-        metrics = turn_metrics(events, prices())
         time_range = TimeRange(command.since, command.until)
+        current_prices = prices()
+
+        def read() -> tuple[TurnMetricsResult, list[Event]]:
+            with event_log.reader() as reader:
+                metrics = turn_metrics(metrics_events(reader, command.since), current_prices)
+                return metrics, [*reader.events_of({EventType.RUN_DELEGATED})]
+
+        metrics, delegated = await asyncio.to_thread(read)
         records = [record for record in metrics.records if time_range.includes(record.closed_at)]
         runs = [
             TurnRun(record.origin, reported)
@@ -268,8 +288,8 @@ def build_dispatcher(
             records=records,
             buckets=stats_buckets(records, runs, command.by),
             total=stats_summary(records, runs),
-            plan_use=plan_use(events, now),
-            limits=active_limits(events, now),
+            plan_use=plan_use(delegated, now),
+            limits=active_limits(delegated, now),
             unpriced_models=sorted(
                 {
                     model
@@ -297,8 +317,8 @@ def build_dispatcher(
     async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:
         events = [
             event
-            for event in event_log.stored(command.thread_id)
-            if event.turn_id == command.turn_id
+            for event in event_log.turn_events(command.turn_id)
+            if event.thread_id == command.thread_id
         ]
         if not any(isinstance(event.payload, TurnStarted) for event in events):
             raise TurnNotFound(
@@ -318,7 +338,7 @@ def build_dispatcher(
         recorded = next(
             (
                 event
-                for event in event_log.stored(command.run_id)
+                for event in event_log.thread_events(command.run_id)
                 if isinstance(event.payload, RunStopped)
                 and event.payload.stop.generation == command.generation
             ),
