@@ -202,6 +202,15 @@ async def _parked_after_two_turns(
     return created.id, await _run_turn(dispatcher, created.id, "Third", after=second.sequence)
 
 
+async def _parked_on_its_first_turn(
+    instance: Instance, message: str, parking: AIMessageChunk
+) -> tuple[UUID, Event]:
+    """A thread whose first turn, started with *message*, parked on the call *parking*."""
+    dispatcher = _runtime(instance, ScriptedModel([parking]))
+    created = await call(dispatcher, "thread.create")
+    return created.id, await _run_turn(dispatcher, created.id, message, after=0)
+
+
 async def _keep_checkpoints(runner: LangGraphRunner, thread_id: UUID) -> None:
     """Stands in for pruning, so a thread holds every checkpoint as before #1193."""
 
@@ -228,7 +237,7 @@ def _old_arrival(thread_id: UUID, turn_id: UUID, delivery: Mapping[str, object])
     )
 
 
-def test_the_migration_keeps_a_delivery_body_only_while_it_waits_and_prunes_checkpoints(
+def test_the_migration_keeps_a_delivery_body_only_while_it_waits_and_tidies_checkpoints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     instance = _instance(tmp_path)
@@ -242,7 +251,31 @@ def test_the_migration_keeps_a_delivery_body_only_while_it_waits_and_prunes_chec
     unpruned = _checkpoints(instance, parked_thread)
     assert isinstance(parked.payload, ApprovalRequested)
     approval_id = parked.payload.approval_id
-    history = [event.model_dump_json() for event in every_event(EventLog(state_dir))]
+    # A delivery turn's checkpoint kept its body as the turn's message before ADR 0117.
+    delivered_body = '{"action":"opened","issue":{"number":8}}'
+    delivered, delivered_park = asyncio.run(
+        _parked_on_its_first_turn(instance, delivered_body, remember)
+    )
+    assert isinstance(delivered_park.payload, ApprovalRequested)
+    delivered_approval = delivered_park.payload.approval_id
+    delivered_arrival = _old_arrival(
+        delivered,
+        delivered_park.turn_id,
+        {
+            "headers": {},
+            "content_type": "application/json",
+            "body": delivered_body,
+            "delivery_id": "delivery-8",
+            "received_at": _AT.isoformat(),
+        },
+    )
+    history: list[str] = []
+    for event in every_event(EventLog(state_dir)):
+        if event.thread_id == delivered:
+            if event.sequence == 1:
+                history.append(delivered_arrival)
+            event = event.model_copy(update={"sequence": event.sequence + 1})
+        history.append(event.model_dump_json())
     threads = [thread.model_dump_json() for thread in ThreadStore(state_dir).threads()]
     for leftover in ("", "-wal", "-shm"):
         Path(f"{state_dir / 'instance.sqlite'}{leftover}").unlink(missing_ok=True)
@@ -320,16 +353,25 @@ def test_the_migration_keeps_a_delivery_body_only_while_it_waits_and_prunes_chec
     assert unpruned == 3
     assert _checkpoints(instance, parked_thread) == 2
     assert not [path for path in state_dir.rglob("*") if path.suffix == ".jsonl"]
+    _, delivered_start, *_ = event_log.thread_events(delivered)
+    assert isinstance(delivered_start.payload, TurnStarted)
+    assert delivered_start.payload.message == "Delivery delivery-8"
+    restored = asyncio.run(LangGraphRunner(instance).restore(delivered, delivered_park.turn_id))
+    assert restored is not None
+    assert restored.message == "Delivery delivery-8"
 
-    async def resume() -> list[Event]:
+    async def resume(thread_id: UUID, approval: UUID, after: int) -> list[Event]:
         restarted = _runtime(instance, ScriptedModel([_DONE]))
         await call(
             restarted,
             "thread.approval.respond",
-            thread_id=parked_thread,
-            approval_id=approval_id,
+            thread_id=thread_id,
+            approval_id=approval,
             decision="approve",
         )
-        return await _stop(restarted, parked_thread, parked.sequence)
+        return await _stop(restarted, thread_id, after)
 
-    assert isinstance(asyncio.run(resume())[-1].payload, TurnCompleted)
+    resumed = asyncio.run(resume(parked_thread, approval_id, parked.sequence))
+    assert isinstance(resumed[-1].payload, TurnCompleted)
+    resumed = asyncio.run(resume(delivered, delivered_approval, delivered_park.sequence + 1))
+    assert isinstance(resumed[-1].payload, TurnCompleted)

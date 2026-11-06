@@ -5,11 +5,12 @@
 Run it with the instances stopped. For each one it imports the events, thread records, config
 changes and coding-session recalls into a new database in one transaction. It keeps a delivery's
 body only while the delivery waits (ADR 0117): a started delivery keeps only its arrival, and its
-turn's message and its code step's call name the delivery instead. It then checks that every
-thread has as many events and the same turns as in events.jsonl, and only when every check passes
-does it put the database in place, prune each thread's checkpoints and delete the JSONL files. A
-failed check, or a crash before the database is in place, leaves the JSONL files as they were. A
-crash after it leaves the rest for the next run. kinby never imports it.
+turn's message and its code step's call name the delivery instead. It then checks that every thread
+has as many events and the same turns as in events.jsonl, and only when every check passes does it
+put the database in place, prune each thread's checkpoints, name the delivery in place of its body
+in the checkpoints left, and delete the JSONL files. A failed check, or a crash before the database
+is in place, leaves the JSONL files as they were. A crash after it leaves the rest for the next
+run. kinby never imports it.
 """
 
 import argparse
@@ -19,16 +20,18 @@ import sqlite3
 import sys
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any  # noqa: TID251 - the JSONL files' boundary
 from uuid import UUID
 
-from kinby.contracts import ConfigChange, DeliveryId, Event, EventType
+from kinby.contracts import ConfigChange, DeliveryId, Event, EventType, SignalReceived
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
 from kinby.core.scheduler import Delivery
 from kinby.core.threads import ThreadRecord
-from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turn_runner import _CHECKPOINT_SERIALIZER, LangGraphRunner
+from kinby.core.turns import TurnRequest
 from kinby.instance import Instance, load_instance
 from kinby.instance.database import DATABASE_NAME, connect
 
@@ -36,6 +39,7 @@ _EVENTS = "events.jsonl"
 _THREADS = "threads.jsonl"
 _CONFIG_CHANGES = "config-changes.jsonl"
 _RECALLS = "recalls"
+_CHECKPOINTS = "checkpoints.sqlite"
 
 #: A thread's event count and its turns, in the order they started.
 type Shape = tuple[int, tuple[str, ...]]
@@ -70,6 +74,7 @@ def migrate(instance: Instance) -> str:
             _check(db, state_dir / _EVENTS)
         partial.replace(database)
     asyncio.run(_prune_checkpoints(instance))
+    _name_deliveries_in_checkpoints(state_dir)
     for path in [*old, *recalls]:
         path.unlink()
     if recalls:
@@ -164,13 +169,54 @@ def _drop_body(record: dict[str, Any], waiting: dict[str, str], references: dict
 
 async def _prune_checkpoints(instance: Instance) -> None:
     """Keep each thread's newest completed checkpoint, and any parked after it."""
-    if not (instance.manifest.state_dir / "checkpoints.sqlite").exists():
+    if not (instance.manifest.state_dir / _CHECKPOINTS).exists():
         return
     runner = LangGraphRunner(instance)
     with closing(connect(instance.manifest.state_dir / DATABASE_NAME)) as db:
         threads = [UUID(thread_id) for (thread_id,) in db.execute("SELECT thread_id FROM heads")]
     for thread_id in threads:
         await runner.prune_checkpoints(thread_id)
+
+
+def _name_deliveries_in_checkpoints(state_dir: Path) -> None:
+    """A checkpoint keeps the turn it ran, whose message was its delivery's body. Name the
+    delivery there too, rewriting each checkpoint and write in place, so a parked turn still
+    resumes from it."""
+    checkpoints = state_dir / _CHECKPOINTS
+    if not checkpoints.exists():
+        return
+    with closing(connect(state_dir / DATABASE_NAME)) as db:
+        references = {
+            UUID(turn_id): SignalReceived.model_validate_json(payload).delivery.reference
+            for turn_id, payload in db.execute(
+                "SELECT turn_id, payload FROM events WHERE type = ?", (EventType.SIGNAL_RECEIVED,)
+            )
+        }
+
+    def named(turn: object) -> TurnRequest | None:
+        if not isinstance(turn, TurnRequest) or turn.turn_id not in references:
+            return None
+        reference = references[turn.turn_id]
+        return None if turn.message == reference else replace(turn, message=reference)
+
+    with closing(sqlite3.connect(checkpoints)) as db, db:
+        for rowid, type_, blob in db.execute("SELECT rowid, type, checkpoint FROM checkpoints"):
+            checkpoint = _CHECKPOINT_SERIALIZER.loads_typed((type_, blob))
+            turn = named(checkpoint["channel_values"].get("turn"))
+            if turn is not None:
+                checkpoint["channel_values"]["turn"] = turn
+                db.execute(
+                    "UPDATE checkpoints SET type = ?, checkpoint = ? WHERE rowid = ?",
+                    (*_CHECKPOINT_SERIALIZER.dumps_typed(checkpoint), rowid),
+                )
+        writes = db.execute("SELECT rowid, type, value FROM writes WHERE channel = 'turn'")
+        for rowid, type_, blob in writes.fetchall():
+            turn = named(_CHECKPOINT_SERIALIZER.loads_typed((type_, blob)))
+            if turn is not None:
+                db.execute(
+                    "UPDATE writes SET type = ?, value = ? WHERE rowid = ?",
+                    (*_CHECKPOINT_SERIALIZER.dumps_typed(turn), rowid),
+                )
 
 
 def _check(db: sqlite3.Connection, events: Path) -> None:
