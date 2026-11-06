@@ -36,6 +36,7 @@ from kinby.core.turns import (
 from kinby.instance import init_instance, load_instance
 from kinby.memory import Episode, Fact, GraphStore, NodeId, RecappedTurn, memory_tools
 from kinby.plugins import ToolContext
+from tests.helpers import every_event
 from tests.test_routines import RoutineModel, fire, routine_file
 
 _MODEL = "openai:gpt-5"
@@ -419,7 +420,7 @@ def test_approved_remember_is_recalled_in_a_later_thread(tmp_path: Path) -> None
         assert search.name == "memory_search"
         assert remembered.node in search.output
         assert MessageDelta(text="You prefer small modules.") in later_payloads
-        assert list(EventLog(instance.manifest.state_dir).all_events()) == []
+        assert every_event(EventLog(instance.manifest.state_dir)) == []
 
     asyncio.run(scenario())
 
@@ -568,7 +569,7 @@ def test_denied_remember_returns_an_error_and_the_turn_continues(tmp_path: Path)
             for message in model.messages[-1]
         )
         assert MessageDelta(text="I did not save that preference.") in payloads
-        assert list(EventLog(instance.manifest.state_dir).all_events()) == []
+        assert every_event(EventLog(instance.manifest.state_dir)) == []
 
     asyncio.run(scenario())
 
@@ -642,7 +643,7 @@ def test_forget_hides_the_node_from_a_later_search_in_the_same_turn(
         assert node_path.is_file()
         assert "tombstone: true\n" in node_path.read_text(encoding="utf-8")
         assert MessageDelta(text="That memory is gone.") in payloads
-        assert list(EventLog(instance.manifest.state_dir).all_events()) == []
+        assert every_event(EventLog(instance.manifest.state_dir)) == []
 
     asyncio.run(scenario())
 
@@ -725,6 +726,6 @@ def test_read_only_denies_memory_write_tools(
         assert GraphStore(instance.path).recall("deployment")
         assert GraphStore(instance.path).recall("coding preferences") == ()
         assert MessageDelta(text="The memory write was denied.") in payloads
-        assert list(EventLog(instance.manifest.state_dir).all_events()) == []
+        assert every_event(EventLog(instance.manifest.state_dir)) == []
 
     asyncio.run(scenario())

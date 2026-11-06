@@ -11,6 +11,7 @@ from kinby.contracts import (
     ContractModel,
     ErrorEnvelope,
     Event,
+    EventType,
     PermissionMode,
     PromptVersion,
     RoutineName,
@@ -135,6 +136,13 @@ async def thread_events(
     stream = await dispatcher.subscribe("thread.subscribe", payload, scopes)
     assert not isinstance(stream, ErrorEnvelope)
     return stream.items
+
+
+def every_event(event_log: EventLog) -> list[Event]:
+    """Every event in the transcript store, in the order appended. The store itself has no such
+    read: each reader asks for what it folds."""
+    with event_log.reader() as reader:
+        return list(reader.events_of(set(EventType)))
 
 
 def write_events(state_dir: Path, records: Iterable[Mapping[str, Any]]) -> None:

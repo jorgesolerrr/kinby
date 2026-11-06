@@ -154,7 +154,7 @@ def test_diff_accepts_a_full_id_and_a_unique_eight_character_prefix(tmp_path: Pa
         )
         turn_id = next(
             event.turn_id
-            for event in EventLog(tmp_path).stored(created.id)
+            for event in EventLog(tmp_path).thread_events(created.id)
             if isinstance(event.payload, TurnStarted)
         )
         exit_code = await run_repl(
@@ -383,7 +383,7 @@ async def _thread_after_one_turn(
     assert exit_code == 0
     turn_id = next(
         event.turn_id
-        for event in EventLog(tmp_path).stored(created.id)
+        for event in EventLog(tmp_path).thread_events(created.id)
         if isinstance(event.payload, TurnStarted)
     )
     return client, created.id, turn_id
@@ -484,13 +484,13 @@ def test_revert_sends_the_command_on_y_and_then_targets_the_revert_by_default(
         assert exit_code == 0
         reverted = [
             event.payload
-            for event in EventLog(tmp_path).stored(thread_id)
+            for event in EventLog(tmp_path).thread_events(thread_id)
             if isinstance(event.payload, WorkspaceReverted)
         ]
         assert len(reverted) == 2
         revert_id = next(
             event.turn_id
-            for event in EventLog(tmp_path).stored(thread_id)
+            for event in EventLog(tmp_path).thread_events(thread_id)
             if isinstance(event.payload, WorkspaceReverted)
         )
         assert reverted[1].target_turn_id == revert_id
@@ -756,7 +756,7 @@ def test_repl_rates_a_completed_turn_good_with_a_reason(tmp_path: Path) -> None:
         assert stderr.getvalue() == ""
         ratings = [
             event.payload
-            for event in EventLog(tmp_path).stored(created.id)
+            for event in EventLog(tmp_path).thread_events(created.id)
             if isinstance(event.payload, TurnRated)
         ]
         assert ratings == [TurnRated(verdict=TurnVerdict.GOOD, reason="Answered directly.")]
@@ -796,7 +796,7 @@ def test_repl_rates_a_completed_turn_bad_without_a_reason(tmp_path: Path) -> Non
         assert stderr.getvalue() == ""
         ratings = [
             event.payload
-            for event in EventLog(tmp_path).stored(created.id)
+            for event in EventLog(tmp_path).thread_events(created.id)
             if isinstance(event.payload, TurnRated)
         ]
         assert ratings == [TurnRated(verdict=TurnVerdict.BAD)]
@@ -831,7 +831,8 @@ def test_repl_skips_a_rating_on_enter(tmp_path: Path) -> None:
         assert exit_code == 0
         assert "Rate this turn [g]ood/[b]ad/[enter to skip]: " in stdout.getvalue()
         assert not any(
-            isinstance(event.payload, TurnRated) for event in EventLog(tmp_path).stored(created.id)
+            isinstance(event.payload, TurnRated)
+            for event in EventLog(tmp_path).thread_events(created.id)
         )
 
     asyncio.run(scenario())
@@ -866,7 +867,8 @@ def test_repl_does_not_ask_for_a_failed_turn(tmp_path: Path) -> None:
         assert "Rate this turn" not in stdout.getvalue()
         assert "The model turn failed unexpectedly." in stderr.getvalue()
         assert not any(
-            isinstance(event.payload, TurnRated) for event in EventLog(tmp_path).stored(created.id)
+            isinstance(event.payload, TurnRated)
+            for event in EventLog(tmp_path).thread_events(created.id)
         )
 
     asyncio.run(scenario())
@@ -975,7 +977,8 @@ def test_repl_does_not_print_recap_events(tmp_path: Path) -> None:
 
         async def first_recap() -> None:
             while not any(
-                isinstance(event.payload, MemoryRecapped) for event in event_log.stored(created.id)
+                isinstance(event.payload, MemoryRecapped)
+                for event in event_log.thread_events(created.id)
             ):
                 await asyncio.sleep(0.01)
 

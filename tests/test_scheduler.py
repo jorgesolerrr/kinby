@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime
+from hashlib import sha256
 from io import StringIO
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from kinby.cli.repl import run_repl
 from kinby.contracts import (
     AcceptedResult,
     CompletionOutcome,
-    Delivery,
+    DeliveryArrival,
     DeliveryId,
     ErrorEnvelope,
     Event,
@@ -35,13 +36,14 @@ from kinby.core.dispatcher import (
 )
 from kinby.core.errors import BudgetExceeded, CodeStepFailed
 from kinby.core.events import EventLog
-from kinby.core.scheduler import SchedulerConfig
+from kinby.core.scheduler import Delivery, SchedulerConfig
 from kinby.core.turns import TurnOutcome
 from kinby.instance import FeedbackPolicy, ManifestError, load_instance
 from kinby.instance.schema import manifest_schema
 from tests.helpers import (
     cannot_restore,
     does_not_park,
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     no_routines,
@@ -123,6 +125,17 @@ class ScriptedRunner:
         return TurnOutcome()
 
 
+class BodyRecordingRunner(ScriptedRunner):
+    """Records the delivery body each turn was handed."""
+
+    def __init__(self) -> None:
+        self.bodies: list[str | None] = []
+
+    async def run(self, turn, context):
+        self.bodies.append(context.delivery_body)
+        return await super().run(turn, context)
+
+
 def runtime(instance, clock, runner=None):
     return build_dispatcher(
         instance.manifest.state_dir,
@@ -202,7 +215,7 @@ def test_start_catches_up_once(tmp_path, catch_up, history, expected):
                 instance.manifest.state_dir,
                 [
                     {**event.model_dump(mode="json"), "timestamp": clock.now.isoformat()}
-                    for event in EventLog(instance.manifest.state_dir).all_events()
+                    for event in every_event(EventLog(instance.manifest.state_dir))
                 ],
             )
         clock.now = datetime(2026, 9, 6, 10, tzinfo=UTC)
@@ -238,7 +251,7 @@ def test_interrupted_scheduled_run_does_not_catch_up_after_restart(tmp_path):
             instance.manifest.state_dir,
             [
                 {**event.model_dump(mode="json"), "timestamp": clock.now.isoformat()}
-                for event in EventLog(instance.manifest.state_dir).all_events()
+                for event in every_event(EventLog(instance.manifest.state_dir))
             ],
         )
         clock.now = datetime(2026, 9, 6, 9, 3, tzinfo=UTC)
@@ -477,7 +490,7 @@ def test_payload_run_returns_while_a_user_turn_runs_then_fires_once_after_it(
         await asyncio.sleep(0)
         assert [
             type(event.payload)
-            for event in EventLog(instance.manifest.state_dir).stored(received.thread_id)
+            for event in EventLog(instance.manifest.state_dir).thread_events(received.thread_id)
         ] == [SignalReceived]
 
         runner.release.set()
@@ -487,7 +500,7 @@ def test_payload_run_returns_while_a_user_turn_runs_then_fires_once_after_it(
 
         assert [
             type(event.payload)
-            for event in EventLog(instance.manifest.state_dir).stored(received.thread_id)
+            for event in EventLog(instance.manifest.state_dir).thread_events(received.thread_id)
         ] == [SignalReceived, TurnStarted, MessageDelta, TurnCompleted]
 
     asyncio.run(scenario())
@@ -738,7 +751,8 @@ def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
         assert [(thread.id, thread.title) for thread in threads.threads] == [
             (accepted.accepted.thread_id, "issues · delivery-1")
         ]
-        events = EventLog(instance.manifest.state_dir).stored(accepted.accepted.thread_id)
+        event_log = EventLog(instance.manifest.state_dir)
+        events = event_log.thread_events(accepted.accepted.thread_id)
         assert len(events) == 1
         assert events[0].turn_id == accepted.accepted.turn_id
         assert events[0].sequence == accepted.accepted.sequence
@@ -748,8 +762,17 @@ def test_receive_records_delivery_and_drops_repeated_id(tmp_path: Path) -> None:
                 trigger=RoutineTrigger.SIGNAL,
                 delivery_id=DeliveryId("delivery-1"),
             ),
-            delivery=delivery,
+            delivery=DeliveryArrival(
+                delivery_id=DeliveryId("delivery-1"),
+                content_type="application/json",
+                size=19,
+                sha256=sha256(b'{"action":"opened"}').hexdigest(),
+                headers={},
+                action="opened",
+                received_at=clock.now,
+            ),
         )
+        assert event_log.waiting_body(accepted.accepted.turn_id) == '{"action":"opened"}'
 
     asyncio.run(scenario())
 
@@ -791,7 +814,7 @@ def test_routine_list_counts_pending_deliveries(
     asyncio.run(scenario())
 
 
-def test_first_scheduler_pass_fires_pending_delivery_with_fixed_turn_id(
+def test_a_delivery_waits_across_a_restart_and_its_turn_is_handed_its_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
@@ -815,18 +838,20 @@ def test_first_scheduler_pass_fires_pending_delivery_with_fixed_turn_id(
         )
         received = next(
             event
-            for event in EventLog(instance.manifest.state_dir).all_events()
+            for event in every_event(EventLog(instance.manifest.state_dir))
             if isinstance(event.payload, SignalReceived)
         )
         runner.release.set()
         await dispatcher.scheduler.drain()
 
-        restarted = runtime(instance, clock)
+        restarted_runner = BodyRecordingRunner()
+        restarted = runtime(instance, clock, restarted_runner)
         assert restarted.scheduler is not None
         await restarted.scheduler.tick()
         await restarted.scheduler.drain()
 
-        events = EventLog(instance.manifest.state_dir).stored(received.thread_id)
+        event_log = EventLog(instance.manifest.state_dir)
+        events = event_log.thread_events(received.thread_id)
         assert [type(event.payload) for event in events] == [
             SignalReceived,
             TurnStarted,
@@ -834,8 +859,12 @@ def test_first_scheduler_pass_fires_pending_delivery_with_fixed_turn_id(
             TurnCompleted,
         ]
         assert {event.turn_id for event in events} == {received.turn_id}
+        assert restarted_runner.bodies == ["opened"]
+        assert event_log.waiting_body(received.turn_id) is None
+        assert isinstance(received.payload, SignalReceived)
         started = events[1].payload
         assert isinstance(started, TurnStarted)
+        assert started.message == received.payload.delivery.reference
         assert started.origin == RoutineOrigin(
             name=RoutineName("issues"), trigger=RoutineTrigger.SIGNAL
         )
@@ -899,7 +928,7 @@ def test_scheduler_fires_oldest_ready_work_one_per_pass(
             await dispatcher.scheduler.tick()
             started = [
                 event.payload
-                for event in EventLog(instance.manifest.state_dir).all_events()
+                for event in every_event(EventLog(instance.manifest.state_dir))
                 if isinstance(event.payload, TurnStarted)
                 and isinstance(event.payload.origin, RoutineOrigin)
                 and event.payload.origin.trigger is not RoutineTrigger.MANUAL
@@ -944,7 +973,7 @@ def test_scheduler_fires_every_pending_delivery_in_receipt_order(tmp_path: Path)
 
         received = [
             event
-            for event in EventLog(instance.manifest.state_dir).all_events()
+            for event in every_event(EventLog(instance.manifest.state_dir))
             if isinstance(event.payload, SignalReceived)
         ]
         assert len(received) == 3
@@ -957,7 +986,7 @@ def test_scheduler_fires_every_pending_delivery_in_receipt_order(tmp_path: Path)
 
         assert [
             event.thread_id
-            for event in EventLog(instance.manifest.state_dir).all_events()
+            for event in every_event(EventLog(instance.manifest.state_dir))
             if isinstance(event.payload, TurnStarted)
             and isinstance(event.payload.origin, RoutineOrigin)
             and event.payload.origin.trigger is RoutineTrigger.SIGNAL
@@ -1008,7 +1037,7 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
         f"Resume with: kinby repl --thread {thread_id} --instance '{instance_path}'\n"
     ) in output.out
     assert "parked" in output.err and "approval" in output.err
-    events = EventLog(instance.manifest.state_dir).all_events()
+    events = every_event(EventLog(instance.manifest.state_dir))
     assert not any(isinstance(event.payload, TurnInterrupted) for event in events)
 
 
@@ -1073,7 +1102,7 @@ def test_repl_waits_visibly_and_shows_routines(tmp_path):
         assert stderr.getvalue().count("INSTANCE_BUSY") == 1
         starts = [
             event.payload
-            for event in EventLog(instance.manifest.state_dir).stored(thread.id)
+            for event in EventLog(instance.manifest.state_dir).thread_events(thread.id)
             if isinstance(event.payload, TurnStarted)
         ]
         assert [started.message for started in starts] == ["Hello"]
@@ -1100,7 +1129,7 @@ def test_repl_shows_pending_deliveries_only_for_signal_routines(
             instance.manifest.state_dir,
             [
                 {**event.model_dump(mode="json"), "timestamp": "2026-09-06T09:00:00+00:00"}
-                for event in EventLog(instance.manifest.state_dir).all_events()
+                for event in every_event(EventLog(instance.manifest.state_dir))
             ],
         )
         assert dispatcher.scheduler is not None
@@ -1527,7 +1556,7 @@ def test_a_restart_after_a_reenable_resets_the_failures_once(tmp_path):
         await restarted.scheduler.tick()
         routine = (await call(restarted, "routine.list")).routines[0]
         assert routine.enabled and routine.failure_count == 0
-        events = EventLog(instance.manifest.state_dir).all_events()
+        events = every_event(EventLog(instance.manifest.state_dir))
         assert sum(isinstance(event.payload, RoutineFailuresReset) for event in events) == 1
 
     asyncio.run(scenario())

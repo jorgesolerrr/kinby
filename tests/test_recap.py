@@ -62,6 +62,7 @@ from kinby.memory.session_digest import MemorySearch, SessionDigest, digest_sess
 from tests.helpers import (
     cannot_restore,
     does_not_park,
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     no_routines,
@@ -238,7 +239,7 @@ def test_kept_draft_writes_narrative_episode_and_token_marker(tmp_path: Path) ->
             await anext(closing_events)
         await closing_events.aclose()
         await asyncio.wait_for(recap.drain(), timeout=1)
-        events = event_log.stored(created.id)
+        events = event_log.thread_events(created.id)
         marker = events[-1]
         call = events[-2]
         assert call.turn_id == accepted.turn_id
@@ -473,7 +474,7 @@ def test_discarded_draft_writes_marker_without_episode(tmp_path: Path) -> None:
 
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        assert event_log.stored(created.id)[-1].payload == MemoryRecapped(
+        assert event_log.thread_events(created.id)[-1].payload == MemoryRecapped(
             node=None,
             input_tokens=8,
             output_tokens=3,
@@ -533,7 +534,7 @@ def test_recap_model_error_warns_without_changing_the_closed_turn(tmp_path: Path
 
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        events = event_log.stored(created.id)
+        events = event_log.thread_events(created.id)
         assert events[-3].payload == TurnCompleted(input_tokens=4, output_tokens=2)
         call = events[-2].payload
         assert isinstance(call, ModelCompleted)
@@ -597,7 +598,7 @@ def test_unknown_recap_model_warns_that_the_model_does_not_exist(
 
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        events = event_log.stored(created.id)
+        events = event_log.thread_events(created.id)
         warnings = [event.payload for event in events if isinstance(event.payload, Warning)]
         assert warnings == [
             Warning(
@@ -647,7 +648,7 @@ def test_catch_up_retries_a_failed_recap_and_writes_its_marker(tmp_path: Path) -
             await anext(closing_events)
         await closing_events.aclose()
         await asyncio.wait_for(failed_recap.drain(), timeout=1)
-        assert isinstance(event_log.stored(created.id)[-1].payload, Warning)
+        assert isinstance(event_log.thread_events(created.id)[-1].payload, Warning)
 
         model = ScriptedRecapModel(
             RecapDraft(
@@ -673,7 +674,7 @@ def test_catch_up_retries_a_failed_recap_and_writes_its_marker(tmp_path: Path) -
 
         markers = [
             event
-            for event in event_log.stored(created.id)
+            for event in event_log.thread_events(created.id)
             if isinstance(event.payload, MemoryRecapped)
         ]
         assert len(model.calls) == 1
@@ -944,7 +945,7 @@ def test_schedule_reads_the_transcript_in_the_worker(tmp_path: Path) -> None:
 
         assert event_log.background_read_seen
         event_log.require_background_read = False
-        assert isinstance(event_log.stored(thread_id)[-1].payload, MemoryRecapped)
+        assert isinstance(event_log.thread_events(thread_id)[-1].payload, MemoryRecapped)
 
     asyncio.run(scenario())
 
@@ -978,7 +979,7 @@ def test_catch_up_recaps_a_closed_uncovered_turn(tmp_path: Path) -> None:
         await recap.catch_up()
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        marker = event_log.stored(thread_id)[-1]
+        marker = event_log.thread_events(thread_id)[-1]
         assert marker.turn_id == turn_id
         assert isinstance(marker.payload, MemoryRecapped)
         assert marker.payload.node is not None
@@ -1067,14 +1068,14 @@ def test_catch_up_deletes_no_work_traces_and_keeps_other_nodes(tmp_path: Path) -
                 )
             ),
         }
-        before = list(event_log.all_events())
+        before = every_event(event_log)
         recap = _trace_only_writer(tmp_path, event_log, graph)
 
         await recap.catch_up()
         await asyncio.wait_for(recap.drain(), timeout=1)
 
         assert graph_files() == kept
-        after = list(event_log.all_events())
+        after = every_event(event_log)
         assert after[:-1] == before
         assert after[-1].turn_id == unmarked
         assert after[-1].payload == MemoryRecapped(
@@ -1085,7 +1086,7 @@ def test_catch_up_deletes_no_work_traces_and_keeps_other_nodes(tmp_path: Path) -
         await asyncio.wait_for(recap.drain(), timeout=1)
 
         assert graph_files() == kept
-        assert list(event_log.all_events()) == after
+        assert every_event(event_log) == after
 
     asyncio.run(scenario())
 
@@ -1157,7 +1158,7 @@ def test_catch_up_queues_oldest_turns_before_a_newly_closed_turn(tmp_path: Path)
         await asyncio.wait_for(recap.drain(), timeout=1)
 
         markers = [
-            event for event in event_log.all_events() if isinstance(event.payload, MemoryRecapped)
+            event for event in every_event(event_log) if isinstance(event.payload, MemoryRecapped)
         ]
         assert [marker.turn_id for marker in markers] == [
             oldest_turn_id,
@@ -1334,7 +1335,7 @@ def test_trace_description_is_one_bounded_line_of_a_webhook_body(tmp_path: Path)
 
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        marker = event_log.stored(created.id)[-1].payload
+        marker = event_log.thread_events(created.id)[-1].payload
         assert isinstance(marker, MemoryRecapped)
         assert marker.node is not None
         episode = GraphStore(tmp_path).open(marker.node)
@@ -1381,7 +1382,7 @@ def test_failed_recap_appends_warning_without_marker(tmp_path: Path) -> None:
             await anext(closing_events)
         await closing_events.aclose()
         await asyncio.wait_for(recap.drain(), timeout=1)
-        events = event_log.stored(created.id)
+        events = event_log.thread_events(created.id)
 
         assert events[-1].payload == Warning(
             sources=("recap",),
@@ -1486,7 +1487,7 @@ def test_no_work_turn_writes_marker_without_node(tmp_path: Path) -> None:
 
         await asyncio.wait_for(recap.drain(), timeout=1)
 
-        marker = event_log.stored(created.id)[-1]
+        marker = event_log.thread_events(created.id)[-1]
         assert marker.turn_id == accepted.turn_id
         assert marker.payload == MemoryRecapped(
             node=None,
@@ -1712,7 +1713,9 @@ async def _tell(dispatcher: Dispatcher, stop: RunStop) -> None:
 
 def _run_markers(event_log: EventLog) -> list[Event]:
     return [
-        event for event in event_log.stored(_RUN_ID) if isinstance(event.payload, MemoryRecapped)
+        event
+        for event in event_log.thread_events(_RUN_ID)
+        if isinstance(event.payload, MemoryRecapped)
     ]
 
 
@@ -1876,7 +1879,7 @@ def test_a_failed_run_recap_warns_and_the_next_start_retries_it(tmp_path: Path) 
         await _tell(dispatcher, _REVIEWED_RUN)
         await asyncio.wait_for(failing.drain(), timeout=1)
 
-        assert event_log.stored(_RUN_ID)[-1].payload == Warning(
+        assert event_log.thread_events(_RUN_ID)[-1].payload == Warning(
             sources=("recap",),
             message="The run recap failed: RuntimeError: recap response could not be parsed",
         )

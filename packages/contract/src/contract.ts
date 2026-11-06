@@ -3390,18 +3390,24 @@ export interface RoutineFailuresReset {
   type: "routine.failures.reset";
 }
 export interface SignalReceived {
-  delivery: Delivery;
+  delivery: DeliveryArrival;
   origin: RoutineOrigin;
   type: "signal.received";
 }
-export interface Delivery {
-  body: string;
+/**
+ * What the transcript store keeps of a delivery: that it arrived, what it was and how big.
+ * Its body waits apart until its turn starts, and is not kept after (ADR 0117).
+ */
+export interface DeliveryArrival {
+  action?: string | null;
   content_type: string;
   delivery_id?: string | null;
   headers: {
     [k: string]: string;
   };
   received_at: string;
+  sha256: string;
+  size: number;
 }
 /**
  * The workspace went from ``previous`` back to ``restored``, the target's before tree.

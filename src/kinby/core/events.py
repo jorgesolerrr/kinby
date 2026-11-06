@@ -11,7 +11,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import DeliveryId, Event, EventType, Payload, RoutineName, Stream
+from kinby.contracts import (
+    DeliveryId,
+    Event,
+    EventType,
+    Payload,
+    RoutineName,
+    SignalReceived,
+    Stream,
+)
 from kinby.core.clock import utc_now
 from kinby.instance.database import DELIVERY_ID, open_database
 
@@ -117,6 +125,33 @@ class EventLog:
         turn_id: UUID,
         payload: Payload,
     ) -> Event:
+        return await self._append(thread_id, turn_id, payload)
+
+    async def append_delivery(
+        self, thread_id: UUID, turn_id: UUID, arrival: SignalReceived, body: str
+    ) -> Event:
+        """Record a delivery's arrival, and its body to wait for *turn_id* to start (ADR 0117)."""
+        return await self._append(thread_id, turn_id, arrival, body)
+
+    def waiting_body(self, turn_id: UUID) -> str | None:
+        """The body of the delivery that waits for *turn_id* to start."""
+        with self._using_db:
+            row = self._db.execute(
+                "SELECT body FROM waiting_deliveries WHERE turn_id = ?", (str(turn_id),)
+            ).fetchone()
+        return None if row is None else row[0]
+
+    def drop_waiting_body(self, turn_id: UUID) -> None:
+        with self._using_db:
+            self._db.execute("DELETE FROM waiting_deliveries WHERE turn_id = ?", (str(turn_id),))
+
+    async def _append(
+        self,
+        thread_id: UUID,
+        turn_id: UUID,
+        payload: Payload,
+        waiting_body: str | None = None,
+    ) -> Event:
         async with self._lock:
             timestamp = self._clock()
             if timestamp.utcoffset() is None:
@@ -151,6 +186,11 @@ class EventLog:
                     " last_activity_at = excluded.last_activity_at",
                     (str(thread_id), event.sequence, at),
                 )
+                if waiting_body is not None:
+                    self._db.execute(
+                        "INSERT INTO waiting_deliveries VALUES (?, ?)",
+                        (str(turn_id), waiting_body),
+                    )
             for subscriber in self._subscribers.get(thread_id, set()):
                 subscriber.put_nowait(event)
         return event
@@ -201,14 +241,6 @@ class EventLog:
         if not subscribers:
             del self._subscribers[thread_id]
 
-    def stored(self, thread_id: UUID) -> list[Event]:
-        with self._using_db:
-            records = self._db.execute(
-                f"SELECT {_EVENT_JSON} FROM events WHERE thread_id = ? ORDER BY sequence",
-                (str(thread_id),),
-            ).fetchall()
-        return [Event.model_validate_json(record) for (record,) in records]
-
     def thread_events(self, thread_id: UUID, after_sequence: int = 0) -> list[Event]:
         with self._using_db:
             return [*EventReader(self._db).thread_events(thread_id, after_sequence)]
@@ -243,10 +275,3 @@ class EventLog:
             # One read transaction holds one snapshot, so a fold's reads agree with each other.
             db.execute("BEGIN")
             yield EventReader(db)
-
-    def all_events(self) -> Iterator[Event]:
-        """Every event in the order appended, as stored when the read began. The read has a
-        connection of its own, so it may be held open across appends."""
-        with closing(open_database(self._state_dir)) as db:
-            for (record,) in db.execute(f"SELECT {_EVENT_JSON} FROM events ORDER BY rowid"):
-                yield Event.model_validate_json(record)

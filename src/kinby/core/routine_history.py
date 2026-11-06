@@ -7,7 +7,7 @@ from uuid import UUID
 from kinby.contracts import (
     ApprovalRequested,
     CompletionOutcome,
-    Delivery,
+    DeliveryArrival,
     Event,
     EventType,
     MessageDelta,
@@ -50,7 +50,7 @@ class PendingDelivery:
     turn_id: UUID
     receipt_order: int
     origin: RoutineOrigin
-    delivery: Delivery
+    delivery: DeliveryArrival
 
 
 @dataclass

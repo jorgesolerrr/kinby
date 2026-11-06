@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,6 @@ from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
-    Delivery,
     DeliveryId,
     ErrorCode,
     Event,
@@ -48,7 +48,7 @@ from kinby.core.dispatcher import (
 from kinby.core.errors import BudgetExceeded, ModelUnpriced
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
-from kinby.core.scheduler import SchedulerConfig
+from kinby.core.scheduler import Delivery, SchedulerConfig
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import ChatModel, LangGraphRunner
@@ -59,7 +59,7 @@ from kinby.memory import GraphStore, RecapWriter
 from kinby.memory.recap import RecapModel
 from kinby.plugins.browser import BrowserService
 from kinby.plugins.routines import SharedCodeStep, SignalAuth, load_routines
-from tests.helpers import turn_config_stub
+from tests.helpers import every_event, turn_config_stub
 
 
 def instance_at(path: Path) -> Instance:
@@ -500,7 +500,7 @@ def test_routine_and_user_turns_use_the_same_prompt_version(tmp_path: Path) -> N
         await turns.wait_idle()
 
         started = [
-            event.payload for event in log.all_events() if isinstance(event.payload, TurnStarted)
+            event.payload for event in every_event(log) if isinstance(event.payload, TurnStarted)
         ]
         assert len(started) == 2
         assert started[0].prompt_version is not None
@@ -565,7 +565,7 @@ def fetch(signal: dict) -> str:
     assert "scheduled fallback" in str(model.messages[0][-1].content)
 
 
-def test_signal_delivery_is_decoded_for_code_step_and_none_skips_model(
+def test_signal_delivery_is_decoded_for_code_step_whose_call_names_the_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
@@ -580,10 +580,14 @@ signal:
   secret: GITHUB_WEBHOOK_SECRET
   signature_header: X-Hub-Signature-256""",
         )
-        (path.parent / "run.py").write_text('''from kinby.plugins import tool
+        received = tmp_path / "received.json"
+        (path.parent / "run.py").write_text(f'''import json
+from pathlib import Path
+from kinby.plugins import tool
 @tool(write=False)
 def fetch(signal: dict, owner: str) -> None:
     """Filter a delivery."""
+    Path({str(received)!r}).write_text(json.dumps(signal))
     return None
 ''')
         model = RoutineModel()
@@ -607,22 +611,19 @@ def fetch(signal: dict, owner: str) -> None:
         await scheduler.drain()
 
         assert model.messages == []
-        events = log.stored(accepted.accepted.thread_id)
+        events = log.thread_events(accepted.accepted.thread_id)
         assert isinstance(events[0].payload, SignalReceived)
-        call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
-        assert call.arguments == {
-            "owner": "jorge",
-            "signal": {
-                "headers": {
-                    "content-type": "application/json",
-                    "x-github-event": "issues",
-                },
-                "content_type": "application/json; charset=utf-8",
-                "body": {"action": "opened", "number": 128},
-                "delivery_id": "delivery-128",
-                "received_at": "2026-09-07T10:00:00Z",
-            },
+        assert json.loads(received.read_text()) == {
+            "headers": {"x-github-event": "issues"},
+            "content_type": "application/json; charset=utf-8",
+            "body": {"action": "opened", "number": 128},
+            "delivery_id": "delivery-128",
+            "received_at": "2026-09-07T10:00:00Z",
         }
+        call = next(event.payload for event in events if isinstance(event.payload, ToolCall))
+        assert call.arguments == {"owner": "jorge", "signal": "Delivery delivery-128"}
+        started = next(event.payload for event in events if isinstance(event.payload, TurnStarted))
+        assert started.message == "Delivery delivery-128"
         completed = events[-1].payload
         assert isinstance(completed, TurnCompleted)
         assert completed.outcome is CompletionOutcome.NO_WORK
@@ -702,7 +703,7 @@ def test_routine_turn_started_records_the_routine_mode(
 
         started = next(
             event.payload
-            for event in log.stored(accepted.thread_id)
+            for event in log.thread_events(accepted.thread_id)
             if isinstance(event.payload, TurnStarted)
         )
         assert started.permission_mode is recorded
@@ -743,7 +744,7 @@ def fetch(signal: dict) -> str:
 
         failed = next(
             event.payload
-            for event in log.stored(accepted.accepted.thread_id)
+            for event in log.thread_events(accepted.accepted.thread_id)
             if isinstance(event.payload, TurnFailed)
         )
         assert failed.code is ErrorCode.INTERNAL
@@ -840,9 +841,9 @@ def test_pending_delivery_respects_disablement_and_reports_deleted_routine(
         await scheduler.drain()
 
         if not deleted and trigger is RoutineTrigger.SIGNAL:
-            assert [type(event.payload) for event in log.stored(accepted.accepted.thread_id)] == [
-                SignalReceived
-            ]
+            assert [
+                type(event.payload) for event in log.thread_events(accepted.accepted.thread_id)
+            ] == [SignalReceived]
             assert model.messages == []
             dispatcher, log = signal_runtime(instance, model)
             scheduler = dispatcher.scheduler
@@ -864,7 +865,7 @@ def test_pending_delivery_respects_disablement_and_reports_deleted_routine(
             await scheduler.drain()
             assert any(
                 isinstance(event.payload, TurnCompleted)
-                for event in log.stored(other.accepted.thread_id)
+                for event in log.thread_events(other.accepted.thread_id)
             )
             model.messages.clear()
             path.write_text(path.read_text().replace("enabled: false", "enabled: true"))
@@ -873,7 +874,7 @@ def test_pending_delivery_respects_disablement_and_reports_deleted_routine(
 
         closing = next(
             event.payload
-            for event in log.stored(accepted.accepted.thread_id)
+            for event in log.thread_events(accepted.accepted.thread_id)
             if isinstance(event.payload, TurnCompleted | TurnFailed)
         )
         if deleted:
@@ -1008,7 +1009,7 @@ def fetch() -> None:
         await writer.catch_up()
         await writer.drain()
         assert model.messages == []
-        stored = log.stored(events[0].thread_id)
+        stored = log.thread_events(events[0].thread_id)
         markers = [event.payload for event in stored if isinstance(event.payload, MemoryRecapped)]
         assert len(markers) == 1
         marker = markers[0]
@@ -1191,7 +1192,9 @@ def fetch() -> str:
                 "mode.read-only.write" in str(message.content) for message in model.messages[1]
             )
         calls = [
-            event.payload for event in log.stored(thread.id) if isinstance(event.payload, ToolCall)
+            event.payload
+            for event in log.thread_events(thread.id)
+            if isinstance(event.payload, ToolCall)
         ]
         assert [call.name for call in calls] == ["fetch", "remember"]
 
@@ -1258,11 +1261,11 @@ def fetch() -> None:
             await log.append(
                 thread_id, turn_id, TurnCompleted(input_tokens=1_000_000, output_tokens=0)
             )
-        before = list(log.all_events())
+        before = every_event(log)
         model = RoutineModel()
         with pytest.raises(ModelUnpriced if unpriced else BudgetExceeded):
             await fire(instance, model)
-        assert list(log.all_events()) == before
+        assert every_event(log) == before
         assert model.messages == []
 
     asyncio.run(scenario())

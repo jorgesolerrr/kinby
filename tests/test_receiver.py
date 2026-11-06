@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 from datetime import UTC, datetime
+from hashlib import sha256
 from http.client import HTTPConnection
 from importlib import import_module
 from threading import Event as ThreadEvent
@@ -27,12 +28,13 @@ from kinby.core.events import EventLog
 from kinby.core.receiver import Receiver
 from kinby.instance import Serve
 from tests.helpers import (
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     turn_config_stub,
 )
 from tests.test_routines import instance_at, routine_file
-from tests.test_scheduler import FakeClock, ScriptedRunner, runtime
+from tests.test_scheduler import BodyRecordingRunner, FakeClock, ScriptedRunner, runtime
 
 
 async def request(
@@ -113,7 +115,7 @@ signal:
                     "X-Hub-Signature-256": (
                         "sha256=d42142b53efbc7cf5cd20b6e074eb33707e0de3b368f698e6d6f6c824ffb8d37"
                     ),
-                    "X-Source": "GitHub",
+                    "X-GitHub-Event": "issues",
                 },
             )
             rejected_status, rejected_body = await request(
@@ -136,25 +138,25 @@ signal:
         assert rejected_status == 401
         assert rejected_body == b""
 
-        events = list(EventLog(instance.manifest.state_dir).all_events())
+        events = every_event(EventLog(instance.manifest.state_dir))
         received = next(event for event in events if isinstance(event.payload, SignalReceived))
         started = next(event for event in events if isinstance(event.payload, TurnStarted))
         assert isinstance(received.payload, SignalReceived)
-        assert received.payload.delivery.headers == {
-            "accept-encoding": "identity",
-            "content-length": "19",
-            "content-type": "application/json; charset=utf-8",
-            "host": f"127.0.0.1:{address.port}",
-            "x-github-delivery": "delivery-1",
-            "x-source": "GitHub",
+        arrival = received.payload.delivery
+        assert arrival.model_dump(exclude={"received_at"}) == {
+            "delivery_id": "delivery-1",
+            "content_type": "application/json; charset=utf-8",
+            "size": 19,
+            "sha256": sha256(body).hexdigest(),
+            "headers": {"x-github-event": "issues"},
+            "action": "opened",
         }
-        assert received.payload.delivery.content_type == "application/json; charset=utf-8"
-        assert received.payload.delivery.body == '{"action":"opened"}'
-        assert received.payload.delivery.delivery_id == "delivery-1"
-        assert received.payload.delivery.received_at.tzinfo is not None
+        assert arrival.received_at.tzinfo is not None
+        assert EventLog(instance.manifest.state_dir).waiting_body(received.turn_id) is None
         assert started.thread_id == received.thread_id
         assert started.turn_id == received.turn_id
         assert isinstance(started.payload, TurnStarted)
+        assert started.payload.message == "Delivery delivery-1"
         assert started.payload.origin == RoutineOrigin(
             name="news",
             trigger=RoutineTrigger.SIGNAL,
@@ -191,7 +193,7 @@ def test_bearer_signal_accepts_only_the_configured_token(tmp_path, monkeypatch) 
         assert accepted == 202
         assert rejected == 401
         assert rejected_body == b""
-        assert len(list(EventLog(instance.manifest.state_dir).all_events())) == 1
+        assert len(every_event(EventLog(instance.manifest.state_dir))) == 1
 
     asyncio.run(scenario())
 
@@ -255,7 +257,7 @@ def test_rejected_calls_are_logged_and_never_recorded(tmp_path, monkeypatch, cap
             await receiver.stop()
 
         assert statuses == [404, 404, 404, 405, 401, 410, 413]
-        assert list(EventLog(instance.manifest.state_dir).all_events()) == []
+        assert every_event(EventLog(instance.manifest.state_dir)) == []
 
     with caplog.at_level(logging.INFO, logger="kinby.core.receiver"):
         asyncio.run(scenario())
@@ -331,7 +333,41 @@ signal:
         assert first_status == 202
         assert repeated_status == 200
         assert json.loads(repeated_body) == json.loads(first_body)
-        assert len(list(EventLog(instance.manifest.state_dir).all_events())) == 1
+        assert len(every_event(EventLog(instance.manifest.state_dir))) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_delivery_received_before_a_restart_starts_its_turn_with_its_body(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("SIGNAL_SECRET", "secret")
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: Issues\nsignal:\n  secret: SIGNAL_SECRET")
+        clock = FakeClock(datetime(2026, 9, 7, tzinfo=UTC))
+        dispatcher = runtime(instance, clock)
+        receiver = Receiver(Serve("127.0.0.1", 0), dispatcher.scheduler, instance)
+        address = await receiver.start()
+        try:
+            status, _ = await request(
+                address,
+                "POST",
+                "/signals/news",
+                body=b"issue 128 opened",
+                headers={"Authorization": "Bearer secret", "Content-Type": "text/plain"},
+            )
+        finally:
+            await receiver.stop()
+
+        runner = BodyRecordingRunner()
+        restarted = runtime(instance, clock, runner)
+        assert restarted.scheduler is not None
+        await restarted.scheduler.tick()
+        await restarted.scheduler.drain()
+
+        assert status == 202
+        assert runner.bodies == ["issue 128 opened"]
 
     asyncio.run(scenario())
 

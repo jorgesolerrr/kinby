@@ -21,6 +21,7 @@ from kinby.contracts import (
 from kinby.core.events import EventLog
 from kinby.core.runtime_lock import runtime_lock
 from kinby.instance import Budgets, RecapPolicy, init_instance, load_instance, reload_manifest
+from tests.helpers import every_event
 
 
 class BlockingInput(StringIO):
@@ -178,7 +179,7 @@ def test_run_catches_up_uncovered_turns_before_waiting_for_input(
         for _ in range(100):
             marker_seen = any(
                 event.turn_id == turn_id and isinstance(event.payload, MemoryRecapped)
-                for event in event_log.all_events()
+                for event in every_event(event_log)
             )
             if marker_seen:
                 break
@@ -401,4 +402,4 @@ def test_routine_commands_refuse_to_start_beside_a_live_server(
 
     assert refused == 1
     assert str(os.getpid()) in refusal
-    assert list(EventLog(state_dir).all_events()) == []
+    assert every_event(EventLog(state_dir)) == []

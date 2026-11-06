@@ -39,7 +39,7 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
-from tests.helpers import thread_events
+from tests.helpers import every_event, thread_events
 from tests.test_gate import ScriptedModel, _instance, _run_turn, _write_store_tool
 from tests.test_routine_grants import news_runtime
 from tests.test_routines import instance_at, routine_file
@@ -185,11 +185,11 @@ def test_a_hub_out_of_reach_leaves_the_notification_pending_until_a_scheduler_pa
             accepted = await dispatcher.dispatch("routine.run", {"name": "news"}, set(Scope))
             assert isinstance(accepted, AcceptedResult), accepted
             await scheduler.drain()
-            pending = [event.payload for event in log.stored(accepted.thread_id)]
+            pending = [event.payload for event in log.thread_events(accepted.thread_id)]
             hub.down = False
             await scheduler.tick()
             await scheduler.tick()
-        answered = [event.payload for event in log.stored(accepted.thread_id)]
+        answered = [event.payload for event in log.thread_events(accepted.thread_id)]
 
         assert not tool_result(pending).error
         assert any(isinstance(payload, NotificationRaised) for payload in pending)
@@ -341,7 +341,7 @@ def test_a_routine_notice_without_a_hub_url_raises_nothing(tmp_path: Path) -> No
         await fail_routine(dispatcher, 1)
         await dispatcher.scheduler.tick()
 
-        assert not any(isinstance(event.payload, NotificationRaised) for event in log.all_events())
+        assert not any(isinstance(event.payload, NotificationRaised) for event in every_event(log))
 
     asyncio.run(scenario())
 

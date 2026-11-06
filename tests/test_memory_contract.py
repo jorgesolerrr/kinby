@@ -7,6 +7,7 @@ from uuid import UUID
 from kinby.contracts import ErrorCode, ErrorEnvelope, Event, Scope
 from kinby.core.events import EventLog
 from kinby.core.turn_runner import LangGraphRunner
+from tests.helpers import every_event
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
 
@@ -422,7 +423,7 @@ def _graph_files(instance_path: Path) -> dict[str, str]:
 
 
 def _events(instance_path: Path) -> list[Event]:
-    return list(EventLog(instance_path / ".state").all_events())
+    return every_event(EventLog(instance_path / ".state"))
 
 
 def _refused(result: object, code: ErrorCode) -> ErrorEnvelope:

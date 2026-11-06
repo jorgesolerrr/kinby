@@ -11,7 +11,6 @@ from aiohttp import web
 
 from kinby.contracts import (
     CONTRACT_VERSION,
-    Delivery,
     DeliveryId,
     RoutineName,
     RoutineTrigger,
@@ -19,7 +18,7 @@ from kinby.contracts import (
 from kinby.core.clock import utc_now
 from kinby.core.contract_server import ContractServer
 from kinby.core.errors import RoutineNotFound
-from kinby.core.scheduler import Scheduler
+from kinby.core.scheduler import Delivery, Scheduler
 from kinby.instance import Instance, Serve
 from kinby.plugins.routines import (
     Routine,

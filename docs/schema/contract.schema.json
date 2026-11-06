@@ -1836,11 +1836,20 @@
       "title": "DelegatedRunOutcome",
       "type": "string"
     },
-    "Delivery": {
+    "DeliveryArrival": {
       "additionalProperties": false,
+      "description": "What the transcript store keeps of a delivery: that it arrived, what it was and how big.\nIts body waits apart until its turn starts, and is not kept after (ADR 0117).",
       "properties": {
-        "body": {
-          "type": "string"
+        "action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "content_type": {
           "type": "string"
@@ -1865,15 +1874,22 @@
         "received_at": {
           "format": "date-time",
           "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
         }
       },
       "required": [
-        "headers",
         "content_type",
-        "body",
+        "size",
+        "sha256",
+        "headers",
         "received_at"
       ],
-      "title": "Delivery",
+      "title": "DeliveryArrival",
       "type": "object"
     },
     "DeliveryStatus": {
@@ -7880,7 +7896,7 @@
       "additionalProperties": false,
       "properties": {
         "delivery": {
-          "$ref": "#/$defs/Delivery"
+          "$ref": "#/$defs/DeliveryArrival"
         },
         "origin": {
           "$ref": "#/$defs/RoutineOrigin"

@@ -51,6 +51,7 @@ from kinby.instance import Budgets, init_instance, load_instance
 from tests.helpers import (
     cannot_restore,
     does_not_park,
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     historical_event_log,
@@ -72,7 +73,7 @@ def _daily_budget_preparation(
     return fixed_turn_preparation(
         model=model,
         daily_cost=daily_cost(
-            event_log.all_events(),
+            every_event(event_log),
             prices,
             datetime.now(UTC).date(),
         ),
@@ -1197,7 +1198,7 @@ def test_dispatcher_without_turn_service_appends_a_second_rating(tmp_path: Path)
         assert second.sequence == first.sequence + 1
         ratings = [
             event.payload
-            for event in EventLog(tmp_path).stored(created.id)
+            for event in EventLog(tmp_path).thread_events(created.id)
             if isinstance(event.payload, TurnRated)
         ]
         assert ratings == [
@@ -1657,7 +1658,7 @@ def test_interrupt_during_approval_restore_prevents_resume(tmp_path: Path) -> No
 def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) -> None:
     async def scenario() -> None:
         _, created, accepted, requested = await _park_turn(tmp_path)
-        records = [event.model_dump(mode="json") for event in EventLog(tmp_path).all_events()]
+        records = [event.model_dump(mode="json") for event in every_event(EventLog(tmp_path))]
         del records[0]["payload"]["permission_mode"]
         write_events(tmp_path, records)
         runner = ParkingRunner(

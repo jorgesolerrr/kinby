@@ -17,6 +17,7 @@ from kinby.memory import (
     NodeNotFound,
     RecappedTurn,
 )
+from tests.helpers import every_event
 
 _THREAD_ID = UUID("11111111-1111-1111-1111-111111111111")
 _TURN_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -466,7 +467,7 @@ def test_remember_writes_a_fact_that_later_recall_finds(tmp_path: Path) -> None:
         "---\n"
         "The memory backend uses markdown until evals justify a database.\n"
     )
-    assert list(EventLog(tmp_path / ".state").all_events()) == []
+    assert every_event(EventLog(tmp_path / ".state")) == []
 
 
 def test_remember_writes_a_fact_with_its_source_episodes(tmp_path: Path) -> None:
@@ -540,7 +541,7 @@ def test_forget_tombstones_a_fact_and_excludes_it_from_recall_and_open(
     assert memory.recall("memory backend") == ()
     with pytest.raises(NodeNotFound, match="was forgotten"):
         memory.open(node)
-    assert list(EventLog(tmp_path / ".state").all_events()) == []
+    assert every_event(EventLog(tmp_path / ".state")) == []
 
 
 def test_a_fact_without_a_thread_added_by_the_user_is_recalled_and_opened(tmp_path: Path) -> None:
