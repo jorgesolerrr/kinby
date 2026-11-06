@@ -12,7 +12,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import ApprovalRequested, ToolResult
-from kinby.core import LangGraphRunner
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import Instance, load_instance
 from kinby.plugins import ToolContext
 from kinby.plugins.defaults.web import web_search

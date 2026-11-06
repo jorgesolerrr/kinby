@@ -654,6 +654,7 @@ function SkillRows({
               <Item size="row">
                 <Checkbox
                   id={`${id}-${name}`}
+                  aria-labelledby={`${id}-${name}-label`}
                   checked={picked.includes(name)}
                   onCheckedChange={(on) =>
                     onChange(on ? [...picked, name] : picked.filter((each) => each !== name))
@@ -661,7 +662,7 @@ function SkillRows({
                 />
                 <ItemContent className="min-w-0">
                   <ItemTitle>
-                    <Label htmlFor={`${id}-${name}`}>
+                    <Label id={`${id}-${name}-label`} htmlFor={`${id}-${name}`}>
                       <span className="truncate font-mono">{name}</span>
                     </Label>
                     {offer !== undefined && suggested.includes(name) && (

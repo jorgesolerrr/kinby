@@ -8,15 +8,10 @@ from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 
 from kinby.contracts import AcceptedResult, Event, Scope, ThreadCreateResult, TurnStarted
-from kinby.core import (
-    LangGraphRunner,
-    TurnConfig,
-    assemble_system_prompt,
-    build_dispatcher,
-    prompt_version,
-)
-from kinby.core.dispatcher import Dispatcher
+from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
+from kinby.core.prompt import assemble_system_prompt, prompt_version
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation
 from kinby.instance import load_instance
 from kinby.plugins.skills import load_skills

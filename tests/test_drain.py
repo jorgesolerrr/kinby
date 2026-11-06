@@ -38,7 +38,6 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
 )
-from kinby.core import boot_instance
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.dispatcher import (
     Dispatcher,
@@ -48,7 +47,7 @@ from kinby.core.dispatcher import (
     build_dispatcher,
 )
 from kinby.core.events import EventLog
-from kinby.core.runtime import InstanceRuntime
+from kinby.core.runtime import InstanceRuntime, boot_instance
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.snapshots import SnapshotRef, SnapshotStore
 from kinby.core.turns import (

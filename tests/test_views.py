@@ -28,8 +28,8 @@ from kinby.contracts import (
     ViewSpec,
     is_turn_closing,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.dispatcher import Dispatcher
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance, load_instance
 from kinby.plugins import ToolContext

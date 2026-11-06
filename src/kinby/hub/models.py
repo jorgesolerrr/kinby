@@ -22,7 +22,7 @@ from kinby.contracts import (
 )
 
 if TYPE_CHECKING:
-    from kinby.core.dispatcher import Dispatcher
+    from kinby.core.routing import Dispatcher
     from kinby.hub.approvals import HomeApprovals
 
 

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import cached_property
+from typing import TYPE_CHECKING
 
-from langchain.chat_models import init_chat_model
-from langchain_anthropic import ChatAnthropic
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from kinby.instance import ModelName
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
 
 _ANTHROPIC_PROVIDER = "anthropic"
 
@@ -28,24 +28,16 @@ def is_anthropic_model(name: ModelName) -> bool:
     return provider == _ANTHROPIC_PROVIDER
 
 
-class _ProfileChatAnthropic(ChatAnthropic):
-    """Let the Anthropic SDK find an ``ant auth login`` profile when no API key is set.
-
-    ChatAnthropic passes an empty key to the SDK, which then skips its credential chain.
-    """
-
-    @cached_property
-    def _client_params(self) -> dict[str, object]:
-        params = dict(super()._client_params)
-        if not params.get("api_key"):
-            params["api_key"] = None
-        return params
-
-
 def init_model(name: ModelName) -> BaseChatModel:
+    """A chat model for *name*, importing its provider's integration only now, so an instance
+    loads the SDKs of the providers it uses and no other."""
     provider, model = _split_model_name(name)
     if provider == _ANTHROPIC_PROVIDER:
-        return _ProfileChatAnthropic(model=model)
+        from kinby.core.anthropic_model import ProfileChatAnthropic
+
+        return ProfileChatAnthropic(model=model)
+    from langchain.chat_models import init_chat_model
+
     return init_chat_model(name)
 
 

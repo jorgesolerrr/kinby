@@ -38,7 +38,7 @@ from kinby.contracts import (
     SubscribeFrame,
     parse_client_frame,
 )
-from kinby.core.dispatcher import Dispatcher, instance_capabilities
+from kinby.core.routing import Dispatcher, instance_capabilities
 
 CONTROL_TOKEN_VARIABLE = "KINBY_CONTROL_TOKEN"
 #: Items one subscription may hold for a client that is not reading fast enough.

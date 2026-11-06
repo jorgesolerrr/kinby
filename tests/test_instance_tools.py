@@ -33,9 +33,9 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.errors import RoutineNotFound, RoutinePending
 from kinby.core.steps import run_command_step
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (
     ApprovalAnswer,
     ParkedTurn,

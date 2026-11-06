@@ -24,8 +24,8 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
 )
-from kinby.core import LangGraphRunner
 from kinby.core.events import EventLog
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (
     ApprovalAnswer,
     ParkedTurn,

@@ -62,12 +62,15 @@ from kinby.contracts import (
     UsageGetCommand,
     is_turn_closing,
 )
-from kinby.core import Dispatcher, assemble_system_prompt, boot_instance, build_dispatcher
 from kinby.core.clock import utc_now, utc_today
 from kinby.core.contract_server import ContractServer
+from kinby.core.dispatcher import build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.pricing import instance_prices
+from kinby.core.prompt import assemble_system_prompt
 from kinby.core.receiver import Receiver
+from kinby.core.routing import Dispatcher
+from kinby.core.runtime import boot_instance
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
 from kinby.core.session_recalls import keep_recall
 from kinby.core.threads import ThreadStore

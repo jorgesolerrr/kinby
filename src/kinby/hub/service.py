@@ -232,7 +232,6 @@ from kinby.contracts import (
 )
 from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
-from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import (
     AdoptionBlocked,
     FactoryCheckFailed,
@@ -249,6 +248,7 @@ from kinby.core.errors import (
     NameTaken,
     PermissionDenied,
 )
+from kinby.core.routing import Dispatcher
 from kinby.core.usage import TimeRange
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.factories.file import InstanceName

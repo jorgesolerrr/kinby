@@ -19,7 +19,7 @@ from kinby.contracts import (
     Scope,
 )
 from kinby.core.contract_server import serve_contract
-from kinby.core.dispatcher import Dispatcher
+from kinby.core.routing import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
 from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
 from kinby.hub.relay import (

@@ -21,7 +21,7 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
 )
-from kinby.core import LangGraphRunner
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn, PreparedTurnRequest, TurnContext, TurnOutcome, TurnResult
 from kinby.instance import Instance, load_instance
 from kinby.instance.permissions import BashPolicy, GatePolicy, PermissionsError
