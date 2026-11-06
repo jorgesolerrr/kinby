@@ -480,9 +480,7 @@ function EntryRow({
         <ItemContent className="min-w-0">
           <ItemTitle>
             <span className="truncate font-mono">{entry.name}</span>
-            {newer && (
-              <span aria-hidden className="size-2 shrink-0 rounded-full bg-muted-foreground" />
-            )}
+            {newer && <span aria-hidden className="size-2 shrink-0 rounded-full bg-ember" />}
             {entry.edited && <Badge variant="outline">Edited</Badge>}
             {entry.source === "git" && <Badge variant="secondary">Git</Badge>}
           </ItemTitle>
