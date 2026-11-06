@@ -320,6 +320,7 @@ from kinby.instance import (
     Manifest,
     ManifestError,
     ModelName,
+    Tools,
     init_from_template,
     init_instance,
     inspect_instance,
@@ -333,7 +334,7 @@ from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from kinby.plugins.mcp import failed_mcp_servers
-from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD
+from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_search_key
 
 _logger = logging.getLogger(__name__)
 
@@ -1336,8 +1337,9 @@ class Hub:
         self.registry.finish_operation(operation_id, OperationState.SUCCEEDED, "Image prepared.")
 
     async def describe_image(self, command: ImageDescribeCommand) -> DeclaredSetup:
-        """What the prepared image declares, as its preparation stored it. It never builds."""
-        return self._prepared_description()
+        """What the prepared image declares, as its preparation stored it, and the key web search
+        needs on a vanilla instance. It never builds."""
+        return with_search_key(self._prepared_description(), Tools().search_key)
 
     async def _declared(self, artifact: ImageArtifact) -> DeclaredSetup:
         """What the image just built declares.

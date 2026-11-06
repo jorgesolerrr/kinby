@@ -27,6 +27,7 @@ from kinby.instance.manifest import (
     parse_listen,
     reload_manifest,
     repository_commands,
+    template_tools,
 )
 
 __all__ = [
@@ -58,4 +59,5 @@ __all__ = [
     "parse_listen",
     "reload_manifest",
     "repository_commands",
+    "template_tools",
 ]

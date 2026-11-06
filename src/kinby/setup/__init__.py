@@ -75,6 +75,31 @@ def with_built_in_fields(own: Iterable[SetupField]) -> list[SetupField]:
     return [*built_in, *template_fields(own)]
 
 
+def with_search_key(setup: DeclaredSetup, variable: str | None) -> DeclaredSetup:
+    """The setup with the key web search needs, held under *variable*, as a required secret: the
+    field already held there, or one added last. Unchanged while web search is off."""
+    if variable is None:
+        return setup
+    if any(field.name == variable for field in setup.setup_fields):
+        fields = [
+            field.model_copy(update={"required": True}) if field.name == variable else field
+            for field in setup.setup_fields
+        ]
+    else:
+        fields = [
+            *setup.setup_fields,
+            SetupField(
+                name=variable,
+                label="Web search key",
+                description="The key of the search backend the instance's web search queries.",
+                kind=SetupFieldKind.SECRET,
+                type=SetupFieldType.TEXT,
+                required=True,
+            ),
+        ]
+    return setup.model_copy(update={"setup_fields": fields})
+
+
 def template_fields(fields: Iterable[SetupField]) -> list[SetupField]:
     """The fields a template adds, leaving out those that override a built-in field's default."""
     built_in = {field.name for field in BUILT_IN_FIELDS}
@@ -157,4 +182,5 @@ __all__ = [
     "value_problem",
     "vanilla_description",
     "with_built_in_fields",
+    "with_search_key",
 ]

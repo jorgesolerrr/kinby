@@ -15,6 +15,7 @@ from kinby.contracts import (
     OperationGetCommand,
     OperationKind,
     OperationState,
+    SetupField,
     SetupFieldKind,
     SetupFieldType,
 )
@@ -28,6 +29,7 @@ from tests.test_hub import (
     hub_client,
     prepared,
 )
+from tests.test_hub_create import declaring
 
 
 class HeldImages(FakeImages):
@@ -98,7 +100,9 @@ def test_preparing_the_image_again_says_it_reused_the_image(tmp_path):
     asyncio.run(scenario())
 
 
-def test_describing_vanilla_lists_the_built_in_fields_the_preparation_stored(tmp_path):
+def test_describing_vanilla_lists_the_fields_the_preparation_stored_then_the_web_search_key(
+    tmp_path,
+):
     async def scenario() -> None:
         directory = tmp_path / "hub"
         hub = hub_at(directory)
@@ -116,9 +120,36 @@ def test_describing_vanilla_lists_the_built_in_fields_the_preparation_stored(tmp
             ("model", SetupFieldKind.CONFIG, SetupFieldType.TEXT, True),
             ("api_key", SetupFieldKind.SECRET, SetupFieldType.TEXT, True),
             ("behavior_prompt", SetupFieldKind.CONFIG, SetupFieldType.MULTILINE, False),
+            ("BRAVE_API_KEY", SetupFieldKind.SECRET, SetupFieldType.TEXT, True),
         ]
+        assert described.setup_fields[-1].label == "Web search key"
         assert images.selections == []
         assert images.described == []
+
+    asyncio.run(scenario())
+
+
+def test_an_image_that_declares_the_web_search_key_shows_it_once_and_required(tmp_path):
+    async def scenario() -> None:
+        declared = SetupField(
+            name="BRAVE_API_KEY",
+            label="Brave key",
+            description="Searches the web.",
+            kind=SetupFieldKind.SECRET,
+            type=SetupFieldType.TEXT,
+            required=False,
+        )
+        client = hub_client(hub_at(tmp_path / "hub", images=declaring(declared)))
+        await prepared(client)
+
+        described = await client.call(IMAGE_DESCRIBE, ImageDescribeCommand())
+
+        assert not isinstance(described, ErrorEnvelope)
+        assert [
+            (field.name, field.label, field.required)
+            for field in described.setup_fields
+            if field.name == "BRAVE_API_KEY"
+        ] == [("BRAVE_API_KEY", "Brave key", True)]
 
     asyncio.run(scenario())
 
