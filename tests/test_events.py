@@ -382,6 +382,34 @@ def test_a_reader_in_a_worker_thread_iterates_what_was_stored_when_it_began(
     asyncio.run(scenario())
 
 
+def test_every_read_of_one_reader_sees_what_was_stored_when_its_first_began(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        began = threading.Event()
+        appended = threading.Event()
+
+        def read() -> tuple[list[Event], list[Event]]:
+            with event_log.reader() as reader:
+                before = [*reader.thread_events(thread_id)]
+                began.set()
+                appended.wait()
+                return before, [*reader.turn_events(turn_id)]
+
+        reading = asyncio.create_task(asyncio.to_thread(read))
+        await asyncio.to_thread(began.wait)
+        await event_log.append(thread_id, turn_id, MessageDelta(text="later"))
+        appended.set()
+
+        assert await reading == ([first], [first])
+
+    asyncio.run(scenario())
+
+
 def test_subscribing_while_threads_append_replays_its_thread_then_goes_live_once(
     tmp_path: Path,
 ) -> None:

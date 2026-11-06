@@ -237,9 +237,11 @@ class EventLog:
 
     @contextmanager
     def reader(self) -> Iterator[EventReader]:
-        """Reads on a connection of their own, for a worker thread to iterate a long range. Each
-        read sees the events stored when it began, while appends go on."""
+        """Reads on a connection of their own, for a worker thread to iterate a long range. Every
+        read sees the events stored when the first began, while appends go on."""
         with closing(open_database(self._state_dir)) as db:
+            # One read transaction holds one snapshot, so a fold's reads agree with each other.
+            db.execute("BEGIN")
             yield EventReader(db)
 
     def all_events(self) -> Iterator[Event]:
