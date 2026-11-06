@@ -33,7 +33,14 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useRead } from "@/hooks/use-read"
 import { reason } from "@/lib/operation"
@@ -95,7 +102,7 @@ export function BrowserProfiles({
         />
       )}
       {profiles.length > 0 && (
-        <ul aria-label="Browser profiles" className="flex flex-col divide-y">
+        <ItemGroup variant="outline" aria-label="Browser profiles">
           {profiles.map((profile) => (
             <ProfileItem
               key={profile.name}
@@ -105,7 +112,7 @@ export function BrowserProfiles({
               onChanged={readAgain}
             />
           ))}
-        </ul>
+        </ItemGroup>
       )}
     </SectionFrame>
   )
@@ -133,57 +140,63 @@ function ProfileItem({
     )
 
   return (
-    <Item render={<li />} aria-label={name} size="row">
-      <ItemContent>
-        <ItemTitle>{name}</ItemTitle>
-        <ItemDescription>{site}</ItemDescription>
-        {failure !== undefined && <Refusal title={`Could not delete ${name}`} error={failure} />}
-      </ItemContent>
-      <ItemActions>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={<Button variant="ghost" size="icon-sm" aria-label={`More for ${name}`} />}
-          >
-            <MoreHorizontalIcon />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => setAsking("rename")}>Rename</DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={() => setAsking("delete")}>
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <RenameDialog
-          name={name}
-          open={asking === "rename"}
-          onOpenChange={(open) => setAsking(open ? "rename" : undefined)}
-          onRename={(newName) =>
-            caller
-              .call("browser.profile.rename", { instance_id: instanceId, name, new_name: newName })
-              .then(onChanged)
-          }
-        />
-        <AlertDialog
-          open={asking === "delete"}
-          onOpenChange={(open) => setAsking(open ? "delete" : undefined)}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                The instance stops opening {site} signed in. Sign in again to make a new profile.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+    <li aria-label={name}>
+      <Item size="sm">
+        <ItemContent>
+          <ItemTitle>{name}</ItemTitle>
+          <ItemDescription>{site}</ItemDescription>
+          {failure !== undefined && <Refusal title={`Could not delete ${name}`} error={failure} />}
+        </ItemContent>
+        <ItemActions>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label={`More for ${name}`} />}
+            >
+              <MoreHorizontalIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setAsking("rename")}>Rename</DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onClick={() => setAsking("delete")}>
                 Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </ItemActions>
-    </Item>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <RenameDialog
+            name={name}
+            open={asking === "rename"}
+            onOpenChange={(open) => setAsking(open ? "rename" : undefined)}
+            onRename={(newName) =>
+              caller
+                .call("browser.profile.rename", {
+                  instance_id: instanceId,
+                  name,
+                  new_name: newName,
+                })
+                .then(onChanged)
+            }
+          />
+          <AlertDialog
+            open={asking === "delete"}
+            onOpenChange={(open) => setAsking(open ? "delete" : undefined)}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  The instance stops opening {site} signed in. Sign in again to make a new profile.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </ItemActions>
+      </Item>
+    </li>
   )
 }
 

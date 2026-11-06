@@ -27,7 +27,14 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { useRead } from "@/hooks/use-read"
 import { PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
@@ -92,7 +99,7 @@ export function Vault({
     >
       {failure !== undefined && <Refusal title="Could not read the vault" error={failure} />}
       {entries.length > 0 && (
-        <ul aria-label="Vault" className="flex flex-col divide-y">
+        <ItemGroup variant="outline" aria-label="Vault">
           {entries.map((entry) => (
             <EntryItem
               key={entry.name}
@@ -102,7 +109,7 @@ export function Vault({
               onChanged={readAgain}
             />
           ))}
-        </ul>
+        </ItemGroup>
       )}
     </SectionFrame>
   )
@@ -131,46 +138,48 @@ function EntryItem({
     )
 
   return (
-    <Item render={<li />} aria-label={name} size="row">
-      <ItemContent>
-        <ItemTitle>{name}</ItemTitle>
-        <ItemDescription>{site}</ItemDescription>
-        {failure !== undefined && <Refusal title={`Could not delete ${name}`} error={failure} />}
-      </ItemContent>
-      <ItemActions>
-        <EntryDialog
-          entry={entry}
-          onSave={edit}
-          trigger={
-            <Button size="sm" variant="outline" aria-label={`Edit ${name}`}>
-              <PencilIcon data-icon="inline-start" />
-              Edit
-            </Button>
-          }
-        />
-        <AlertDialog>
-          <AlertDialogTrigger
-            render={<Button variant="ghost" size="icon-sm" aria-label={`Delete ${name}`} />}
-          >
-            <Trash2Icon />
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                The instance stops signing in to {site} with it.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={() => void remove()}>
-                Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </ItemActions>
-    </Item>
+    <li aria-label={name}>
+      <Item size="sm">
+        <ItemContent>
+          <ItemTitle>{name}</ItemTitle>
+          <ItemDescription>{site}</ItemDescription>
+          {failure !== undefined && <Refusal title={`Could not delete ${name}`} error={failure} />}
+        </ItemContent>
+        <ItemActions>
+          <EntryDialog
+            entry={entry}
+            onSave={edit}
+            trigger={
+              <Button size="sm" variant="outline" aria-label={`Edit ${name}`}>
+                <PencilIcon data-icon="inline-start" />
+                Edit
+              </Button>
+            }
+          />
+          <AlertDialog>
+            <AlertDialogTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label={`Delete ${name}`} />}
+            >
+              <Trash2Icon />
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  The instance stops signing in to {site} with it.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => void remove()}>
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </ItemActions>
+      </Item>
+    </li>
   )
 }
 

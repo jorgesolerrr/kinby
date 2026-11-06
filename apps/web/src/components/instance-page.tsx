@@ -19,7 +19,7 @@ import {
 import { BrowserProfiles } from "@/components/browser-profiles"
 import { SectionFrame } from "@/components/section-frame"
 import { Secrets } from "@/components/secrets-section"
-import { SubscriptionLogins } from "@/components/subscription-logins"
+import { LoginRow, SubscriptionLogins } from "@/components/subscription-logins"
 import { Toolset } from "@/components/toolset"
 import { Vault } from "@/components/vault"
 import { Badge } from "@/components/ui/badge"
@@ -122,24 +122,22 @@ export function InstancePage({
             lead={`What keeps ${name} from doing everything it could.`}
             variant="page"
           >
-            {logins.length > 0 && (
-              <SubscriptionLogins
-                caller={caller}
-                clock={clock}
-                instanceId={instance.instance_id}
-                logins={logins}
-                onEnded={onChanged}
-              />
-            )}
-            {failed.length > 0 && (
-              <ItemGroup aria-label="MCP servers">
-                {failed.map((notice) => (
-                  <Item
-                    key={noticeKey(notice)}
-                    render={<li />}
-                    aria-label={noticeTitle(notice)}
-                    variant="outline"
-                  >
+            <ItemGroup variant="outline" aria-label="Needs you">
+              {logins.map((login) => (
+                <LoginRow
+                  key={login.id}
+                  caller={caller}
+                  clock={clock}
+                  instanceId={instance.instance_id}
+                  login={login}
+                  onEnded={onChanged}
+                  variant="default"
+                  size="sm"
+                />
+              ))}
+              {failed.map((notice) => (
+                <li key={noticeKey(notice)} aria-label={noticeTitle(notice)}>
+                  <Item size="sm">
                     <ItemContent>
                       <ItemTitle>{noticeTitle(notice)}</ItemTitle>
                       <ItemDescription lines="all">{notice.message}</ItemDescription>
@@ -150,9 +148,9 @@ export function InstancePage({
                       </Button>
                     </ItemActions>
                   </Item>
-                ))}
-              </ItemGroup>
-            )}
+                </li>
+              ))}
+            </ItemGroup>
           </SectionFrame>
         )}
         {client !== undefined && (
@@ -195,11 +193,11 @@ function Views({
         (value.views.length === 0 ? (
           <p className="text-sm text-muted-foreground">No views yet.</p>
         ) : (
-          <ul aria-label="Views" className="flex flex-col divide-y">
+          <ItemGroup variant="outline" aria-label="Views">
             {value.views.map((view) => (
               <li key={view.id}>
                 <Item
-                  size="row"
+                  size="sm"
                   render={<button type="button" aria-label={view.title} />}
                   onClick={() => openView(instanceId, view.id)}
                 >
@@ -215,7 +213,7 @@ function Views({
                 </Item>
               </li>
             ))}
-          </ul>
+          </ItemGroup>
         ))}
     </SectionFrame>
   )
@@ -361,44 +359,48 @@ function RepositoryCommands({ name, status }: { name: string; status: InstanceSt
 /** Each list held, by name with its commands in the order they run, then each missing one. */
 function CommandLists({ held, missing }: { held: RepositoryCommandList[]; missing: string[] }) {
   return (
-    <ul aria-label="Repository commands" className="flex flex-col divide-y">
+    <ItemGroup variant="outline" aria-label="Repository commands">
       {held.map(({ name, commands }) => (
-        <Item key={name} render={<li />} aria-label={name} size="row">
-          <ItemContent>
-            <ItemTitle>
-              <code className="font-mono">{name}</code>
-            </ItemTitle>
-            {commands.length > 0 && (
-              <ol className="flex flex-col gap-1 text-muted-foreground">
-                {commands.map((command, index) => (
-                  // A list may run the same command twice.
-                  <li key={index}>
-                    <code className="font-mono break-all">{command}</code>
-                  </li>
-                ))}
-              </ol>
+        <li key={name} aria-label={name}>
+          <Item size="sm">
+            <ItemContent>
+              <ItemTitle>
+                <code className="font-mono">{name}</code>
+              </ItemTitle>
+              {commands.length > 0 && (
+                <ol className="flex flex-col gap-1 text-muted-foreground">
+                  {commands.map((command, index) => (
+                    // A list may run the same command twice.
+                    <li key={index}>
+                      <code className="font-mono break-all">{command}</code>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </ItemContent>
+            {commands.length === 0 && (
+              <ItemActions>
+                <Badge variant="outline">Empty</Badge>
+              </ItemActions>
             )}
-          </ItemContent>
-          {commands.length === 0 && (
-            <ItemActions>
-              <Badge variant="outline">Empty</Badge>
-            </ItemActions>
-          )}
-        </Item>
+          </Item>
+        </li>
       ))}
       {missing.map((list) => (
-        <Item key={list} render={<li />} aria-label={list} size="row">
-          <ItemContent>
-            <ItemTitle>
-              <code className="font-mono">{list}</code>
-            </ItemTitle>
-          </ItemContent>
-          <ItemActions>
-            <Badge variant="outline">Missing</Badge>
-          </ItemActions>
-        </Item>
+        <li key={list} aria-label={list}>
+          <Item size="sm">
+            <ItemContent>
+              <ItemTitle>
+                <code className="font-mono">{list}</code>
+              </ItemTitle>
+            </ItemContent>
+            <ItemActions>
+              <Badge variant="outline">Missing</Badge>
+            </ItemActions>
+          </Item>
+        </li>
       ))}
-    </ul>
+    </ItemGroup>
   )
 }
 

@@ -14,7 +14,14 @@ import { Refusal } from "@/components/browser-profiles"
 import { SectionFrame } from "@/components/section-frame"
 import { Badge } from "@/components/ui/badge"
 import { Field, FieldLabel } from "@/components/ui/field"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Switch } from "@/components/ui/switch"
 import { useRead } from "@/hooks/use-read"
 
@@ -58,7 +65,7 @@ export function Toolset({
     >
       {failure !== undefined && <Refusal title="Could not read the toolset" error={failure} />}
       {value !== undefined && (
-        <ul aria-label="Toolset" className="flex flex-col divide-y">
+        <ItemGroup variant="outline" aria-label="Toolset">
           <Row title="Default tools">
             <ItemDescription>{named("On", value.default_tools, true)}</ItemDescription>
             <ItemDescription>{named("Off", value.default_tools, false)}</ItemDescription>
@@ -92,7 +99,7 @@ export function Toolset({
           <Row title="Browser">
             <ItemDescription>{value.browser ? "On" : "Off"}</ItemDescription>
           </Row>
-        </ul>
+        </ItemGroup>
       )}
     </SectionFrame>
   )
@@ -108,13 +115,15 @@ function Row({
   children: ReactNode
 }) {
   return (
-    <Item render={<li />} aria-label={title} size="row">
-      <ItemContent>
-        <ItemTitle>{title}</ItemTitle>
-        {children}
-      </ItemContent>
-      {actions !== undefined && <ItemActions>{actions}</ItemActions>}
-    </Item>
+    <li aria-label={title}>
+      <Item size="sm">
+        <ItemContent>
+          <ItemTitle>{title}</ItemTitle>
+          {children}
+        </ItemContent>
+        {actions !== undefined && <ItemActions>{actions}</ItemActions>}
+      </Item>
+    </li>
   )
 }
 
@@ -142,26 +151,28 @@ function AuthoredToolItem({
   }
 
   return (
-    <Item render={<li />} aria-label={tool.name} size="row">
-      <ItemContent>
-        <ItemTitle>{tool.name}</ItemTitle>
-        <ItemDescription>
-          {tool.read_only ? "Runs as a read." : "Every call asks, as a write."}
-        </ItemDescription>
-      </ItemContent>
-      <ItemActions>
-        <Field orientation="horizontal" className="w-auto">
-          <Switch
-            id={id}
-            checked={tool.read_only}
-            disabled={client === undefined || busy}
-            onCheckedChange={mark}
-          />
-          <FieldLabel htmlFor={id}>Read-only</FieldLabel>
-        </Field>
-      </ItemActions>
-      {failure !== undefined && <Refusal title="Could not change the mark" error={failure} />}
-    </Item>
+    <li aria-label={tool.name}>
+      <Item size="sm">
+        <ItemContent>
+          <ItemTitle>{tool.name}</ItemTitle>
+          <ItemDescription>
+            {tool.read_only ? "Runs as a read." : "Every call asks, as a write."}
+          </ItemDescription>
+        </ItemContent>
+        <ItemActions>
+          <Field orientation="horizontal" className="w-auto">
+            <Switch
+              id={id}
+              checked={tool.read_only}
+              disabled={client === undefined || busy}
+              onCheckedChange={mark}
+            />
+            <FieldLabel htmlFor={id}>Read-only</FieldLabel>
+          </Field>
+        </ItemActions>
+        {failure !== undefined && <Refusal title="Could not change the mark" error={failure} />}
+      </Item>
+    </li>
   )
 }
 

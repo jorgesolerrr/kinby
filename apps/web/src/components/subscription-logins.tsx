@@ -1,5 +1,5 @@
 import type { Client, Clock, LoginSetup, LoginState } from "@kinby/contract"
-import { useCallback, useState } from "react"
+import { type ComponentProps, useCallback, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -63,19 +63,25 @@ interface LoginRequest {
   running?: string
 }
 
-function LoginRow({
+/**
+ * One login's row, signed in on its own. An outline row by default; `variant` and `size` set it
+ * for a bordered row group.
+ */
+export function LoginRow({
   caller,
   clock,
   instanceId,
   login,
   onEnded,
+  variant = "outline",
+  size,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
   login: LoginSetup
   onEnded: () => void
-}) {
+} & Pick<ComponentProps<typeof Item>, "variant" | "size">) {
   // A new object for each click, so signing in again follows a new login. A sign-in the hub
   // already runs when the row loads, after a reload say, is followed without a click.
   const [request, setRequest] = useState<LoginRequest | undefined>(() =>
@@ -109,36 +115,42 @@ function LoginRow({
   const signIn = unfinished ? STORED.signed_in : latest
   const busy = signIn?.state === "signing-in"
   return (
-    <Item render={<li />} aria-label={login.label} variant="outline">
-      {/* On a phone the text takes the whole row and the badge and button wrap below it. */}
-      <ItemContent className="basis-full sm:basis-0">
-        <ItemTitle>{login.label}</ItemTitle>
-        <ItemDescription lines="all">{login.description}</ItemDescription>
-        {signIn?.state === "signing-in" && signIn.prompt !== null && (
-          <ItemDescription lines="all">
-            Open{" "}
-            <a href={signIn.prompt.url} target="_blank" rel="noreferrer">
-              {signIn.prompt.url}
-            </a>{" "}
-            and enter <code className="font-mono text-foreground">{signIn.prompt.code}</code>
-          </ItemDescription>
-        )}
-        {signIn?.state === "failed" && (
-          <ItemDescription lines="all">{signIn.detail}</ItemDescription>
-        )}
-        {unfinished && (
-          <ItemDescription lines="all">
-            The new sign-in did not finish, and the one before it still works. {unfinished.detail}
-          </ItemDescription>
-        )}
-      </ItemContent>
-      <ItemActions>
-        <State signIn={signIn} />
-        <Button variant="outline" disabled={busy} onClick={() => setRequest({ loginId: login.id })}>
-          {signIn === undefined || busy ? "Sign in" : "Sign in again"}
-        </Button>
-      </ItemActions>
-    </Item>
+    <li aria-label={login.label}>
+      <Item variant={variant} size={size}>
+        {/* On a phone the text takes the whole row and the badge and button wrap below it. */}
+        <ItemContent className="basis-full sm:basis-0">
+          <ItemTitle>{login.label}</ItemTitle>
+          <ItemDescription lines="all">{login.description}</ItemDescription>
+          {signIn?.state === "signing-in" && signIn.prompt !== null && (
+            <ItemDescription lines="all">
+              Open{" "}
+              <a href={signIn.prompt.url} target="_blank" rel="noreferrer">
+                {signIn.prompt.url}
+              </a>{" "}
+              and enter <code className="font-mono text-foreground">{signIn.prompt.code}</code>
+            </ItemDescription>
+          )}
+          {signIn?.state === "failed" && (
+            <ItemDescription lines="all">{signIn.detail}</ItemDescription>
+          )}
+          {unfinished && (
+            <ItemDescription lines="all">
+              The new sign-in did not finish, and the one before it still works. {unfinished.detail}
+            </ItemDescription>
+          )}
+        </ItemContent>
+        <ItemActions>
+          <State signIn={signIn} />
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => setRequest({ loginId: login.id })}
+          >
+            {signIn === undefined || busy ? "Sign in" : "Sign in again"}
+          </Button>
+        </ItemActions>
+      </Item>
+    </li>
   )
 }
 
