@@ -69,7 +69,7 @@ describe("LibraryPage, a factory", () => {
     await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
 
     const madeOf = await screen.findByRole("heading", { name: "What it's made of" })
-    const instances = screen.getByRole("heading", { name: "Instances" })
+    const instances = screen.getByRole("heading", { name: "Instances and runs" })
     expect(
       instances.compareDocumentPosition(madeOf) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()

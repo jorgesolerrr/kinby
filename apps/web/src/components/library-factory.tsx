@@ -46,7 +46,7 @@ export function FactoryEntry({
   return (
     <>
       <FactoryInstances client={client} clock={clock} factory={name} />
-      <section className="flex max-w-2xl flex-col gap-4">
+      <section className="flex flex-col gap-4">
         <h2 className="text-base font-semibold">What it&apos;s made of</h2>
         {opened === undefined ? (
           failure === undefined ? (

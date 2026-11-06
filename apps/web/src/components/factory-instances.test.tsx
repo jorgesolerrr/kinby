@@ -40,11 +40,19 @@ const stopped = run({
   instance_id: "billing",
   status: "needs-human",
   step: "review",
+  updated_at: new Date(2026, 9, 12, 9, 30).toISOString(),
 })
 const runs: Record<string, FactoryRun[]> = {
   billing: [
     run({ run_id: "run-2", instance_id: "billing", status: "done", work_item: { issue: 9 } }),
     stopped,
+    run({
+      run_id: "run-3",
+      instance_id: "billing",
+      status: "running",
+      step: "implement",
+      work_item: { issue: 15 },
+    }),
   ],
   software: [],
 }
@@ -89,37 +97,100 @@ async function stoppedRun() {
 }
 
 describe("the factory's instances", () => {
-  it("lists each instance that holds one of its roles, with its role", async () => {
+  it("lists each instance that holds one of its roles in a card, with its role", async () => {
     render(<FactoryInstances client={hub()} clock={fakeClock()} factory="software" />)
 
-    const listed = await screen.findAllByRole("region")
+    const section = within(screen.getByRole("region", { name: "Instances and runs" }))
+    const listed = await section.findAllByRole("region")
     expect(listed.map((region) => region.getAttribute("aria-label"))).toEqual([
       "billing-coder",
       "software-coder",
     ])
-    expect(within(listed[0] as HTMLElement).getByText("coder")).toBeDefined()
+    const billing = within(listed[0] as HTMLElement)
+    expect(billing.getByRole("list").getAttribute("data-variant")).toBe("outline")
+    expect(billing.getByText("coder")).toBeDefined()
   })
 
-  it("shows each instance's runs under it, those needing a human first with their cause", async () => {
+  it("sums up each instance's runs that need a human and that are running", async () => {
+    render(<FactoryInstances client={hub()} clock={fakeClock()} factory="software" />)
+
+    const billing = within(await screen.findByRole("region", { name: "billing-coder" }))
+    expect(billing.getByText("1 needs a human · 1 running")).toBeDefined()
+    const software = within(screen.getByRole("region", { name: "software-coder" }))
+    expect(software.getByText("No runs yet")).toBeDefined()
+  })
+
+  it("opens an instance's page", async () => {
+    const user = userEvent.setup()
+    render(<FactoryInstances client={hub()} clock={fakeClock()} factory="software" />)
+
+    const billing = within(await screen.findByRole("region", { name: "billing-coder" }))
+    await user.click(billing.getByRole("button", { name: "Open" }))
+
+    expect(window.location.pathname).toBe("/instances/billing")
+  })
+
+  it("shows each instance's runs as rows in its card, those needing a human first", async () => {
     const caller = hub()
     render(<FactoryInstances client={caller} clock={fakeClock()} factory="software" />)
 
     const billing = within(await screen.findByRole("region", { name: "billing-coder" }))
-    const billingRuns = within(billing.getByRole("list", { name: "Runs of billing-coder" }))
-    expect(billing.getByText("1 needing a human")).toBeDefined()
+    const rows = billing.getAllByRole("listitem", { name: /^issue/ })
+    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "issue 12: Needs a human at review",
+      "issue 15: Running at implement",
+      "issue 9: Done",
+    ])
     expect(
-      billingRuns.getAllByRole("listitem").map((row) => row.getAttribute("aria-label")),
-    ).toEqual(["issue 12: Needs a human at review", "issue 9: Done"])
-    expect(await billingRuns.findByText("Step review failed twice, its retries.")).toBeDefined()
-    const done = within(billingRuns.getByRole("listitem", { name: "issue 9: Done" }))
-    expect(done.queryByRole("button")).toBeNull()
-    const software = within(screen.getByRole("region", { name: "software-coder" }))
-    expect(software.getByText("0 needing a human")).toBeDefined()
-    expect(software.getByText("No runs yet.")).toBeDefined()
+      rows.map((row) => within(row).getByText(/^(Needs a human|Running|Done)$/).dataset.variant),
+    ).toEqual(["attention", "success", "secondary"])
+    const needing = within(rows[0] as HTMLElement)
+    expect(needing.getByText("at review · Oct 12, 2026, 9:30 AM")).toBeDefined()
+    expect(await needing.findByText("Step review failed twice, its retries.")).toBeDefined()
+    expect(within(rows[2] as HTMLElement).queryByRole("button")).toBeNull()
     expect(caller.calls.filter((call) => call.method === "factory.run.list")).toEqual([
       { method: "factory.run.list", params: { factory: "software", instance_id: "billing" } },
       { method: "factory.run.list", params: { factory: "software", instance_id: "software" } },
     ])
+  })
+
+  it("shows the few newest finished runs, and the rest on asking", async () => {
+    const finished = [1, 2, 3, 4, 5].map((issue) =>
+      run({
+        run_id: `run-${issue}`,
+        instance_id: "software",
+        status: issue === 2 ? "cancelled" : "done",
+        work_item: { issue },
+        updated_at: `2026-10-0${issue}T09:00:00Z`,
+      }),
+    )
+    const queued = run({ run_id: "run-6", instance_id: "software", status: "queued" })
+    const caller = stubCaller({
+      "instance.list": () => ({ instances }),
+      "factory.run.list": ({ instance_id }) => ({
+        runs: instance_id === "software" ? [...finished, queued] : [],
+      }),
+    })
+    const user = userEvent.setup()
+    render(<FactoryInstances client={caller} clock={fakeClock()} factory="software" />)
+
+    const software = within(await screen.findByRole("region", { name: "software-coder" }))
+    const shown = () =>
+      software
+        .getAllByRole("listitem", { name: /^issue/ })
+        .map((row) => row.getAttribute("aria-label"))
+    expect(shown()).toEqual(["issue 12: Queued", "issue 5: Done", "issue 4: Done", "issue 3: Done"])
+    await user.click(software.getByRole("button", { name: "Show 2 more" }))
+
+    expect(shown()).toEqual([
+      "issue 12: Queued",
+      "issue 5: Done",
+      "issue 4: Done",
+      "issue 3: Done",
+      "issue 2: Cancelled",
+      "issue 1: Done",
+    ])
+    expect(software.queryByRole("button", { name: /^Show/ })).toBeNull()
   })
 
   it("retries a run that needs a human at its step", async () => {
