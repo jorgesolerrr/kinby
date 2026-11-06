@@ -10,7 +10,9 @@ has as many events and the same turns as in events.jsonl, and only when every ch
 put the database in place, prune each thread's checkpoints, name the delivery in place of its body
 in the checkpoints left, and delete the JSONL files. A failed check, or a crash before the database
 is in place, leaves the JSONL files as they were. A crash after it leaves the rest for the next
-run. kinby never imports it.
+run. An instance already on its database from before ADR 0117 has no JSONL files, and its arrivals
+still hold their bodies: it drops them in place, in one transaction, then tidies its checkpoints the
+same way. kinby never imports it.
 """
 
 import argparse
@@ -58,12 +60,14 @@ def migrate(instance: Instance) -> str:
         if path.exists()
     ]
     recalls = sorted((state_dir / _RECALLS).glob("*.jsonl"))
-    if not old and not recalls:
-        return "nothing to migrate"
     database = state_dir / DATABASE_NAME
+    if not old and not recalls and not _holds_bodies(database):
+        return "nothing to migrate"
     # The database goes in place only once its check passed, so one already there was made by a run
-    # that stopped while deleting the files.
-    if not database.exists():
+    # that stopped while deleting the files, or by kinby before ADR 0117.
+    if database.exists():
+        _drop_bodies(database)
+    else:
         partial = state_dir / f"{DATABASE_NAME}.partial"
         for leftover in ("", "-wal", "-shm"):
             Path(f"{partial}{leftover}").unlink(missing_ok=True)
@@ -144,7 +148,7 @@ def _drop_body(record: dict[str, Any], waiting: dict[str, str], references: dict
     started turn's message and its code step's call name the delivery instead (ADR 0117)."""
     payload, turn = record["payload"], record["turn_id"]
     match payload["type"]:
-        case EventType.SIGNAL_RECEIVED:
+        case EventType.SIGNAL_RECEIVED if "body" in payload["delivery"]:
             old = payload["delivery"]
             arrival = Delivery(
                 headers=old["headers"],
@@ -165,6 +169,39 @@ def _drop_body(record: dict[str, Any], waiting: dict[str, str], references: dict
             if isinstance(signal, dict) and "body" in signal:
                 payload["arguments"]["signal"] = references[turn]
             del references[turn]
+
+
+def _holds_bodies(database: Path) -> bool:
+    """Whether *database* keeps a delivery's body in its arrival, as kinby did before ADR 0117."""
+    if not database.exists():
+        return False
+    with closing(connect(database)) as db:
+        return bool(
+            db.execute(
+                "SELECT 1 FROM events WHERE type = ?"
+                " AND json_extract(payload, '$.delivery.body') IS NOT NULL LIMIT 1",
+                (EventType.SIGNAL_RECEIVED,),
+            ).fetchone()
+        )
+
+
+def _drop_bodies(database: Path) -> None:
+    """Rewrite the arrivals, turn messages and code step calls that still hold a delivery's body,
+    as the import would have written them."""
+    waiting: dict[str, str] = {}
+    references: dict[str, str] = {}
+    with closing(connect(database)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        rows = db.execute(
+            "SELECT rowid, turn_id, payload FROM events WHERE type IN (?, ?, ?) ORDER BY rowid",
+            (EventType.SIGNAL_RECEIVED, EventType.TURN_STARTED, EventType.TOOL_CALL),
+        ).fetchall()
+        for rowid, turn_id, payload in rows:
+            record = {"turn_id": turn_id, "payload": json.loads(payload)}
+            _drop_body(record, waiting, references)
+            if (rewritten := _compact(record["payload"])) != payload:
+                db.execute("UPDATE events SET payload = ? WHERE rowid = ?", (rewritten, rowid))
+        db.executemany("INSERT OR IGNORE INTO waiting_deliveries VALUES (?, ?)", waiting.items())
 
 
 async def _prune_checkpoints(instance: Instance) -> None:

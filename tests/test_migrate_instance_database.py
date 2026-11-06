@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Mapping
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -38,6 +39,7 @@ from kinby.core.threads import ThreadRecord, ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import Instance, init_instance, load_instance
 from kinby.instance.config_changes import ConfigChangeLog
+from kinby.instance.database import connect
 from tests.helpers import every_event
 from tests.test_checkpoint_pruning import (
     _DONE,
@@ -375,3 +377,60 @@ def test_the_migration_keeps_a_delivery_body_only_while_it_waits_and_tidies_chec
     assert isinstance(resumed[-1].payload, TurnCompleted)
     resumed = asyncio.run(resume(delivered, delivered_approval, delivered_park.sequence + 1))
     assert isinstance(resumed[-1].payload, TurnCompleted)
+
+
+def test_a_database_from_before_adr_0117_drops_its_delivery_bodies_in_place(
+    tmp_path: Path,
+) -> None:
+    instance = load_instance(init_instance(tmp_path / "alice"))
+    state_dir = instance.manifest.state_dir
+    state_dir.mkdir(exist_ok=True)
+    scan, scan_turn, waiting, waiting_turn = uuid4(), uuid4(), uuid4(), uuid4()
+    body = '{"action":"labeled","issue":{"number":7}}'
+    delivery = {
+        "headers": {"x-github-event": "issues"},
+        "content_type": "application/json",
+        "body": body,
+        "delivery_id": "delivery-7",
+        "received_at": _AT.isoformat(),
+    }
+    started = TurnStarted(message=body, model="openai:gpt-5")
+    waiting_delivery = {
+        "headers": {},
+        "content_type": "text/plain",
+        "body": "issue 9 opened",
+        "received_at": _AT.isoformat(),
+    }
+    records = [
+        json.loads(_old_arrival(scan, scan_turn, delivery)),
+        *(event.model_dump(mode="json") for event in _turn(scan, 2, started, turn_id=scan_turn)),
+        json.loads(_old_arrival(waiting, waiting_turn, waiting_delivery)),
+    ]
+    with closing(connect(state_dir / "instance.sqlite")) as db:
+        db.executemany(
+            "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                (
+                    record["thread_id"],
+                    record["sequence"],
+                    record["turn_id"],
+                    record["payload"]["type"],
+                    datetime.fromisoformat(record["timestamp"]).isoformat(timespec="microseconds"),
+                    json.dumps(record["payload"]),
+                )
+                for record in records
+            ),
+        )
+
+    migrated = _migrate(instance.path)
+
+    assert migrated.returncode == 0, migrated.stdout + migrated.stderr
+    event_log = EventLog(state_dir)
+    received, turn_started = event_log.thread_events(scan)
+    assert isinstance(received.payload, SignalReceived)
+    assert received.payload.delivery.sha256 == sha256(body.encode()).hexdigest()
+    assert isinstance(turn_started.payload, TurnStarted)
+    assert turn_started.payload.message == "Delivery delivery-7"
+    assert event_log.waiting_body(scan_turn) is None
+    assert event_log.waiting_body(waiting_turn) == "issue 9 opened"
+    assert _migrate(instance.path).stdout.strip().endswith("nothing to migrate")
