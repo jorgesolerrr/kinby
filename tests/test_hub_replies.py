@@ -489,6 +489,46 @@ def test_notifications_are_listed_by_instance_or_thread_with_their_deliveries(tm
     asyncio.run(scenario())
 
 
+def test_the_notification_list_pages_back_from_the_newest_with_their_deliveries(tmp_path):
+    async def scenario() -> None:
+        hub = channel_hub(tmp_path / "hub", FakeService(), FakeTime())
+        client = hub_client(hub)
+        alice_id = (await created_instance(client, name="alice")).instance_id
+        async with served(hub) as address:
+            channel = await paired_channel(client, address)
+        await client.call(
+            CHANNEL_MUTE, ChannelMuteCommand(channel_id=channel.channel_id, instance_id=alice_id)
+        )
+        alice = raising(hub, alice_id)
+        ids = [(await raised(alice, f"news {index}")).notification_id for index in range(5)]
+
+        pages: list[NotificationListResult] = []
+        cursor = None
+        while not pages or cursor is not None:
+            page = await client.call(
+                NOTIFICATION_LIST,
+                NotificationListCommand(instance_id=alice_id, cursor=cursor, limit=2),
+            )
+            assert isinstance(page, NotificationListResult), page
+            pages.append(page)
+            cursor = page.cursor
+
+        assert [[item.title for item in page.notifications] for page in pages] == [
+            ["news 3", "news 4"],
+            ["news 1", "news 2"],
+            ["news 0"],
+        ]
+        assert [page.cursor for page in pages] == [ids[3], ids[1], None]
+        assert all(
+            item.deliveries
+            == [NotificationDelivery(channel_id=channel.channel_id, status=DeliveryStatus.MUTED)]
+            for page in pages
+            for item in page.notifications
+        )
+
+    asyncio.run(scenario())
+
+
 def test_the_web_app_replies_only_with_an_option_the_notification_offers_and_only_as_admin(
     tmp_path,
 ):

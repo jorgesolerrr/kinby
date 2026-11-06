@@ -2045,10 +2045,13 @@ export interface MemoryOpenResult {
  * The notifications of one instance or one thread, or every one without either.
  */
 export interface NotificationListCommand {
+  cursor?: string | null;
   instance_id?: string | null;
+  limit?: number | null;
   thread_id?: string | null;
 }
 export interface NotificationListResult {
+  cursor: string | null;
   notifications: Notification[];
 }
 /**

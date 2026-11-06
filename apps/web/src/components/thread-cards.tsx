@@ -26,6 +26,26 @@ export function RaisedNotification({
 }) {
   const notificationId = step.hub?.kind === "accepted" ? step.hub.notificationId : undefined
   const kept = notificationId === undefined ? undefined : notifications.kept.get(notificationId)
+  // The hub took it, and it is older than the notifications read so far.
+  const older = notificationId !== undefined && kept === undefined ? notifications.older : undefined
+  if (older !== undefined) {
+    return (
+      <Marker>
+        <MarkerIcon>
+          <BellIcon />
+        </MarkerIcon>
+        <MarkerContent>{step.title}</MarkerContent>
+        <Button
+          variant="link"
+          size="xs"
+          aria-label={`Show where “${step.title}” stands`}
+          onClick={older}
+        >
+          Show where it stands
+        </Button>
+      </Marker>
+    )
+  }
   const status = notificationStatus(step, kept)
   const applied = kept?.replies.find((reply) => reply.option != null && reply.status === "applied")
   const answered =

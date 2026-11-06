@@ -88,6 +88,7 @@ from kinby.factories.file import (
     NeedsHumanCall,
     Outcome,
     SendBack,
+    SignalFilter,
     Step,
     ValueType,
     WaitStep,
@@ -99,7 +100,14 @@ from kinby.factories.file import (
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
-from kinby.hub.registry import STOPS, FactoryMember, HubRegistry, ManagedInstance, RunStopRef
+from kinby.hub.registry import (
+    STOPS,
+    UNFINISHED,
+    FactoryMember,
+    HubRegistry,
+    ManagedInstance,
+    RunStopRef,
+)
 from kinby.instance import ManifestError, repository_commands
 
 if TYPE_CHECKING:
@@ -268,7 +276,11 @@ class FactoryRuns:
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
         return FactoryRunListResult(
-            runs=self._registry.runs(command.factory, command.status, command.instance_id)
+            runs=self._registry.runs(
+                command.factory,
+                None if command.status is None else (command.status,),
+                command.instance_id,
+            )
         )
 
     def rework(self, run: FactoryRun) -> Rework:
@@ -278,7 +290,7 @@ class FactoryRuns:
         factory's file, no attempt reads as either.
         """
         attempts = self._registry.attempts(run.run_id)
-        factory = self._factory(run.factory)
+        factory = self.factory(run.factory)
         tally = (
             _tally(factory, attempts[:-1]) if factory is not None else _Tally(Counter(), Counter())
         )
@@ -294,7 +306,7 @@ class FactoryRuns:
         return FactoryRunDetail(
             run=run,
             attempts=self._registry.attempts(run.run_id),
-            earlier_steps=_earlier(self._factory(run.factory), run.step),
+            earlier_steps=_earlier(self.factory(run.factory), run.step),
         )
 
     async def retry(self, command: FactoryRunRetryCommand) -> FactoryRun:
@@ -308,7 +320,7 @@ class FactoryRuns:
         Its retries and send-backs count afresh.
         """
         run = self._existing(command.run_id)
-        factory = self._factory(run.factory)
+        factory = self.factory(run.factory)
         approving = _awaits_approval(factory, run)
         if not approving:
             _needing_human(run)
@@ -324,7 +336,7 @@ class FactoryRuns:
     async def approve(self, command: FactoryRunApproveCommand) -> FactoryRun:
         """Move a run that awaits the user's approval on, as its approve step's next outcome."""
         run = self._existing(command.run_id)
-        if not _awaits_approval(self._factory(run.factory), run):
+        if not _awaits_approval(self.factory(run.factory), run):
             raise RunAwaitsNoApproval(
                 f'Factory run "{run.run_id}" is {run.status.value}, so it awaits no approval.'
             )
@@ -347,30 +359,28 @@ class FactoryRuns:
         body = _json(signal.body)
         waits = [step for step in factory.steps if isinstance(step, WaitStep)]
         # Read before any parked run moves on, so the signal wakes each run at most once.
-        working = (
-            *self._registry.runs(member.factory, FactoryRunStatus.QUEUED, owner),
-            *self._registry.runs(member.factory, FactoryRunStatus.RUNNING, owner),
-        )
-        stopped = self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN, owner)
-        for run in self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner):
+        unfinished = self._registry.runs(member.factory, UNFINISHED, owner)
+        for run in unfinished:
             step = _step(factory, run.step) if run.step is not None else None
-            held = run.work_item | self._results(run.run_id, factory)
-            if isinstance(step, WaitStep) and any(
-                _matches(fields, signal, body, held) for fields in step.signal
-            ):
+            if run.status is not FactoryRunStatus.PARKED or not isinstance(step, WaitStep):
+                continue
+            held = self._held(run, factory, step.signal)
+            if any(_matches(fields, signal, body, held) for fields in step.signal):
                 self._disarm(run.run_id)
                 summary = f'A signal on routine "{signal.routine}" matched.'
                 self._advance(run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary))
-        for run in working:
-            held = run.work_item | self._results(run.run_id, factory)
+        working = [FactoryRunStatus.QUEUED, FactoryRunStatus.RUNNING]
+        for run in (run for run in unfinished if run.status in working):
+            held = self._held(run, factory, [fields for wait in waits for fields in wait.signal])
             for wait in waits:
                 if any(_matches(fields, signal, body, held) for fields in wait.signal):
                     self._woken.setdefault(run.run_id, set()).add(wait.id)
-        for run in stopped:
-            held = run.work_item | self._results(run.run_id, factory)
-            if any(_matches(fields, signal, body, held) for fields in factory.closing.done):
+        closing = factory.closing
+        for run in (run for run in unfinished if run.status is FactoryRunStatus.NEEDS_HUMAN):
+            held = self._held(run, factory, [*closing.done, *closing.cancelled])
+            if any(_matches(fields, signal, body, held) for fields in closing.done):
                 self._move(run.run_id, FactoryRunStatus.DONE, None)
-            elif any(_matches(fields, signal, body, held) for fields in factory.closing.cancelled):
+            elif any(_matches(fields, signal, body, held) for fields in closing.cancelled):
                 self._move(run.run_id, FactoryRunStatus.CANCELLED, run.step)
 
     async def cancel(self, command: FactoryRunCancelCommand) -> FactoryRun:
@@ -435,7 +445,7 @@ class FactoryRuns:
         for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
             self._enqueue(run)
         for run in self._registry.runs_in(FactoryRunStatus.PARKED):
-            factory = self._factory(run.factory)
+            factory = self.factory(run.factory)
             step = (
                 _step(factory, run.step) if factory is not None and run.step is not None else None
             )
@@ -444,20 +454,21 @@ class FactoryRuns:
             elif isinstance(step, WaitStep):
                 self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
         for run in pending:
-            factory = self._factory(run.factory)
+            factory = self.factory(run.factory)
             if factory is not None and factory.needs_human is not None:
                 attempts = self._registry.attempts(run.run_id)
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
         for run in uncalled:
-            factory = self._factory(run.factory)
+            factory = self.factory(run.factory)
             if factory is not None and factory.ended is not None:
                 self._report(factory, factory.ended, run)
         for stop in untold:
             self._put_stop(_QueuedStop(stop))
 
-    def needing_human(self, record: ManagedInstance) -> int:
-        """How many runs of the instance's factory need the user at a step in that instance.
+    def needing_human(self, record: ManagedInstance, factory: FactoryFile | None) -> int:
+        """How many runs of the instance's factory, whose file is *factory*, need the user at a
+        step in that instance.
 
         A run needs the user when it stopped for a human or awaits approval. A step that runs in
         no instance counts toward the instance of the factory's intake. A run counts only toward
@@ -465,7 +476,6 @@ class FactoryRuns:
         first active instance of any other role.
         """
         member = record.factory
-        factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return 0
         if member.name == factory.intake.instance:
@@ -476,18 +486,18 @@ class FactoryRuns:
             return 0
         return sum(
             _instance_of(factory, run.step) == member.name
-            for run in (
-                *self._registry.runs(member.factory, FactoryRunStatus.NEEDS_HUMAN, owner),
-                *self._registry.runs(member.factory, FactoryRunStatus.PARKED, owner),
+            for run in self._registry.runs(
+                member.factory, (FactoryRunStatus.NEEDS_HUMAN, FactoryRunStatus.PARKED), owner
             )
             if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
         )
 
-    def missing_commands(self, record: ManagedInstance) -> Sequence[CommandListName]:
-        """The lists of repository commands the instance's factory role needs and it does not
+    def missing_commands(
+        self, record: ManagedInstance, factory: FactoryFile | None
+    ) -> Sequence[CommandListName]:
+        """The lists of repository commands the instance's role in *factory* needs and it does not
         hold."""
         member = record.factory
-        factory = self._factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return []
         return _missing_commands(factory, member.name, record.path)
@@ -496,7 +506,7 @@ class FactoryRuns:
         """The lists of repository commands the instance holds now, when its factory role needs
         any."""
         member = record.factory
-        factory = self._factory(member.factory) if member is not None else None
+        factory = self.factory(member.factory) if member is not None else None
         if member is None or factory is None or not command_lists(factory, member.name):
             return []
         return [
@@ -508,13 +518,13 @@ class FactoryRuns:
         """The instance's place in its factory, and that factory's file, if it has one."""
         record = self._registry.instance(instance_id)
         member = record.factory if record is not None else None
-        factory = self._factory(member.factory) if member is not None else None
+        factory = self.factory(member.factory) if member is not None else None
         if member is None or factory is None:
             return None
         return member, factory
 
     def _intake_instance(self, name: FactoryName) -> InstanceName | None:
-        factory = self._factory(name)
+        factory = self.factory(name)
         return factory.intake.instance if factory is not None else None
 
     def _existing(self, run_id: UUID) -> FactoryRun:
@@ -569,7 +579,7 @@ class FactoryRuns:
 
         A wait or approve step runs in no instance: it is the step itself, which parks the run.
         """
-        factory = self._factory(run.factory)
+        factory = self.factory(run.factory)
         step = _step(factory, step_id) if factory is not None else None
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
@@ -704,6 +714,16 @@ class FactoryRuns:
             ),
             None,
         )
+
+    def _held(
+        self, run: FactoryRun, factory: FactoryFile, filters: Iterable[SignalFilter]
+    ) -> Mapping[ValueName, StepValue]:
+        """The run's values that *filters* may name. Its attempts are read only when one names a
+        value."""
+        named = any(
+            run_value_name(value) is not None for fields in filters for value in fields.values()
+        )
+        return run.work_item | self._results(run.run_id, factory) if named else {}
 
     def _results(
         self, run_id: UUID, factory: FactoryFile, starting: StepId | None = None
@@ -917,7 +937,7 @@ class FactoryRuns:
         if result.resets_at is not None:
             self._registry.end_attempt(run_id, result)
             return self._park_until(run_id, run.step, result.resets_at)
-        factory = self._factory(run.factory)
+        factory = self.factory(run.factory)
         step = _step(factory, run.step) if factory is not None else None
         if step is not None and result.ending is StepEnding.CLEAN:
             result = _checked_types(step, result)
@@ -941,7 +961,7 @@ class FactoryRuns:
     def _move(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
         """Put the run in *status* at *step*, and tell the instance that handed it in when that
         stops it. A run that ends done or cancelled gets the factory's ended call."""
-        factory = self._factory(self._existing(run_id).factory)
+        factory = self.factory(self._existing(run_id).factory)
         ended = factory.ended if factory is not None and status in _ENDS else None
         moved = self._registry.move_run(run_id, status, step, ended_call=ended is not None)
         self._publish(moved)
@@ -1039,7 +1059,7 @@ class FactoryRuns:
             return
         self._queue(instance_id).put_nowait(report)
 
-    def _factory(self, name: FactoryName) -> FactoryFile | None:
+    def factory(self, name: FactoryName) -> FactoryFile | None:
         """The factory's file as the hub keeps it, or None once the factory is gone."""
         try:
             return self._factories.file(name)

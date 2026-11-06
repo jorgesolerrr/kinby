@@ -249,9 +249,8 @@ from kinby.core.errors import (
     PermissionDenied,
 )
 from kinby.core.routing import Dispatcher
-from kinby.core.usage import TimeRange
 from kinby.factories import SHIPPED_FACTORIES
-from kinby.factories.file import InstanceName
+from kinby.factories.file import FactoryFile, InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
@@ -542,6 +541,15 @@ class PendingStop:
 
 
 @dataclass(frozen=True)
+class _InstanceFiles:
+    """The instance secrets and the manifest of one instance, read once for one answer."""
+
+    secrets: dict[str, str]
+    #: None when the manifest cannot be read.
+    manifest: Manifest | None
+
+
+@dataclass(frozen=True)
 class ObservedProcess:
     """What the container runtime reports for one instance, its detail redacted."""
 
@@ -655,6 +663,7 @@ class Hub:
 
     def close(self) -> None:
         """Release this directory so another process can own it."""
+        self.registry.close()
         self._directory_lock.close()
 
     def _serve_hub(self, dispatcher: Dispatcher) -> None:
@@ -739,24 +748,22 @@ class Hub:
         record = self.registry.instance(instance_id)
         if record is None:
             return frozenset()
+        return self._scopes(record, self._manifest(record))
+
+    def _scopes(self, record: ManagedInstance, manifest: Manifest | None) -> frozenset[Scope]:
         return (
             NOTIFICATION_SCOPES
             | (INTAKE_SCOPES if record.factory is not None else frozenset())
             | (HOME_SCOPES if record.home else frozenset())
-            | (BROWSER_SCOPES if self._browser_on(record) else frozenset())
+            | (BROWSER_SCOPES if self._browser_on(manifest) else frozenset())
         )
 
-    def _browser_on(self, record: ManagedInstance) -> bool:
+    def _browser_on(self, manifest: Manifest | None) -> bool:
         """Whether the hub lends browsers and the instance's manifest turns the browser on."""
-        if self._browsers is None:
-            return False
-        try:
-            return inspect_instance(record.path).manifest.browser
-        except ManifestError:
-            return False
+        return self._browsers is not None and manifest is not None and manifest.browser
 
     def _instance_browser_on(self, instance_id: UUID) -> bool:
-        return self._browser_on(self._active_instance(instance_id))
+        return self._browser_on(self._manifest(self._active_instance(instance_id)))
 
     async def _resume_takeover(
         self, instance_id: UUID, command: ThreadTakeoverResumeCommand
@@ -1285,10 +1292,10 @@ class Hub:
         inspect_instance(staging)
         return template.setup
 
-    def _hub_route(self, record: ManagedInstance) -> dict[str, str]:
+    def _hub_route(self, record: ManagedInstance, manifest: Manifest | None) -> dict[str, str]:
         """The hub route, and the scopes an instance holds there, as its environment carries them:
         none unless the registry grants it a scope and the hub has an address."""
-        scopes = self.instance_scopes(record.instance_id)
+        scopes = self._scopes(record, manifest)
         if self._private_url is None or not scopes:
             return {}
         return {
@@ -1301,7 +1308,7 @@ class Hub:
 
         An instance created before its route reaches the hub from its next container on.
         """
-        if route := self._hub_route(record):
+        if route := self._hub_route(record, self._manifest(record)):
             self._replace_secrets(record.path, route)
 
     async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
@@ -1786,7 +1793,8 @@ class Hub:
         """What the instance can do outside its workspace, read from its files, so a stopped
         instance answers too."""
         record = self._active_instance(command.instance_id)
-        tools = inspect_instance(record.path).manifest.tools
+        manifest = inspect_instance(record.path).manifest
+        tools = manifest.tools
         variable = tools.search.key_variable
         try:
             authored, held = exposed_tools(record.path), packages(record.path)
@@ -1808,7 +1816,7 @@ class Hub:
             authored_tools=[
                 AuthoredTool(name=name, read_only=name in read_only) for name in authored
             ],
-            browser=self._browser_on(record),
+            browser=self._browser_on(manifest),
         )
 
     async def stop(
@@ -2794,8 +2802,20 @@ class Hub:
         hub_revision = await self._images.resolve(_PREPARED_REVISION)
         records = self.registry.listed_instances(removed=command.removed)
         served = await self._served_templates(records)
+        factories = {
+            name: self.runs.factory(name)
+            for name in {record.factory.factory for record in records if record.factory}
+        }
         return InstanceListResult(
-            instances=[await self._summary(record, hub_revision, served) for record in records]
+            instances=[
+                await self._summary(
+                    record,
+                    hub_revision,
+                    served,
+                    factories[record.factory.factory] if record.factory else None,
+                )
+                for record in records
+            ]
         )
 
     async def _served_templates(
@@ -2819,8 +2839,11 @@ class Hub:
         record: ManagedInstance,
         hub_revision: str,
         served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+        factory: FactoryFile | None,
     ) -> InstanceSummary:
-        observed = await self._observed(record)
+        """*factory* is the file of the factory the instance holds a role of."""
+        files = self._files(record)
+        observed = await self._observed(record, files)
         return InstanceSummary(
             instance_id=record.instance_id,
             manifest_id=record.manifest_id,
@@ -2833,30 +2856,31 @@ class Hub:
             runtime_id=record.runtime_id,
             storage=list(record.storage),
             avatar=record.avatar,
-            setup_pending=self._setup(record).pending,
+            setup_pending=self._setup(record, files, factory).pending,
             home=record.home,
             factory_role=(
                 FactoryRole(factory=record.factory.factory, name=record.factory.name)
                 if record.factory is not None
                 else None
             ),
-            notices=[*self._notices_of(record, hub_revision, served).values()],
-            needs_human=self.runs.needing_human(record),
+            notices=[*self._notices_of(record, files, hub_revision, served).values()],
+            needs_human=self.runs.needing_human(record, factory),
         )
 
     def _notices_of(
         self,
         record: ManagedInstance,
+        files: _InstanceFiles,
         hub_revision: str,
         served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
     ) -> dict[str, InstanceNotice]:
-        manifest = self._manifest(record)
+        manifest = files.manifest
         return _notices(
             record,
             hub_revision,
             served,
-            self._hub_route(record),
-            self._environment(record.path),
+            self._hub_route(record, manifest),
+            files.secrets,
             {} if manifest is None else failed_mcp_servers(manifest.state_dir),
         )
 
@@ -2870,7 +2894,8 @@ class Hub:
             _logger.exception("Could not look for instance notices")
             return
         for record in records:
-            for key, notice in self._notices_of(record, hub_revision, served).items():
+            notices = self._notices_of(record, self._files(record), hub_revision, served)
+            for key, notice in notices.items():
                 self.outbox.notify(
                     record.instance_id,
                     key,
@@ -2882,18 +2907,20 @@ class Hub:
 
     async def status(self, command: InstanceStatusCommand) -> InstanceStatusResult:
         record = self._active_instance(command.instance_id)
-        observed = await self._observed(record)
+        files = self._files(record)
+        observed = await self._observed(record, files)
+        factory = self.runs.factory(record.factory.factory) if record.factory else None
         return InstanceStatusResult(
             instance_id=record.instance_id,
             process=observed.process,
             readiness=observed.readiness,
-            setup=self._setup(record),
+            setup=self._setup(record, files, factory),
             home=record.home,
             detail=observed.detail,
             active_operation_id=self.registry.active_operation(record.instance_id),
             recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
             repository_commands=[*self.runs.held_commands(record)],
-            browser=self._browser_on(record),
+            browser=self._browser_on(files.manifest),
         )
 
     async def _recreate_reasons(
@@ -2904,9 +2931,9 @@ class Hub:
             return ()
         return (RecreateReason.SECRETS,) if await self._secrets_replaced(record) else ()
 
-    async def _observed(self, record: ManagedInstance) -> ObservedProcess:
+    async def _observed(self, record: ManagedInstance, files: _InstanceFiles) -> ObservedProcess:
         """Read the runtime once. A runtime that cannot be read reports the instance unavailable."""
-        secrets = self._environment(record.path).values()
+        secrets = files.secrets.values()
         try:
             status = await self._runtime.status(record.runtime_id)
         except Exception as exc:
@@ -2923,6 +2950,10 @@ class Hub:
         if record.factory is not None:
             return record.factory.setup
         return self.registry.description()
+
+    @classmethod
+    def _files(cls, record: ManagedInstance) -> _InstanceFiles:
+        return _InstanceFiles(cls._environment(record.path), cls._manifest(record))
 
     @staticmethod
     def _manifest(record: ManagedInstance) -> Manifest | None:
@@ -2944,9 +2975,11 @@ class Hub:
             # code_run reports a malformed project to the agent; setup reads it as declaring none.
             return ()
 
-    def _setup(self, record: ManagedInstance) -> InstanceSetup:
+    def _setup(
+        self, record: ManagedInstance, files: _InstanceFiles, factory: FactoryFile | None
+    ) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, how they stand, and
-        the lists of repository commands it is missing."""
+        the lists of repository commands it is missing from those *factory* names."""
         description = self._declared_setup(record)
         declared = description.logins if description is not None else []
         running = {
@@ -2954,16 +2987,16 @@ class Hub:
             for login in declared
             if (running := self.registry.running_login(record.instance_id, login.id))
         }
-        manifest = self._manifest(record)
+        manifest = files.manifest
         return instance_setup(
             description,
             logins=self.registry.login_states(record.instance_id),
             running=running,
-            secrets=self._environment(record.path),
+            secrets=files.secrets,
             links=self.registry.secret_links(record.instance_id),
             model=manifest.models.main if manifest is not None else None,
             search_key=manifest.tools.search_key if manifest is not None else None,
-            missing_commands=self.runs.missing_commands(record),
+            missing_commands=self.runs.missing_commands(record, factory),
             code_secrets=self._code_secrets(record),
         )
 
@@ -3011,12 +3044,9 @@ class Hub:
         """Join the runs the instance handed in with their tokens in every instance, which are
         asked at once, and keep none of the answers (ADR 0063)."""
         self._active_instance(command.instance_id)
-        created = TimeRange(command.since, command.until)
-        runs = [
-            run
-            for run in self.registry.runs(None, None, command.instance_id)
-            if created.includes(run.created_at)
-        ]
+        runs = self.registry.runs(
+            None, None, command.instance_id, since=command.since, until=command.until
+        )
         answers = await self._answers(StatsGetCommand(since=command.since, until=command.until))
         return run_usage([(run, self.runs.rework(run)) for run in runs], answers)
 
