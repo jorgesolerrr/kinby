@@ -205,7 +205,7 @@ def test_config_history_lists_the_newest_first_by_file(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_config_changes_appended_at_once_are_all_kept(tmp_path: Path) -> None:
+def test_config_changes_appended_at_once_to_a_new_database_are_all_kept(tmp_path: Path) -> None:
     writers = 8
 
     def change(diff: str) -> ConfigChange:
@@ -216,14 +216,13 @@ def test_config_changes_appended_at_once_are_all_kept(tmp_path: Path) -> None:
             diff=diff,
         )
 
-    for attempt in range(20):
+    for attempt in range(50):
         state_dir = tmp_path / str(attempt)
         start = Barrier(writers)
 
         def append(writer: int, state_dir: Path = state_dir, start: Barrier = start) -> None:
-            log = ConfigChangeLog(state_dir)
             start.wait()
-            log.append(change(str(writer)))
+            ConfigChangeLog(state_dir).append(change(str(writer)))
 
         with ThreadPoolExecutor(writers) as pool:
             list(pool.map(append, range(writers)))

@@ -2,12 +2,14 @@
 thread records, config changes and coding-session recalls (ADR 0116)."""
 
 import sqlite3
+import threading
 from pathlib import Path
 
 DATABASE_NAME = "instance.sqlite"
 MIGRATION_SCRIPT = "scripts/migrate_instance_database.py"
 #: The stores from before the database, which a state directory may still hold.
 _OLD_STORES = ("events.jsonl", "threads.jsonl", "config-changes.jsonl")
+_connecting = threading.Lock()
 
 # An event's key is its thread and sequence. Its rowid keeps the order events were appended in.
 _SCHEMA = """
@@ -67,8 +69,10 @@ def open_database(state_dir: Path) -> sqlite3.Connection:
 def connect(path: Path) -> sqlite3.Connection:
     """Connect to the instance database at *path*, making its tables when missing."""
     db = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
-    db.execute("PRAGMA journal_mode = WAL")
+    # Two connections that switch a new database to WAL at once may fail without waiting.
+    with _connecting:
+        db.execute("PRAGMA journal_mode = WAL")
+        db.executescript(_SCHEMA)
     # A commit waits for no disk sync: a power cut may lose the latest writes, never the database.
     db.execute("PRAGMA synchronous = NORMAL")
-    db.executescript(_SCHEMA)
     return db
