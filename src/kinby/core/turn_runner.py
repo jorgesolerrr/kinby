@@ -31,7 +31,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
-from langgraph.types import Command, Interrupt, interrupt
+from langgraph.types import Command, Interrupt, StateSnapshot, interrupt
 from pydantic import JsonValue, TypeAdapter
 
 from kinby.contracts import (
@@ -666,6 +666,7 @@ class LangGraphRunner:
             if budgets.steps is None:
                 raise
             raise BudgetExceeded("steps", budgets.steps) from exc
+        await self.prune_checkpoints(turn.thread_id)
         if isinstance(parked, TakeoverRequested):
             # The user drives the page on the hub. With no browser free, the turn parks all the
             # same, and the user's live view opens the page once one comes free.
@@ -938,12 +939,28 @@ class LangGraphRunner:
         )
         return output
 
+    async def prune_checkpoints(self, thread_id: UUID) -> None:
+        """Delete the thread's checkpoints older than its newest completed one. A newer one,
+        such as a turn parked on an approval or a takeover, stays."""
+        async with self._graph() as (graph, checkpointer):
+            completed = await _newest_completed(graph, _thread_config(thread_id))
+            if completed is None:
+                return
+            older = (str(thread_id), completed.config["configurable"]["checkpoint_id"])
+            async with checkpointer.lock, checkpointer.conn.cursor() as cursor:
+                await cursor.execute(
+                    "DELETE FROM checkpoints WHERE thread_id = ? AND checkpoint_id < ?", older
+                )
+                await cursor.execute(
+                    "DELETE FROM writes WHERE thread_id = ? AND checkpoint_id < ?", older
+                )
+                await checkpointer.conn.commit()
+
     async def _start_config(self, turn: PreparedTurnRequest) -> tuple[RunnableConfig, int]:
         async with self._graph() as (graph, checkpointer):
-            async for state in graph.aget_state_history(_graph_config(turn)):
-                interrupted = any(task.interrupts for task in state.tasks)
-                if not state.next and not interrupted:
-                    return state.config, _checkpoint_step(state.metadata) + 1
+            completed = await _newest_completed(graph, _graph_config(turn))
+            if completed is not None:
+                return completed.config, _checkpoint_step(completed.metadata) + 1
             await checkpointer.adelete_thread(str(turn.thread_id))
         return _graph_config(turn), -1
 
@@ -1309,7 +1326,23 @@ def _after_model(state: ModelState) -> str:
 
 
 def _graph_config(turn: PreparedTurnRequest) -> RunnableConfig:
-    return {"configurable": {"thread_id": str(turn.thread_id)}}
+    return _thread_config(turn.thread_id)
+
+
+def _thread_config(thread_id: UUID) -> RunnableConfig:
+    return {"configurable": {"thread_id": str(thread_id)}}
+
+
+async def _newest_completed(
+    graph: CompiledStateGraph[ModelState, ModelContext, ModelState, ModelState],
+    config: RunnableConfig,
+) -> StateSnapshot | None:
+    """The thread's newest checkpoint of a turn that ran to its end, which the next turn
+    starts from."""
+    async for state in graph.aget_state_history(config):
+        if not state.next and not any(task.interrupts for task in state.tasks):
+            return state
+    return None
 
 
 def _budget_metadata(progress: _BudgetProgress, started_at: float) -> dict[str, int | float]:
