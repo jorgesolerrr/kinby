@@ -84,9 +84,9 @@ from kinby.core.snapshots import (
     snapshot_ref,
 )
 from kinby.core.threads import (
+    PARKING_EVENTS,
     PendingTakeover,
     ThreadStore,
-    events_by_thread,
     first_message_title,
     parked_on,
     pending_approval,
@@ -314,10 +314,13 @@ class Turns:
         return origins
 
     def _parked(self) -> dict[UUID, Origin]:
-        grouped = events_by_thread(self._store.threads(), self._log.all_events())
+        turns = (
+            self._log.turn_events(request.turn_id)
+            for request in self._log.latest_in_open_turns(PARKING_EVENTS)
+        )
         return {
-            thread_id: _turn_origin(events, pending.event.turn_id)
-            for thread_id, events in grouped.items()
+            pending.event.thread_id: _turn_origin(events, pending.event.turn_id)
+            for events in turns
             if (pending := parked_on(events)) is not None
         }
 
@@ -370,11 +373,7 @@ class Turns:
         while True:
             # Clear before reading, so a turn that closes while reading is never missed.
             self._changed.clear()
-            events = [
-                event
-                for event in self._log.stored(started.thread_id)
-                if event.turn_id == started.turn_id
-            ]
+            events = self._log.turn_events(started.turn_id)
             closing = next(
                 (at for at, event in enumerate(events) if is_turn_closing(event.payload)), None
             )
@@ -431,7 +430,7 @@ class Turns:
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
-        events = self._log.stored(command.thread_id)
+        events = self._log.thread_events(command.thread_id)
         running = self._running.get(command.thread_id)
         active = running is not None and not running.task.done()
         if command.thread_id in self._claims or active or parked_on(events) is not None:
@@ -545,7 +544,9 @@ class Turns:
     def _recorded_snapshots(self, thread_id: UUID, turn_id: UUID) -> RecordedSnapshots | None:
         """The snapshots recorded for a turn or a revert, or None if it started without one."""
         payloads = [
-            event.payload for event in self._log.stored(thread_id) if event.turn_id == turn_id
+            event.payload
+            for event in self._log.turn_events(turn_id)
+            if event.thread_id == thread_id
         ]
         reverted = next(
             (payload for payload in payloads if isinstance(payload, WorkspaceReverted)),
@@ -575,7 +576,7 @@ class Turns:
             turn_ids=list(
                 dict.fromkeys(
                     event.turn_id
-                    for event in self._log.stored(command.thread_id)
+                    for event in self._log.thread_events(command.thread_id)
                     if isinstance(event.payload, TurnStarted)
                 )
             )
@@ -588,7 +589,7 @@ class Turns:
         """Every turn target on the thread, in order, and whether each has closed."""
         self._require_thread(command.thread_id)
         closed: dict[UUID, bool] = {}
-        for event in self._log.stored(command.thread_id):
+        for event in self._log.thread_events(command.thread_id):
             if isinstance(event.payload, TurnStarted):
                 closed.setdefault(event.turn_id, False)
             elif isinstance(event.payload, WorkspaceReverted) or is_turn_closing(event.payload):
@@ -605,7 +606,7 @@ class Turns:
     ) -> AcceptedResult:
         self._require_thread(thread_id)
         self.require_available(origin)
-        events = self._log.stored(thread_id)
+        events = self._log.thread_events(thread_id)
         pending = parked_on(events)
         running = self._running.get(thread_id)
         active = running is not None and not running.task.done()
@@ -644,7 +645,7 @@ class Turns:
         preparation = self._prepare_for_turn()
         check_daily_budget(preparation.daily_budget)
         thread_id = thread()
-        events = self._log.stored(thread_id)
+        events = self._log.thread_events(thread_id)
         claim = TurnClaim(origin)
         self._claims[thread_id] = claim
         try:
@@ -701,7 +702,7 @@ class Turns:
             running.task.cancel()
             turn_id = running.request.turn_id
         else:
-            pending = parked_on(self._log.stored(command.thread_id))
+            pending = parked_on(self._log.thread_events(command.thread_id))
             if pending is None:
                 raise _no_active_turn(command.thread_id)
             turn_id = pending.event.turn_id
@@ -720,7 +721,7 @@ class Turns:
             usage = (
                 running.usage
                 if running is not None
-                else _recorded_model_usage(self._log.stored(command.thread_id), turn_id)
+                else _recorded_model_usage(self._log.turn_events(turn_id))
             )
             interrupted = await self._log.append(
                 command.thread_id,
@@ -749,7 +750,7 @@ class Turns:
             raise InstanceDraining(
                 "The instance has drained. The approval waits for its next start."
             )
-        events = self._log.stored(command.thread_id)
+        events = self._log.thread_events(command.thread_id)
         pending = pending_approval(events)
         known = any(
             isinstance(event.payload, ApprovalRequested)
@@ -787,13 +788,14 @@ class Turns:
                 "The instance has drained. The takeover waits for its next start."
             )
         self._require_thread(command.thread_id)
-        pending = pending_takeover(self._log.stored(command.thread_id))
+        events = self._log.thread_events(command.thread_id)
+        pending = pending_takeover(events)
         if pending is None or pending.request.takeover_id != command.takeover_id:
             raise TakeoverNotFound(f'Takeover "{command.takeover_id}" was not found.')
         running = self._running.get(command.thread_id)
         if command.thread_id in self._claims or (running is not None and not running.task.done()):
             raise _thread_busy(command.thread_id)
-        origin = _turn_origin(self._log.stored(command.thread_id), pending.event.turn_id)
+        origin = _turn_origin(events, pending.event.turn_id)
         return await self._resume_parked(pending.event, origin, _TAKEOVER_FINISHED)
 
     def _abandon_later(self, takeover: PendingTakeover) -> None:
@@ -805,7 +807,7 @@ class Turns:
         """End the turn and close its browser, unless the user finished the takeover in time."""
         await asyncio.sleep(TAKEOVER_SECONDS)
         thread_id, turn_id = takeover.event.thread_id, takeover.event.turn_id
-        pending = pending_takeover(self._log.stored(thread_id))
+        pending = pending_takeover(self._log.turn_events(turn_id))
         if pending != takeover or thread_id in self._claims:
             return
         claim = InterruptedTurnClaim()
@@ -821,7 +823,7 @@ class Turns:
                         "minutes, so the turn ended."
                     ),
                     snapshot=await self._capture(thread_id, turn_id, SnapshotBoundary.AFTER),
-                    **_recorded_model_usage(self._log.stored(thread_id), turn_id).model_dump(),
+                    **_recorded_model_usage(self._log.turn_events(turn_id)).model_dump(),
                 ),
             )
             self._schedule_after_turn(thread_id, turn_id)
@@ -891,7 +893,7 @@ class Turns:
 
     def _spawn(self, turn: PreparedTurnRequest, work: Coroutine[object, object, None]) -> None:
         task = asyncio.create_task(work)
-        model_calls = _recorded_model_calls(self._log.stored(turn.thread_id), turn.turn_id)
+        model_calls = _recorded_model_calls(self._log.turn_events(turn.turn_id))
         self._running[turn.thread_id] = RunningTurn(
             turn,
             task,
@@ -937,7 +939,9 @@ class Turns:
             running = self._owned_running_turn(turn)
             if running is None:
                 # interrupt appends turn.interrupted outside this closure.
-                closed = _turn_closed(self._log.stored(turn.thread_id), turn.turn_id)
+                closed = any(
+                    is_turn_closing(event.payload) for event in self._log.turn_events(turn.turn_id)
+                )
                 if closed:
                     raise _no_active_turn(turn.thread_id)
                 raise TurnInterruptedError
@@ -959,7 +963,7 @@ class Turns:
             message = "The model turn failed unexpectedly."
         else:
             if isinstance(outcome, ParkedTurn):
-                if (takeover := pending_takeover(self._log.stored(turn.thread_id))) is not None:
+                if (takeover := pending_takeover(self._log.turn_events(turn.turn_id))) is not None:
                     self._abandon_later(takeover)
                 return
             running = self._owned_running_turn(turn)
@@ -1059,16 +1063,12 @@ def _sum_model_calls(calls: Sequence[TokenTotals]) -> TokenTotals:
     )
 
 
-def _recorded_model_calls(events: Sequence[Event], turn_id: UUID) -> list[ModelCompleted]:
-    return [
-        event.payload
-        for event in events
-        if event.turn_id == turn_id and isinstance(event.payload, ModelCompleted)
-    ]
+def _recorded_model_calls(turn_events: Sequence[Event]) -> list[ModelCompleted]:
+    return [event.payload for event in turn_events if isinstance(event.payload, ModelCompleted)]
 
 
-def _recorded_model_usage(events: Sequence[Event], turn_id: UUID) -> TokenTotals:
-    return _sum_model_calls(_recorded_model_calls(events, turn_id))
+def _recorded_model_usage(turn_events: Sequence[Event]) -> TokenTotals:
+    return _sum_model_calls(_recorded_model_calls(turn_events))
 
 
 def _permission_mode(
@@ -1085,10 +1085,6 @@ def _thread_busy(thread_id: UUID) -> ThreadBusy:
 
 def _snapshot_unavailable(turn_id: UUID) -> SnapshotUnavailable:
     return SnapshotUnavailable(f'Workspace snapshots are unavailable for turn "{turn_id}".')
-
-
-def _turn_closed(events: Sequence[Event], turn_id: UUID) -> bool:
-    return any(event.turn_id == turn_id and is_turn_closing(event.payload) for event in events)
 
 
 def _no_active_turn(thread_id: UUID) -> NoActiveTurn:

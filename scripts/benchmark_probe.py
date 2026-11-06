@@ -118,13 +118,16 @@ async def reflection(directory: Path) -> Measures:
 
 
 async def reads(directory: Path, thread_id: UUID) -> Measures:
-    """How long reading one thread and one scheduler tick take on a booted instance."""
+    """How long reading one thread, one scheduler tick and waking a thread take on a booted
+    instance."""
     from kinby.cli.client import ContractClient
     from kinby.contracts import (
         INSTANCE_SCOPES,
         THREAD_SUBSCRIBE,
+        THREAD_TURN_START,
         ErrorEnvelope,
         ThreadSubscribeCommand,
+        ThreadTurnStartCommand,
     )
     from kinby.core.runtime import boot_instance
     from kinby.instance import load_instance
@@ -148,10 +151,24 @@ async def reads(directory: Path, thread_id: UUID) -> Measures:
                 if read == stream.head_sequence:
                     return
 
+    async def wake() -> float:
+        """Time starting a turn on the thread, then wait for the turn and its recap to end."""
+        command = ThreadTurnStartCommand(thread_id=thread_id, message="What is left?")
+        started = time.perf_counter()
+        accepted = await client.call(THREAD_TURN_START, command)
+        duration = (time.perf_counter() - started) * 1000
+        if isinstance(accepted, ErrorEnvelope):
+            raise RuntimeError(accepted.message)
+        await runtime.scheduler.drain()
+        if runtime.recap is not None:
+            await runtime.recap.drain()
+        return duration
+
     try:
         return {
             "thread_read_ms": await _median_ms(read_thread),
             "tick_ms": await _median_ms(runtime.scheduler.tick),
+            "wake_ms": statistics.median([await wake() for _ in range(_TIMED_RUNS)]),
         }
     finally:
         await runtime.stop_after_running_routine()

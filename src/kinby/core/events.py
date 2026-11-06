@@ -20,6 +20,9 @@ _EVENT_JSON = (
     "json_object('sequence', sequence, 'thread_id', thread_id, 'turn_id', turn_id,"
     " 'timestamp', timestamp, 'payload', json(payload))"
 )
+_CLOSING_TYPES = (
+    f"('{EventType.TURN_COMPLETED}', '{EventType.TURN_FAILED}', '{EventType.TURN_INTERRUPTED}')"
+)
 
 
 def _stored_at(time: datetime) -> str:
@@ -56,6 +59,18 @@ class EventReader:
             where += " AND timestamp < ?"
             parameters.append(_stored_at(until))
         return self._events(where, parameters)
+
+    def latest_in_open_turns(self, types: Collection[EventType]) -> Iterator[Event]:
+        """Each thread's latest event of *types*, when its turn has not closed."""
+        latest = (
+            f"SELECT max(rowid) FROM events WHERE type IN ({', '.join('?' * len(types))})"
+            " GROUP BY thread_id"
+        )
+        return self._events(
+            f"rowid IN ({latest}) AND NOT EXISTS (SELECT 1 FROM events AS closing"
+            f" WHERE closing.turn_id = events.turn_id AND closing.type IN {_CLOSING_TYPES})",
+            [*types],
+        )
 
     def delivery(self, name: RoutineName, delivery_id: DeliveryId) -> Event | None:
         """The arrival of the delivery a provider sent *name* under *delivery_id*."""
@@ -204,6 +219,10 @@ class EventLog:
     ) -> list[Event]:
         with self._using_db:
             return [*EventReader(self._db).events_of(types, since=since, until=until)]
+
+    def latest_in_open_turns(self, types: Collection[EventType]) -> list[Event]:
+        with self._using_db:
+            return [*EventReader(self._db).latest_in_open_turns(types)]
 
     def delivery(self, name: RoutineName, delivery_id: DeliveryId) -> Event | None:
         with self._using_db:

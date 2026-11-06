@@ -1,5 +1,4 @@
 import asyncio
-from collections.abc import Iterator
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -250,17 +249,23 @@ class PausingEventLog(EventLog):
         return await super().append(thread_id, turn_id, payload)
 
 
-class HistoricalEventLog(EventLog):
-    def __init__(self, state_dir: Path, history: list[Event]) -> None:
-        super().__init__(state_dir)
-        self._history = history
+def historical_event_log(state_dir: Path, history: list[Event]) -> EventLog:
+    write_events(
+        state_dir,
+        (
+            {
+                **event.model_dump(mode="json"),
+                "timestamp": event.timestamp.isoformat(timespec="microseconds"),
+            }
+            for event in history
+        ),
+    )
+    return EventLog(state_dir)
 
-    def all_events(self) -> Iterator[Event]:
-        yield from self._history
-        yield from super().all_events()
 
-
-def _historical_turn(closed_at: datetime, model: str) -> list[Event]:
+def _historical_turn(
+    closed_at: datetime, model: str, duration: timedelta = timedelta(seconds=1)
+) -> list[Event]:
     thread_id = uuid4()
     turn_id = uuid4()
     return [
@@ -268,7 +273,7 @@ def _historical_turn(closed_at: datetime, model: str) -> list[Event]:
             sequence=1,
             thread_id=thread_id,
             turn_id=turn_id,
-            timestamp=closed_at - timedelta(seconds=1),
+            timestamp=closed_at - duration,
             payload=TurnStarted(message="Earlier", model=model),
         ),
         Event(
@@ -792,7 +797,7 @@ def test_daily_cost_budget_does_not_count_a_turn_closed_yesterday(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        event_log = HistoricalEventLog(
+        event_log = historical_event_log(
             tmp_path,
             _historical_turn(datetime.now(UTC) - timedelta(days=1), "openai:gpt-5"),
         )
@@ -827,7 +832,7 @@ def test_daily_cost_budget_refuses_an_unpriced_model_from_a_turn_closed_today(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        event_log = HistoricalEventLog(
+        event_log = historical_event_log(
             tmp_path,
             _historical_turn(datetime.now(UTC), "other:model"),
         )
@@ -862,8 +867,13 @@ def test_daily_cost_budget_refuses_an_unpriced_model_from_a_turn_closed_today(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "duration",
+    [timedelta(seconds=1), timedelta(days=1)],
+    ids=["started-today", "started-the-day-before"],
+)
 def test_turn_preparation_uses_the_event_log_and_manifest_price_override(
-    tmp_path: Path,
+    tmp_path: Path, duration: timedelta
 ) -> None:
     async def scenario() -> None:
         instance_path = tmp_path / "priced"
@@ -874,9 +884,9 @@ def test_turn_preparation_uses_the_event_log_and_manifest_price_override(
                 '\n[prices."other:model"]\ninput = 1.25\noutput = 10\n'
             )
         instance = load_instance(instance_path)
-        event_log = HistoricalEventLog(
+        event_log = historical_event_log(
             instance.manifest.state_dir,
-            _historical_turn(datetime.now(UTC), "other:model"),
+            _historical_turn(datetime.now(UTC), "other:model", duration),
         )
         runner = LangGraphRunner(instance, event_log=event_log)
         dispatcher = build_dispatcher(
@@ -919,7 +929,7 @@ def test_daily_cost_budget_uses_cache_rates(tmp_path: Path) -> None:
         thread_id = uuid4()
         turn_id = uuid4()
         closed_at = datetime.now(UTC)
-        event_log = HistoricalEventLog(
+        event_log = historical_event_log(
             instance.manifest.state_dir,
             [
                 Event(

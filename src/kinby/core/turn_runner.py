@@ -9,7 +9,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from functools import partial
 from typing import Annotated, Protocol, cast
 from uuid import UUID, uuid4, uuid5
@@ -39,6 +39,7 @@ from kinby.contracts import (
     ApprovalRequested,
     CompletionOutcome,
     Delivery,
+    Event,
     EventType,
     FactoryRunOrigin,
     FileHash,
@@ -59,11 +60,13 @@ from kinby.contracts import (
     ToolCall,
     ToolGated,
     ToolResult,
+    TurnStarted,
     UserOrigin,
     Warning,
     gate_denial_source,
+    is_turn_closing,
 )
-from kinby.core.budgets import DailyBudget, daily_cost
+from kinby.core.budgets import DAILY_COST_EVENTS, DailyBudget, daily_cost
 from kinby.core.clock import utc_today
 from kinby.core.errors import (
     BudgetExceeded,
@@ -367,13 +370,10 @@ class LangGraphRunner:
         daily_budget = None
         if limit is not None:
             prices = price_map(manifest.prices)
+            today = self._today()
             daily_budget = DailyBudget(
                 limit=limit,
-                cost=daily_cost(
-                    self._event_log.all_events(),
-                    prices,
-                    self._today(),
-                ),
+                cost=daily_cost(self._closed_on(today), prices, today),
                 unpriced_model=(
                     UnpricedModel(manifest.models.main)
                     if manifest.models.main not in prices
@@ -492,6 +492,22 @@ class LangGraphRunner:
             await self._browser.close(turn_id)
         return result
 
+    def _closed_on(self, day: date) -> list[Event]:
+        """The events daily_cost folds for the turns closed on *day*: those stored since the day
+        began, after the start of each turn that began before it."""
+        events = self._event_log.events_of(
+            DAILY_COST_EVENTS, since=datetime.combine(day, time(), UTC)
+        )
+        started = {event.turn_id for event in events if isinstance(event.payload, TurnStarted)}
+        earlier = [
+            event
+            for closing in events
+            if is_turn_closing(closing.payload) and closing.turn_id not in started
+            for event in self._event_log.turn_events(closing.turn_id)
+            if isinstance(event.payload, TurnStarted)
+        ]
+        return [*earlier, *events]
+
     def _granted_tools(self, turn: PreparedTurnRequest) -> tuple[str, ...]:
         """The tools the routine's grants allow, when a routine started the turn."""
         if not isinstance(turn.origin, RoutineOrigin):
@@ -507,7 +523,7 @@ class LangGraphRunner:
     async def _grant_parked_tool(self, turn: PreparedTurnRequest, emit: Emit) -> None:
         """Grant the tool of the approval the turn is parked on to the routine that started it,
         unless the routine changed since the turn started."""
-        pending = pending_approval(self._event_log.stored(turn.thread_id))
+        pending = pending_approval(self._event_log.turn_events(turn.turn_id))
         if not isinstance(turn.origin, RoutineOrigin) or pending is None:
             raise GrantOutsideRoutine("Only a routine's parked turn grants a tool to the routine.")
         async with self._graph() as (graph, _):
@@ -534,7 +550,7 @@ class LangGraphRunner:
 
     async def _mark_parked_tool_read_only(self, turn: PreparedTurnRequest) -> None:
         """Mark the authored tool of the approval the turn is parked on read-only, as the user."""
-        pending = pending_approval(self._event_log.stored(turn.thread_id))
+        pending = pending_approval(self._event_log.turn_events(turn.turn_id))
         if pending is None or pending.request.rule != AUTHORED_RULE:
             raise ReadOnlyMarkRefused("Only an authored tool's approval marks it read-only.")
         await asyncio.to_thread(
@@ -549,7 +565,7 @@ class LangGraphRunner:
         async with self._counting_profiles:
             counted = {
                 event.payload.version
-                for event in self._event_log.all_events()
+                for event in self._event_log.events_of({EventType.PROFILE_COUNTED})
                 if isinstance(event.payload, ProfileCounted)
             }
             for version, text in list(self._uncounted_profiles.items()):
@@ -816,8 +832,8 @@ class LangGraphRunner:
         call = next(
             (
                 event.payload
-                for event in self._event_log.stored(turn.thread_id)
-                if event.turn_id == turn.turn_id and isinstance(event.payload, ToolCall)
+                for event in self._event_log.turn_events(turn.turn_id)
+                if isinstance(event.payload, ToolCall)
             ),
             None,
         )
@@ -838,8 +854,8 @@ class LangGraphRunner:
         return next(
             (
                 event.payload.delivery
-                for event in self._event_log.stored(turn.thread_id)
-                if event.turn_id == turn.turn_id and isinstance(event.payload, SignalReceived)
+                for event in self._event_log.turn_events(turn.turn_id)
+                if isinstance(event.payload, SignalReceived)
             ),
             None,
         )
@@ -1228,8 +1244,8 @@ class LangGraphRunner:
             return
         self._emitted_tool_calls.update(
             (turn.thread_id, turn.turn_id, payload.call_id)
-            for event in self._event_log.stored(turn.thread_id)
-            if event.turn_id == turn.turn_id and isinstance(payload := event.payload, ToolCall)
+            for event in self._event_log.turn_events(turn.turn_id)
+            if isinstance(payload := event.payload, ToolCall)
         )
 
     def _forget_tool_call(self, turn: TurnRequest, call: ToolCall) -> None:

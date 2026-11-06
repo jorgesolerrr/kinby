@@ -1030,14 +1030,14 @@ def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
             await call(dispatcher, "thread.create")
         restarted = runtime(instance, clock)
         reads = 0
-        all_events = EventLog.all_events
+        latest_in_open_turns = EventLog.latest_in_open_turns
 
-        def counted_events(log):
+        def counted_events(log, types):
             nonlocal reads
             reads += 1
-            return all_events(log)
+            return latest_in_open_turns(log, types)
 
-        monkeypatch.setattr(EventLog, "all_events", counted_events)
+        monkeypatch.setattr(EventLog, "latest_in_open_turns", counted_events)
         busy = await call(restarted, "routine.run", name="news")
         assert busy.code == "INSTANCE_BUSY"
         # One read checks availability, however many threads the instance has.

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict  # noqa: TID251 - the store's file bo
 from kinby.contracts import (
     ApprovalRequested,
     Event,
+    EventType,
     ModePinned,
     NotificationAccepted,
     NotificationRaised,
@@ -43,6 +44,8 @@ _COLUMNS = "id, title, created_at, archived"
 #: The most characters a title taken from a thread's first message has.
 TITLE_LENGTH = 60
 _NOTIFYING = (NotificationRaised, NotificationAccepted, NotificationRefused)
+#: The events a turn parks on.
+PARKING_EVENTS = frozenset({EventType.APPROVAL_REQUESTED, EventType.TAKEOVER_REQUESTED})
 _PARKED = frozenset({ThreadStatus.AWAITING_APPROVAL, ThreadStatus.AWAITING_TAKEOVER})
 
 
