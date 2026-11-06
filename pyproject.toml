@@ -57,8 +57,10 @@ evals = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
 markers = [
     "browser: drives Playwright's headless shell, which docker/check.Dockerfile installs",
+    "slow: times reads on a large store, so runs only when asked for with -m slow",
 ]
 
 [tool.ruff]

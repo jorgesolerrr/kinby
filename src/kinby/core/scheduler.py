@@ -44,14 +44,19 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.routine_history import RoutineHistory, routine_history
+from kinby.core.routine_history import ROUTINE_EVENTS, RoutineHistory, routine_history
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, inspect_instance
 from kinby.instance.config_changes import recorded_change
 from kinby.instance.layout import ROUTINES_DIR
 from kinby.instance.routine_grants import RoutineGrants
-from kinby.plugins.notify import pending_notifications, raise_recorded, raises_notifications
+from kinby.plugins.notify import (
+    NOTIFICATION_EVENTS,
+    pending_notifications,
+    raise_recorded,
+    raises_notifications,
+)
 from kinby.plugins.routines import Routine, disable_routine, load_routine, load_routines
 
 #: The failed firings in a row after which the failure policy disables a routine.
@@ -95,7 +100,7 @@ class Scheduler:
         self._changed = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         routines, _ = load_routines(self._instance)
-        history = routine_history(self._log.all_events()).routines
+        history = routine_history(self._log.events_of(ROUTINE_EVENTS)).routines
         self._armed = self._arm(routines, catch_up_from=history)
 
     def start(self) -> None:
@@ -141,14 +146,9 @@ class Scheduler:
         trigger: RoutineTrigger,
     ) -> DeliveryReceipt:
         if delivery.delivery_id is not None:
-            for event in self._log.all_events():
-                payload = event.payload
-                if (
-                    isinstance(payload, SignalReceived)
-                    and payload.origin.name == name
-                    and payload.delivery.delivery_id == delivery.delivery_id
-                ):
-                    return DeliveryReceipt(accepted(event), repeated=True)
+            event = self._log.delivery(name, delivery.delivery_id)
+            if event is not None:
+                return DeliveryReceipt(accepted(event), repeated=True)
         origin = RoutineOrigin(
             name=name,
             trigger=trigger,
@@ -217,12 +217,16 @@ class Scheduler:
     async def list(self, command: RoutineListCommand) -> RoutineListResult:
         routines, warnings = load_routines(self._instance)
         await self._reset_failures(routines)
-        history = routine_history(self._log.all_events()).routines
+        history = routine_history(self._log.events_of(ROUTINE_EVENTS)).routines
         self._armed = self._arm(routines, catch_up_from={})
         result = []
         for routine in routines:
             record = history.get(routine.name, RoutineHistory())
             last = record.last_run
+            if last is not None:
+                # Its first line is folded from its own turn, the one read that holds its text.
+                turn = routine_history(self._log.turn_events(last.turn_id))
+                last = turn.routines[routine.name].last_run
             result.append(
                 RoutineSummary(
                     name=routine.name,
@@ -307,7 +311,7 @@ class Scheduler:
             await self._handle_failures()
             await self._raise_notifications()
             routines, _ = load_routines(self._instance)
-            histories = routine_history(self._log.all_events())
+            histories = routine_history(self._log.events_of(ROUTINE_EVENTS))
             history = histories.routines
             self._armed = self._arm(routines, catch_up_from={})
             disabled = {routine.name for routine in routines if not routine.enabled}
@@ -374,14 +378,14 @@ class Scheduler:
 
     async def _raise_notifications(self) -> None:
         """Raise each notification the hub has not answered, until one finds it out of reach."""
-        for recorded in pending_notifications(self._log.all_events()):
+        for recorded in pending_notifications(self._log.events_of(NOTIFICATION_EVENTS)):
             answer = await raise_recorded(recorded)
             if answer is None:
                 return
             await self._log.append(recorded.thread_id, recorded.turn_id, answer)
 
     async def _reset_failures(self, routines: Sequence[Routine]) -> None:
-        history = routine_history(self._log.all_events()).routines
+        history = routine_history(self._log.events_of(ROUTINE_EVENTS)).routines
         for routine in routines:
             notice = history.get(routine.name, RoutineHistory()).disable_notice
             if routine.enabled and notice is not None:
@@ -392,7 +396,7 @@ class Scheduler:
     async def _handle_failures(self) -> None:
         routines, _ = load_routines(self._instance)
         await self._reset_failures(routines)
-        history = routine_history(self._log.all_events())
+        history = routine_history(self._log.events_of(ROUTINE_EVENTS))
         by_name = {routine.name: routine for routine in routines}
         for failure in history.failures:
             notice = notification = None

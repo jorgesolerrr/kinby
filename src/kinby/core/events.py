@@ -3,22 +3,75 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
-from collections.abc import AsyncGenerator, Callable, Iterator
-from contextlib import closing
+from collections.abc import AsyncGenerator, Callable, Collection, Iterator, Sequence
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import Event, Payload, Stream
+from kinby.contracts import DeliveryId, Event, EventType, Payload, RoutineName, Stream
 from kinby.core.clock import utc_now
-from kinby.instance.database import open_database
+from kinby.instance.database import DELIVERY_ID, open_database
 
 #: Each event row as the JSON of its event.
 _EVENT_JSON = (
     "json_object('sequence', sequence, 'thread_id', thread_id, 'turn_id', turn_id,"
     " 'timestamp', timestamp, 'payload', json(payload))"
 )
+
+
+def _stored_at(time: datetime) -> str:
+    return time.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+class EventReader:
+    """The bounded reads of the transcript store, each iterating its events in the order
+    appended."""
+
+    def __init__(self, db: sqlite3.Connection) -> None:
+        self._db = db
+
+    def thread_events(self, thread_id: UUID, after_sequence: int = 0) -> Iterator[Event]:
+        return self._events("thread_id = ? AND sequence > ?", (str(thread_id), after_sequence))
+
+    def turn_events(self, turn_id: UUID) -> Iterator[Event]:
+        return self._events("turn_id = ?", (str(turn_id),))
+
+    def events_of(
+        self,
+        types: Collection[EventType],
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Iterator[Event]:
+        """The events of *types*, stored from *since* and before *until*."""
+        where = f"type IN ({', '.join('?' * len(types))})"
+        parameters: list[str] = [*types]
+        if since is not None:
+            where += " AND timestamp >= ?"
+            parameters.append(_stored_at(since))
+        if until is not None:
+            where += " AND timestamp < ?"
+            parameters.append(_stored_at(until))
+        return self._events(where, parameters)
+
+    def delivery(self, name: RoutineName, delivery_id: DeliveryId) -> Event | None:
+        """The arrival of the delivery a provider sent *name* under *delivery_id*."""
+        return next(
+            self._events(
+                f"type = '{EventType.SIGNAL_RECEIVED}' AND {DELIVERY_ID} = ?"
+                " AND json_extract(payload, '$.origin.name') = ?",
+                (delivery_id, name),
+            ),
+            None,
+        )
+
+    def _events(self, where: str, parameters: Sequence[object]) -> Iterator[Event]:
+        query = f"SELECT {_EVENT_JSON} FROM events WHERE {where} ORDER BY rowid"
+        for (record,) in self._db.execute(query, parameters):
+            yield Event.model_validate_json(record)
 
 
 class EventLog:
@@ -88,10 +141,13 @@ class EventLog:
         """Take the head sequence and the replay under the lock, so neither misses an append."""
         subscriber: asyncio.Queue[Event] = asyncio.Queue()
         async with self._lock:
-            stored = self.stored(thread_id)
+            replay = self.thread_events(thread_id, after_sequence)
+            with self._using_db:
+                head = self._db.execute(
+                    "SELECT sequence FROM heads WHERE thread_id = ?", (str(thread_id),)
+                ).fetchone()
             self._subscribers.setdefault(thread_id, set()).add(subscriber)
-        replay = [event for event in stored if event.sequence > after_sequence]
-        head_sequence = stored[-1].sequence if stored else 0
+        head_sequence = 0 if head is None else head[0]
         return Stream(
             head_sequence,
             self._deliver(thread_id, subscriber, replay, after_sequence),
@@ -130,6 +186,35 @@ class EventLog:
                 (str(thread_id),),
             ).fetchall()
         return [Event.model_validate_json(record) for (record,) in records]
+
+    def thread_events(self, thread_id: UUID, after_sequence: int = 0) -> list[Event]:
+        with self._using_db:
+            return [*EventReader(self._db).thread_events(thread_id, after_sequence)]
+
+    def turn_events(self, turn_id: UUID) -> list[Event]:
+        with self._using_db:
+            return [*EventReader(self._db).turn_events(turn_id)]
+
+    def events_of(
+        self,
+        types: Collection[EventType],
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Event]:
+        with self._using_db:
+            return [*EventReader(self._db).events_of(types, since=since, until=until)]
+
+    def delivery(self, name: RoutineName, delivery_id: DeliveryId) -> Event | None:
+        with self._using_db:
+            return EventReader(self._db).delivery(name, delivery_id)
+
+    @contextmanager
+    def reader(self) -> Iterator[EventReader]:
+        """Reads on a connection of their own, for a worker thread to iterate a long range. Each
+        read sees the events stored when it began, while appends go on."""
+        with closing(open_database(self._state_dir)) as db:
+            yield EventReader(db)
 
     def all_events(self) -> Iterator[Event]:
         """Every event in the order appended, as stored when the read began. The read has a

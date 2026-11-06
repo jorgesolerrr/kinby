@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +10,7 @@ from kinby.contracts import (
     Delivery,
     DeliveryId,
     Event,
+    EventType,
     MessageDelta,
     PermissionMode,
     RoutineName,
@@ -209,6 +211,151 @@ def test_a_read_under_way_sees_no_event_appended_after_it_began(tmp_path: Path) 
         read.extend(reading)
 
         assert read == [first, second]
+
+    asyncio.run(scenario())
+
+
+def test_a_thread_read_returns_that_thread_after_its_cursor(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        await event_log.append(uuid4(), turn_id, STARTED)
+        second = await event_log.append(thread_id, turn_id, MessageDelta(text="kept"))
+
+        assert event_log.thread_events(thread_id) == [first, second]
+        assert event_log.thread_events(thread_id, after_sequence=1) == [second]
+        assert event_log.thread_events(thread_id, after_sequence=2) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_read_returns_only_that_turns_events(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        started = await event_log.append(thread_id, turn_id, STARTED)
+        await event_log.append(thread_id, uuid4(), STARTED)
+        completed = await event_log.append(
+            thread_id, turn_id, TurnCompleted(input_tokens=0, output_tokens=0)
+        )
+
+        assert event_log.turn_events(turn_id) == [started, completed]
+
+    asyncio.run(scenario())
+
+
+def test_a_type_read_returns_those_types_in_the_order_appended(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        times = iter(datetime(2026, 9, 6, hour, tzinfo=UTC) for hour in range(9, 14))
+        event_log = EventLog(tmp_path, clock=lambda: next(times))
+        first_thread = uuid4()
+        second_thread = uuid4()
+        turn_id = uuid4()
+        nine = await event_log.append(first_thread, turn_id, STARTED)
+        await event_log.append(first_thread, turn_id, MessageDelta(text="skipped"))
+        eleven = await event_log.append(second_thread, turn_id, STARTED)
+        twelve = await event_log.append(
+            first_thread, turn_id, TurnCompleted(input_tokens=0, output_tokens=0)
+        )
+        thirteen = await event_log.append(second_thread, turn_id, STARTED)
+        types = {EventType.TURN_STARTED, EventType.TURN_COMPLETED}
+
+        assert event_log.events_of(types) == [nine, eleven, twelve, thirteen]
+        assert event_log.events_of(
+            types,
+            since=datetime(2026, 9, 6, 11, tzinfo=UTC),
+            until=datetime(2026, 9, 6, 13, tzinfo=UTC),
+        ) == [eleven, twelve]
+
+    asyncio.run(scenario())
+
+
+def test_a_delivery_is_found_by_its_routine_and_provider_id(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+
+        def received(routine: str, delivery_id: str) -> SignalReceived:
+            return SignalReceived(
+                origin=RoutineOrigin(
+                    name=RoutineName(routine),
+                    trigger=RoutineTrigger.SIGNAL,
+                    delivery_id=DeliveryId(delivery_id),
+                ),
+                delivery=Delivery(
+                    headers={},
+                    content_type="application/json",
+                    body="{}",
+                    delivery_id=DeliveryId(delivery_id),
+                    received_at=datetime(2026, 9, 6, 9, tzinfo=UTC),
+                ),
+            )
+
+        await event_log.append(uuid4(), uuid4(), received("triage", "delivery-1"))
+        issues = await event_log.append(uuid4(), uuid4(), received("issues", "delivery-1"))
+
+        assert event_log.delivery(RoutineName("issues"), DeliveryId("delivery-1")) == issues
+        assert event_log.delivery(RoutineName("issues"), DeliveryId("delivery-2")) is None
+        assert event_log.delivery(RoutineName("news"), DeliveryId("delivery-1")) is None
+
+    asyncio.run(scenario())
+
+
+def test_a_reader_in_a_worker_thread_iterates_what_was_stored_when_it_began(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        first = await event_log.append(thread_id, turn_id, STARTED)
+        second = await event_log.append(thread_id, turn_id, MessageDelta(text="kept"))
+        began = threading.Event()
+        appended = threading.Event()
+
+        def read() -> list[Event]:
+            with event_log.reader() as reader:
+                reading = reader.thread_events(thread_id)
+                read = [next(reading)]
+                began.set()
+                appended.wait()
+                return [*read, *reading]
+
+        reading = asyncio.create_task(asyncio.to_thread(read))
+        await asyncio.to_thread(began.wait)
+        await event_log.append(thread_id, turn_id, MessageDelta(text="later"))
+        appended.set()
+
+        assert await reading == [first, second]
+
+    asyncio.run(scenario())
+
+
+def test_subscribing_while_threads_append_replays_its_thread_then_goes_live_once(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        thread_id = uuid4()
+        other_thread = uuid4()
+        turn_id = uuid4()
+        event_log = EventLog(tmp_path)
+        await event_log.append(thread_id, turn_id, STARTED)
+        await event_log.append(other_thread, turn_id, STARTED)
+
+        subscribing, *appended = await asyncio.gather(
+            event_log.subscribe(thread_id, after_sequence=1),
+            event_log.append(other_thread, turn_id, MessageDelta(text="other")),
+            event_log.append(thread_id, turn_id, MessageDelta(text="raced")),
+            event_log.append(thread_id, turn_id, MessageDelta(text="after")),
+        )
+        received = [await asyncio.wait_for(anext(subscribing.items), timeout=1) for _ in range(2)]
+        await subscribing.aclose()
+
+        assert received == [event for event in appended if event.thread_id == thread_id]
+        assert [event.sequence for event in received] == [2, 3]
+        assert subscribing.head_sequence == 1
 
     asyncio.run(scenario())
 

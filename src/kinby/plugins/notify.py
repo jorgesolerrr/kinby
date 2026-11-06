@@ -14,6 +14,7 @@ from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
     Event,
+    EventType,
     NotificationAccepted,
     NotificationRaiseCommand,
     NotificationRaised,
@@ -125,6 +126,16 @@ class RecordedNotification:
     turn_id: UUID
     sequence: int
     raised: NotificationRaised
+
+
+#: The events pending_notifications folds.
+NOTIFICATION_EVENTS = frozenset(
+    {
+        EventType.NOTIFICATION_RAISED,
+        EventType.NOTIFICATION_ACCEPTED,
+        EventType.NOTIFICATION_REFUSED,
+    }
+)
 
 
 def pending_notifications(events: Iterable[Event]) -> list[RecordedNotification]:
