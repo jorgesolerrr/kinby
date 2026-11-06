@@ -9,6 +9,7 @@ from kinby.contracts import (
     CompletionOutcome,
     Delivery,
     Event,
+    EventType,
     MessageDelta,
     RoutineFailureHandled,
     RoutineFailuresReset,
@@ -27,6 +28,20 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.turn_metrics import TurnKey
+
+#: The events the routine history folds, but for a run's text: only the run's own turn holds it.
+ROUTINE_EVENTS = frozenset(
+    {
+        EventType.SIGNAL_RECEIVED,
+        EventType.ROUTINE_FAILURE_HANDLED,
+        EventType.ROUTINE_FAILURES_RESET,
+        EventType.TURN_STARTED,
+        EventType.APPROVAL_REQUESTED,
+        EventType.TURN_COMPLETED,
+        EventType.TURN_FAILED,
+        EventType.TURN_INTERRUPTED,
+    }
+)
 
 
 @dataclass(frozen=True)

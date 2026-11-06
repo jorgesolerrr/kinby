@@ -1040,9 +1040,8 @@ def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
         monkeypatch.setattr(EventLog, "all_events", counted_events)
         busy = await call(restarted, "routine.run", name="news")
         assert busy.code == "INSTANCE_BUSY"
-        # One read resets the routine's failures and one checks availability, however many
-        # threads the instance has.
-        assert reads == 2
+        # One read checks availability, however many threads the instance has.
+        assert reads == 1
 
     asyncio.run(scenario())
 

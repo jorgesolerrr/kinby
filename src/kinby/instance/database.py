@@ -10,9 +10,11 @@ MIGRATION_SCRIPT = "scripts/migrate_instance_database.py"
 #: The stores from before the database, which a state directory may still hold.
 _OLD_STORES = ("events.jsonl", "threads.jsonl", "config-changes.jsonl")
 _connecting = threading.Lock()
+#: A delivery's provider id, which its arrival event carries.
+DELIVERY_ID = "json_extract(payload, '$.delivery.delivery_id')"
 
 # An event's key is its thread and sequence. Its rowid keeps the order events were appended in.
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS events (
     thread_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,
@@ -24,6 +26,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_by_turn ON events (turn_id);
 CREATE INDEX IF NOT EXISTS events_by_type ON events (type, timestamp);
+CREATE INDEX IF NOT EXISTS events_by_delivery ON events ({DELIVERY_ID})
+    WHERE type = 'signal.received';
 CREATE TABLE IF NOT EXISTS heads (
     thread_id TEXT PRIMARY KEY,
     sequence INTEGER NOT NULL,
