@@ -38,7 +38,7 @@ from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
     CompletionOutcome,
-    Delivery,
+    DeliveryArrival,
     Event,
     EventType,
     FactoryRunOrigin,
@@ -146,7 +146,6 @@ from kinby.plugins.routines import (
     SharedCodeStep,
     load_routines,
     resolve_code_step,
-    strip_signal_credentials,
 )
 from kinby.plugins.skills import load_skills
 from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
@@ -620,7 +619,9 @@ class LangGraphRunner:
         )
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
-        prepared = await self._prepare_turn(turn, graph_input, tools, progress, emit)
+        prepared = await self._prepare_turn(
+            turn, graph_input, tools, progress, emit, context.delivery_body
+        )
         if isinstance(prepared, TurnOutcome):
             return prepared
         tools = prepared.tools
@@ -723,6 +724,7 @@ class LangGraphRunner:
         tools: ToolSnapshot,
         progress: _BudgetProgress,
         emit: Emit,
+        delivery_body: str | None,
     ) -> _PreparedTurn | TurnOutcome:
         budgets = progress.budgets
         message = turn.message
@@ -743,7 +745,7 @@ class LangGraphRunner:
             for warning in budget_warnings:
                 await emit(warning)
             message = routine.prompt
-            delivery = self._delivery_for_turn(turn)
+            arrival = self._delivery_for_turn(turn)
             declared = routine.code_step
             consolidate = (
                 consolidate_tool(
@@ -806,7 +808,7 @@ class LangGraphRunner:
                     turn.permission_mode,
                     turn.origin,
                     turn.thread_id,
-                    delivery,
+                    None if arrival is None or delivery_body is None else (arrival, delivery_body),
                     emit,
                     budgets,
                 )
@@ -819,8 +821,8 @@ class LangGraphRunner:
                 if output is None:
                     return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
                 payload = output
-            elif delivery is not None:
-                payload = delivery.body
+            elif delivery_body is not None:
+                payload = delivery_body
         return _PreparedTurn(tools, progress, message, payload)
 
     def _opened_with_dreaming_step(self, turn: PreparedTurnRequest) -> bool:
@@ -850,7 +852,7 @@ class LangGraphRunner:
         thread = ThreadStore(self._instance.manifest.state_dir).thread(turn.thread_id)
         return thread.title if thread is not None else None
 
-    def _delivery_for_turn(self, turn: PreparedTurnRequest) -> Delivery | None:
+    def _delivery_for_turn(self, turn: PreparedTurnRequest) -> DeliveryArrival | None:
         return next(
             (
                 event.payload.delivery
@@ -867,27 +869,33 @@ class LangGraphRunner:
         mode: PermissionMode,
         origin: RoutineOrigin,
         thread_id: UUID,
-        delivery: Delivery | None,
+        delivery: tuple[DeliveryArrival, str] | None,
         emit: Emit,
         budgets: Budgets,
     ) -> str | None:
         arguments = dict(routine.arguments)
+        recorded = dict(arguments)
         if delivery is not None:
-            raw_signal = delivery.model_dump(mode="json")
-            raw_signal["headers"] = strip_signal_credentials(routine.signal, delivery.headers)
-            media_type = delivery.content_type.partition(";")[0].strip().lower()
+            arrival, body = delivery
+            raw_signal = arrival.model_dump(
+                mode="json", include={"headers", "content_type", "delivery_id", "received_at"}
+            )
+            raw_signal["body"] = body
+            media_type = arrival.content_type.partition(";")[0].strip().lower()
             if media_type == "application/json":
                 try:
-                    raw_signal["body"] = json.loads(delivery.body)
+                    raw_signal["body"] = json.loads(body)
                 except json.JSONDecodeError as exc:
                     raise CodeStepFailed(f"The signal body is not valid JSON: {exc}") from exc
             arguments["signal"] = _TOOL_ARGUMENTS.validate_python(raw_signal)
+            # The transcript store keeps the delivery's arrival, never its body (ADR 0117).
+            recorded["signal"] = arrival.reference
         elif routine.signal is not None and origin.trigger is not RoutineTrigger.SIGNAL:
-            arguments["signal"] = {}
+            arguments["signal"] = recorded["signal"] = {}
         call = ToolCall(
             call_id=str(uuid4()),
             name=code_step.name,
-            arguments=arguments,
+            arguments=recorded,
             write=code_step.write,
         )
         await emit(call)
@@ -927,7 +935,7 @@ class LangGraphRunner:
                     recall_reporter=_recall_reporter(emit),
                     view_reporter=emit,
                 )
-                output = await code_step.ainvoke_raw(call.arguments, context)
+                output = await code_step.ainvoke_raw(arguments, context)
         except Exception as exc:
             failure = (
                 BudgetExceeded("seconds", budgets.seconds)

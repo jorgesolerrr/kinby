@@ -59,6 +59,7 @@ from kinby.hub import ControlEndpoint, ControlUndelivered, HttpInstanceControl
 from kinby.instance import Instance
 from kinby.instance.layout import PERMISSIONS_NAME, STATE_DIR
 from kinby.memory import Fact, GraphStore, NodeId
+from tests.helpers import every_event
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
 from tests.test_gate import ScriptedModel
@@ -434,7 +435,7 @@ def test_the_instance_records_each_stop_of_its_run_once_under_the_run(tmp_path):
 
         stopped = [
             event
-            for event in EventLog(tmp_path / STATE_DIR).all_events()
+            for event in every_event(EventLog(tmp_path / STATE_DIR))
             if isinstance(event.payload, RunStopped)
         ]
         assert [(event.thread_id, event.payload) for event in stopped] == [
@@ -575,6 +576,7 @@ def test_a_runs_next_step_call_lets_go_of_the_answer_it_held(tmp_path, next_call
 
 VERDICT_HOOK = """\
 from kinby.plugins.hooks import HookResult, StepEnd, hook
+from tests.helpers import every_event
 
 
 @hook
@@ -1043,7 +1045,7 @@ def test_a_gated_tool_in_an_agent_steps_turn_waits_on_the_users_approval(tmp_pat
             while not (
                 requested := [
                     event
-                    for event in log.all_events()
+                    for event in every_event(log)
                     if isinstance(event.payload, ApprovalRequested)
                 ]
             ):
@@ -1066,7 +1068,7 @@ def test_a_gated_tool_in_an_agent_steps_turn_waits_on_the_users_approval(tmp_pat
         assert (result.ending, result.summary) == (StepEnding.CLEAN, "Opened pull request 70.")
         [tool_result] = [
             event.payload
-            for event in log.stored(approval.thread_id)
+            for event in log.thread_events(approval.thread_id)
             if isinstance(event.payload, ToolResult)
         ]
         assert (tool_result.output, tool_result.error) == ("{'pr': 70}", False)
@@ -1326,7 +1328,7 @@ def test_a_client_step_records_a_warning_for_a_skill_it_could_not_load(tmp_path,
 
         assert [
             (event.thread_id, event.payload)
-            for event in log.all_events()
+            for event in every_event(log)
             if isinstance(event.payload, Warning)
         ] == [
             (
@@ -1600,7 +1602,7 @@ def test_a_client_runs_delegated_run_names_the_step_and_attempt_it_ran_in(tmp_pa
 
         assert [
             (event.thread_id, event.payload.step, event.payload.attempt)
-            for event in log.all_events()
+            for event in every_event(log)
             if isinstance(event.payload, RunDelegated)
         ] == [(ORIGIN.run_id, "test", 2)]
 
@@ -1636,7 +1638,7 @@ def remembering_runtime(tmp_path: Path) -> tuple[Instance, ScheduledDispatcher, 
 def recalls(log: EventLog) -> list[tuple[UUID, MemoryRecalled]]:
     return [
         (event.thread_id, event.payload)
-        for event in log.all_events()
+        for event in every_event(log)
         if isinstance(event.payload, MemoryRecalled)
     ]
 

@@ -15,7 +15,7 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import TurnPreparation
 from kinby.instance import load_instance
 from kinby.plugins.skills import load_skills
-from tests.helpers import GRAPH_EVENT_TIMEOUT, thread_events
+from tests.helpers import GRAPH_EVENT_TIMEOUT, every_event, thread_events
 
 _FIXED_TODAY = date(2026, 8, 28)
 
@@ -243,7 +243,7 @@ def test_turn_prompt_version_does_not_change_with_the_date(
 
         versions = [
             event.payload.prompt_version
-            for event in event_log.all_events()
+            for event in every_event(event_log)
             if isinstance(event.payload, TurnStarted)
         ]
         assert versions[0] == versions[1]
@@ -291,7 +291,7 @@ def test_prepared_prompt_does_not_drift_before_the_model_runs(tmp_path: Path) ->
 
         started = next(
             event.payload
-            for event in event_log.all_events()
+            for event in every_event(event_log)
             if isinstance(event.payload, TurnStarted)
         )
         system_prompt = next(

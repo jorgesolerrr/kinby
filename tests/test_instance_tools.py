@@ -17,7 +17,6 @@ from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
     CommandStepRun,
-    Delivery,
     Event,
     GateDecider,
     GateOutcome,
@@ -34,6 +33,7 @@ from kinby.contracts import (
     ToolResult,
 )
 from kinby.core.errors import RoutineNotFound, RoutinePending
+from kinby.core.scheduler import Delivery
 from kinby.core.steps import run_command_step
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (

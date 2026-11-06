@@ -65,6 +65,7 @@ from tests.helpers import (
     FakeSnapshotStore,
     cannot_restore,
     does_not_park,
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     no_routines,
@@ -180,7 +181,7 @@ async def opened_thread(dispatcher: Dispatcher) -> UUID:
 
 
 def recorded(instance: Instance) -> list[Event]:
-    return list(EventLog(instance.manifest.state_dir).all_events())
+    return every_event(EventLog(instance.manifest.state_dir))
 
 
 async def until(ready: Callable[[], bool], timeout: float = 5) -> None:

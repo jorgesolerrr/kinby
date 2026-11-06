@@ -531,18 +531,32 @@ class RoutineFailuresReset(ContractModel):
     name: RoutineName
 
 
-class Delivery(ContractModel):
-    headers: dict[str, str]
-    content_type: str
-    body: str
+class DeliveryArrival(ContractModel):
+    """What the transcript store keeps of a delivery: that it arrived, what it was and how big.
+    Its body waits apart until its turn starts, and is not kept after (ADR 0117)."""
+
     delivery_id: DeliveryId | None = None
+    content_type: str
+    #: The body's length in bytes.
+    size: int
+    #: The body's SHA-256, in hex.
+    sha256: str
+    #: The few headers that say what arrived, such as GitHub's event type.
+    headers: dict[str, str]
+    #: The action a JSON body names, such as GitHub's "labeled".
+    action: str | None = None
     received_at: AwareDatetime
+
+    @property
+    def reference(self) -> str:
+        """How the delivery's turn names it, in its message and its code step's call."""
+        return f"Delivery {self.delivery_id or f'sha256:{self.sha256}'}"
 
 
 class SignalReceived(ContractModel):
     type: Literal[EventType.SIGNAL_RECEIVED] = EventType.SIGNAL_RECEIVED
     origin: RoutineOrigin
-    delivery: Delivery
+    delivery: DeliveryArrival
 
 
 class WaitingApproval(ContractModel):

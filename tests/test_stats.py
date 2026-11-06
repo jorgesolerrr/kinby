@@ -79,6 +79,7 @@ from kinby.memory.facade import new_node_id
 from tests.helpers import (
     cannot_restore,
     does_not_park,
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     historical_event_log,
@@ -194,7 +195,7 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
             ),
         )
         accepted = await _record_metrics_turn(dispatcher)
-        events = list(event_log.all_events())
+        events = every_event(event_log)
         started = events[0]
         closed = events[-1]
 
@@ -927,7 +928,7 @@ def test_stats_and_daily_budget_count_failed_turn_tokens(tmp_path: Path) -> None
     assert result.records[0].input_tokens == 4
     assert result.records[0].output_tokens == 2
     assert result.records[0].cost == 0.000025
-    assert daily_cost(log.all_events(), price_map(), now.date()).usd == 0.000025
+    assert daily_cost(every_event(log), price_map(), now.date()).usd == 0.000025
 
 
 def test_stats_get_reports_unpriced_models_and_sums_only_priced_turns(
@@ -2540,7 +2541,7 @@ def test_cli_stats_prints_buckets_and_totals_and_writes_json(
         ),
     )
     asyncio.run(_record_metrics_turn(dispatcher))
-    closed = list(event_log.all_events())[-1]
+    closed = every_event(event_log)[-1]
     report_path = instance.manifest.state_dir / "stats.json"
     report_path.write_text("old report", encoding="utf-8")
 

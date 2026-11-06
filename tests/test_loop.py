@@ -567,7 +567,7 @@ def test_interrupted_turn_closes_with_the_model_call_tally(tmp_path: Path) -> No
         assert isinstance(interrupted, AcceptedResult)
         events = [
             event
-            for event in EventLog(tmp_path / "bounded" / ".state").stored(thread_id)
+            for event in EventLog(tmp_path / "bounded" / ".state").thread_events(thread_id)
             if event.turn_id == accepted.turn_id
         ]
         assert events[-1].payload == TurnInterrupted(
@@ -594,7 +594,7 @@ def test_parked_turn_interrupt_closes_with_the_recorded_model_call_tally(
         )
 
         assert isinstance(interrupted, AcceptedResult)
-        events = EventLog(tmp_path / "bounded" / ".state").stored(thread_id)
+        events = EventLog(tmp_path / "bounded" / ".state").thread_events(thread_id)
         assert events[-1].turn_id == requested.turn_id
         assert events[-1].payload == TurnInterrupted(
             input_tokens=5,

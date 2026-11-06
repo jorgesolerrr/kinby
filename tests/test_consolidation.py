@@ -520,7 +520,7 @@ def test_a_stage_turn_writes_no_episode(tmp_path: Path) -> None:
         model = ConsolidatingModel([learned("Invoices go out late", monday, tuesday)])
         events = await _fire(instance, model, writer.schedule)
         await writer.drain()
-        return EventLog(instance.manifest.state_dir).stored(events[0].thread_id)
+        return EventLog(instance.manifest.state_dir).thread_events(events[0].thread_id)
 
     stored = asyncio.run(scenario())
 
@@ -560,7 +560,7 @@ def test_a_recap_caught_up_late_reads_the_stage_from_the_turn(tmp_path: Path, st
         writer = RecapWriter(log, graph, instance, model_factory=lambda _: model)
         await writer.catch_up()
         await writer.drain()
-        stored = log.stored(thread_id)
+        stored = log.thread_events(thread_id)
         [marker] = [event.payload for event in stored if isinstance(event.payload, MemoryRecapped)]
         return marker
 

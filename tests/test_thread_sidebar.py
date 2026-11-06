@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -41,11 +42,14 @@ from tests.test_thread_status import ScriptedRunner
 class RoutineRunner(ScriptedRunner):
     """Run each turn as its message says, find no work in a message of "nothing new", and notify
     the user with options in one of "ask", or with options the hub refuses in "ask refused", or
-    with an approval's options in "ask approval"."""
+    with an approval's options in "ask approval". A delivered run reads its body instead."""
 
     async def run(
         self, turn: PreparedTurnRequest, context: TurnContext
     ) -> TurnOutcome | ParkedTurn:
+        if context.delivery_body is not None:
+            # A delivered run says what to do in its body.
+            turn = replace(turn, message=context.delivery_body)
         match turn.message:
             case "nothing new":
                 return TurnOutcome(outcome=CompletionOutcome.NO_WORK)

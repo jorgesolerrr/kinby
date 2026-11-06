@@ -14,7 +14,6 @@ from kinby.contracts import (
     ConfigActor,
     ConfigChange,
     ConfigFile,
-    Delivery,
     ErrorCode,
     ErrorEnvelope,
     Event,
@@ -26,6 +25,7 @@ from kinby.contracts import (
 )
 from kinby.core.errors import RoutineNotFound
 from kinby.core.receiver import Receiver
+from kinby.core.scheduler import Delivery
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext, TurnOutcome
 from kinby.instance import Serve

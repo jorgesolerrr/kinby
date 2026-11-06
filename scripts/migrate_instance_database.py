@@ -3,25 +3,33 @@
     uv run scripts/migrate_instance_database.py <instance directory>...
 
 Run it with the instances stopped. For each one it imports the events, thread records, config
-changes and coding-session recalls into a new database in one transaction. It then checks that
-every thread has as many events and the same turns as in events.jsonl, and only when every check
-passes does it put the database in place and delete the JSONL files. A failed check, or a crash
-before the database is in place, leaves the JSONL files as they were. A crash while deleting them
-leaves the rest for the next run. kinby never imports it.
+changes and coding-session recalls into a new database in one transaction. It keeps a delivery's
+body only while the delivery waits (ADR 0117): a started delivery keeps only its arrival, and its
+turn's message and its code step's call name the delivery instead. It then checks that every
+thread has as many events and the same turns as in events.jsonl, and only when every check passes
+does it put the database in place, prune each thread's checkpoints and delete the JSONL files. A
+failed check, or a crash before the database is in place, leaves the JSONL files as they were. A
+crash after it leaves the rest for the next run. kinby never imports it.
 """
 
 import argparse
+import asyncio
 import json
 import sqlite3
 import sys
 from collections.abc import Iterator
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
+from typing import Any  # noqa: TID251 - the JSONL files' boundary
+from uuid import UUID
 
-from kinby.contracts import ConfigChange, Event
+from kinby.contracts import ConfigChange, DeliveryId, Event, EventType
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
+from kinby.core.scheduler import Delivery
 from kinby.core.threads import ThreadRecord
-from kinby.instance import load_instance
+from kinby.core.turn_runner import LangGraphRunner
+from kinby.instance import Instance, load_instance
 from kinby.instance.database import DATABASE_NAME, connect
 
 _EVENTS = "events.jsonl"
@@ -37,8 +45,9 @@ class CheckFailed(Exception):
     """A thread reads differently from the database than from its JSONL file."""
 
 
-def migrate(state_dir: Path) -> str:
-    """Move *state_dir*'s JSONL files into its database, and say what moved."""
+def migrate(instance: Instance) -> str:
+    """Move *instance*'s JSONL files into its database, and say what moved."""
+    state_dir = instance.manifest.state_dir
     old = [
         path
         for path in (state_dir / _EVENTS, state_dir / _THREADS, state_dir / _CONFIG_CHANGES)
@@ -60,6 +69,7 @@ def migrate(state_dir: Path) -> str:
                 _import(db, state_dir, recalls)
             _check(db, state_dir / _EVENTS)
         partial.replace(database)
+    asyncio.run(_prune_checkpoints(instance))
     for path in [*old, *recalls]:
         path.unlink()
     if recalls:
@@ -73,8 +83,13 @@ def migrate(state_dir: Path) -> str:
 
 def _import(db: sqlite3.Connection, state_dir: Path, recalls: list[Path]) -> None:
     heads: dict[str, tuple[int, str]] = {}
+    waiting: dict[str, str] = {}
+    #: The deliveries whose turns may yet name them, by turn.
+    references: dict[str, str] = {}
     for line in _whole_lines(state_dir / _EVENTS):
-        event = Event.model_validate_json(line)
+        record = json.loads(line)
+        _drop_body(record, waiting, references)
+        event = Event.model_validate(record)
         thread_id, at = str(event.thread_id), event.timestamp.isoformat(timespec="microseconds")
         # Keeping the first of two events at one sequence lets the check name the thread.
         db.execute(
@@ -85,7 +100,7 @@ def _import(db: sqlite3.Connection, state_dir: Path, recalls: list[Path]) -> Non
                 str(event.turn_id),
                 event.type,
                 at,
-                _compact(json.loads(line)["payload"]),
+                _compact(record["payload"]),
             ),
         )
         heads[thread_id] = (event.sequence, at)
@@ -93,6 +108,7 @@ def _import(db: sqlite3.Connection, state_dir: Path, recalls: list[Path]) -> Non
         "INSERT INTO heads VALUES (?, ?, ?)",
         ((thread_id, sequence, at) for thread_id, (sequence, at) in heads.items()),
     )
+    db.executemany("INSERT INTO waiting_deliveries VALUES (?, ?)", waiting.items())
     # A rename or an archive appended the thread's record again, and its latest record won.
     threads = {
         thread.id: thread
@@ -116,6 +132,45 @@ def _import(db: sqlite3.Connection, state_dir: Path, recalls: list[Path]) -> Non
         "INSERT INTO recalls VALUES (?, ?)",
         ((path.stem, line) for path in recalls for line in _whole_lines(path)),
     )
+
+
+def _drop_body(record: dict[str, Any], waiting: dict[str, str], references: dict[str, str]) -> None:
+    """Keep a delivery's arrival in *record*, and its body in *waiting* until its turn starts. A
+    started turn's message and its code step's call name the delivery instead (ADR 0117)."""
+    payload, turn = record["payload"], record["turn_id"]
+    match payload["type"]:
+        case EventType.SIGNAL_RECEIVED:
+            old = payload["delivery"]
+            arrival = Delivery(
+                headers=old["headers"],
+                content_type=old["content_type"],
+                body=old["body"],
+                delivery_id=DeliveryId(old["delivery_id"]) if old.get("delivery_id") else None,
+                received_at=datetime.fromisoformat(old["received_at"]),
+            ).arrival()
+            payload["delivery"] = arrival.model_dump(mode="json")
+            waiting[turn] = old["body"]
+            references[turn] = arrival.reference
+        case EventType.TURN_STARTED if turn in waiting:
+            del waiting[turn]
+            payload["message"] = references[turn]
+        case EventType.TOOL_CALL if turn in references:
+            signal = payload["arguments"].get("signal")
+            # A code step's call comes first in its turn, and carries the whole delivery.
+            if isinstance(signal, dict) and "body" in signal:
+                payload["arguments"]["signal"] = references[turn]
+            del references[turn]
+
+
+async def _prune_checkpoints(instance: Instance) -> None:
+    """Keep each thread's newest completed checkpoint, and any parked after it."""
+    if not (instance.manifest.state_dir / "checkpoints.sqlite").exists():
+        return
+    runner = LangGraphRunner(instance)
+    with closing(connect(instance.manifest.state_dir / DATABASE_NAME)) as db:
+        threads = [UUID(thread_id) for (thread_id,) in db.execute("SELECT thread_id FROM heads")]
+    for thread_id in threads:
+        await runner.prune_checkpoints(thread_id)
 
 
 def _check(db: sqlite3.Connection, events: Path) -> None:
@@ -177,10 +232,10 @@ def main() -> None:
     parser.add_argument("instances", nargs="+", type=Path, help="instance directories")
     failed = False
     for directory in parser.parse_args().instances:
-        state_dir = load_instance(directory).manifest.state_dir
+        instance = load_instance(directory)
         try:
-            with runtime_lock(state_dir):
-                print(f"{directory}: {migrate(state_dir)}")
+            with runtime_lock(instance.manifest.state_dir):
+                print(f"{directory}: {migrate(instance)}")
         except (CheckFailed, InstanceBusyError) as exc:
             failed = True
             print(f"{directory}: kept its JSONL files: {exc}")

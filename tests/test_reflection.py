@@ -40,6 +40,7 @@ from kinby.instance import Instance, init_instance, load_instance
 from kinby.instance.init import DEFAULT_REFLECTION_LENS
 from kinby.memory import Fact, GraphStore, RecapWriter
 from kinby.plugins.routines import load_routine
+from tests.helpers import every_event
 from tests.test_consolidation import (
     ConsolidatingModel,
     consolidated,
@@ -205,7 +206,7 @@ def respond(
             )
         )
         await turns.wait_idle()
-        return log.stored(approval.thread_id)
+        return log.thread_events(approval.thread_id)
 
     return asyncio.run(scenario())
 
@@ -428,7 +429,7 @@ def test_an_approved_reflection_resumes_only_once_the_instance_is_free(tmp_path:
         await turns.wait_idle()
         await turns.respond(approve)
         await turns.wait_idle()
-        return log.stored(approval.thread_id)
+        return log.thread_events(approval.thread_id)
 
     events = asyncio.run(scenario())
 
@@ -475,12 +476,12 @@ def test_a_reflection_waiting_on_approval_does_not_block_a_consolidation(tmp_pat
             await dispatcher.scheduler.tick()
         *_, nightly = [
             event.thread_id
-            for event in log.all_events()
+            for event in every_event(log)
             if isinstance(event.payload, TurnStarted)
             and isinstance(event.payload.origin, RoutineOrigin)
             and event.payload.origin.name == "consolidation"
         ]
-        return parked, log.stored(nightly)
+        return parked, log.thread_events(nightly)
 
     parked, nightly = asyncio.run(scenario())
 
@@ -506,7 +507,7 @@ def test_a_reflection_turn_writes_no_episode(tmp_path: Path) -> None:
         thread_id = await wake_reflection(turns, store)
         await until(log, thread_id, lambda event: is_turn_closing(event.payload))
         await writer.drain()
-        return log.stored(thread_id)
+        return log.thread_events(thread_id)
 
     stored = asyncio.run(scenario())
 

@@ -420,7 +420,7 @@ def _show_thread(state_dir: Path, thread_id: UUID) -> int:
     if not ThreadStore(state_dir).exists(thread_id):
         print(f'Thread "{thread_id}" was not found.', file=sys.stderr)
         return 1
-    for event in EventLog(state_dir).stored(thread_id):
+    for event in EventLog(state_dir).thread_events(thread_id):
         print(event.model_dump_json())
     return 0
 

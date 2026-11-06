@@ -179,6 +179,8 @@ Emit = Callable[[Payload], Awaitable[Event]]
 class TurnContext:
     budgets: Budgets
     emit: Emit
+    #: The body of the delivery that started the turn, handed over as the turn starts.
+    delivery_body: str | None = None
 
 
 class TurnRunner(Protocol):
@@ -621,10 +623,11 @@ class Turns:
         turn_id: UUID,
         message: str,
         origin: RoutineOrigin,
+        delivery_body: str | None,
     ) -> AcceptedResult:
         self._require_thread(thread_id)
         self.require_available(origin)
-        return await self._wake(lambda: thread_id, message, origin, turn_id)
+        return await self._wake(lambda: thread_id, message, origin, turn_id, delivery_body)
 
     async def ask(self, command: ThreadAskCommand) -> AcceptedResult:
         return await self.wake_new_thread(None, command.message, HomeInstanceOrigin())
@@ -641,6 +644,7 @@ class Turns:
         message: str,
         origin: Origin,
         turn_id: UUID,
+        delivery_body: str | None = None,
     ) -> AcceptedResult:
         preparation = self._prepare_for_turn()
         check_daily_budget(preparation.daily_budget)
@@ -683,7 +687,7 @@ class Turns:
                 self._title_untitled(thread_id, message)
         finally:
             self._release_claim(thread_id, claim)
-        self._spawn(turn, self._run(turn, preparation.budgets))
+        self._spawn(turn, self._run(turn, preparation.budgets, delivery_body))
         return AcceptedResult(
             thread_id=turn.thread_id,
             turn_id=turn.turn_id,
@@ -908,8 +912,14 @@ class Turns:
             return None
         return running
 
-    async def _run(self, turn: PreparedTurnRequest, budgets: Budgets) -> None:
-        await self._finish(turn, budgets, lambda context: self._runner.run(turn, context))
+    async def _run(
+        self, turn: PreparedTurnRequest, budgets: Budgets, delivery_body: str | None
+    ) -> None:
+        await self._finish(
+            turn,
+            budgets,
+            lambda context: self._runner.run(turn, replace(context, delivery_body=delivery_body)),
+        )
 
     async def _resume(
         self,

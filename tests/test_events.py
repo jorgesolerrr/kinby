@@ -1,13 +1,14 @@
 import asyncio
 import threading
 from datetime import UTC, datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from kinby.contracts import (
-    Delivery,
+    DeliveryArrival,
     DeliveryId,
     Event,
     EventType,
@@ -27,7 +28,7 @@ from kinby.contracts import (
     Warning,
 )
 from kinby.core.events import EventLog
-from tests.helpers import write_events
+from tests.helpers import every_event, write_events
 
 STARTED = TurnStarted(
     message="Hello",
@@ -44,8 +45,8 @@ def test_event_clock_rejects_naive_timestamps_before_persisting(tmp_path: Path) 
         with pytest.raises(ValueError, match="timezone-aware"):
             await event_log.append(thread_id, uuid4(), STARTED)
 
-        assert event_log.stored(thread_id) == []
-        assert list(event_log.all_events()) == []
+        assert event_log.thread_events(thread_id) == []
+        assert every_event(event_log) == []
 
     asyncio.run(scenario())
 
@@ -61,7 +62,7 @@ def test_event_clock_normalizes_aware_timestamps_to_utc(tmp_path: Path) -> None:
         expected = datetime(2026, 9, 11, 4, 30, tzinfo=UTC)
         assert event.timestamp == expected
         assert event.timestamp.tzinfo is UTC
-        stored = EventLog(tmp_path).stored(thread_id)
+        stored = EventLog(tmp_path).thread_events(thread_id)
         assert stored == [event]
         assert stored[0].timestamp.isoformat() == "2026-09-11T04:30:00+00:00"
 
@@ -90,7 +91,7 @@ def test_tool_and_warning_events_round_trip_through_the_event_log(tmp_path: Path
 
         stored = [await event_log.append(thread_id, turn_id, payload) for payload in payloads]
 
-        assert EventLog(tmp_path).stored(thread_id) == stored
+        assert EventLog(tmp_path).thread_events(thread_id) == stored
         assert [event.payload for event in stored] == payloads
 
     asyncio.run(scenario())
@@ -174,26 +175,8 @@ def test_interleaved_threads_each_keep_a_gap_free_sequence(tmp_path: Path) -> No
             await event_log.append(second_thread, turn_id, MessageDelta(text="second"))
         await event_log.append(first_thread, turn_id, MessageDelta(text="first"))
 
-        assert [event.sequence for event in event_log.stored(first_thread)] == [1, 2, 3, 4]
-        assert [event.sequence for event in event_log.stored(second_thread)] == [1, 2, 3]
-
-    asyncio.run(scenario())
-
-
-def test_all_events_reads_every_thread_in_the_order_appended(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        first_thread = uuid4()
-        second_thread = uuid4()
-        turn_id = uuid4()
-        event_log = EventLog(tmp_path)
-
-        appended = [
-            await event_log.append(second_thread, turn_id, STARTED),
-            await event_log.append(first_thread, turn_id, STARTED),
-            await event_log.append(second_thread, turn_id, MessageDelta(text="second")),
-        ]
-
-        assert list(EventLog(tmp_path).all_events()) == appended
+        assert [event.sequence for event in event_log.thread_events(first_thread)] == [1, 2, 3, 4]
+        assert [event.sequence for event in event_log.thread_events(second_thread)] == [1, 2, 3]
 
     asyncio.run(scenario())
 
@@ -205,11 +188,12 @@ def test_a_read_under_way_sees_no_event_appended_after_it_began(tmp_path: Path) 
         event_log = EventLog(tmp_path)
         first = await event_log.append(thread_id, turn_id, STARTED)
         second = await event_log.append(thread_id, turn_id, MessageDelta(text="kept"))
-        reading = event_log.all_events()
-        read = [next(reading)]
+        with event_log.reader() as reader:
+            reading = reader.thread_events(thread_id)
+            read = [next(reading)]
 
-        await event_log.append(thread_id, turn_id, MessageDelta(text="later"))
-        read.extend(reading)
+            await event_log.append(thread_id, turn_id, MessageDelta(text="later"))
+            read.extend(reading)
 
         assert read == [first, second]
 
@@ -322,32 +306,55 @@ def test_the_last_activity_read_gives_when_each_threads_latest_event_was_stored(
     asyncio.run(scenario())
 
 
+def _arrival(routine: str, delivery_id: str) -> SignalReceived:
+    return SignalReceived(
+        origin=RoutineOrigin(
+            name=RoutineName(routine),
+            trigger=RoutineTrigger.SIGNAL,
+            delivery_id=DeliveryId(delivery_id),
+        ),
+        delivery=DeliveryArrival(
+            delivery_id=DeliveryId(delivery_id),
+            content_type="application/json",
+            size=2,
+            sha256=sha256(b"{}").hexdigest(),
+            headers={},
+            received_at=datetime(2026, 9, 6, 9, tzinfo=UTC),
+        ),
+    )
+
+
 def test_a_delivery_is_found_by_its_routine_and_provider_id(tmp_path: Path) -> None:
     async def scenario() -> None:
         event_log = EventLog(tmp_path)
 
-        def received(routine: str, delivery_id: str) -> SignalReceived:
-            return SignalReceived(
-                origin=RoutineOrigin(
-                    name=RoutineName(routine),
-                    trigger=RoutineTrigger.SIGNAL,
-                    delivery_id=DeliveryId(delivery_id),
-                ),
-                delivery=Delivery(
-                    headers={},
-                    content_type="application/json",
-                    body="{}",
-                    delivery_id=DeliveryId(delivery_id),
-                    received_at=datetime(2026, 9, 6, 9, tzinfo=UTC),
-                ),
-            )
-
-        await event_log.append(uuid4(), uuid4(), received("triage", "delivery-1"))
-        issues = await event_log.append(uuid4(), uuid4(), received("issues", "delivery-1"))
+        await event_log.append_delivery(uuid4(), uuid4(), _arrival("triage", "delivery-1"), "{}")
+        issues = await event_log.append_delivery(
+            uuid4(), uuid4(), _arrival("issues", "delivery-1"), "{}"
+        )
 
         assert event_log.delivery(RoutineName("issues"), DeliveryId("delivery-1")) == issues
         assert event_log.delivery(RoutineName("issues"), DeliveryId("delivery-2")) is None
         assert event_log.delivery(RoutineName("news"), DeliveryId("delivery-1")) is None
+
+    asyncio.run(scenario())
+
+
+def test_a_delivery_body_waits_apart_from_its_arrival_until_dropped(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        thread_id, turn_id = uuid4(), uuid4()
+        event_log = EventLog(tmp_path)
+
+        arrival = await event_log.append_delivery(
+            thread_id, turn_id, _arrival("issues", "delivery-1"), '{"action":"opened"}'
+        )
+
+        restarted = EventLog(tmp_path)
+        assert restarted.thread_events(thread_id) == [arrival]
+        assert '"opened"' not in arrival.model_dump_json()
+        assert restarted.waiting_body(turn_id) == '{"action":"opened"}'
+        restarted.drop_waiting_body(turn_id)
+        assert EventLog(tmp_path).waiting_body(turn_id) is None
 
     asyncio.run(scenario())
 
@@ -551,7 +558,7 @@ def test_old_events_without_delivery_fields_still_read(tmp_path: Path) -> None:
             }
         ],
     )
-    event = next(EventLog(tmp_path).all_events())
+    event = every_event(EventLog(tmp_path))[0]
     assert isinstance(event.payload, TurnStarted)
     assert isinstance(event.payload.origin, RoutineOrigin)
     assert event.payload.origin.delivery_id is None
@@ -591,7 +598,7 @@ def test_old_tool_events_read_with_unknown_write_and_no_duration(tmp_path: Path)
     ]
     write_events(tmp_path, records)
 
-    call, result = [event.payload for event in EventLog(tmp_path).all_events()]
+    call, result = [event.payload for event in every_event(EventLog(tmp_path))]
 
     assert isinstance(call, ToolCall)
     assert call.write is None
@@ -629,7 +636,7 @@ def test_old_closing_events_read_with_zero_new_token_fields(tmp_path: Path) -> N
     ]
     write_events(tmp_path, records)
 
-    completed, failed = [event.payload for event in EventLog(tmp_path).all_events()]
+    completed, failed = [event.payload for event in every_event(EventLog(tmp_path))]
 
     assert completed == TurnCompleted(input_tokens=4, output_tokens=2)
     assert failed == TurnFailed(code="INTERNAL", message="failed")
@@ -656,7 +663,7 @@ def test_old_boundary_events_read_with_no_workspace_snapshot(tmp_path: Path) -> 
     ]
     write_events(tmp_path, records)
 
-    started, completed = [event.payload for event in EventLog(tmp_path).all_events()]
+    started, completed = [event.payload for event in every_event(EventLog(tmp_path))]
 
     assert isinstance(started, TurnStarted)
     assert started.snapshot is None
@@ -666,21 +673,8 @@ def test_old_boundary_events_read_with_no_workspace_snapshot(tmp_path: Path) -> 
 
 def test_signal_received_and_manual_payload_shapes() -> None:
     received = datetime(2026, 9, 6, 9, tzinfo=UTC)
-    delivery = Delivery(
-        headers={"content-type": "application/json"},
-        content_type="application/json",
-        body='{"action":"opened"}',
-        delivery_id=DeliveryId("abc"),
-        received_at=received,
-    )
-    payload = SignalReceived(
-        origin=RoutineOrigin(
-            name=RoutineName("news"),
-            trigger=RoutineTrigger.SIGNAL,
-            delivery_id=DeliveryId("abc"),
-        ),
-        delivery=delivery,
-    )
+    body = '{"action":"opened"}'
+    payload = _arrival("news", "abc")
     event = Event.model_validate(
         {
             "sequence": 1,
@@ -701,10 +695,10 @@ def test_signal_received_and_manual_payload_shapes() -> None:
     command = RoutineRunCommand.model_validate(
         {
             "name": "news",
-            "payload": {"body": delivery.body, "content_type": "application/json"},
+            "payload": {"body": body, "content_type": "application/json"},
         }
     )
     assert command.payload is not None
-    assert command.payload.body == delivery.body
+    assert command.payload.body == body
     assert command.payload.content_type == "application/json"
     assert RoutineRunCommand(name="news").payload is None

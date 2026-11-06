@@ -1,5 +1,5 @@
 """The instance database: one SQLite file in the state directory that holds the instance's events,
-thread records, config changes and coding-session recalls (ADR 0116)."""
+thread records, waiting deliveries, config changes and coding-session recalls (ADR 0116)."""
 
 import sqlite3
 import threading
@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS heads (
     thread_id TEXT PRIMARY KEY,
     sequence INTEGER NOT NULL,
     last_activity_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS waiting_deliveries (
+    turn_id TEXT PRIMARY KEY,
+    body TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY,

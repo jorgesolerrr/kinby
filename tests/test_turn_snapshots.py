@@ -732,7 +732,7 @@ def test_a_revert_snapshots_around_the_restore_and_records_it(tmp_path: Path) ->
             SnapshotRef(f"refs/kinby/snapshots/{thread_id}/{result.turn_id}/before"),
             SnapshotRef(f"refs/kinby/snapshots/{thread_id}/{result.turn_id}/after"),
         ]
-        events = EventLog(tmp_path).stored(thread_id)
+        events = EventLog(tmp_path).thread_events(thread_id)
         assert events[-1].turn_id == result.turn_id
         assert events[-1].sequence == result.sequence
         assert events[-1].payload == WorkspaceReverted(
@@ -875,7 +875,7 @@ def test_a_revert_that_cannot_restore_reports_snapshots_unavailable(tmp_path: Pa
         snapshots = FailingRestoreSnapshotStore()
         dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
         turn_id = await _closed_turn(dispatcher, thread_id)
-        events = len(EventLog(tmp_path).stored(thread_id))
+        events = len(EventLog(tmp_path).thread_events(thread_id))
 
         result = await dispatcher.dispatch(
             "thread.turn.revert",
@@ -885,7 +885,7 @@ def test_a_revert_that_cannot_restore_reports_snapshots_unavailable(tmp_path: Pa
 
         assert isinstance(result, ErrorEnvelope)
         assert result.code is ErrorCode.SNAPSHOT_UNAVAILABLE
-        assert len(EventLog(tmp_path).stored(thread_id)) == events
+        assert len(EventLog(tmp_path).thread_events(thread_id)) == events
 
     asyncio.run(scenario())
 
@@ -952,7 +952,7 @@ def test_a_revert_needs_only_the_target_before_snapshot(tmp_path: Path) -> None:
         snapshots = SelectivelyFailingSnapshotStore(failed_capture=2)
         dispatcher, thread_id = await _thread_on(tmp_path, ScriptedRunner(), snapshots)
         turn_id = await _closed_turn(dispatcher, thread_id)
-        assert isinstance(EventLog(tmp_path).stored(thread_id)[-1].payload, TurnCompleted)
+        assert isinstance(EventLog(tmp_path).thread_events(thread_id)[-1].payload, TurnCompleted)
 
         result = await dispatcher.dispatch(
             "thread.turn.revert",
@@ -1008,7 +1008,7 @@ def test_a_revert_is_refused_while_an_approval_parks_behind_a_later_event(
             {"thread_id": thread_id, "turn_id": rated, "verdict": "good", "reason": None},
             {Scope.THREAD_RATE},
         )
-        assert isinstance(EventLog(tmp_path).stored(thread_id)[-1].payload, TurnRated)
+        assert isinstance(EventLog(tmp_path).thread_events(thread_id)[-1].payload, TurnRated)
         captures = len(snapshots.refs)
 
         result = await dispatcher.dispatch(
@@ -1040,7 +1040,7 @@ def test_a_revert_is_recorded_even_when_its_after_capture_fails(tmp_path: Path) 
 
         assert isinstance(result, AcceptedResult)
         assert snapshots.restored == [TreeId(f"{1:040d}")]
-        assert EventLog(tmp_path).stored(thread_id)[-1].payload == WorkspaceReverted(
+        assert EventLog(tmp_path).thread_events(thread_id)[-1].payload == WorkspaceReverted(
             target_turn_id=turn_id,
             previous=TreeId(f"{3:040d}"),
             restored=TreeId(f"{1:040d}"),

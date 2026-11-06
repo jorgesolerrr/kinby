@@ -20,6 +20,7 @@ from kinby.core.receiver import Receiver
 from kinby.core.scheduler import Scheduler
 from kinby.hub import Hub, relay
 from kinby.instance import Instance, Serve
+from tests.helpers import every_event
 from tests.test_hub import FakeRuntime
 from tests.test_hub_server import call, created_instance, finished, frame, hub_at, served, url
 from tests.test_routines import instance_at, routine_file
@@ -265,10 +266,10 @@ signal:
         assert signed.status == 202
         assert UUID(accepted["thread_id"])
         assert tampered.status == 401
-        events = list(EventLog(instance.manifest.state_dir).all_events())
+        events = every_event(EventLog(instance.manifest.state_dir))
         received = [event.payload for event in events if isinstance(event.payload, SignalReceived)]
         assert len(received) == 1
-        assert received[0].delivery.body == SIGNED_BODY.decode()
+        assert received[0].delivery.size == len(SIGNED_BODY)
         assert received[0].delivery.delivery_id == "delivery-1"
 
     asyncio.run(scenario())

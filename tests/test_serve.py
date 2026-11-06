@@ -13,7 +13,6 @@ import pytest
 
 from kinby.cli import main
 from kinby.contracts import (
-    Delivery,
     MemoryRecapped,
     MessageDelta,
     PermissionMode,
@@ -33,10 +32,12 @@ from kinby.contracts import (
 from kinby.core.dispatcher import TurnConfig
 from kinby.core.events import EventLog
 from kinby.core.runtime import boot_instance
+from kinby.core.scheduler import Delivery
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import TurnOutcome
 from kinby.memory import GraphStore, RecapWriter
 from tests.helpers import (
+    every_event,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     turn_config_stub,
@@ -254,11 +255,11 @@ def test_routine_run_payload_records_and_streams_delivery(
 
     output = capsys.readouterr()
     assert output.out.endswith("Done\n")
-    events = list(EventLog(instance.manifest.state_dir).all_events())
+    events = every_event(EventLog(instance.manifest.state_dir))
     received = events[0]
     started = next(event for event in events if isinstance(event.payload, TurnStarted))
     assert isinstance(received.payload, SignalReceived)
-    assert received.payload.delivery.body == body
+    assert received.payload.delivery.size == len(body.encode())
     assert received.payload.delivery.content_type == content_type
     assert received.payload.origin.trigger is RoutineTrigger.MANUAL
     assert started.turn_id == received.turn_id
@@ -337,7 +338,7 @@ def test_the_repl_fires_a_due_routine_while_it_waits(tmp_path, monkeypatch) -> N
         for _ in range(300):
             if any(
                 isinstance(event.payload, TurnCompleted)
-                for event in EventLog(tmp_path / ".state").all_events()
+                for event in every_event(EventLog(tmp_path / ".state"))
             ):
                 fired.set()
                 break
@@ -349,7 +350,7 @@ def test_the_repl_fires_a_due_routine_while_it_waits(tmp_path, monkeypatch) -> N
     exit_code = main(["repl", "--instance", str(tmp_path)])
     closer.join(timeout=5)
 
-    events = list(EventLog(tmp_path / ".state").all_events())
+    events = every_event(EventLog(tmp_path / ".state"))
     started = [event.payload for event in events if isinstance(event.payload, TurnStarted)]
     assert exit_code == 0
     assert fired.is_set()
@@ -370,18 +371,20 @@ def test_run_fires_pending_delivery_on_boot(
     turn_id = uuid4()
 
     async def seed() -> None:
-        await EventLog(instance.manifest.state_dir).append(
+        delivery = Delivery(
+            headers={},
+            content_type="text/plain",
+            body="opened",
+            received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+        )
+        await EventLog(instance.manifest.state_dir).append_delivery(
             thread.id,
             turn_id,
             SignalReceived(
                 origin=RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.SIGNAL),
-                delivery=Delivery(
-                    headers={},
-                    content_type="text/plain",
-                    body="opened",
-                    received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
-                ),
+                delivery=delivery.arrival(),
             ),
+            delivery.body,
         )
 
     asyncio.run(seed())
@@ -399,7 +402,7 @@ def test_run_fires_pending_delivery_on_boot(
 
     assert main(["repl", "--instance", str(tmp_path)]) == 0
 
-    events = EventLog(instance.manifest.state_dir).stored(thread.id)
+    events = EventLog(instance.manifest.state_dir).thread_events(thread.id)
     started = next(event for event in events if isinstance(event.payload, TurnStarted))
     assert started.turn_id == turn_id
 
@@ -467,7 +470,7 @@ def test_serve_interrupts_a_running_routine_and_drains_its_recap(
     restarted_stopper.join(timeout=5)
 
     output = capsys.readouterr()
-    events = list(EventLog(tmp_path / ".state").all_events())
+    events = every_event(EventLog(tmp_path / ".state"))
     assert exit_code == 0, (output.out, output.err)
     assert restarted_exit_code == 0
     assert not stopper.is_alive()

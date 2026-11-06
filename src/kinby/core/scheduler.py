@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import uuid4
 
 from cronsim import CronSim
@@ -17,7 +19,8 @@ from kinby.contracts import (
     ConfigActor,
     ConfigFile,
     CronSchedule,
-    Delivery,
+    DeliveryArrival,
+    DeliveryId,
     NotificationRaised,
     RoutineFailureHandled,
     RoutineFailuresReset,
@@ -44,7 +47,12 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.routine_history import ROUTINE_EVENTS, RoutineHistory, routine_history
+from kinby.core.routine_history import (
+    ROUTINE_EVENTS,
+    PendingDelivery,
+    RoutineHistory,
+    routine_history,
+)
 from kinby.core.threads import ThreadStore
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, inspect_instance
@@ -61,6 +69,8 @@ from kinby.plugins.routines import Routine, disable_routine, load_routine, load_
 
 #: The failed firings in a row after which the failure policy disables a routine.
 DISABLE_AFTER = 10
+#: The headers a delivery's arrival keeps, which say what arrived.
+_NAMED_HEADERS = ("x-github-event",)
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,41 @@ class SchedulerConfig:
 class ArmedRoutine:
     schedule: CronSchedule
     time: datetime
+
+
+@dataclass(frozen=True, kw_only=True)
+class Delivery:
+    """A delivery as it arrived, its body included."""
+
+    headers: Mapping[str, str]
+    content_type: str
+    body: str
+    delivery_id: DeliveryId | None = None
+    received_at: datetime
+
+    def arrival(self) -> DeliveryArrival:
+        """What the transcript store keeps of the delivery (ADR 0117)."""
+        body = self.body.encode()
+        headers = {name.lower(): value for name, value in self.headers.items()}
+        return DeliveryArrival(
+            delivery_id=self.delivery_id,
+            content_type=self.content_type,
+            size=len(body),
+            sha256=sha256(body).hexdigest(),
+            headers={name: headers[name] for name in _NAMED_HEADERS if name in headers},
+            action=self._action(),
+            received_at=self.received_at,
+        )
+
+    def _action(self) -> str | None:
+        if self.content_type.partition(";")[0].strip().lower() != "application/json":
+            return None
+        try:
+            body = json.loads(self.body)
+        except json.JSONDecodeError:
+            return None
+        action = body.get("action") if isinstance(body, dict) else None
+        return action if isinstance(action, str) else None
 
 
 @dataclass(frozen=True)
@@ -156,10 +201,11 @@ class Scheduler:
         )
         title_suffix = delivery.delivery_id or self._local_minute(delivery.received_at)
         thread = self._store.create(f"{name} · {title_suffix}")
-        event = await self._log.append(
+        event = await self._log.append_delivery(
             thread.id,
             uuid4(),
-            SignalReceived(origin=origin, delivery=delivery),
+            SignalReceived(origin=origin, delivery=delivery.arrival()),
+            delivery.body,
         )
         self.schedule()
         return DeliveryReceipt(accepted(event), repeated=False)
@@ -276,6 +322,18 @@ class Scheduler:
             return receipt.accepted
         return await self._fire(routine, RoutineTrigger.MANUAL)
 
+    async def _start(self, delivery: PendingDelivery, origin: RoutineOrigin) -> AcceptedResult:
+        """Start the delivery's turn with its body, which is not kept after (ADR 0117)."""
+        accepted = await self._turns.wake_recorded(
+            delivery.thread_id,
+            delivery.turn_id,
+            delivery.delivery.reference,
+            origin,
+            self._log.waiting_body(delivery.turn_id),
+        )
+        self._log.drop_waiting_body(delivery.turn_id)
+        return accepted
+
     async def _fire(self, routine: Routine, trigger: RoutineTrigger) -> AcceptedResult:
         now = self._clock()
         origin = RoutineOrigin(
@@ -343,12 +401,7 @@ class Scheduler:
                 origin = delivery.origin.model_copy(
                     update={"trigger": RoutineTrigger.SIGNAL, "dreaming_stage": stage}
                 )
-                firing = self._turns.wake_recorded(
-                    delivery.thread_id,
-                    delivery.turn_id,
-                    delivery.delivery.body,
-                    origin,
-                )
+                firing = self._start(delivery, origin)
                 rearm = None
             elif scheduled is not None:
                 _, routine, armed = scheduled
