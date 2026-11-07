@@ -2363,10 +2363,13 @@ class HubRegistry:
         return UUID(row[0]) if row is not None else None
 
     def notifications_raised(self, instance_id: UUID, since: datetime) -> int:
-        """How many notifications the instance raised since then."""
+        """How many notifications other than approvals the instance raised since then."""
         with self._transaction() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) FROM notifications WHERE instance_id = ? AND raised_at >= ?",
+                """
+                SELECT COUNT(*) FROM notifications
+                WHERE instance_id = ? AND raised_at >= ? AND approval IS NULL
+                """,
                 (str(instance_id), since.isoformat()),
             ).fetchone()
         return row[0]

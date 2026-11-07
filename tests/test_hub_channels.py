@@ -21,7 +21,9 @@ from kinby.contracts import (
     CHANNEL_UNMUTE,
     CHANNEL_UPDATE,
     HUB_SCOPES,
+    NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
+    ApprovalRequested,
     Channel,
     ChannelCreateCommand,
     ChannelDeleteCommand,
@@ -35,6 +37,9 @@ from kinby.contracts import (
     ChannelUpdateCommand,
     ErrorCode,
     ErrorEnvelope,
+    GateRule,
+    NotificationListCommand,
+    NotificationListResult,
     NotificationRaiseCommand,
     NotificationRaiseResult,
     Scope,
@@ -42,6 +47,7 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
     SetupValue,
+    WaitingApproval,
 )
 from kinby.hub import Hub
 from kinby.hub.channels import (
@@ -246,6 +252,26 @@ def notification(key: str, *, text: str = "It ran.") -> NotificationRaiseCommand
     )
 
 
+def approval_notification(
+    key: str, approval_id: UUID, options: tuple[str, ...] = ("Approve", "Deny")
+) -> NotificationRaiseCommand:
+    """What an instance raises when a turn parks on an approval."""
+    request = ApprovalRequested(
+        approval_id=approval_id,
+        name="store",
+        arguments={"path": "notes.md"},
+        rule=GateRule("ask mode: writes need approval"),
+    )
+    return notification(key).model_copy(
+        update={
+            "title": "Approval waiting",
+            "text": "store: path=notes.md",
+            "options": list(options),
+            "approval": WaitingApproval(turn_id=UUID(int=2), request=request),
+        }
+    )
+
+
 async def raised(client: ContractClient, key: str) -> NotificationRaiseResult:
     result = await client.call(NOTIFICATION_RAISE, notification(key))
     assert isinstance(result, NotificationRaiseResult), result
@@ -420,6 +446,58 @@ def test_an_instance_past_its_daily_cap_is_refused_and_the_hub_says_so_once(tmp_
         assert cap.link == f"{_PUBLIC_URL}/instances/{alice_id}/threads/{UUID(int=1)}"
         assert cap.options == ("Mute this instance",)
         assert service.attempts[21].title == "tomorrow"
+
+    asyncio.run(scenario())
+
+
+def test_an_approval_past_the_daily_cap_is_raised_and_sent_all_the_same(tmp_path):
+    async def scenario() -> None:
+        service = FakeService()
+        hub = channel_hub(tmp_path / "hub", service, FakeTime())
+        client = hub_client(hub)
+        alice_id = (await started_instance(client, hub)).instance_id
+        alice = raising(hub, alice_id)
+        async with served(hub) as address:
+            await paired_channel(client, address)
+        for index in range(20):
+            await raised(alice, f"news {index}")
+        refused = await alice.call(NOTIFICATION_RAISE, notification("news 20"))
+        approval = await alice.call(NOTIFICATION_RAISE, approval_notification("approval", uuid4()))
+        await until(lambda: len(service.attempts) == 22)
+        listed = await client.call(NOTIFICATION_LIST, NotificationListCommand(instance_id=alice_id))
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.RESOURCE_EXHAUSTED
+        assert isinstance(approval, NotificationRaiseResult)
+        assert [attempt.title for attempt in service.attempts[20:]] == [
+            "Daily notification cap reached",
+            "Approval waiting",
+        ]
+        assert isinstance(listed, NotificationListResult)
+        cap = next(n for n in listed.notifications if n.title == "Daily notification cap reached")
+        assert cap.text == (
+            "alice raised 20 notifications today. "
+            "kinby sends no more of them until tomorrow, but approvals still reach you."
+        )
+
+    asyncio.run(scenario())
+
+
+def test_approvals_leave_the_whole_daily_cap_to_the_instances_own_notifications(tmp_path):
+    async def scenario() -> None:
+        hub = channel_hub(tmp_path / "hub", FakeService(), FakeTime())
+        alice = raising(hub, (await started_instance(hub_client(hub), hub)).instance_id)
+        approvals = [
+            await alice.call(NOTIFICATION_RAISE, approval_notification(f"approval {n}", uuid4()))
+            for n in range(20)
+        ]
+        for index in range(20):
+            await raised(alice, f"news {index}")
+        refused = await alice.call(NOTIFICATION_RAISE, notification("news 20"))
+
+        assert all(isinstance(approval, NotificationRaiseResult) for approval in approvals)
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.RESOURCE_EXHAUSTED
 
     asyncio.run(scenario())
 

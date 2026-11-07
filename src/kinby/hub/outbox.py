@@ -57,7 +57,8 @@ class Outbox:
         """Record the notification an instance raised, linked to its thread.
 
         A new key past the instance's daily cap is refused, and the first refusal of the day raises
-        a notification that says so.
+        a notification that says so. An approval waiting is never refused: the gate raised it, not
+        the agent.
         """
         record = self._registry.instance(instance_id)
         if record is None:
@@ -68,7 +69,10 @@ class Outbox:
         page = f"/instances/{instance_id}/threads/{command.thread_id}"
         now = self._clock()
         today = datetime.combine(now.date(), time(), now.tzinfo)
-        if self._registry.notifications_raised(instance_id, since=today) >= DAILY_CAP:
+        if (
+            command.approval is None
+            and self._registry.notifications_raised(instance_id, since=today) >= DAILY_CAP
+        ):
             name = _name(record)
             self.notify(
                 instance_id,
@@ -76,7 +80,7 @@ class Outbox:
                 source=command.source,
                 title="Daily notification cap reached",
                 text=f"{name} raised {DAILY_CAP} notifications today. "
-                "kinby sends no more of them until tomorrow.",
+                "kinby sends no more of them until tomorrow, but approvals still reach you.",
                 page=page,
                 thread_id=command.thread_id,
             )
