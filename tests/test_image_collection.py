@@ -4,16 +4,22 @@ import asyncio
 from pathlib import Path
 
 from kinby.contracts import (
+    IMAGE_DESCRIBE,
     IMAGE_PREPARE,
+    INSTANCE_CREATE,
     INSTANCE_UPDATE,
     DeclaredSetup,
+    ErrorEnvelope,
+    ImageDescribeCommand,
     ImagePrepareCommand,
     ImagePrepareResult,
+    InstanceCreateCommand,
     InstanceUpdateCommand,
     LifecycleOperationResult,
     OperationState,
 )
 from kinby.hub import Hub, HubRegistry, ImagePreparer
+from tests.test_factory_templates import WITH_SETUP
 from tests.test_hub import (
     FakeControl,
     FakeRuntime,
@@ -23,6 +29,8 @@ from tests.test_hub import (
     prepared,
 )
 from tests.test_hub_deletion import deleted, previewed
+from tests.test_hub_factories import write_factory
+from tests.test_hub_factory_roles import created as created_coder
 from tests.test_hub_recreate import CrashOnReplacement
 from tests.test_hub_removal import removed
 from tests.test_image_preparation import FakeImageBackend, _git, _source_repo
@@ -40,6 +48,7 @@ def _hub(tmp_path: Path, backend: FakeImageBackend, runtime: FakeRuntime | None 
         runtime=runtime or FakeRuntime(),
         images=ImagePreparer(source, HubRegistry(directory), backend),
         control=FakeControl(),
+        shipped_factories=tmp_path / "shipped",
     )
 
 
@@ -70,17 +79,21 @@ def test_an_accepted_update_removes_the_previous_image_and_every_record_naming_i
     async def scenario() -> None:
         backend = FakeImageBackend()
         hub = _hub(tmp_path, backend)
-        created = await created_instance(hub_client(hub))
+        client = hub_client(hub)
+        created = await created_instance(client)
         previous = hub.registry.image_artifacts()[0]
         # Docker gives one image id to two builds whose inputs differ but whose layers do not.
         hub.registry.record_image_artifact("another-input-key", previous)
+        _commit(tmp_path, "prepared")
+        await prepared(client)
         _commit(tmp_path, "updated")
 
         await _updated(hub, created)
 
         assert backend.removed == ["sha256:image-1"]
         assert [artifact.image_id for artifact in hub.registry.image_artifacts()] == [
-            "sha256:image-2"
+            "sha256:image-2",
+            "sha256:image-3",
         ]
         assert hub.registry.description("sha256:image-1") is None
 
@@ -150,7 +163,7 @@ def test_deleting_an_instance_frees_the_candidate_its_failed_update_staged(tmp_p
         )
         await _settled(hub)
 
-        assert sorted(backend.removed) == ["sha256:image-1", "sha256:image-2"]
+        assert backend.removed == ["sha256:image-2"]
 
     asyncio.run(scenario())
 
@@ -203,7 +216,10 @@ def test_an_image_docker_refuses_to_remove_keeps_its_records_and_fails_no_update
         backend = FakeImageBackend()
         backend.refused.add("sha256:image-1")
         hub = _hub(tmp_path, backend)
-        created = await created_instance(hub_client(hub))
+        client = hub_client(hub)
+        created = await created_instance(client)
+        _commit(tmp_path, "prepared")
+        await prepared(client)
         _commit(tmp_path, "updated")
 
         await _updated(hub, created)
@@ -212,8 +228,58 @@ def test_an_image_docker_refuses_to_remove_keeps_its_records_and_fails_no_update
         assert [artifact.image_id for artifact in hub.registry.image_artifacts()] == [
             "sha256:image-1",
             "sha256:image-2",
+            "sha256:image-3",
         ]
         assert hub.registry.description("sha256:image-1") is not None
+
+    asyncio.run(scenario())
+
+
+async def _described(hub: Hub) -> DeclaredSetup:
+    described = await hub_client(hub).call(IMAGE_DESCRIBE, ImageDescribeCommand())
+    assert not isinstance(described, ErrorEnvelope), described
+    return described
+
+
+def test_the_prepared_image_and_its_description_stay_through_a_restart(tmp_path):
+    async def scenario() -> None:
+        backend = FakeImageBackend()
+        hub = _hub(tmp_path, backend)
+        await prepared(hub_client(hub))
+        hub.close()
+
+        reopened = _hub(tmp_path, backend)
+        await reopened.recover()
+        await _settled(reopened)
+
+        assert backend.removed == []
+        assert (await _described(reopened)).setup_fields
+
+    asyncio.run(scenario())
+
+
+def test_the_prepared_image_stays_when_a_factory_role_is_created_beside_it(tmp_path):
+    async def scenario() -> None:
+        backend = FakeImageBackend()
+        write_factory(tmp_path / "hub" / "factories" / "tickets", WITH_SETUP)
+        hub = _hub(tmp_path, backend)
+        client = hub_client(hub)
+        await prepared(client)
+
+        await created_coder(client)
+        await _settled(hub)
+
+        assert backend.removed == []
+        assert (await _described(hub)).setup_fields
+        accepted = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="alice", model="openai:gpt-5", secrets={"api_key": "sk-test"}
+            ),
+        )
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
+        assert len(backend.builds) == 2
 
     asyncio.run(scenario())
 

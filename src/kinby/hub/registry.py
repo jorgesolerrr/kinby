@@ -1709,11 +1709,13 @@ class HubRegistry:
         return [artifact for key in keys if (artifact := self.image_artifact(key)) is not None]
 
     def unreferenced_images(self) -> list[str]:
-        """Recorded images no instance that is not deleted names, as its image or candidate.
+        """Recorded images no instance that is not deleted names, as its image or candidate,
+        and that are not the image described last.
 
         A removed instance keeps its image for a restoration (ADR 0053), and an instance
         whose update failed still names its previous image (ADR 0035). Deletion leaves
-        the candidate row a failed update staged.
+        the candidate row a failed update staged. The image described last is the prepared
+        one, which a vanilla creation reads and reuses.
         """
         with self._transaction() as connection:
             rows = connection.execute(
@@ -1726,6 +1728,10 @@ class HubRegistry:
                     SELECT update_candidates.image_id FROM update_candidates
                     JOIN instances ON instances.id = update_candidates.instance_id
                     WHERE instances.intended_state != ?
+                    UNION
+                    SELECT * FROM (
+                        SELECT image_id FROM image_descriptions ORDER BY rowid DESC LIMIT 1
+                    )
                 )
                 GROUP BY image_id ORDER BY MIN(rowid)
                 """,
