@@ -45,6 +45,9 @@ from tests.test_hub_server import served, url
 _PRIVATE_URL = "http://hub:8080"
 #: A browser service no browser in these tests reaches.
 _NOWHERE = "ws://127.0.0.1:9/"
+#: Where the instances answer: nothing listens, so a lifecycle call is refused at once. A made-up
+#: hostname would cost a DNS lookup, which takes seconds to fail under Docker Desktop.
+_NO_INSTANCE = "http://127.0.0.1:9"
 
 
 class FakeBrowserRuntime:
@@ -131,6 +134,8 @@ async def browser_hub(
     alice = (await started_instance(client, hub, name="alice")).instance_id
     bob = (await started_instance(client, hub, name="bob")).instance_id
     browser_on(hub, alice)
+    for instance_id in (alice, bob):
+        instances.addresses[str(instance_id)] = _NO_INSTANCE
     async with served(hub) as served_at:
         yield BrowserHub(hub, runtime, instances, served_at, alice, bob)
     hub.close()
