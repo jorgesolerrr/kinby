@@ -596,6 +596,10 @@ export interface Contract {
       command: RoutineDeleteCommand;
       result: RoutineDeleteResult;
     };
+    "routine.grant.add": {
+      command: RoutineGrantAddCommand;
+      result: RoutineGrantListResult;
+    };
     "routine.grant.list": {
       command: RoutineGrantListCommand;
       result: RoutineGrantListResult;
@@ -2210,8 +2214,9 @@ export interface RoutineDeleteCommand {
   name: string;
 }
 export interface RoutineDeleteResult {}
-export interface RoutineGrantListCommand {
+export interface RoutineGrantAddCommand {
   name: string;
+  tool: ToolName;
 }
 export interface RoutineGrantListResult {
   grants: RoutineGrant[];
@@ -2220,10 +2225,13 @@ export interface RoutineGrantListResult {
  * The user's standing allow for one tool in one routine's turns, whatever its arguments.
  */
 export interface RoutineGrant {
-  approval_id: string;
+  approval_id: string | null;
   granted_at: string;
   routine: string;
   tool: ToolName;
+}
+export interface RoutineGrantListCommand {
+  name: string;
 }
 export interface RoutineGrantRevokeCommand {
   name: string;
@@ -2235,6 +2243,7 @@ export interface RoutineListResult {
   warnings: Warning[];
 }
 export interface RoutineSummary {
+  code_step?: ToolName | null;
   description: string;
   enabled: boolean;
   failure_count?: number;

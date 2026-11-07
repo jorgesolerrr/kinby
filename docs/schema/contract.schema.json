@@ -6944,8 +6944,15 @@
       "description": "The user's standing allow for one tool in one routine's turns, whatever its arguments.",
       "properties": {
         "approval_id": {
-          "format": "uuid",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "granted_at": {
           "format": "date-time",
@@ -6965,6 +6972,23 @@
         "approval_id"
       ],
       "title": "RoutineGrant",
+      "type": "object"
+    },
+    "RoutineGrantAddCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "name",
+        "tool"
+      ],
+      "title": "RoutineGrantAddCommand",
       "type": "object"
     },
     "RoutineGrantListCommand": {
@@ -7259,6 +7283,17 @@
     "RoutineSummary": {
       "additionalProperties": false,
       "properties": {
+        "code_step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "description": {
           "type": "string"
         },
@@ -13374,6 +13409,22 @@
           ],
           "type": "object"
         },
+        "routine.grant.add": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/RoutineGrantAddCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/RoutineGrantListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "routine.grant.list": {
           "additionalProperties": false,
           "properties": {
@@ -14099,6 +14150,7 @@
         "routine.delete",
         "routine.rename",
         "routine.grant.list",
+        "routine.grant.add",
         "routine.grant.revoke",
         "prompt.get",
         "prompt.set",

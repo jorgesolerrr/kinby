@@ -1,5 +1,7 @@
 # Any edit to a routine revokes its grants
 
+Amended by [ADR 0119](0119-a-shell-read-runs-unasked-and-a-routine-can-be-granted-its-code-step.md): the user can also grant a routine its own code step from its page, without an approval.
+
 Ticket [#161](https://github.com/jorgesolerrr/kinby/issues/161): a routine that clicks in the browser or calls an MCP tool every hour asks every hour under `ask`, so the user's only options are to approve each run or raise the instance's whole mode. The research in [#918](https://github.com/jorgesolerrr/kinby/issues/918) found that OpenClaw lets "Always allow" on a scheduled job's approval mint a grant bound to that job, revoked when the job changes. kinby adds the **routine grant**.
 
 ## Decision

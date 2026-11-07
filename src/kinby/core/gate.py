@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kinby.contracts import GateRule, PermissionMode, ToolCall
+from kinby.core.shell_reads import is_shell_read
 from kinby.instance.permissions import GateAction, GatePolicy
 from kinby.plugins.tools import Tool
 
@@ -64,7 +65,8 @@ def evaluate(
     in every mode but read-only, so the ceiling still bounds it (ADR 0112). An authored tool is a
     write whatever it declares, unless the user *marked_read_only* it (ADR 0109). A tool that
     opens a URL is allowed for one of the thread's *seen_urls*, and a write for any other
-    (ADR 0110).
+    (ADR 0110). A shell read runs unasked in ask and auto, once the bash patterns and a rule
+    naming bash had their say (ADR 0119).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
@@ -94,6 +96,15 @@ def evaluate(
         return GateDecision(override, GateRule(f"tools.{call.name}"))
     if granted and mode is not PermissionMode.READ_ONLY:
         return GateDecision(GateAction.ALLOW, GateRule("routine.grant"))
+    if (
+        mode in (PermissionMode.ASK, PermissionMode.AUTO)
+        and call.name == "bash"
+        and tool is not None
+        and not tool.authored
+        and isinstance(command := call.arguments.get("command"), str)
+        and is_shell_read(command, workspace)
+    ):
+        return GateDecision(GateAction.ALLOW, GateRule("bash.read"))
     if tool is not None and tool.authored and not marked_read_only:
         return GateDecision(_PRESETS[mode][True], AUTHORED_RULE)
     if call.name in URL_READS:

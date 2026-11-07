@@ -409,6 +409,12 @@ class GrantOutsideRoutine(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class CodeStepGrantRefused(CoreError):
+    """A routine's page grants the routine only its own code step (ADR 0119)."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class ReadOnlyMarkRefused(CoreError):
     """Only an approval for an authored tool's call marks the tool read-only (ADR 0109)."""
 

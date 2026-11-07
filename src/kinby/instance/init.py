@@ -240,7 +240,9 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "# Modes: read-only denies writes, ask requests approval, "
             "and full-access allows writes.\n"
             "# auto allows writes with declared paths inside the workspace. It asks before\n"
-            "# bash, undeclared write tools, and paths outside the workspace.\n"
+            "# undeclared write tools and paths outside the workspace.\n"
+            "# ask and auto run shell reads, such as ls or grep inside the workspace, unasked.\n"
+            "# auto asks before any other bash.\n"
             'mode = "ask"\n'
             'ceiling = "full-access"\n'
             "\n"

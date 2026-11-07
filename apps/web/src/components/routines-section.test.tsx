@@ -1,5 +1,5 @@
 import { CallError } from "@kinby/contract"
-import type { ConfigChange, RoutineSummary } from "@kinby/contract"
+import type { ConfigChange, RoutineGrant, RoutineSummary } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -247,6 +247,35 @@ describe("RoutinesSection", () => {
     )
     expect(caller.calls.filter((call) => call.method === "routine.grant.revoke")).toEqual([
       { method: "routine.grant.revoke", params: { name: "news", tool: "post" } },
+    ])
+  })
+
+  it("grants a routine its code step, then lists it among what it always allows", async () => {
+    let grants: RoutineGrant[] = []
+    const { caller, user } = openSection({
+      "routine.list": () => ({ routines: [{ ...news, code_step: "fetch_news" }], warnings: [] }),
+      "routine.grant.list": () => ({ grants }),
+      "routine.grant.add": ({ name, tool }) => {
+        grants = [
+          {
+            routine: name,
+            tool,
+            granted_at: new Date(2026, 8, 28, 9, 5).toISOString(),
+            approval_id: null,
+          },
+        ]
+        return { grants }
+      },
+    })
+
+    const item = await unfold(user, "news")
+    await user.click(await within(item).findByRole("button", { name: "Always allow fetch_news" }))
+
+    const allowed = await within(item).findByRole("list", { name: "Always allowed" })
+    expect(allowed.textContent).toContain("fetch_news, since Sep 28, 2026, 9:05 AM")
+    expect(within(item).queryByRole("button", { name: "Always allow fetch_news" })).toBeNull()
+    expect(caller.calls.filter((call) => call.method === "routine.grant.add")).toEqual([
+      { method: "routine.grant.add", params: { name: "news", tool: "fetch_news" } },
     ])
   })
 
