@@ -133,6 +133,13 @@ class ErrorEnvelope(ContractModel):
     #: so does INVALID_ARGUMENT for a config write.
     fields: dict[str, str] = Field(default_factory=dict)
 
+    @property
+    def explained(self) -> str:
+        """The message, then what is wrong with each field, for a client that prints the error."""
+        if not self.fields:
+            return self.message
+        return f"{self.message} {'; '.join(f'{name}: {why}' for name, why in self.fields.items())}"
+
 
 class PermissionMode(StrEnum):
     READ_ONLY = "read-only"
