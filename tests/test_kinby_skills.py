@@ -1,10 +1,12 @@
 import asyncio
+import json
 import re
-from datetime import date
+from datetime import UTC, date, datetime
+from typing import get_args
 from uuid import uuid4
 
 from kinby.cli import main
-from kinby.contracts import PermissionMode
+from kinby.contracts import PermissionMode, View, ViewComponent
 from kinby.core.prompt import PromptSectionName, assemble_system_prompt
 from kinby.instance import init_instance, load_instance
 from kinby.plugins import Tool, ToolContext
@@ -19,7 +21,7 @@ def test_fresh_instance_catalogues_and_shows_kinbys_write_routine(tmp_path, caps
     skills, warnings = load_skills(instance)
 
     assert not warnings
-    assert [skill.name for skill in skills] == ["write-routine"]
+    assert [skill.name for skill in skills] == ["write-routine", "write-view"]
     assert skills[0].description == "Draft kinby routine files for recurring or manual work."
     sections = assemble_system_prompt(instance, skills, date(2026, 9, 5))
     catalogue = next(
@@ -44,6 +46,41 @@ def test_disabling_defaults_omits_kinbys_write_routine(tmp_path, capsys):
     assert "skills:\nprompt sections:\n" in capsys.readouterr().out
 
 
+def _write_view_body(tmp_path):
+    skills, _ = load_skills(load_instance(init_instance(tmp_path / "instance")))
+    return next(skill.body for skill in skills if skill.name == "write-view")
+
+
+def test_fresh_instance_catalogues_kinbys_write_view(tmp_path):
+    instance = load_instance(init_instance(tmp_path / "instance"))
+
+    skills, _ = load_skills(instance)
+
+    [skill] = [skill for skill in skills if skill.name == "write-view"]
+    sections = assemble_system_prompt(instance, skills, date(2026, 9, 5))
+    catalogue = next(
+        section.text for section in sections if section.name == PromptSectionName.SKILLS
+    )
+    assert f"- write-view: {skill.description}" in catalogue
+
+
+def test_write_view_names_every_component_of_the_view_catalogue(tmp_path):
+    """A new catalogue component fails this until write-view teaches it."""
+    (catalogue, _) = get_args(ViewComponent.__value__)
+    tags = {component.model_fields["component"].default for component in get_args(catalogue)}
+
+    cited = set(re.findall(r"`([A-Za-z]+)`", _write_view_body(tmp_path)))
+
+    assert tags - cited == set()
+
+
+def test_write_view_example_is_a_view(tmp_path):
+    (example,) = re.findall(r"```json\n(.*?)\n```", _write_view_body(tmp_path), re.DOTALL)
+    arguments = json.loads(example)
+
+    View.model_validate({**arguments, "updated_at": datetime.now(UTC)})
+
+
 def _write_skill(root, name, body):
     path = root / name / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,14 +101,24 @@ def test_instance_then_kinby_then_workspace_skill_precedence(tmp_path):
     skills, warnings = load_skills(instance)
 
     assert not warnings
-    assert [skill.name for skill in skills] == ["instance-only", "write-routine", "workspace-only"]
+    assert [skill.name for skill in skills] == [
+        "instance-only",
+        "write-routine",
+        "write-view",
+        "workspace-only",
+    ]
     assert skills[1].description == "Draft kinby routine files for recurring or manual work."
 
     override = _write_skill(path / "skills", "write-routine", "Instance routine instructions.")
     skills, warnings = load_skills(instance)
 
     assert not warnings
-    assert [skill.name for skill in skills] == ["instance-only", "write-routine", "workspace-only"]
+    assert [skill.name for skill in skills] == [
+        "instance-only",
+        "write-routine",
+        "write-view",
+        "workspace-only",
+    ]
     assert skills[1].source == override
     assert skills[1].body == "Instance routine instructions."
 
@@ -79,7 +126,7 @@ def test_instance_then_kinby_then_workspace_skill_precedence(tmp_path):
         manifest.write("\n[tools]\ndefaults = false\n")
     remaining, warnings = load_skills(load_instance(path))
     assert not warnings
-    assert remaining == skills
+    assert remaining == tuple(skill for skill in skills if skill.name != "write-view")
 
 
 def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):

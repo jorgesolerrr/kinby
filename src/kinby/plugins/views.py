@@ -40,23 +40,20 @@ def view_read(id: ViewId, context: ToolContext) -> str:
 
 @tool(write=True, view=True)
 async def view_write(
-    id: ViewId, title: str, spec: ViewSpec, data: dict[str, JsonValue], context: ToolContext
+    id: ViewId,
+    title: str,
+    spec: dict[str, JsonValue],
+    data: dict[str, JsonValue],
+    context: ToolContext,
 ) -> str:
     """Create or replace a view: a page of UI the user opens in the web app, which you keep
     current. Write one on your own when it shows something more precisely than a message, such
-    as a board a routine updates every morning.
-
-    id is a short slug. The spec lists components from the view catalogue, each with a unique id;
-    the one with id "root" is rendered, and a Card or Row names its children, and a Table column
-    its cell, by id. A Card stacks its children; a Row sets them side by side, such as a few
-    Stats, and wraps them when they run out of room. A prop is a literal or
-    {"path": "<JSON Pointer>"} into data. Card and Row children may instead be
-    {"path": "/items", "template": "<component id>"}, which renders the template once per item of
-    the array, with the template's paths read in the item. Table rows, Kanban columns,
-    Chart points and Checklist items repeat over an array the same way; each component says which
-    of its props are read in the item. A view is capped at 1 MB.
+    as a board a routine updates every morning. Read the write-view skill before composing a
+    spec. id is a short slug, and a view is capped at 1 MB.
     """
-    change = await asyncio.to_thread(write_view, context.instance, id, title, spec, data)
+    change = await asyncio.to_thread(
+        write_view, context.instance, id, title, ViewSpec.model_validate(spec), data
+    )
     await context.report_view_changed(ViewChanged(view=id, title=title, change=change))
     return f"{change.value.capitalize()} view {id}."
 
