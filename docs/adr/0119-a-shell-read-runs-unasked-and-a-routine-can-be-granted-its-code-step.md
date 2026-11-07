@@ -6,7 +6,7 @@ Ticket [#1220](https://github.com/jorgesolerrr/kinby/issues/1220): Finance's rou
 
 ## Decision
 
-- **A shell read is a read under `ask` and `auto`.** It is one or more simple commands joined only by `|`, `;`, `&&`, `||` or newlines. Every program is on a fixed allowlist of programs that only read, and `git` counts only with `status`, `log`, `diff` or `show`. No command passes a flag that makes its program write or run another program. The command holds no expansion, subshell, group, background job or input redirection, and redirects output only to `/dev/null` or onto another output. No argument names a path outside the workspace. The gate allows a shell read with rule `bash.read`.
+- **A shell read is a read under `ask` and `auto`.** It is one or more simple commands joined only by `|`, `;`, `&&`, `||` or newlines. Every program is on a fixed allowlist of programs that only read. No command passes a flag that makes its program write, run another program, follow links while it walks a directory, or load its program or its input's names from a file. The command holds no expansion, subshell, group, background job or input redirection, and redirects output only to `/dev/null` or onto another output. No argument names a path outside the workspace once its links and globs are resolved, from every directory a `cd` may have reached. The gate allows a shell read with rule `bash.read`.
 - **The classifier fails toward asking.** A command it cannot parse or does not recognise is gated as before.
 - **Rules still come first.** The bash deny and ask patterns and a `tools.bash` rule decide before `bash.read`. `read-only` still denies bash, and `full-access` is unchanged.
 - **The allowlist is kinby's**, like the shipped deny patterns. `permissions.toml` cannot extend it.
@@ -17,6 +17,7 @@ Ticket [#1220](https://github.com/jorgesolerrr/kinby/issues/1220): Finance's rou
 ## Considered options
 
 - **Allow all bash under `auto` unless a deny or ask pattern matches.** Rejected. Bash inherits the process environment with every secret from the instance's `.env`. It can rewrite `permissions.toml`, which holds the mode and the ceiling, and the files holding the read-only marks and the routine grants. It can also `curl` any host. A prompt-injected routine would turn `auto` into `full-access`.
+- **Counting `git status`, `log`, `diff` and `show` as shell reads**, as the ticket first proposed. Rejected. A repository's config, attributes and hooks can make each of them run any program, through `core.fsmonitor`, a clean filter, textconv, an external diff or `gpg.program`. They sit in `.git` inside the workspace, which `auto` writes unasked, and no flag turns them all off.
 - **A routine grant on `bash`.** Rejected. It allows every command in the routine, which is far broader than reading files.
 - **Letting a code step park on an approval.** Rejected. The step runs before the model and has no model call to resume, and a routine that parks overnight is the problem this decision solves.
 
@@ -25,6 +26,7 @@ Ticket [#1220](https://github.com/jorgesolerrr/kinby/issues/1220): Finance's rou
 - `bash.read` joins the gate rules recorded in `tool.gated` events.
 - [ADR 0115](0115-a-routine-parked-on-an-approval-holds-only-its-own-thread.md) said the gate never parses commands. It now parses them only to tell a shell read, and anything it can't tell asks.
 - A shell read can still read any file in the workspace and print it to the model. The workspace is already the model's to read.
-- `git` reads the repository the workspace sits in, which may be the instance's own. `kinby init` keeps `.env` and the state directory out of it.
+- `git` asks under `ask` and `auto` as before, `git log` included.
+- `auto` writes a workspace file unasked, so a shell read never takes its program from a file. `jq -f` asks.
 - A routine grant from the routine's page records no approval, so `RoutineGrant.approval_id` is null for it.
 - A granted code step keeps its grant when `code_write` changes the code it runs. Revoking it then is left to a later decision.

@@ -7,26 +7,34 @@ asks.
 from __future__ import annotations
 
 import re
+from glob import glob
 from pathlib import Path
 
-#: The programs a shell read may run. git is limited further to its reading subcommands.
+#: The programs a shell read may run. git is not one: its repository's config, attributes and
+#: hooks sit in the workspace, which auto writes unasked, and can make any git command run a
+#: program.
 _PROGRAMS = frozenset(
     {"cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "find", "stat", "file", "du", "tree"}
     | {"diff", "cut", "tr", "sort", "echo", "printf", "date", "basename", "dirname", "realpath"}
-    | {"jq", "bc", "expr", "true", "git"}
+    | {"jq", "bc", "expr", "true"}
 )
-_GIT_READS = frozenset({"status", "log", "diff", "show"})
-_FIND_WRITES = frozenset(
+_FIND_UNSAFE = frozenset(
     {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
+    | {"-L", "-follow"}
 )
-#: The short flags and long flag prefixes that make a program write or run another program. Long
+#: The short flags and long flag prefixes that make a program write, run another program, follow
+#: links while it walks a directory, or read its input's names or its own program from a file. Long
 #: flags are prefixes because GNU tools accept any unambiguous abbreviation.
-_WRITE_FLAGS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "sort": ("o", ("--o", "--co")),
-    "tree": ("oR", ("--o",)),
+_UNSAFE_FLAGS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "sort": ("o", ("--o", "--co", "--fi")),
+    "tree": ("oRl", ("--o",)),
     "date": ("s", ("--s",)),
     "file": ("C", ("--co",)),
-    "git": ("", ("--ou",)),
+    "grep": ("R", ("--de",)),
+    "ls": ("L", ("--de",)),
+    "du": ("L", ("--de",)),
+    "diff": ("r", ("--rec",)),
+    "jq": ("f", ("--f",)),
 }
 #: Characters that start an expansion, a subshell, a group or an input redirection.
 _UNSUPPORTED = frozenset("$`(){}<")
@@ -42,9 +50,20 @@ _DOUBLE_QUOTED_ESCAPE = re.compile(r'\\([\\"\n])')
 
 
 def is_shell_read(command: str, workspace: Path) -> bool:
-    """Whether *command* only runs programs that read, on paths inside *workspace*."""
+    """Whether *command* only runs programs that read, on paths inside *workspace*, through any
+    link or glob."""
     commands = _commands(command)
-    return bool(commands) and all(_reads(words, workspace) for words in commands)
+    if not commands:
+        return False
+    root = workspace.resolve()
+    # Every directory a command may run in: a cd before it may have failed, or run in a pipe.
+    directories = {root}
+    for program, *arguments in commands:
+        if not _reads(program, arguments, directories, root):
+            return False
+        if program == "cd":
+            directories |= {(each / arguments[0]).resolve() for each in directories}
+    return True
 
 
 def _commands(command: str) -> list[list[str]] | None:
@@ -96,15 +115,12 @@ def _escaped(match: re.Match[str]) -> str:
     return "" if match.group(1) == "\n" else match.group(1)
 
 
-def _reads(words: list[str], workspace: Path) -> bool:
-    program, *arguments = words
-    if program not in _PROGRAMS or not all(_confined(each, workspace) for each in arguments):
+def _reads(program: str, arguments: list[str], directories: set[Path], root: Path) -> bool:
+    if program not in _PROGRAMS or any(_unsafe(program, each) for each in arguments):
         return False
-    if any(_writes(program, each) for each in arguments):
+    if not all(_confined(each, directories, root) for each in arguments):
         return False
     match program:
-        case "git":
-            return arguments[:1] != [] and arguments[0] in _GIT_READS
         case "cd":
             # Without a directory cd goes home, cd - goes wherever OLDPWD says, and CDPATH can
             # send any directory not led by / or . outside the workspace.
@@ -115,26 +131,37 @@ def _reads(words: list[str], workspace: Path) -> bool:
     return True
 
 
-def _writes(program: str, argument: str) -> bool:
+def _unsafe(program: str, argument: str) -> bool:
     if program == "find":
-        return argument in _FIND_WRITES
-    letters, prefixes = _WRITE_FLAGS.get(program, ("", ()))
+        return argument in _FIND_UNSAFE
+    letters, prefixes = _UNSAFE_FLAGS.get(program, ("", ()))
     if argument.startswith("--"):
         return argument.startswith(prefixes)
     return argument.startswith("-") and any(letter in argument[1:] for letter in letters)
 
 
-def _confined(argument: str, workspace: Path) -> bool:
-    """Whether *argument* names no path outside *workspace*."""
+def _confined(argument: str, directories: set[Path], root: Path) -> bool:
+    """Whether *argument* names no path outside *root* from any of *directories*."""
     if argument.startswith("~") or "=~" in argument or ":~" in argument:
         return False
-    if argument.startswith("-"):
-        # A path glued to a flag, as in -f/path or --file=path, is not worth telling apart.
-        return "/" not in argument
-    parts = re.split(r"[/:=]", argument)
-    if ".." in parts:
+    if not argument.startswith("-"):
+        return _inside(argument, directories, root)
+    # An absolute path glued to a flag, as in -f/path, is not worth telling apart.
+    if "/" in argument:
         return False
-    # A glob after a leading dot, as in .?, can match the parent directory.
-    if any(part.startswith(".") and re.search(r"[*?\[]", part) for part in parts):
+    glued = argument.partition("=")[2] if argument.startswith("--") else argument[2:]
+    return not glued or _inside(glued, directories, root)
+
+
+def _inside(name: str, directories: set[Path], root: Path) -> bool:
+    """Whether *name*, read from each of *directories*, resolves inside *root* through its links,
+    and so does everything it matches as a glob."""
+    # Before bash 5.2, a glob after a leading dot, as in .?, matches the parent directory.
+    if any(part.startswith(".") and re.search(r"[*?\[]", part) for part in name.split("/")):
         return False
-    return not argument.startswith("/") or Path(argument).is_relative_to(workspace)
+    for directory in directories:
+        path = directory / name
+        for each in glob(str(path)) or [path]:
+            if not Path(each).resolve().is_relative_to(root):
+                return False
+    return True

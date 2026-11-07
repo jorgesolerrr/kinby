@@ -25,13 +25,12 @@ OVERNIGHT = "cd /instance/workspace; ls -R . | head -50; ls learning"
         "grep -rn foo .",
         "find . -name '*.md'",
         'echo "1200*0.3" | bc',
-        "git log --oneline -5",
         "ls 2>/dev/null",
         "ls >/dev/null 2>&1",
         "cat /instance/workspace/notes.md && wc -l notes.md || true",
         "ls\npwd\n",
         "cd ./learning && ls",
-        "git show HEAD~1",
+        "head -n5 notes.md",
     ],
 )
 def test_a_command_that_only_reads_inside_the_workspace_is_a_shell_read(command: str) -> None:
@@ -87,10 +86,58 @@ def test_a_command_that_only_reads_inside_the_workspace_is_a_shell_read(command:
         "echo x >&2victim",
         "cd learning && ls",
         "jq -n 'include \"m\"; .'",
+        "jq -n -f query.jq",
+        "jq -nf query.jq",
+        "git log --oneline -5",
+        "git status",
+        "git diff --no-index --ext-diff a b",
+        "grep -R foo .",
+        "find -L . -name x",
+        "find . -follow",
+        "ls -RL .",
+        "du -L .",
+        "tree -l",
+        "diff -r a b",
+        "sort --files0-from=list",
     ],
 )
 def test_any_other_command_is_not_a_shell_read(command: str) -> None:
     assert not is_shell_read(command, WORKSPACE)
+
+
+@pytest.fixture
+def linked(tmp_path: Path) -> Path:
+    """A workspace holding links to a secret outside it, at its top and in a subdirectory."""
+    secret = tmp_path / ".env"
+    secret.write_text("KEY=secret", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    (workspace / "sub").mkdir(parents=True)
+    (workspace / "notes.md").write_text("notes", encoding="utf-8")
+    (workspace / "link").symlink_to(secret)
+    (workspace / "sub" / "link").symlink_to(secret)
+    (workspace / "out").symlink_to(tmp_path)
+    return workspace
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat link",
+        "cat out/.env",
+        "cat ./*",
+        "cd ./sub && cat link",
+        "cd ./missing || cat link",
+        "cd ./out; cat .env",
+        "date -flink",
+        "diff --from-file=link notes.md",
+    ],
+)
+def test_a_link_out_of_the_workspace_is_not_a_shell_read(linked: Path, command: str) -> None:
+    assert not is_shell_read(command, linked)
+
+
+def test_a_file_inside_the_workspace_is_a_shell_read_beside_a_link(linked: Path) -> None:
+    assert is_shell_read("cat notes.md; cd ./sub && ls", linked)
 
 
 def _gate(

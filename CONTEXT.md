@@ -529,7 +529,7 @@ The instance's list of command patterns the **gate** refuses or escalates regard
 
 ### Shell read
 
-A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace. A command the gate cannot tell is a shell read asks like any other bash.
+A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace, even through a link. A command the gate cannot tell is a shell read asks like any other bash.
 
 ### Contract
 
