@@ -379,6 +379,6 @@ async def call_hub(method: str, params: dict[str, JsonValue], named: str) -> dic
         case ResultFrame(result=result):
             return result
         case ErrorFrame(error=error):
-            raise ValueError(f"The hub refused {named}: {error.message}")
+            raise ValueError(f"The hub refused {named}: {error.explained}")
         case other:
             raise ConnectionError(f"The hub answered {named} with {other!r}.")

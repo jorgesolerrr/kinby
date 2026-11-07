@@ -32,7 +32,7 @@ Subscribe = Callable[
 
 
 def format_error(error: ErrorEnvelope) -> str:
-    return f"{error.code.value}: {error.message}"
+    return f"{error.code.value}: {error.explained}"
 
 
 class ContractClient:
