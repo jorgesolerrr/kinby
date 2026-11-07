@@ -23,6 +23,7 @@ from kinby.contracts import (
     RoutineName,
     ToolCall,
     ToolGated,
+    TurnFailed,
     Warning,
     is_turn_closing,
 )
@@ -447,5 +448,105 @@ def test_another_routines_grants_survive_an_edit(tmp_path: Path) -> None:
 
         [grant] = (await call(dispatcher, "routine.grant.list", name="weather")).grants
         assert grant.tool == "post"
+
+    asyncio.run(scenario())
+
+
+def code_step_runtime(tmp_path: Path, mode: str = "auto") -> ScheduledDispatcher:
+    """Routine news in *mode*, whose code step is the authored write post."""
+    instance = news_instance(tmp_path)
+    routine_file(
+        instance, f'description: News\nmode: {mode}\nrun: post\narguments: {{"text": "hi"}}'
+    )
+    dispatcher, _ = signal_runtime(instance, CallingModel())
+    return dispatcher
+
+
+def test_an_ungranted_code_step_that_writes_fails_the_turn_under_auto(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path)
+
+        closed = await run_routine(dispatcher)
+
+        assert isinstance(closed.payload, TurnFailed)
+        assert 'Code step "post" requires allow' in closed.payload.message
+        assert "Grant it from the routine's page" in closed.payload.message
+
+    asyncio.run(scenario())
+
+
+def test_a_code_step_granted_to_its_routine_runs_under_auto(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path)
+        await call(dispatcher, "routine.grant.add", name="news", tool="post")
+
+        closed = await run_routine(dispatcher)
+
+        assert is_turn_closing(closed.payload)
+        assert not isinstance(closed.payload, TurnFailed)
+        [gate] = await gates(dispatcher, closed.thread_id)
+        assert (gate.name, gate.action, gate.rule) == ("post", GateOutcome.ALLOW, "routine.grant")
+
+    asyncio.run(scenario())
+
+
+def test_a_code_step_grant_does_not_apply_in_read_only(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path, "read-only")
+        await call(dispatcher, "routine.grant.add", name="news", tool="post")
+
+        closed = await run_routine(dispatcher)
+
+        assert isinstance(closed.payload, TurnFailed)
+        assert 'Code step "post" requires allow' in closed.payload.message
+
+    asyncio.run(scenario())
+
+
+def test_granting_a_routine_its_code_step_lists_the_grant(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path)
+
+        added = await call(dispatcher, "routine.grant.add", name="news", tool="post")
+
+        [grant] = added.grants
+        assert (grant.routine, grant.tool, grant.approval_id) == ("news", "post", None)
+        assert (await call(dispatcher, "routine.grant.list", name="news")).grants == added.grants
+
+    asyncio.run(scenario())
+
+
+def test_granting_a_tool_that_is_not_the_routines_code_step_is_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path)
+
+        refused = await call(dispatcher, "routine.grant.add", name="news", tool="archive")
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert (await call(dispatcher, "routine.grant.list", name="news")).grants == []
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_to_the_routine_revokes_its_code_step_grant(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path)
+        await call(dispatcher, "routine.grant.add", name="news", tool="post")
+
+        await call(dispatcher, "routine.set_enabled", name="news", enabled=False)
+
+        assert (await call(dispatcher, "routine.grant.list", name="news")).grants == []
+
+    asyncio.run(scenario())
+
+
+def test_the_routine_list_names_a_routines_code_step(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = code_step_runtime(tmp_path)
+
+        [summary] = (await call(dispatcher, "routine.list")).routines
+
+        assert summary.code_step == "post"
 
     asyncio.run(scenario())

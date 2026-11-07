@@ -2024,6 +2024,8 @@ class RoutineSummary(ContractModel):
     next_run: datetime | None
     signal: SignalSummary | None = None
     pending: int
+    #: The tool the routine runs before its model, if any, which its page can grant it (ADR 0119).
+    code_step: ToolName | None = None
 
 
 class RoutineListResult(ContractModel):
@@ -2185,12 +2187,19 @@ class RoutineGrant(ContractModel):
     routine: RoutineName
     tool: ToolName
     granted_at: datetime
-    #: The approval the user answered with "always allow in this routine".
-    approval_id: UUID
+    #: The approval the user answered with "always allow in this routine", or None for a code
+    #: step the user granted from the routine's page (ADR 0119).
+    approval_id: UUID | None
 
 
 class RoutineGrantListCommand(ContractModel):
     name: RoutineName
+
+
+class RoutineGrantAddCommand(ContractModel):
+    name: RoutineName
+    #: The routine's own code step, the one tool a routine is granted without an approval.
+    tool: ToolName
 
 
 class RoutineGrantRevokeCommand(ContractModel):

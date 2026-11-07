@@ -811,6 +811,7 @@ class LangGraphRunner:
                     None if arrival is None or delivery_body is None else (arrival, delivery_body),
                     emit,
                     budgets,
+                    granted=code_step.name in graph_input.granted,
                 )
                 progress = replace(
                     progress,
@@ -872,6 +873,8 @@ class LangGraphRunner:
         delivery: tuple[DeliveryArrival, str] | None,
         emit: Emit,
         budgets: Budgets,
+        *,
+        granted: bool,
     ) -> str | None:
         arguments = dict(routine.arguments)
         recorded = dict(arguments)
@@ -905,6 +908,7 @@ class LangGraphRunner:
             call,
             code_step,
             self._instance.manifest.workspace.path,
+            granted=granted,
             marked_read_only=code_step.name in read_only_tools(self._instance.path),
         )
         await emit(
@@ -921,6 +925,8 @@ class LangGraphRunner:
                 f'Code step "{call.name}" requires allow; gate rule '
                 f'"{decision.rule}" returned {decision.action.value}.'
             )
+            if decision.action is GateAction.ASK:
+                message += " Grant it from the routine's page to let it run."
             await emit(ToolResult(call_id=call.call_id, name=call.name, output=message, error=True))
             raise PermissionDenied(message)
         timeout = asyncio.timeout(budgets.seconds)

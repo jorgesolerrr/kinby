@@ -8,6 +8,7 @@ import os
 import shutil
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -40,6 +41,8 @@ from kinby.contracts import (
     RoutineDeleteCommand,
     RoutineDeleteResult,
     RoutineFile,
+    RoutineGrant,
+    RoutineGrantAddCommand,
     RoutineGrantListCommand,
     RoutineGrantListResult,
     RoutineGrantRevokeCommand,
@@ -66,6 +69,7 @@ from kinby.contracts import (
 )
 from kinby.core.errors import (
     AuthoredToolNotFound,
+    CodeStepGrantRefused,
     InvalidConfig,
     RoutineNotFound,
     RoutineRefused,
@@ -123,6 +127,7 @@ from kinby.plugins.instance_tools import (
     write_skill,
 )
 from kinby.plugins.registry import ToolRegistry
+from kinby.plugins.routines import load_routines
 from kinby.plugins.skills import load_skill_tiers, load_skills, lower_tier_skill
 
 _PROMPT_FILES = {
@@ -262,6 +267,30 @@ class InstanceConfig:
     async def list_routine_grants(self, command: RoutineGrantListCommand) -> RoutineGrantListResult:
         grants = RoutineGrants(self._instance.manifest.state_dir)
         return RoutineGrantListResult(grants=grants.of(command.name))
+
+    async def add_routine_grant(self, command: RoutineGrantAddCommand) -> RoutineGrantListResult:
+        async with self._instance.routine_lock:
+            await asyncio.to_thread(self._grant_code_step, command)
+        grants = RoutineGrants(self._instance.manifest.state_dir)
+        return RoutineGrantListResult(grants=grants.of(command.name))
+
+    def _grant_code_step(self, command: RoutineGrantAddCommand) -> None:
+        routines, _ = load_routines(self._instance)
+        routine = next((each for each in routines if each.name == command.name), None)
+        if routine is None:
+            raise RoutineNotFound(f'Routine "{command.name}" was not found.')
+        if routine.code_step is None or routine.code_step.name != command.tool:
+            raise CodeStepGrantRefused(
+                f'"{command.tool}" is not the code step of routine "{command.name}".'
+            )
+        RoutineGrants(self._instance.manifest.state_dir).grant(
+            RoutineGrant(
+                routine=command.name,
+                tool=command.tool,
+                granted_at=datetime.now(UTC),
+                approval_id=None,
+            )
+        )
 
     async def revoke_routine_grant(
         self, command: RoutineGrantRevokeCommand

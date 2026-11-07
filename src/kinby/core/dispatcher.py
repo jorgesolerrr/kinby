@@ -28,6 +28,7 @@ from kinby.contracts import (
     PROMPT_GET,
     PROMPT_SET,
     ROUTINE_DELETE,
+    ROUTINE_GRANT_ADD,
     ROUTINE_GRANT_LIST,
     ROUTINE_GRANT_REVOKE,
     ROUTINE_LIST,
@@ -397,6 +398,7 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_DELETE, config.delete_routine)
         dispatcher.register(ROUTINE_RENAME, config.rename_routine)
         dispatcher.register(ROUTINE_GRANT_LIST, config.list_routine_grants)
+        dispatcher.register(ROUTINE_GRANT_ADD, config.add_routine_grant)
         dispatcher.register(ROUTINE_GRANT_REVOKE, config.revoke_routine_grant)
     if isinstance(turns, ScheduledTurnConfig) and turn_service is not None:
         step_instance = turns.scheduler.instance

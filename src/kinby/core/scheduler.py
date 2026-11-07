@@ -296,6 +296,7 @@ class Scheduler:
                         else None
                     ),
                     pending=len(record.pending),
+                    code_step=routine.code_step.name if routine.code_step is not None else None,
                 )
             )
         return RoutineListResult(routines=result, warnings=warnings)

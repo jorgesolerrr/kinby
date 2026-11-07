@@ -509,7 +509,7 @@ The check every **tool** call passes through before it runs. It reads the tool's
 
 ### Gate rule
 
-The identifier for the policy condition that produced a **gate decision**, such as `mode.ask.write` or `bash.deny[0]`.
+The identifier for the policy condition that produced a **gate decision**, such as `mode.ask.write`, `bash.deny[0]` or `bash.read`.
 
 ### Gate decision
 
@@ -526,6 +526,10 @@ A named preset of **gate** rules a **thread** runs under: read-only, ask, auto, 
 ### Denylist
 
 The instance's list of command patterns the **gate** refuses or escalates regardless of **permission mode**. The patterns kinby ships always apply, and the instance's own patterns add to them. A tripwire, not a wall: it catches obvious disasters, while the **sandbox** provides the actual isolation.
+
+### Shell read
+
+A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace, even through a link. A command the gate cannot tell is a shell read asks like any other bash.
 
 ### Contract
 
