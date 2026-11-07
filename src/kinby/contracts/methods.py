@@ -119,6 +119,7 @@ from kinby.contracts.models import (
     LibrarySkillCheckCommand,
     LibrarySkillCheckResult,
     LibrarySkillDeleteCommand,
+    LibrarySkillFileReadCommand,
     LibrarySkillMoveCommand,
     LibrarySkillReadCommand,
     LibrarySkillWriteCommand,
@@ -171,6 +172,7 @@ from kinby.contracts.models import (
     Scope,
     SkillCustomizeCommand,
     SkillDeleteCommand,
+    SkillFileResult,
     SkillListCommand,
     SkillListResult,
     SkillReadCommand,
@@ -509,6 +511,9 @@ LIBRARY_LIST = Method("library.list", Scope.HUB_READ, LibraryListCommand, Librar
 LIBRARY_SKILL_READ = Method(
     "library.skill.read", Scope.HUB_READ, LibrarySkillReadCommand, SkillResult
 )
+LIBRARY_SKILL_FILE_READ = Method(
+    "library.skill.file.read", Scope.HUB_READ, LibrarySkillFileReadCommand, SkillFileResult
+)
 LIBRARY_SKILL_WRITE = Method(
     "library.skill.write", Scope.HUB_ADMIN, LibrarySkillWriteCommand, SkillResult
 )
@@ -726,6 +731,7 @@ METHODS = (
     FACTORY_RUN_CANCEL,
     LIBRARY_LIST,
     LIBRARY_SKILL_READ,
+    LIBRARY_SKILL_FILE_READ,
     LIBRARY_SKILL_WRITE,
     LIBRARY_SKILL_DELETE,
     LIBRARY_SKILL_CHECK,

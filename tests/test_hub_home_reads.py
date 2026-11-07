@@ -211,6 +211,11 @@ def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monke
                             hub_read_call(
                                 "routines-1", "routine.list", {"instance_id": str(hub.alice)}
                             ),
+                            hub_read_call(
+                                "file-1",
+                                "library.skill.file.read",
+                                {"name": "tdd", "path": "mocking.md"},
+                            ),
                         ],
                     ),
                     AIMessageChunk(content="Alice runs one routine."),
@@ -226,6 +231,8 @@ def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monke
         assert '"manifest_id": "alice"' in results["list-1"].output
         assert not results["routines-1"].error, results["routines-1"].output
         assert '"name": "news"' in results["routines-1"].output
+        assert not results["file-1"].error, results["file-1"].output
+        assert '"path": "mocking.md"' in results["file-1"].output
 
     asyncio.run(scenario())
 
