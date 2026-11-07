@@ -869,6 +869,8 @@ class Hub:
                 result = await self.recreate(write, requester=home)
             case InstancePicksSetCommand():
                 result = await self.set_picks(write)
+            case ImagePrepareCommand():
+                result = await self.prepare_image(write, requester=home)
             case LibrarySkillWriteCommand():
                 result = await self.library.write_skill(write)
             case LibraryGitAddCommand():
@@ -1311,10 +1313,14 @@ class Hub:
         if route := self._hub_route(record, self._manifest(record)):
             self._replace_secrets(record.path, route)
 
-    async def prepare_image(self, command: ImagePrepareCommand) -> ImagePrepareResult:
-        """Build or reuse kinby's base image before any instance exists, and describe it."""
+    async def prepare_image(
+        self, command: ImagePrepareCommand, requester: UUID | None = None
+    ) -> ImagePrepareResult:
+        """Build or reuse kinby's base image before any instance exists, and describe it.
+
+        *requester* is the instance that asked for it through the hub, if one did."""
         operation_id = uuid4()
-        opened = self.registry.begin_preparation(operation_id, "Preparation queued.")
+        opened = self.registry.begin_preparation(operation_id, "Preparation queued.", requester)
         if opened == operation_id:
             self._schedule(self._prepare_image(operation_id))
         return ImagePrepareResult(operation_id=opened)

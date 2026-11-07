@@ -284,6 +284,7 @@ def test_hub_tools_are_on_turns_the_user_starts_only(
         "instance_routine_run",
         "instance_routine_delete",
         "instance_ask",
+        "image_prepare",
     }
     if present:
         assert hub_tools <= set(model.tools)

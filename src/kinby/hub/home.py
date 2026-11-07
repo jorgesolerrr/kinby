@@ -17,6 +17,7 @@ from kinby.contracts import (
     ChannelMuteCommand,
     ContractModel,
     FactoryEditCommand,
+    ImagePrepareCommand,
     InstanceCreateCommand,
     InstancePicksSetCommand,
     InstanceRecreateCommand,
@@ -34,6 +35,7 @@ from kinby.plugins.hub import (
     channel_mute,
     channel_unmute,
     factory_write,
+    image_prepare,
     instance_ask,
     instance_create,
     instance_lifecycle,
@@ -88,6 +90,7 @@ type HomeWrite = (
     | InstancePicksSetCommand
     | RelayedWrite
     | InstanceAsk
+    | ImagePrepareCommand
     | LibrarySkillWriteCommand
     | LibraryGitAddCommand
     | LibraryMove
@@ -142,6 +145,8 @@ def home_write(tool: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                 return InstancePicksSetCommand.model_validate(arguments)
             case instance_ask.name:
                 return InstanceAsk.model_validate(arguments)
+            case image_prepare.name:
+                return ImagePrepareCommand.model_validate(arguments)
             case library_skill_write.name:
                 return LibrarySkillWriteCommand.model_validate(arguments)
             case library_git_add.name:

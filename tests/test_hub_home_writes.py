@@ -25,6 +25,7 @@ from kinby.contracts import (
     FrameType,
     GateRule,
     HomeInstanceOrigin,
+    ImagePrepareResult,
     ItemFrame,
     LibraryGitAddCommand,
     LibraryGitAddResult,
@@ -954,6 +955,37 @@ def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up
     asyncio.run(scenario())
 
 
+def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
+    tmp_path, monkeypatch
+):
+    def script(_: UUID) -> list[AIMessageChunk]:
+        return [
+            calling("prepare-1", "image_prepare", {}),
+            calling("describe-1", "hub_read", {"method": "image.describe", "params": {}}),
+            AIMessageChunk(content="The image is prepared."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            payloads = await relayed_turn(kinby)
+            [approval] = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+            results = tool_results(payloads)
+            accepted = ImagePrepareResult.model_validate_json(results["prepare-1"].output)
+            operation = await finished_operation(hub_client(kinby.hub), accepted)
+            [forged] = await answers(
+                kinby.route(kinby.home), kinby.home_token, written(uuid4(), "image_prepare", {})
+            )
+
+        assert approval.name == "image_prepare"
+        assert operation.kind is OperationKind.PREPARE
+        assert operation.state is OperationState.SUCCEEDED
+        assert operation.requester == kinby.home
+        assert "setup_fields" in json.loads(results["describe-1"].output)
+        assert error_code(forged) == ErrorCode.PERMISSION_DENIED.value
+
+    asyncio.run(scenario())
+
+
 def lifecycle_runner(tmp_path: Path, policy: GatePolicy | None = None) -> LangGraphRunner:
     model = ScriptedModel(
         [
@@ -1036,7 +1068,13 @@ def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, sco
 
     names = {tool.name for tool in hub_tools()}
     if present:
-        assert {"hub_read", "instance_create", "instance_lifecycle", "instance_prompt_set"} <= names
+        assert {
+            "hub_read",
+            "instance_create",
+            "instance_lifecycle",
+            "instance_prompt_set",
+            "image_prepare",
+        } <= names
     else:
         assert not names
 
