@@ -712,19 +712,21 @@ def test_a_run_parked_by_its_plan_window_runs_its_step_again_at_the_reset_spendi
 
 def test_a_run_parked_by_its_plan_window_wakes_at_the_reset_after_a_hub_restart(tmp_path):
     control = FakeControl()
-    refused = limited(timedelta(seconds=2))
-    control.step_results = [refused, StepResult(ending=StepEnding.CLEAN, session="claude-1")]
     runtime = FakeRuntime()
     directory = tmp_path / "hub"
     hub = factory_hub(directory, control, runtime, CLIENT_FILES)
 
-    async def before_the_restart() -> UUID:
+    async def before_the_restart() -> tuple[UUID, StepResult]:
         coder = await started_coder(hub, runtime)
+        # The window starts once the coder is up: under load, starting it can outlast the window,
+        # and a run refused past its reset never parks.
+        refused = limited(timedelta(seconds=2))
+        control.step_results = [refused, StepResult(ending=StepEnding.CLEAN, session="claude-1")]
         run = await handed_in(hub, coder, 7)
         await parked(hub, run.run_id)
-        return run.run_id
+        return run.run_id, refused
 
-    run_id = asyncio.run(before_the_restart())
+    run_id, refused = asyncio.run(before_the_restart())
     hub.close()
     restarted = Hub(
         directory,
