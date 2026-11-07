@@ -9,7 +9,7 @@ Run each pass issue the user names against the playground hub at `kinby.jorgesol
 Run every command from the repository root in Git Bash. The helpers sit next to this file:
 
 - `deploy.sh` pulls main on the box, rebuilds the hub, and runs an instance update on its instances.
-- `hub.sh` runs `hub.py` inside the hub container, signed in with the hub's access token: `instances`, `update`, `secrets`, and `retry`, `send-back` and `cancel`, which take a run id or an issue number.
+- `hub.sh` runs `hub.py` inside the hub container, signed in with the hub's access token: `instances`, `update`, `secrets`, and `retry`, `send-back` and `cancel`, which take a run id or an issue number. `hub.sh tokens` runs `tokens.py` instead, the token probe below.
 - `browser.py` drives Playwright's bundled Chromium with the stored browser session.
 
 ## Steps
@@ -110,3 +110,19 @@ PY
 ```
 
 Creating an instance in the web app asks for its secret setup fields. Leave them empty. The instance then shows pending setup, and `hub.sh secrets` fills them. If the form will not submit without one, ask Jorge to type it himself.
+
+## Token probe
+
+`tokens.py` prints what an instance spent, from its events. It opens the instance's database read-only and writes nothing to it. Run it on the box:
+
+```bash
+bash .claude/skills/e2e-pass/hub.sh tokens <hub-instance-id> [--since 2026-11-07T10:00]
+```
+
+It prints three sections:
+
+- **Turns.** Each turn's model calls, input tokens, cache reads and cache writes, with a total.
+- **Tool results.** By tool, and by method for `hub_read`: the characters returned, the largest result, the characters sent again on later calls of the turn and on later turns of the thread, and the errors.
+- **Source reads.** Shell commands that read kinby's installed package.
+
+`--since` takes an ISO date or time, in UTC unless it names a zone. To compare spend before and after a change, run the same tasks and pass the time the run started.
