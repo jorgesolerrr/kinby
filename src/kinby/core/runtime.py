@@ -22,7 +22,9 @@ from kinby.core.dispatcher import (
 )
 from kinby.core.events import EventLog
 from kinby.core.pricing import instance_prices
+from kinby.core.saved_outputs import sweep_outputs
 from kinby.core.scheduler import Scheduler, SchedulerConfig
+from kinby.core.threads import PARKING_EVENTS, parked_on
 from kinby.instance import Instance
 from kinby.instance.permissions import load_permissions
 from kinby.memory import GraphStore, RecapWriter
@@ -90,6 +92,13 @@ async def boot_instance(
 ) -> InstanceRuntime:
     """Start one runtime that owns an instance's turns and routine fires."""
     event_log = EventLog(instance.manifest.state_dir)
+    # A turn parked on an approval resumes after the start, so its saved outputs stay.
+    parked = {
+        event.turn_id
+        for event in event_log.latest_in_open_turns(PARKING_EVENTS)
+        if parked_on(event_log.turn_events(event.turn_id)) is not None
+    }
+    sweep_outputs(instance.manifest.state_dir, parked)
     turns = await turn_config(instance, event_log=event_log, model_override=model_override)
     if turns.recap is not None:
         await turns.recap.catch_up()

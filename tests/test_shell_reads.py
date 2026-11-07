@@ -140,6 +140,36 @@ def test_a_file_inside_the_workspace_is_a_shell_read_beside_a_link(linked: Path)
     assert is_shell_read("cat notes.md; cd ./sub && ls", linked)
 
 
+STATE = Path("/instance/.state")
+OUTPUTS = STATE / "saved-outputs" / "turn"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"grep -c x {OUTPUTS}/call.txt",
+        f"jq '.items | length' {OUTPUTS}/call.txt",
+        f"head -c 100 {OUTPUTS}/call.txt | wc -c",
+        f"cd {OUTPUTS} && tail -n 5 call.txt",
+    ],
+)
+def test_a_read_of_the_turns_saved_outputs_is_a_shell_read(command: str) -> None:
+    assert is_shell_read(command, WORKSPACE, saved_outputs=OUTPUTS)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"grep -c x {STATE}/saved-outputs/other/call.txt",
+        f"jq . {OUTPUTS}/../other/call.txt",
+        f"grep x {STATE}/events.sqlite",
+        f"cat {STATE}/../.env",
+    ],
+)
+def test_a_read_of_another_turns_outputs_or_the_state_directory_is_not(command: str) -> None:
+    assert not is_shell_read(command, WORKSPACE, saved_outputs=OUTPUTS)
+
+
 def _gate(
     command: str, mode: PermissionMode, policy: GatePolicy = SHIPPED_POLICY, tool: Tool = bash
 ) -> tuple[GateAction, str]:

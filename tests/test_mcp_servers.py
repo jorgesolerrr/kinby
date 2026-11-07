@@ -100,6 +100,19 @@ def test_a_picked_servers_included_tool_is_named_by_its_server_and_a_turn_calls_
     assert (called.error, called.output) == (False, "looked: hi")
 
 
+def test_a_result_over_the_cap_is_cut_by_the_runner_not_the_server(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo("look"))
+
+    payloads = asyncio.run(
+        turn(instance, [("echo__look", {"text": "x" * 40_000})], PermissionMode.FULL_ACCESS)
+    )
+
+    called = result(payloads)
+    assert called.size == len("looked: ") + 40_000
+    assert called.output.startswith("looked: " + "x" * (30_000 - len("looked: ")) + "\n")
+
+
 def test_a_tool_outside_the_include_filter_is_not_offered(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     pick(instance, echo=echo("look"))
