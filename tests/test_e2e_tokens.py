@@ -1,0 +1,165 @@
+"""The token probe the e2e pass runs on an instance, `.claude/skills/e2e-pass/tokens.py`."""
+
+import importlib.util
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+
+from kinby.contracts import (
+    Event,
+    ModelCompleted,
+    Payload,
+    ToolCall,
+    ToolResult,
+    TurnCompleted,
+)
+from tests.helpers import write_events
+
+PROBE_SCRIPT = Path(__file__).parents[1] / ".claude" / "skills" / "e2e-pass" / "tokens.py"
+spec = importlib.util.spec_from_file_location("e2e_tokens", PROBE_SCRIPT)
+assert spec is not None and spec.loader is not None
+e2e_tokens = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(e2e_tokens)
+
+THREAD = UUID("aaaaaaaa-0000-4000-8000-000000000000")
+OTHER_THREAD = UUID("bbbbbbbb-0000-4000-8000-000000000000")
+STARTED = datetime(2026, 11, 1, 10, tzinfo=UTC)
+SOURCE_READ = "sed -n 1,80p /usr/local/lib/python3.14/site-packages/kinby/core/turns.py"
+REFUSAL = "INVALID_PARAMS: factory.get has no param 'id'."
+RESULTS_HEADER = [
+    "tool",
+    "results",
+    "chars",
+    "largest",
+    "resent",
+    "in",
+    "turn",
+    "resent",
+    "later",
+    "errors",
+]
+
+
+def _call(input_tokens: int, cache_read: int = 0, cache_write: int = 0) -> ModelCompleted:
+    return ModelCompleted(
+        model="claude-sonnet-5",
+        duration_ms=1,
+        input_tokens=input_tokens,
+        output_tokens=10,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_write,
+    )
+
+
+def _hub_read(call_id: str, method: str) -> ToolCall:
+    return ToolCall(call_id=call_id, name="hub_read", arguments={"method": method, "params": {}})
+
+
+def _turn(thread_id: UUID, minute: int, *payloads: Payload) -> list[Event]:
+    turn_id = uuid4()
+    at = STARTED + timedelta(minutes=minute)
+    return [
+        Event(sequence=0, thread_id=thread_id, turn_id=turn_id, timestamp=at, payload=payload)
+        for payload in payloads
+    ]
+
+
+def _instance(directory: Path) -> Path:
+    """An instance whose home thread read stats, the installed source and a refused factory, then
+    spoke twice more, and a second thread of one call."""
+    history = [
+        *_turn(
+            THREAD,
+            0,
+            _call(1000, cache_write=800),
+            _hub_read("stats", "stats.get"),
+            ToolCall(call_id="source", name="bash", arguments={"command": SOURCE_READ}),
+            ToolResult(call_id="stats", name="hub_read", output="s" * 5000, error=False),
+            ToolResult(call_id="source", name="bash", output="b" * 300, error=False),
+            _call(7000, cache_read=1000, cache_write=6000),
+            _hub_read("factory", "factory.get"),
+            ToolResult(call_id="factory", name="hub_read", output=REFUSAL, error=True),
+            _call(7100, cache_read=7000, cache_write=100),
+            TurnCompleted(input_tokens=15100, output_tokens=30),
+            # The memory recap's call, after the turn closed.
+            _call(500),
+        ),
+        *_turn(THREAD, 5, _call(9000, cache_read=8000), _call(9100, cache_read=9000)),
+        *_turn(OTHER_THREAD, 9, _call(2000, cache_write=2000)),
+    ]
+    sequences: dict[UUID, int] = {}
+    records = []
+    for event in history:
+        sequences[event.thread_id] = sequences.get(event.thread_id, 0) + 1
+        record = event.model_dump(mode="json")
+        record["sequence"] = sequences[event.thread_id]
+        record["timestamp"] = event.timestamp.isoformat(timespec="microseconds")
+        records.append(record)
+    write_events(directory / ".state", records)
+    return directory
+
+
+def _section(out: str, title: str) -> list[list[str]]:
+    """The rows of the section under *title*, each split into its words."""
+    lines = out.split(f"{title}\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    return [line.split() for line in lines]
+
+
+def test_the_probe_prints_each_turns_tokens_and_model_calls(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert e2e_tokens.main([str(_instance(tmp_path))]) == 0
+
+    assert _section(capsys.readouterr().out, "Turns") == [
+        ["started", "thread", "calls", "input", "cache", "read", "cache", "write"],
+        ["2026-11-01", "10:00:00", "aaaaaaaa", "4", "15,600", "8,000", "6,900"],
+        ["2026-11-01", "10:05:00", "aaaaaaaa", "2", "18,100", "17,000", "0"],
+        ["2026-11-01", "10:09:00", "bbbbbbbb", "1", "2,000", "0", "2,000"],
+        ["total", "7", "35,700", "25,000", "8,900"],
+    ]
+
+
+def test_the_probe_prints_result_sizes_resent_characters_and_errors_by_tool(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert e2e_tokens.main([str(_instance(tmp_path))]) == 0
+
+    refusal = f"{len(REFUSAL):,}"
+    assert _section(capsys.readouterr().out, "Tool results") == [
+        RESULTS_HEADER,
+        ["hub_read", "stats.get", "1", "5,000", "5,000", "5,000", "10,000", "0"],
+        ["bash", "1", "300", "300", "300", "600", "0"],
+        ["hub_read", "factory.get", "1", refusal, refusal, "0", f"{2 * len(REFUSAL):,}", "1"],
+    ]
+
+
+def test_the_probe_prints_the_shell_commands_that_read_kinbys_installed_package(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert e2e_tokens.main([str(_instance(tmp_path))]) == 0
+
+    assert _section(capsys.readouterr().out, "Source reads") == [
+        ["2026-11-01", "10:00:00", "aaaaaaaa", *SOURCE_READ.split()]
+    ]
+
+
+def test_the_probe_reads_only_the_turns_since_a_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert e2e_tokens.main([str(_instance(tmp_path)), "--since", "2026-11-01T10:05"]) == 0
+
+    out = capsys.readouterr().out
+    assert _section(out, "Turns")[-1] == ["total", "3", "20,100", "17,000", "2,000"]
+    assert _section(out, "Tool results") == [["none"]]
+    assert _section(out, "Source reads") == [["none"]]
+
+
+def test_the_probe_writes_nothing_to_the_instance(tmp_path: Path):
+    instance = _instance(tmp_path)
+    before = {path: path.read_bytes() for path in instance.rglob("*") if path.is_file()}
+
+    assert e2e_tokens.main([str(instance)]) == 0
+
+    assert {path: path.read_bytes() for path in instance.rglob("*") if path.is_file()} == before
