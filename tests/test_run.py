@@ -282,6 +282,41 @@ def test_thread_show_prints_the_threads_events_as_json_lines(
     assert [Event.model_validate_json(line) for line in shown.out.splitlines()] == appended
 
 
+def test_thread_show_prints_a_factory_runs_events(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    event_log = EventLog(load_instance(instance).manifest.state_dir)
+    run_id = uuid4()
+
+    appended = asyncio.run(
+        event_log.append(
+            run_id, uuid4(), MemoryRecapped(input_tokens=3, output_tokens=2, node=None)
+        )
+    )
+
+    exit_code = main(["thread", "show", str(run_id), str(instance)])
+    shown = capsys.readouterr()
+
+    assert exit_code == 0
+    assert [Event.model_validate_json(line) for line in shown.out.splitlines()] == [appended]
+
+
+def test_thread_show_prints_nothing_for_an_empty_thread(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    main(["thread", "create", str(instance)])
+    thread_id = capsys.readouterr().out.splitlines()[0].removeprefix("id: ")
+
+    exit_code = main(["thread", "show", thread_id, str(instance)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_thread_show_rejects_an_unknown_thread(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -24,7 +24,7 @@ The deployed hub and the coders run on the playground box (netcup, Debian 13), s
 | CEC-Agent's test services | `cec-agent-test-postgres` and `cec-agent-test-minio`, from `/home/jorge/cec-agent-kinby/compose.yaml` |
 | Hub registry | `/home/jorge/kinby-hub/registry.sqlite`, which is `/hub/registry.sqlite` in the hub |
 | Hub access token | `/home/jorge/kinby-hub/access-token`. Pipe it and never print it. See `.claude/skills/e2e-pass/SKILL.md`. |
-| Instance events | `/home/jorge/kinby-hub/instances/<id>/.state/instance.sqlite`. The box has no `sqlite3`: `docker exec <id> kinby thread show <thread-id> /instance` prints one thread's events. It finds only threads with a record in the `threads` table. A factory run's events (`run.delegated`, `run.stopped`, its recap) are stored under the run's id with no record, so read them from the `events` table by that id with `python` in the container. |
+| Instance events | `/home/jorge/kinby-hub/instances/<id>/.state/instance.sqlite`. The box has no `sqlite3`: `docker exec <id> kinby thread show <thread-id> /instance` prints one thread's events, or a factory run's events by the run's id. |
 | History before instance.sqlite | Each instance's JSONL stores, checkpoints and database as they were before the #1200 migration, in `/home/jorge/kinby-hub/backups/migration-1200/<id>.tgz`. software-coder also keeps `events-archive-2026-11-06.jsonl` in its `.state`. |
 
 ## Ready queries
