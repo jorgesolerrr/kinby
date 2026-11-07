@@ -7,6 +7,7 @@ import pytest
 import kinby.core  # noqa: F401  kinby.plugins.core needs kinby.core imported first.
 from kinby.contracts import RELAYED_READS, Scope
 from kinby.contracts.methods import METHODS
+from kinby.factories.file import FACTORY_FILE_ADAPTER
 from kinby.instance import init_instance, inspect_instance
 from kinby.instance.layout import SKILL_FILE
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
@@ -20,6 +21,7 @@ _CITED = re.compile(r"`([^`\n]+)`")
 _METHOD = re.compile(r"[a-z]+(\.[a-z_]+)+")
 _FILE = re.compile(r".+\.(md|yaml|toml|py|json|txt)")
 _SNAKE = re.compile(r"[a-z]+(_[a-z]+)+")
+FACTORY_REFERENCE = "references/factory.md"
 
 READS = {method.name for method in METHODS if method.scope is Scope.HUB_READ} | RELAYED_READS
 
@@ -79,6 +81,20 @@ def test_a_home_skill_names_no_other_skill_of_the_library(name):
     shipped = {folder.name for folder in SHIPPED_SKILLS.iterdir() if folder.is_dir()}
 
     assert not _cited(name) & (shipped - {name})
+
+
+def test_the_factory_reference_names_every_factory_yaml_field():
+    """A new field of factory.yaml fails this until the factory reference names it."""
+    schema = FACTORY_FILE_ADAPTER.json_schema(by_alias=True)
+    fields = {
+        field
+        for declaration in (schema, *schema["$defs"].values())
+        for field in declaration.get("properties", {})
+    }
+    reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
+
+    assert fields <= set(_CITED.findall(reference.read_text(encoding="utf-8")))
+    assert FACTORY_REFERENCE in _cited("write-factory")
 
 
 def test_write_routine_names_every_hub_tool_a_routine_lacks():
