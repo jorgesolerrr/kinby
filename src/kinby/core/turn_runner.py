@@ -164,6 +164,8 @@ _BUDGET_STEPS = "kinby_budget_steps"
 _BUDGET_TOKENS = "kinby_budget_tokens"
 _BUDGET_SECONDS = "kinby_budget_seconds"
 _BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
+#: The size over which a tool result from an earlier turn reaches the model cleared.
+_CLEARED_OVER = 1_000
 _URL = re.compile(r"https?://[^\s<>\"'`()\[\]{}]+")
 #: The tools whose results bring URLs in from the web.
 _URL_SOURCES = frozenset({"web_search", "browser_snapshot", "browser_text", *URL_READS})
@@ -304,6 +306,31 @@ def _mark_cache_prefix(
     marked_messages[0] = _with_cache_control(marked_messages[0])
     marked_messages[-1] = _with_cache_control(marked_messages[-1])
     return marked_messages
+
+
+def _clear_earlier_results(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
+    """*messages* as the model is sent them: each tool result over the threshold from before the
+    current turn's user message replaced by a stub (ADR 0122)."""
+    turn_start = max(
+        (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
+        default=0,
+    )
+    return [
+        _cleared(message)
+        if index < turn_start
+        and isinstance(message, ToolMessage)
+        and len(message.text) > _CLEARED_OVER
+        else message
+        for index, message in enumerate(messages)
+    ]
+
+
+def _cleared(result: ToolMessage) -> ToolMessage:
+    stub = (
+        f"[{result.name} result cleared: {len(result.text):,} characters from an earlier turn. "
+        f"Call {result.name} again if you need it.]"
+    )
+    return result.model_copy(update={"content": stub})
 
 
 class LangGraphRunner:
@@ -1053,7 +1080,7 @@ class LangGraphRunner:
         )
         response: AIMessageChunk | None = None
         started_at = asyncio.get_running_loop().time()
-        request_messages = [runtime.context.system_message, *messages]
+        request_messages = [runtime.context.system_message, *_clear_earlier_results(messages)]
         async for chunk in runtime.context.model.astream(
             _mark_cache_prefix(state.turn.model, request_messages)
         ):
