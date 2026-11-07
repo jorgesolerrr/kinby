@@ -416,10 +416,11 @@ async def _show_stats(
 
 
 def _show_thread(state_dir: Path, thread_id: UUID) -> int:
-    if not ThreadStore(state_dir).exists(thread_id):
+    events = EventLog(state_dir).thread_events(thread_id)
+    if not events and not ThreadStore(state_dir).exists(thread_id):
         print(f'Thread "{thread_id}" was not found.', file=sys.stderr)
         return 1
-    for event in EventLog(state_dir).thread_events(thread_id):
+    for event in events:
         print(event.model_dump_json())
     return 0
 
@@ -957,9 +958,9 @@ def main(
     )
     thread_show_parser = thread_subparsers.add_parser(
         "show",
-        help="print a thread's events as JSON, one per line",
+        help="print a thread's or a factory run's events as JSON, one per line",
     )
-    thread_show_parser.add_argument("thread_id", type=UUID, help="thread to show")
+    thread_show_parser.add_argument("thread_id", type=UUID, help="thread or factory run to show")
     _add_instance_selector(thread_show_parser, "instance that owns the thread")
     thread_archive_parser = thread_subparsers.add_parser(
         "archive",
