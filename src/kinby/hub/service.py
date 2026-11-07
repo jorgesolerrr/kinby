@@ -98,6 +98,7 @@ from kinby.contracts import (
     LIBRARY_MCP_SERVER_WRITE,
     LIBRARY_SKILL_CHECK,
     LIBRARY_SKILL_DELETE,
+    LIBRARY_SKILL_FILE_READ,
     LIBRARY_SKILL_MOVE,
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
@@ -701,6 +702,7 @@ class Hub:
         dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
         dispatcher.register(LIBRARY_LIST, self.library.list)
         dispatcher.register(LIBRARY_SKILL_READ, self.library.read_skill)
+        dispatcher.register(LIBRARY_SKILL_FILE_READ, self.library.read_skill_file)
         dispatcher.register(LIBRARY_SKILL_WRITE, self.library.write_skill)
         dispatcher.register(LIBRARY_SKILL_DELETE, self.library.delete_skill)
         dispatcher.register(LIBRARY_SKILL_CHECK, self.library.check)

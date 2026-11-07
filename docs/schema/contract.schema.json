@@ -4372,6 +4372,24 @@
       "title": "LibrarySkillDeleteCommand",
       "type": "object"
     },
+    "LibrarySkillFileReadCommand": {
+      "additionalProperties": false,
+      "description": "Read one of a library skill's other files, by its path as ``SkillResult.files`` lists it.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path"
+      ],
+      "title": "LibrarySkillFileReadCommand",
+      "type": "object"
+    },
     "LibrarySkillMoveCommand": {
       "additionalProperties": false,
       "description": "Move a library skill to the newer version a check showed. No instance changes.",
@@ -7962,6 +7980,23 @@
         "hash"
       ],
       "title": "SkillDeleteCommand",
+      "type": "object"
+    },
+    "SkillFileResult": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "title": "SkillFileResult",
       "type": "object"
     },
     "SkillListCommand": {
@@ -13038,6 +13073,22 @@
           ],
           "type": "object"
         },
+        "library.skill.file.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LibrarySkillFileReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/SkillFileResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "library.skill.move": {
           "additionalProperties": false,
           "properties": {
@@ -14159,6 +14210,7 @@
         "factory.run.cancel",
         "library.list",
         "library.skill.read",
+        "library.skill.file.read",
         "library.skill.write",
         "library.skill.delete",
         "library.skill.check",

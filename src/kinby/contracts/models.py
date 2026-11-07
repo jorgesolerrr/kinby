@@ -2647,6 +2647,19 @@ class LibrarySkillReadCommand(ContractModel):
     name: SkillName
 
 
+class LibrarySkillFileReadCommand(ContractModel):
+    """Read one of a library skill's other files, by its path as ``SkillResult.files`` lists it."""
+
+    name: SkillName
+    path: str
+
+
+class SkillFileResult(ContractModel):
+    path: str
+    #: The file's UTF-8 text.
+    content: str
+
+
 class LibrarySkillWriteCommand(ContractModel):
     """Write a library skill's ``SKILL.md``, creating the skill when ``hash`` is null."""
 

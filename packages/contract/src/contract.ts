@@ -512,6 +512,10 @@ export interface Contract {
       command: LibrarySkillDeleteCommand;
       result: LibraryListResult;
     };
+    "library.skill.file.read": {
+      command: LibrarySkillFileReadCommand;
+      result: SkillFileResult;
+    };
     "library.skill.move": {
       command: LibrarySkillMoveCommand;
       result: LibraryListResult;
@@ -1899,6 +1903,17 @@ export interface NewerVersion {
 export interface LibrarySkillDeleteCommand {
   hash: string;
   name: string;
+}
+/**
+ * Read one of a library skill's other files, by its path as ``SkillResult.files`` lists it.
+ */
+export interface LibrarySkillFileReadCommand {
+  name: string;
+  path: string;
+}
+export interface SkillFileResult {
+  content: string;
+  path: string;
 }
 /**
  * Move a library skill to the newer version a check showed. No instance changes.

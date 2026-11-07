@@ -32,6 +32,7 @@ from kinby.contracts import (
     LibrarySkillCheckCommand,
     LibrarySkillCheckResult,
     LibrarySkillDeleteCommand,
+    LibrarySkillFileReadCommand,
     LibrarySkillMoveCommand,
     LibrarySkillReadCommand,
     LibrarySkillWriteCommand,
@@ -44,6 +45,7 @@ from kinby.contracts import (
     NewerVersion,
     PickState,
     PreviewedSkill,
+    SkillFileResult,
     SkillName,
     SkillPick,
     SkillResult,
@@ -174,6 +176,22 @@ class Library:
 
     async def read_skill(self, command: LibrarySkillReadCommand) -> SkillResult:
         return skill_result(self._folder(command.name))
+
+    async def read_skill_file(self, command: LibrarySkillFileReadCommand) -> SkillFileResult:
+        """One of the skill's other files, only by a path its files list."""
+        folder = self._folder(command.name)
+        if command.path not in skill_result(folder).files:
+            raise InvalidConfig(
+                {
+                    "path": f'The skill "{command.name}" has no other file "{command.path}". '
+                    "library.skill.read returns its SKILL.md and lists its other files."
+                }
+            )
+        try:
+            content = (folder / command.path).read_bytes().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise InvalidConfig({"path": f"{command.path} is not UTF-8 text."}) from exc
+        return SkillFileResult(path=command.path, content=content)
 
     async def write_skill(self, command: LibrarySkillWriteCommand) -> SkillResult:
         async with self._edit_lock:

@@ -7,6 +7,7 @@ import pytest
 
 from kinby.contracts import (
     LIBRARY_LIST,
+    LIBRARY_SKILL_FILE_READ,
     LIBRARY_SKILL_READ,
     ErrorCode,
     ErrorEnvelope,
@@ -14,8 +15,10 @@ from kinby.contracts import (
     LibraryKind,
     LibraryListCommand,
     LibraryListResult,
+    LibrarySkillFileReadCommand,
     LibrarySkillReadCommand,
     LibrarySource,
+    SkillFileResult,
     SkillResult,
 )
 from kinby.hub import Hub
@@ -144,6 +147,47 @@ def test_reading_a_skill_the_library_does_not_hold_is_not_found(tmp_path):
         answer = asyncio.run(read(name))
         assert isinstance(answer, ErrorEnvelope)
         assert answer.code is ErrorCode.NOT_FOUND
+
+
+def read_skill_file(hub: Hub, name: str, path: str) -> object:
+    command = LibrarySkillFileReadCommand(name=name, path=path)
+    return asyncio.run(hub_client(hub).call(LIBRARY_SKILL_FILE_READ, command))
+
+
+def test_a_library_skills_other_file_reads_by_its_path_in_the_skill(tmp_path):
+    hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+    formats = hub.directory / "skills" / "tdd" / "formats"
+    formats.mkdir()
+    (formats / "x.md").write_bytes("# X\r\nÉté.\n".encode())
+
+    answer = read_skill_file(hub, "tdd", "formats/x.md")
+
+    assert answer == SkillFileResult(path="formats/x.md", content="# X\r\nÉté.\n")
+
+
+def test_a_library_skill_file_its_files_do_not_list_or_that_is_not_text_is_refused(tmp_path):
+    hub = Hub(tmp_path / "hub", runtime=FakeRuntime(), images=FakeImages())
+    skill = hub.directory / "skills" / "tdd"
+    (skill / "image.bin").write_bytes(b"\xff\xfe\x00")
+
+    refused = {
+        (name, path): read_skill_file(hub, name, path)
+        for name, path in [
+            ("absent", "mocking.md"),
+            ("tdd", "absent.md"),
+            ("tdd", "SKILL.md"),
+            ("tdd", "../unslop/SKILL.md"),
+            ("tdd", str(skill / "mocking.md")),
+            ("tdd", "image.bin"),
+        ]
+    }
+
+    assert {
+        key: answer.code for key, answer in refused.items() if isinstance(answer, ErrorEnvelope)
+    } == {
+        ("absent", "mocking.md"): ErrorCode.NOT_FOUND,
+        **{key: ErrorCode.INVALID_ARGUMENT for key in refused if key[0] == "tdd"},
+    }
 
 
 def test_a_factory_written_on_the_hub_is_written_and_a_copy_of_a_shipped_one_is_shipped(tmp_path):
