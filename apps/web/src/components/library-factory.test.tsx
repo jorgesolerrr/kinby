@@ -37,7 +37,7 @@ function openPage(file = factoryFile) {
         }),
       ],
     }),
-    "factory.run.list": () => ({ runs: [] }),
+    "factory.run.list": () => ({ runs: [], cursor: null }),
   })
   return openLibrary(caller, "/library/factories")
 }

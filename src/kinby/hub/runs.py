@@ -275,12 +275,16 @@ class FactoryRuns:
         return run
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
+        """One page of the factory's runs the command's filters match, oldest first."""
+        runs = self._registry.runs(
+            command.factory,
+            None if command.status is None else (command.status,),
+            command.instance_id,
+            after=command.cursor,
+        )
+        page = runs[: command.limit]
         return FactoryRunListResult(
-            runs=self._registry.runs(
-                command.factory,
-                None if command.status is None else (command.status,),
-                command.instance_id,
-            )
+            runs=page, cursor=page[-1].run_id if len(runs) > len(page) else None
         )
 
     def rework(self, run: FactoryRun) -> Rework:

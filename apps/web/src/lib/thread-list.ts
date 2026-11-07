@@ -104,7 +104,7 @@ function createThreadList(
  */
 async function listThreads(client: Lister, filter: ThreadFilter): Promise<ThreadListResult> {
   try {
-    return await client.call("thread.list", { filter })
+    return await client.call("thread.list", { filter, limit: null })
   } catch (error) {
     if (!(error instanceof CallError && error.code === "INVALID_ARGUMENT")) throw error
     const listed = await client.call("thread.list", {})

@@ -28,6 +28,7 @@ from kinby.contracts import (
     UserOrigin,
     is_turn_closing,
 )
+from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.core.errors import InstanceUnavailable
 from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
@@ -42,7 +43,7 @@ from tests.test_hub import FakeRuntime, hub_at, hub_client, started_instance
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import frame, served, url
 from tests.test_routines import RoutineModel, instance_at, no_recap, routine_file
-from tests.test_scheduler import FakeClock
+from tests.test_scheduler import FakeClock, call, events_for
 from tests.test_scheduler import runtime as instance_runtime
 
 
@@ -51,11 +52,13 @@ class HomeHub:
     """A served hub, its home instance, and a running instance the home instance reads."""
 
     hub: Hub
+    runtime: FakeRuntime
     address: Serve
     home: UUID
     home_token: ControlToken
     alice: UUID
     alice_token: ControlToken
+    alice_dispatcher: ScheduledDispatcher
 
     def route(self, instance_id: UUID) -> str:
         return url(self.address, f"/instances/{instance_id}/hub")
@@ -77,7 +80,16 @@ async def home_hub(directory: Path) -> AsyncIterator[HomeHub]:
     dispatcher = instance_runtime(instance, FakeClock(datetime(2026, 10, 15, tzinfo=UTC)))
     async with served(hub) as address, instance_served(dispatcher, alice_token) as private:
         runtime.addresses[str(alice)] = f"http://{private.host}:{private.port}"
-        yield HomeHub(hub, address, home, control_token(hub, str(home)), alice, alice_token)
+        yield HomeHub(
+            hub,
+            runtime,
+            address,
+            home,
+            control_token(hub, str(home)),
+            alice,
+            alice_token,
+            dispatcher,
+        )
     hub.close()
 
 
@@ -184,6 +196,141 @@ def test_another_instances_control_token_gets_nothing_on_the_hub(tmp_path):
         assert error_code(listed) == ErrorCode.NOT_FOUND.value
         assert error_code(relayed) == ErrorCode.NOT_FOUND.value
         assert error_code(written) == ErrorCode.NOT_FOUND.value
+
+    asyncio.run(scenario())
+
+
+def result_of(answer: dict[str, object]) -> dict[str, object]:
+    assert answer["type"] == FrameType.RESULT.value, answer
+    assert isinstance(answer["result"], dict)
+    return answer["result"]
+
+
+def relayed(
+    instance_id: UUID, method: str, params: dict[str, object]
+) -> tuple[str, dict[str, object]]:
+    return (
+        "instance.relay.read",
+        {"instance_id": str(instance_id), "method": method, "params": params},
+    )
+
+
+def relayed_result(answer: dict[str, object]) -> dict[str, object]:
+    relayed_answer = result_of(answer)["result"]
+    assert isinstance(relayed_answer, dict)
+    return relayed_answer
+
+
+def test_stats_get_leaves_out_the_per_turn_records_unless_the_read_asks_for_them(tmp_path):
+    async def scenario() -> None:
+        async with home_hub(tmp_path) as hub:
+            thread = await call(hub.alice_dispatcher, "thread.create")
+            await call(hub.alice_dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+            await events_for(hub.alice_dispatcher, thread.id)
+            bounded, whole = await answers(
+                hub.route(hub.home),
+                hub.home_token,
+                relayed(hub.alice, "stats.get", {}),
+                relayed(hub.alice, "stats.get", {"records": True}),
+            )
+
+        assert relayed_result(bounded)["records"] == []
+        total = relayed_result(bounded)["total"]
+        assert isinstance(total, dict)
+        assert total["completed"] == 1
+        records = relayed_result(whole)["records"]
+        assert isinstance(records, list)
+        assert len(records) == 1
+
+    asyncio.run(scenario())
+
+
+def test_instance_logs_hold_the_last_200_lines_unless_the_read_sets_tail(tmp_path):
+    async def scenario() -> None:
+        async with home_hub(tmp_path) as hub:
+            hub.runtime.log_output = "".join(f"line {index}\n" for index in range(300)).encode()
+            bounded, longer = await answers(
+                hub.route(hub.home),
+                hub.home_token,
+                ("instance.logs", {"instance_id": str(hub.alice)}),
+                ("instance.logs", {"instance_id": str(hub.alice), "tail": 250}),
+            )
+
+        bounded_lines = str(result_of(bounded)["text"]).splitlines()
+        assert len(bounded_lines) == 200
+        assert bounded_lines[0] == "line 100"
+        assert len(str(result_of(longer)["text"]).splitlines()) == 250
+
+    asyncio.run(scenario())
+
+
+def test_a_relayed_thread_list_holds_50_threads_and_a_cursor_to_the_rest(tmp_path):
+    async def scenario() -> None:
+        async with home_hub(tmp_path) as hub:
+            for _ in range(51):
+                await call(hub.alice_dispatcher, "thread.create")
+            route, token = hub.route(hub.home), hub.home_token
+            first, everything = await answers(
+                route,
+                token,
+                relayed(hub.alice, "thread.list", {"filter": "all"}),
+                relayed(hub.alice, "thread.list", {"filter": "all", "limit": None}),
+            )
+            cursor = relayed_result(first)["cursor"]
+            (rest,) = await answers(
+                route,
+                token,
+                relayed(hub.alice, "thread.list", {"filter": "all", "cursor": cursor}),
+            )
+
+        first_page = relayed_result(first)["threads"]
+        assert isinstance(first_page, list)
+        assert len(first_page) == 50
+        assert cursor == {
+            "last_activity_at": first_page[-1]["last_activity_at"],
+            "id": first_page[-1]["id"],
+        }
+        rest_page = relayed_result(rest)["threads"]
+        assert isinstance(rest_page, list)
+        assert len(rest_page) == 1
+        assert relayed_result(rest)["cursor"] is None
+        whole = relayed_result(everything)["threads"]
+        assert isinstance(whole, list)
+        assert len(whole) == 51
+        assert relayed_result(everything)["cursor"] is None
+
+    asyncio.run(scenario())
+
+
+def test_factory_run_list_holds_50_runs_and_a_cursor_to_the_rest(tmp_path):
+    async def scenario() -> None:
+        async with home_hub(tmp_path) as hub:
+            for issue in range(51):
+                hub.hub.registry.open_run(hub.alice, "checks", {"issue": issue}, "code")
+            route, token = hub.route(hub.home), hub.home_token
+            first, everything = await answers(
+                route,
+                token,
+                ("factory.run.list", {"factory": "checks"}),
+                ("factory.run.list", {"factory": "checks", "limit": None}),
+            )
+            cursor = result_of(first)["cursor"]
+            (rest,) = await answers(
+                route, token, ("factory.run.list", {"factory": "checks", "cursor": cursor})
+            )
+
+        first_page = result_of(first)["runs"]
+        assert isinstance(first_page, list)
+        assert [run["work_item"]["issue"] for run in first_page] == list(range(50))
+        assert cursor == first_page[-1]["run_id"]
+        rest_page = result_of(rest)["runs"]
+        assert isinstance(rest_page, list)
+        assert [run["work_item"]["issue"] for run in rest_page] == [50]
+        assert result_of(rest)["cursor"] is None
+        whole = result_of(everything)["runs"]
+        assert isinstance(whole, list)
+        assert len(whole) == 51
+        assert result_of(everything)["cursor"] is None
 
     asyncio.run(scenario())
 

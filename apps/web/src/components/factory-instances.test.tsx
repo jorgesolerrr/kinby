@@ -76,7 +76,10 @@ function hub(acted: () => FactoryRun = () => stopped) {
   }
   return stubCaller({
     "instance.list": () => ({ instances }),
-    "factory.run.list": ({ instance_id }) => ({ runs: listed[instance_id ?? ""] ?? [] }),
+    "factory.run.list": ({ instance_id }) => ({
+      runs: listed[instance_id ?? ""] ?? [],
+      cursor: null,
+    }),
     "factory.run.get": ({ run_id }) => ({
       run: stopped,
       attempts: [
@@ -149,8 +152,14 @@ describe("the factory's instances", () => {
     expect(await needing.findByText("Step review failed twice, its retries.")).toBeDefined()
     expect(within(rows[2] as HTMLElement).queryByRole("button")).toBeNull()
     expect(caller.calls.filter((call) => call.method === "factory.run.list")).toEqual([
-      { method: "factory.run.list", params: { factory: "software", instance_id: "billing" } },
-      { method: "factory.run.list", params: { factory: "software", instance_id: "software" } },
+      {
+        method: "factory.run.list",
+        params: { factory: "software", instance_id: "billing", limit: null },
+      },
+      {
+        method: "factory.run.list",
+        params: { factory: "software", instance_id: "software", limit: null },
+      },
     ])
   })
 
@@ -169,6 +178,7 @@ describe("the factory's instances", () => {
       "instance.list": () => ({ instances }),
       "factory.run.list": ({ instance_id }) => ({
         runs: instance_id === "software" ? [...finished, queued] : [],
+        cursor: null,
       }),
     })
     const user = userEvent.setup()
@@ -297,6 +307,7 @@ describe("the factory's instances", () => {
       "instance.list": () => ({ instances }),
       "factory.run.list": ({ instance_id }) => ({
         runs: instance_id === "billing" ? [parked] : [],
+        cursor: null,
       }),
     })
     render(<FactoryInstances client={caller} clock={fakeClock()} factory="software" />)

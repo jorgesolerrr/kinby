@@ -222,7 +222,9 @@ describe("the stats page", () => {
 
     await act(() => Promise.resolve())
 
-    expect(statsReads(client)).toEqual([{ since: "2026-09-24T00:00:00.000Z", by: "day" }])
+    expect(statsReads(client)).toEqual([
+      { since: "2026-09-24T00:00:00.000Z", by: "day", records: true },
+    ])
   })
 
   it("reads 30 days by day and 90 days by week when the range changes", async () => {
@@ -233,8 +235,8 @@ describe("the stats page", () => {
     await user.click(screen.getByRole("button", { name: "90 days" }))
 
     expect(statsReads(client).slice(1)).toEqual([
-      { since: "2026-09-01T00:00:00.000Z", by: "day" },
-      { since: "2026-07-03T00:00:00.000Z", by: "week" },
+      { since: "2026-09-01T00:00:00.000Z", by: "day", records: true },
+      { since: "2026-07-03T00:00:00.000Z", by: "week", records: true },
     ])
   })
 
@@ -568,7 +570,7 @@ describe("the stats page", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }))
 
     expect(statsReads(client)).toEqual(
-      Array(3).fill({ since: "2026-09-24T00:00:00.000Z", by: "day" }),
+      Array(3).fill({ since: "2026-09-24T00:00:00.000Z", by: "day", records: true }),
     )
   })
 })
