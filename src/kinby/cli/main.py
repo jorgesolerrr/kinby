@@ -87,7 +87,6 @@ from kinby.instance import (
     load_instance,
     parse_listen,
 )
-from kinby.instance.database import UnmigratedStateError
 from kinby.instance.permissions import load_permissions
 from kinby.instance.recap import load_recap_lens
 from kinby.memory import (
@@ -1179,7 +1178,6 @@ def main(
     except (
         InstanceNotFoundError,
         InstanceBusyError,
-        UnmigratedStateError,
         InsecureContractUrl,
         ManifestError,
         NodeNotFound,

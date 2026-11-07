@@ -6,9 +6,6 @@ import threading
 from pathlib import Path
 
 DATABASE_NAME = "instance.sqlite"
-MIGRATION_SCRIPT = "scripts/migrate_instance_database.py"
-#: The stores from before the database, which a state directory may still hold.
-_OLD_STORES = ("events.jsonl", "threads.jsonl", "config-changes.jsonl")
 _connecting = threading.Lock()
 #: A delivery's provider id, which its arrival event carries.
 DELIVERY_ID = "json_extract(payload, '$.delivery.delivery_id')"
@@ -54,24 +51,14 @@ CREATE TABLE IF NOT EXISTS recalls (
 """
 
 
-class UnmigratedStateError(Exception):
-    """The state directory holds the stores from before the instance database, and no database."""
-
-
 def open_database(state_dir: Path) -> sqlite3.Connection:
     """Connect to the instance database in *state_dir*, making it when missing.
 
     Each statement commits on its own, and a write of several opens its transaction with
     ``BEGIN IMMEDIATE``. Any thread may use the connection, one thread at a time.
     """
-    path = state_dir / DATABASE_NAME
-    if not path.exists() and any((state_dir / name).exists() for name in _OLD_STORES):
-        raise UnmigratedStateError(
-            f"{state_dir} still keeps its history in JSONL files. Stop the instance and move "
-            f"them into {DATABASE_NAME} with {MIGRATION_SCRIPT}."
-        )
     state_dir.mkdir(parents=True, exist_ok=True)
-    return connect(path)
+    return connect(state_dir / DATABASE_NAME)
 
 
 def connect(path: Path) -> sqlite3.Connection:

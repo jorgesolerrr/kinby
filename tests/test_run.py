@@ -111,22 +111,6 @@ def test_verbose_run_writes_no_process_log_under_state(tmp_path, capsys, monkeyp
     }
 
 
-def test_an_unmigrated_state_directory_refuses_to_start_and_names_the_script(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    instance = tmp_path / "alice"
-    init_instance(instance)
-    (instance / ".state").mkdir(exist_ok=True)
-    (instance / ".state" / "events.jsonl").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr("sys.stdin", StringIO(""))
-
-    exit_code = main(["repl", str(instance)])
-
-    assert exit_code == 1
-    assert "scripts/migrate_instance_database.py" in capsys.readouterr().err
-    assert not (instance / ".state" / "instance.sqlite").exists()
-
-
 def test_run_catches_up_uncovered_turns_before_waiting_for_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
