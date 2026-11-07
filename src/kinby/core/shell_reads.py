@@ -1,5 +1,5 @@
-"""Tell a shell read: a bash command that only reads inside the workspace (ADR 0119), or the
-turn's saved outputs (ADR 0121).
+"""Tell a shell read: a bash command that only reads inside the workspace (ADR 0119), the
+turn's saved outputs (ADR 0121), or the hub through kinby's CLI (ADR 0120).
 
 A command this module cannot parse or does not recognise is not a shell read, so a wrong guess
 asks.
@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from glob import glob
 from pathlib import Path
+
+from kinby.contracts import HUB_READS, RELAYED_READS
 
 #: The programs a shell read may run. git is not one: its repository's config, attributes and
 #: hooks sit in the workspace, which auto writes unasked, and can make any git command run a
@@ -120,6 +122,8 @@ def _escaped(match: re.Match[str]) -> str:
 def _reads(
     program: str, arguments: list[str], directories: set[Path], roots: tuple[Path, ...]
 ) -> bool:
+    if program == "kinby":
+        return _hub_read(arguments)
     if program not in _PROGRAMS or any(_unsafe(program, each) for each in arguments):
         return False
     if not all(_confined(each, directories, roots) for each in arguments):
@@ -133,6 +137,17 @@ def _reads(
             # env reads the environment, and a module can load from outside the workspace.
             return not any(re.search(r"\b(env|include|import)\b", each) for each in arguments)
     return True
+
+
+def _hub_read(arguments: list[str]) -> bool:
+    """Whether kinby's *arguments* only read the hub. Their values go to the hub, never to a
+    path."""
+    match arguments:
+        case ["hub", "read", method, *_]:
+            return method in HUB_READS | RELAYED_READS
+        case ["hub", "help" | "methods" | "wait", *_]:
+            return True
+    return False
 
 
 def _unsafe(program: str, argument: str) -> bool:
