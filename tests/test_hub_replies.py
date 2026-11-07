@@ -20,24 +20,20 @@ from kinby.contracts import (
     THREAD_TURN_START,
     AcceptedResult,
     ApprovalDecision,
-    ApprovalRequested,
     Channel,
     ChannelMuteCommand,
     DeliveryStatus,
     ErrorCode,
     ErrorEnvelope,
-    GateRule,
     NotificationDelivery,
     NotificationListCommand,
     NotificationListResult,
-    NotificationRaiseCommand,
     NotificationReply,
     NotificationReplyCommand,
     ReplyStatus,
     Scope,
     ThreadApprovalRespondCommand,
     ThreadTurnStartCommand,
-    WaitingApproval,
 )
 from kinby.core.dispatcher import Dispatcher
 from kinby.core.errors import ApprovalNotFound, ThreadBusy
@@ -49,6 +45,7 @@ from tests.test_hub_channels import (
     _NOW,
     FakeService,
     FakeTime,
+    approval_notification,
     channel_hub,
     next_sent,
     notification,
@@ -559,26 +556,6 @@ def test_the_web_app_replies_only_with_an_option_the_notification_offers_and_onl
         assert await replies(hub, alice_id) == []
 
     asyncio.run(scenario())
-
-
-def approval_notification(
-    key: str, approval_id: UUID, options: tuple[str, ...] = ("Approve", "Deny")
-) -> NotificationRaiseCommand:
-    """What an instance raises when a turn parks on an approval."""
-    request = ApprovalRequested(
-        approval_id=approval_id,
-        name="store",
-        arguments={"path": "notes.md"},
-        rule=GateRule("ask mode: writes need approval"),
-    )
-    return notification(key).model_copy(
-        update={
-            "title": "Approval waiting",
-            "text": "store: path=notes.md",
-            "options": list(options),
-            "approval": WaitingApproval(turn_id=UUID(int=2), request=request),
-        }
-    )
 
 
 IN_ROUTINE = ("Approve", "Always allow in this routine", "Deny")
