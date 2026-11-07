@@ -1813,6 +1813,9 @@ def test_a_client_steps_prompt_ends_with_the_skills_catalogue_each_skill_from_it
         assert called.stdin.endswith(
             f"\n- write-routine ({defaults.SKILLS / 'write-routine' / 'SKILL.md'}): "
             "Draft kinby routine files for recurring or manual work."
+            f"\n- write-view ({defaults.SKILLS / 'write-view' / 'SKILL.md'}): "
+            "Compose a view's spec and data from the view catalogue. Use when creating or "
+            "reshaping a view."
         )
 
     asyncio.run(scenario())
