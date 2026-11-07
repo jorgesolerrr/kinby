@@ -529,7 +529,7 @@ The instance's list of command patterns the **gate** refuses or escalates regard
 
 ### Shell read
 
-A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace, even through a link. A command the gate cannot tell is a shell read asks like any other bash.
+A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace, even through a link. Reading the current **turn**'s **saved outputs** and a **hub read** through the CLI count too. A command the gate cannot tell is a shell read asks like any other bash.
 
 ### Contract
 
@@ -637,6 +637,14 @@ Anything an **instance** loads beyond the core: a **tool**, a **skill** or a **h
 
 A native Python capability the model can call during a **turn**. Every tool declares whether it writes (changes files, state, or the outside world); the **gate** reads that flag. Tools present at the start of a turn are the tools for that turn.
 
+### Saved output
+
+The whole output of a **tool** call too long to give the model, kept as a file for the rest of its **turn**. The model gets the start of it and where it is, and reads the rest in parts. It goes when the turn closes.
+
+### Cleared result
+
+A large **tool** result from an earlier **turn** of a **thread**, which the model is sent as a stub naming the tool and its size. The thread keeps the result itself, and the model can call the tool again.
+
 ### Default tools
 
 The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob, bash, web_search and web_fetch. The manifest can switch them all off, or switch off one by name and keep the rest. web_search is offered only while the instance holds its **search backend**'s key.
@@ -728,8 +736,12 @@ _Avoid_: component library
 
 ### Hub tool
 
-A **tool** only the **home instance** holds, through which it reads the **hub** and other **instances**, or asks the hub to change something the hub owns or another instance's setup. One that writes asks in every **permission mode**, and the hub runs it only after seeing the user approve that exact call. Hub tools are present only on turns the user starts.
+A **tool** only the **home instance** holds, through which it asks the hub to change something the hub owns or another instance's setup. One that writes asks in every **permission mode**, and the hub runs it only after seeing the user approve that exact call. Hub tools are present only on turns the user starts.
 _Avoid_: admin tool, system tool
+
+### Hub read
+
+One read the **home instance** makes of the **hub**, or of another **instance** through the hub, by running kinby's CLI in bash. It changes nothing, so it runs unasked, in any **turn**.
 
 ### Behavior prompt
 
