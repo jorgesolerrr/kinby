@@ -1,9 +1,9 @@
 ---
 name: create-instance
-description: Create an instance through onboarding with instance_create, as a vanilla instance or a factory role, with its model, prompt, picks and secrets named by hub secret. Use when the user asks for a new instance or agent.
+description: Create an instance through onboarding with hub_write's instance_create operation, as a vanilla instance or a factory role, with its model, prompt, picks and secrets named by hub secret. Use when the user asks for a new instance or agent.
 ---
 
-Onboarding is the one flow that creates an instance. The web app runs it as a form, and you run it as one `instance_create` call. The approval shows the user every value of that call, so settle them with the user first and send the call once.
+Onboarding is the one flow that creates an instance. The web app runs it as a form, and you run it as one `hub_write` call with the `instance_create` operation. The approval shows the user every value of that call, so settle them with the user first and send the call once.
 
 When a read this flow depends on fails, stop and tell the user what failed. Never raise an approval for a call that read was meant to check.
 
@@ -17,7 +17,7 @@ Done when you know the role, or know there is none.
 
 Read `factory.describe` with the factory's `name` for a role: its `instances` hold each role's setup fields and logins, and its `suggested_picks` hold the skills each role proposes. Read `image.describe` for a vanilla instance.
 
-If the hub refuses `image.describe` because the image is not prepared, call `image_prepare`. It returns a lifecycle operation: read `operation.get` with its `operation_id` until its state is succeeded or failed, then read `image.describe` again. If the preparation fails, tell the user why, from its detail and its steps, and stop. Never call `instance_create` on an image that is not prepared.
+If the hub refuses `image.describe` because the image is not prepared, call `hub_write` with `image_prepare` and no arguments. It returns a lifecycle operation: read `operation.get` with its `operation_id` until its state is succeeded or failed, then read `image.describe` again. If the preparation fails, tell the user why, from its detail and its steps, and stop. Never ask for `instance_create` on an image that is not prepared.
 
 Every instance asks for its model, its API key and its behavior prompt. The model goes in `model`, as `provider:model`, like `anthropic:claude-sonnet-5`. Every other configuration field goes in `setup` by its field name, such as `behavior_prompt`. Take each field's default unless the user wants another value.
 
@@ -37,8 +37,8 @@ Read `library.list`. A role starts from its suggested picks, and the user may dr
 
 ## 5. Create, then start
 
-Call `instance_create`. It returns a lifecycle operation. Read `operation.get` with its `operation_id` until its state is succeeded or failed. A failed one says why in its detail and its steps.
+Call `hub_write` with `instance_create` and these values as its arguments. It returns a lifecycle operation. Read `operation.get` with its `operation_id` until its state is succeeded or failed. A failed one says why in its detail and its steps.
 
-A new instance is stopped. Tell the user what setup is pending: logins to finish and secrets to set, which they do on its setup card. Then start it with `instance_lifecycle` and `start` once the user wants it running.
+A new instance is stopped. Tell the user what setup is pending: logins to finish and secrets to set, which they do on its setup card. Then start it with the `instance_lifecycle` operation and `start` once the user wants it running.
 
-If the hub refuses `instance_create` because the image is not prepared, prepare it and read `image.describe` again, as in step 2. Settle any value that changed with the user before you call `instance_create` again.
+If the hub refuses `instance_create` because the image is not prepared, prepare it and read `image.describe` again, as in step 2. Settle any value that changed with the user before you ask for `instance_create` again.

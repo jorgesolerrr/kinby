@@ -1,6 +1,6 @@
 ---
 name: write-factory
-description: Write or edit a factory with factory_write, its steps, hooks, instance templates and prompts, so it passes the factory check. Use when the user wants a factory designed, created or changed.
+description: Write or edit a factory with hub_write's factory_write operation, its steps, hooks, instance templates and prompts, so it passes the factory check. Use when the user wants a factory designed, created or changed.
 ---
 
 A factory is a folder of files the hub runs as a line of steps. Its instances are ordinary instances that picked one of its roles. It holds behavior only. Nothing in it names one repository's commands or conventions, and its prompts name no skill an instance picks. Each instance keeps those itself.
@@ -45,7 +45,7 @@ A step's result comes from the world, never from what the agent says it did. A h
 
 ## Write it
 
-Call `factory_write` with the factory's `name`, the files to write by their path in the folder, each whole, and the `hash` from `factory.get`. Use `hash` null to create a new factory. Files you leave out stay as they are, and no write removes one, so tell the user which file to delete when one should go. Editing the shipped factory writes the hub's own copy of it.
+Call `hub_write` with `factory_write` and, as its arguments, the factory's `name`, the files to write by their path in the folder, each whole, and the `hash` from `factory.get`. Use `hash` null to create a new factory. Files you leave out stay as they are, and no write removes one, so tell the user which file to delete when one should go. Editing the shipped factory writes the hub's own copy of it.
 
 The hub runs the factory check before it keeps anything. A factory that fails it is refused with every problem listed, and the last good version stays. Fix each problem and write again.
 

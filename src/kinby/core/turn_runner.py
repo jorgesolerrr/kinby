@@ -81,7 +81,7 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.gate import AUTHORED_RULE, URL_READS, evaluate
+from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import price_map
@@ -237,6 +237,8 @@ class ToolCallResolution:
     gate: ToolGated
     #: The approval the user gave the call, which a hub tool shows the hub.
     approval_id: UUID | None
+    #: What the tool's check found wrong with the arguments, which the model reads instead.
+    refusal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1154,7 +1156,20 @@ class LangGraphRunner:
                 saved_outputs=saved_outputs,
             )
             approval_id = None
-            if (
+            refusal = (
+                selected.check(arguments)
+                if selected is not None and selected.check is not None
+                else None
+            )
+            if refusal is not None:
+                gate = ToolGated(
+                    call_id=call.call_id,
+                    name=call.name,
+                    action=GateOutcome.DENY,
+                    rule=INVALID_ARGUMENTS,
+                    decided_by=GateDecider.POLICY,
+                )
+            elif (
                 selected is not None
                 and name == browser_takeover.name
                 and gate_decision.action is not GateAction.DENY
@@ -1217,7 +1232,7 @@ class LangGraphRunner:
                     rule=gate_decision.rule,
                     decided_by=GateDecider.POLICY,
                 )
-            calls.append(ToolCallResolution(call, gate, approval_id))
+            calls.append(ToolCallResolution(call, gate, approval_id, refusal))
 
         messages: list[AnyMessage] = []
         for resolution in calls:
@@ -1227,7 +1242,7 @@ class LangGraphRunner:
                 result = ToolResult(
                     call_id=call.call_id,
                     name=call.name,
-                    output=_denial(resolution.gate),
+                    output=resolution.refusal or _denial(resolution.gate),
                     error=True,
                 )
                 await runtime.context.emit(result)

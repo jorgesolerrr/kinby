@@ -16,7 +16,7 @@ from types import NoneType, UnionType
 from typing import Annotated, Literal, get_args, get_origin
 from uuid import UUID
 
-from pydantic import BaseModel, JsonValue  # noqa: TID251 - a hub write's tool schema
+from pydantic import JsonValue
 from pydantic.fields import FieldInfo
 from pydantic_core import to_jsonable_python
 
@@ -30,8 +30,13 @@ from kinby.contracts import (
     OperationState,
 )
 from kinby.contracts.methods import METHODS
-from kinby.plugins.hub import HUB_WRITES, HubRefused, holds_hub_home, read_hub
-from kinby.plugins.tools import Tool
+from kinby.plugins.hub import (
+    HubRefused,
+    HubWriteOperation,
+    holds_hub_home,
+    read_hub,
+    write_arguments,
+)
 
 #: How often wait reads the operation.
 POLL_SECONDS = 1.0
@@ -41,17 +46,9 @@ WAIT_SECONDS = 100.0
 CELL_WIDTH = 60
 
 
-def _arguments(write: Tool) -> dict[str, FieldInfo]:
-    """The arguments a hub write takes, as the model sees them."""
-    schema = write.runnable.tool_call_schema
-    if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
-        raise TypeError(f'The hub write "{write.name}" has no argument model.')
-    return schema.model_fields
-
-
 _READS = HUB_READS | RELAYED_READS
 _PARAMS = {method.name: method.command.model_fields for method in METHODS if method.name in _READS}
-_WRITES = {write.name: _arguments(write) for write in HUB_WRITES}
+_WRITES = {operation.value: write_arguments(operation) for operation in HubWriteOperation}
 _NOT_HOME = "kinby hub read and wait run only in the home instance, which its hub grants hub:home."
 _LISTED = "kinby hub methods lists them."
 

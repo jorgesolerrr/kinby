@@ -9,7 +9,7 @@ from kinby.contracts import Scope
 from kinby.instance import init_instance, inspect_instance
 from kinby.plugins import defaults
 from kinby.plugins.core import core_tools
-from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, HubWriteOperation, hub_write
 from kinby.plugins.tools import Tool
 from kinby.plugins.views import view_write
 
@@ -39,3 +39,9 @@ def test_view_write_leaves_the_view_catalogue_to_its_skill():
     assert len(sent) < 1_000
     assert "Kanban" not in sent
     assert "write-view" in sent
+
+
+def test_hub_write_names_every_operation():
+    described = hub_write.runnable.description
+
+    assert [operation for operation in HubWriteOperation if operation not in described] == []
