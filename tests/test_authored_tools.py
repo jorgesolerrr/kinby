@@ -145,16 +145,15 @@ def test_a_broken_module_keeps_the_last_valid_tools_with_a_warning(tmp_path: Pat
     assert called == "echo: hi"
 
 
-def test_an_authored_tool_result_is_cut_at_the_bash_cap(tmp_path: Path) -> None:
+def test_an_authored_tool_result_over_the_cap_is_cut_by_the_runner(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     expose(instance, module=ECHO.replace('f"echo: {text}"', "text * 40_000"))
-    tools, _ = ToolRegistry(tmp_path, tools=Tools(defaults=False)).refresh()
-    echo = tools.get("echo")
-    assert echo is not None
 
-    called = asyncio.run(echo.ainvoke({"text": "x"}, ToolContext(instance, uuid4())))
+    payloads = asyncio.run(turn(instance, [("echo", {"text": "x"})], PermissionMode.FULL_ACCESS))
 
-    assert called == "x" * 30_000
+    [called] = [payload for payload in payloads if isinstance(payload, ToolResult)]
+    assert called.size == 40_000
+    assert called.output.startswith("x" * 30_000 + "\n")
 
 
 def test_an_authored_tool_that_declares_it_reads_still_asks_in_ask_mode(tmp_path: Path) -> None:
