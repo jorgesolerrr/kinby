@@ -15,11 +15,15 @@ from kinby.contracts import (
     ThreadSummary,
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
-from kinby.core.turns import ParkedTurn, PreparedTurnRequest, TurnContext, TurnOutcome
+from kinby.core.turns import (
+    ApprovalAnswer,
+    ParkedTurn,
+    PreparedTurnRequest,
+    TurnContext,
+    TurnOutcome,
+)
 from kinby.instance.permissions import GatePolicy
 from tests.helpers import (
-    cannot_restore,
-    does_not_park,
     fixed_permission_ceiling,
     fixed_turn_preparation,
     no_routines,
@@ -28,11 +32,13 @@ from tests.helpers import (
 
 
 class ScriptedRunner:
-    """Run each turn as its message says: hold it open, park it on an approval, or fail it."""
+    """Run each turn as its message says: hold it open, park it on an approval, or fail it. A
+    parked turn completes once its approval is answered."""
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+        self.parked: dict[UUID, PreparedTurnRequest] = {}
 
     async def run(
         self, turn: PreparedTurnRequest, context: TurnContext
@@ -44,16 +50,26 @@ class ScriptedRunner:
             case "park":
                 await context.emit(
                     ApprovalRequested(
-                        approval_id=uuid4(), name="write_file", arguments={}, rule="scripted"
+                        approval_id=uuid4(),
+                        name="write_file",
+                        arguments={"path": "notes.md"},
+                        rule="scripted",
                     )
                 )
+                self.parked[turn.turn_id] = turn
                 return ParkedTurn()
             case "fail":
                 raise RuntimeError("provider unavailable")
         return TurnOutcome()
 
-    resume = does_not_park
-    restore = cannot_restore
+    async def resume(
+        self, turn: PreparedTurnRequest, answer: ApprovalAnswer, context: TurnContext
+    ) -> TurnOutcome:
+        return TurnOutcome()
+
+    async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
+        return self.parked.get(turn_id)
+
     routine_mode = no_routines
 
 
@@ -107,6 +123,7 @@ def test_a_new_thread_is_idle_and_last_active_when_it_was_created(tmp_path: Path
         [thread] = await _listed(dispatcher)
 
         assert thread.status is ThreadStatus.IDLE
+        assert thread.approval is None
         assert thread.last_activity_at == created.created_at
 
     asyncio.run(scenario())
@@ -123,6 +140,7 @@ def test_a_thread_runs_while_its_turn_is_open(tmp_path: Path) -> None:
         [thread] = await _listed(dispatcher)
 
         assert thread.status is ThreadStatus.RUNNING
+        assert thread.approval is None
         runner.release.set()
 
     asyncio.run(scenario())
@@ -133,11 +151,12 @@ def test_a_thread_awaits_approval_while_its_turn_is_parked(tmp_path: Path) -> No
         dispatcher = _dispatcher(tmp_path, ScriptedRunner())
         created = await _create(dispatcher)
         await _start(dispatcher, created.id, "park")
-        await _until(dispatcher, created.id, EventType.APPROVAL_REQUESTED)
+        requested = await _until(dispatcher, created.id, EventType.APPROVAL_REQUESTED)
 
         [thread] = await _listed(dispatcher)
 
         assert thread.status is ThreadStatus.AWAITING_APPROVAL
+        assert thread.approval == requested.payload
 
     asyncio.run(scenario())
 
@@ -156,6 +175,7 @@ def test_a_thread_fails_with_its_last_turn_until_the_next_turn_starts(tmp_path: 
         [running] = await _listed(dispatcher)
 
         assert failed.status is ThreadStatus.FAILED
+        assert failed.approval is None
         assert running.status is ThreadStatus.RUNNING
         runner.release.set()
 
@@ -172,6 +192,7 @@ def test_a_thread_is_idle_once_its_turn_completes(tmp_path: Path) -> None:
         [thread] = await _listed(dispatcher)
 
         assert thread.status is ThreadStatus.IDLE
+        assert thread.approval is None
 
     asyncio.run(scenario())
 
@@ -191,6 +212,7 @@ def test_a_thread_is_idle_once_its_turn_is_interrupted(tmp_path: Path) -> None:
         [thread] = await _listed(dispatcher)
 
         assert thread.status is ThreadStatus.IDLE
+        assert thread.approval is None
 
     asyncio.run(scenario())
 
@@ -209,6 +231,7 @@ def test_a_parked_turn_that_is_interrupted_leaves_the_thread_idle(tmp_path: Path
         [thread] = await _listed(dispatcher)
 
         assert thread.status is ThreadStatus.IDLE
+        assert thread.approval is None
 
     asyncio.run(scenario())
 

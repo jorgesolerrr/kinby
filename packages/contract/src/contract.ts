@@ -2809,6 +2809,7 @@ export interface ThreadArchiveCommand {
   thread_id: string;
 }
 export interface ThreadSummary {
+  approval?: ApprovalRequested | null;
   archived: boolean;
   created_at: string;
   id: string;

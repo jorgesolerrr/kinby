@@ -9608,6 +9608,17 @@
     "ThreadSummary": {
       "additionalProperties": false,
       "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalRequested"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "archived": {
           "type": "boolean"
         },

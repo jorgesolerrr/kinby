@@ -976,6 +976,8 @@ class ThreadSummary(ContractModel):
     archived: bool
     #: Who started the thread's first turn: the user, or the routine whose run it is.
     origin: Origin
+    #: The approval the thread's turn is parked on, set exactly while it awaits approval.
+    approval: ApprovalRequested | None = None
 
 
 class ThreadListResult(ContractModel):

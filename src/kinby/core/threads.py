@@ -243,6 +243,7 @@ def thread_summary(
 ) -> ThreadSummary:
     """The thread's summary, *last_activity_at* None while it has no events."""
     pinned = pinned_mode(events)
+    pending = pending_approval(events)
     return ThreadSummary(
         id=thread.id,
         title=thread.title,
@@ -253,6 +254,7 @@ def thread_summary(
         mode_pinned=pinned is not None,
         archived=thread.archived,
         origin=thread_origin(events),
+        approval=None if pending is None else pending.request,
     )
 
 

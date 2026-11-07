@@ -8,7 +8,7 @@ The user asks so they don't have to open each instance. Lead with what needs the
 ## 1. Gather
 
 1. `instance.list`: each instance's `persona_name`, its `intended_state` and `process`, `setup_pending`, its `notices`, and `needs_human`, the count of its factory runs stopped for the user.
-2. For each running instance, `thread.list` with its `instance_id`. A thread whose `status` is `awaiting_approval` waits on the user, and one whose status is `awaiting_reply` waits on their reply to a notification. One whose status is `failed` closed with an error. The sidebar filter, the default, lists all three.
+2. For each running instance, `thread.list` with its `instance_id`. A thread whose `status` is `awaiting_approval` waits on the user, and its `approval` names the tool it waits to call and the gate `rule` that asked. One whose status is `awaiting_reply` waits on their reply to a notification. One whose status is `failed` closed with an error. The sidebar filter, the default, lists all three.
 3. `factory.list`, then `factory.run.list` for each factory. Runs with status `needs-human` or `parked` wait. `factory.run.get` shows a run's steps and the summary of its last attempt.
 4. `stats.summary` with `since` set to the start of the period the user means, a day unless they say otherwise. It holds each running instance's usage, the API cost, each subscription's runs per plan window and any plan limit still ahead. It names the instances it could not count.
 5. `routine.list` for an instance whose work matters to the question. A routine whose `failure_count` is above zero is failing now. Its `last_failure` is the reason of its latest failure, and it stays after the routine recovers, so read it only to explain a failure.
@@ -24,7 +24,7 @@ Done when every instance the hub lists is either counted or named as stopped or 
 
 ## 3. Report
 
-- What needs the user, each with where to act: for an approval or a failure, a Markdown link to the thread, `[a short label](/instances/<instance_id>/threads/<thread_id>)`, never the path as code; for a run that needs a human, the factory run.
+- What needs the user, each with where to act: for an approval or a failure, a Markdown link to the thread, `[a short label](/instances/<instance_id>/threads/<thread_id>)`, never the path as code; for a run that needs a human, the factory run. Name the tool and the rule each approval waits on.
 - What is broken and the likely cause, in one line each.
 - Usage for the period: cost, the runs each subscription made per plan window, and each subscription in `limits`, with the time it resets. A subscription that is not in `limits` has no limit you can see, so leave out how close it is to one.
 - Everything else in a sentence, such as "the other four instances ran their routines and need nothing".

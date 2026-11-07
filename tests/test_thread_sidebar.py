@@ -283,6 +283,7 @@ def test_a_routine_run_awaiting_a_reply_stays_in_the_sidebar_until_the_user_answ
         [summary] = await _threads(dispatcher, "sidebar")
         assert summary.id == asking
         assert summary.status is ThreadStatus.AWAITING_REPLY
+        assert summary.approval is None
 
         await _reply(dispatcher, asking, "done")
 
