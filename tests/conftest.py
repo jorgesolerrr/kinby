@@ -1,5 +1,6 @@
 import pytest
 
+from kinby.contracts import SearchBackend
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 
 
@@ -12,3 +13,13 @@ def _without_a_hub_route(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.delenv(HUB_URL_VARIABLE, raising=False)
     monkeypatch.delenv(HUB_SCOPES_VARIABLE, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _without_a_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test without a search backend's key, even on a box that holds one.
+
+    With the key, the model gets `web_search`. A test that wants it sets the variable itself.
+    """
+    for backend in SearchBackend:
+        monkeypatch.delenv(backend.key_variable, raising=False)

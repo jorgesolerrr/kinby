@@ -83,6 +83,7 @@ def hub_tools() -> tuple[Tool, ...]:
         instance_routine_run,
         instance_routine_delete,
         instance_ask,
+        image_prepare,
         library_skill_write,
         library_git_add,
         library_move,
@@ -244,6 +245,15 @@ async def instance_ask(instance_id: UUID, message: str, context: ToolContext) ->
     accepted = AcceptedResult.model_validate(await _written(instance_ask, arguments, context))
     link = f"/instances/{instance_id}/threads/{accepted.thread_id}"
     return json.dumps({**accepted.model_dump(mode="json"), "link": link}, ensure_ascii=False)
+
+
+@tool(write=True, hub=True)
+async def image_prepare(context: ToolContext) -> str:
+    """Prepare the image a vanilla instance runs on, and return its lifecycle operation as JSON.
+
+    While a preparation is running, this returns that one. Follow it with operation.get.
+    """
+    return await _write(image_prepare, {}, context)
 
 
 @tool(write=True, hub=True)

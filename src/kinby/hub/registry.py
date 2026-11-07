@@ -820,7 +820,9 @@ class HubRegistry:
             ),
         )
 
-    def begin_preparation(self, operation_id: UUID, detail: str) -> UUID:
+    def begin_preparation(
+        self, operation_id: UUID, detail: str, requester: UUID | None = None
+    ) -> UUID:
         """Open this image preparation, or return the unfinished one."""
         with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -839,17 +841,8 @@ class HubRegistry:
             ).fetchone()
             if existing is not None:
                 return UUID(existing[0])
-            connection.execute(
-                """
-                INSERT INTO operations (id, kind, state, detail)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    str(operation_id),
-                    OperationKind.PREPARE.value,
-                    OperationState.PENDING.value,
-                    detail,
-                ),
+            self._insert_operation(
+                connection, operation_id, None, OperationKind.PREPARE, detail, requester
             )
         return operation_id
 

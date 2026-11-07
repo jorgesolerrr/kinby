@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+from uuid import uuid4
 
 from kinby.contracts import (
     IMAGE_DESCRIBE,
@@ -184,6 +185,24 @@ def test_preparing_the_image_while_it_is_being_prepared_returns_the_running_oper
         assert again.operation_id == first.operation_id
         assert (await finished_operation(client, first)).state is OperationState.SUCCEEDED
         assert images.selections == [ImageSelection("HEAD", None)]
+
+    asyncio.run(scenario())
+
+
+def test_a_preparation_already_running_keeps_its_requester(tmp_path):
+    async def scenario() -> None:
+        images = HeldImages()
+        hub = hub_at(tmp_path / "hub", images=images)
+        client = hub_client(hub)
+
+        first = await client.call(IMAGE_PREPARE, ImagePrepareCommand())
+        await images.building.wait()
+        again = await hub.prepare_image(ImagePrepareCommand(), requester=uuid4())
+        images.release.set()
+
+        assert isinstance(first, ImagePrepareResult)
+        assert again.operation_id == first.operation_id
+        assert (await finished_operation(client, first)).requester is None
 
     asyncio.run(scenario())
 
