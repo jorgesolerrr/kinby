@@ -25,6 +25,7 @@ from tests.test_hub import FakeRuntime
 from tests.test_hub_server import call, created_instance, finished, frame, hub_at, served, url
 from tests.test_routines import instance_at, routine_file
 from tests.test_scheduler import FakeClock, runtime
+from tests.test_thread_sidebar import _fire, _setup
 
 
 @asynccontextmanager
@@ -90,6 +91,38 @@ def test_the_hub_relays_a_client_to_the_instances_private_contract(tmp_path: Pat
         assert isinstance(created["result"], dict)
         assert isinstance(listed["result"], dict)
         assert [thread["title"] for thread in listed["result"]["threads"]] == ["Relayed"]
+
+    asyncio.run(scenario())
+
+
+def test_a_relayed_thread_list_carries_the_approval_a_parked_run_waits_on(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        hub = hub_at(tmp_path / "hub", runtime)
+        token = hub.access.issue()
+        assert token is not None
+        headers = {"Authorization": f"Bearer {token}"}
+        (tmp_path / "instance").mkdir()
+        dispatcher, _ = await _setup(tmp_path / "instance", "park")
+        await _fire(dispatcher, "park")
+        async with served(hub) as address, aiohttp.ClientSession(headers=headers) as session:
+            instance_id = await running_instance(hub, session, address)
+            async with instance_served(dispatcher, control_token(hub, instance_id)) as private:
+                runtime.addresses[instance_id] = f"http://{private.host}:{private.port}"
+                async with session.ws_connect(
+                    url(address, f"/instances/{instance_id}/ws")
+                ) as relayed:
+                    await call(relayed, "thread.list")
+                    listed = await frame(relayed)
+
+        assert isinstance(listed["result"], dict), listed
+        [thread] = listed["result"]["threads"]
+        assert thread["status"] == "awaiting_approval"
+        assert thread["approval"]["name"] == "write_file"
+        assert thread["approval"]["arguments"] == {"path": "notes.md"}
+        assert thread["approval"]["rule"] == "scripted"
 
     asyncio.run(scenario())
 

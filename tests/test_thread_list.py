@@ -2,10 +2,20 @@ import asyncio
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import Scope, ThreadListResult
+import pytest
+
+from kinby.contracts import (
+    AcceptedResult,
+    ApprovalRequested,
+    EventType,
+    Scope,
+    ThreadListResult,
+    ThreadStatus,
+)
 from kinby.core.dispatcher import Dispatcher, build_dispatcher
 from tests.test_thread_archive import _create
 from tests.test_thread_sidebar import _fire, _setup
+from tests.test_thread_status import _until
 
 
 async def _list(dispatcher: Dispatcher, **command: object) -> ThreadListResult:
@@ -29,6 +39,51 @@ def test_the_routine_option_lists_that_routines_runs_alone(tmp_path: Path) -> No
         assert await _listed(dispatcher, filter="all", routine="done") == [second, first]
         assert await _listed(dispatcher, filter="sidebar", routine="fail") == [failed]
         assert await _listed(dispatcher, filter="sidebar", routine="done") == []
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_run_parked_on_a_gated_call_lists_the_approval_it_waits_on(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher, _ = await _setup(tmp_path, "park")
+        thread_id = await _fire(dispatcher, "park")
+        requested = await _until(dispatcher, thread_id, EventType.APPROVAL_REQUESTED)
+
+        [thread] = (await _list(dispatcher, filter="all", routine="park")).threads
+
+        assert thread.status is ThreadStatus.AWAITING_APPROVAL
+        assert thread.approval == requested.payload
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("decision", ["approve", "deny"])
+def test_an_answered_approval_leaves_the_summary_once_the_turn_moves_on(
+    tmp_path: Path, decision: str
+) -> None:
+    async def scenario() -> None:
+        dispatcher, _ = await _setup(tmp_path, "park")
+        thread_id = await _fire(dispatcher, "park")
+        requested = await _until(dispatcher, thread_id, EventType.APPROVAL_REQUESTED)
+        assert isinstance(requested.payload, ApprovalRequested)
+        answered = await dispatcher.dispatch(
+            "thread.approval.respond",
+            {
+                "thread_id": thread_id,
+                "approval_id": requested.payload.approval_id,
+                "decision": decision,
+            },
+            {Scope.THREAD_OPERATE},
+        )
+        assert isinstance(answered, AcceptedResult), answered
+        await _until(dispatcher, thread_id, EventType.TURN_COMPLETED)
+
+        [thread] = (await _list(dispatcher, filter="all", routine="park")).threads
+
+        assert thread.status is ThreadStatus.IDLE
+        assert thread.approval is None
 
     asyncio.run(scenario())
 

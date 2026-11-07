@@ -16,7 +16,7 @@ You are the home instance. The hub created you and lets you, and no other instan
 - **Factory.** A line of steps the hub runs to carry a work item, such as one issue, from start to finish across its instances. Each of its instances picked one of its factory roles at creation, such as `coder`, and keeps that role for life.
 - **Factory run.** One work item's trip through a factory. A run that ran out of retries, or lacks what only the user can give, is needs human and waits for the user.
 - **Routine.** A prompt an instance runs on a schedule, on a signal, or by hand. It lives as `routines/<name>/ROUTINE.md` in that instance.
-- **Thread.** One conversation in one instance. Its status is running, awaiting approval, failed or idle.
+- **Thread.** One conversation in one instance. Its status is running, awaiting approval, failed or idle. A thread awaiting approval carries the `approval` it waits on: the tool's `name`, its `arguments` and the gate `rule` that asked. Read it to tell the user what they are approving, or why the gate stopped a run.
 - **Channel.** Where the hub sends the user notifications, such as a Telegram chat or an email inbox. Each one keeps a list of the instances it mutes and sends nothing from them.
 
 ## Reading

@@ -654,20 +654,26 @@ def test_a_takeover_parks_the_turn_needing_the_user_and_resuming_it_finishes_it(
     browser = FakeBrowser()
     dispatcher = _takeover_runtime(tmp_path, browser)
 
-    async def scenario() -> tuple[Event, list[ThreadStatus], list[UUID], list[UUID], list[Event]]:
+    async def scenario() -> tuple[
+        Event,
+        list[tuple[ThreadStatus, ApprovalRequested | None]],
+        list[UUID],
+        list[UUID],
+        list[Event],
+    ]:
         parked = await _parked_on_takeover(dispatcher)
         listed = await call(dispatcher, "thread.list")
         opened_while_parked, closed_while_parked = list(browser.opened), list(browser.closed)
         await _resume(dispatcher, parked)
         events = await turn_events(dispatcher, parked.thread_id)
-        statuses = [thread.status for thread in listed.threads]
+        statuses = [(thread.status, thread.approval) for thread in listed.threads]
         return parked, statuses, opened_while_parked, closed_while_parked, events
 
     parked, statuses, opened_while_parked, closed_while_parked, events = asyncio.run(scenario())
 
     assert isinstance(parked.payload, TakeoverRequested)
     assert parked.payload.reason == _REASON
-    assert statuses == [ThreadStatus.AWAITING_TAKEOVER]
+    assert statuses == [(ThreadStatus.AWAITING_TAKEOVER, None)]
     # The user drives the turn's page on the hub, so it is open for them before any browser call.
     assert opened_while_parked == [parked.turn_id]
     assert closed_while_parked == []
