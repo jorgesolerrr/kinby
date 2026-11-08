@@ -609,6 +609,39 @@ def test_a_patch_that_fails_is_a_tool_error_and_leaves_the_view(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"op": "append", "path": "/data/postings/-", "value": {}},
+        {"op": "add", "path": "/data/postings/-"},
+        {"op": "move", "path": "/data/moved"},
+        {"op": "remove", "path": "data/postings"},
+        {"op": "remove", "path": "/data/postings", "value": 1},
+        "add /data/postings/-",
+    ],
+)
+def test_a_patch_with_an_invalid_operation_is_a_tool_error_and_leaves_the_view(
+    tmp_path: Path, op: object
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(
+            instance_at(tmp_path),
+            calling(("view_write", board()), ("view_patch", {"id": "applications", "ops": [op]})),
+        )
+        await turn(dispatcher)
+        before = await call(dispatcher, "view.get", id="applications")
+
+        events = await turn(dispatcher)
+        after = await call(dispatcher, "view.get", id="applications")
+
+        [result] = tool_results(events)
+        assert result.error
+        assert changes(events) == []
+        assert after == before
+
+    asyncio.run(scenario())
+
+
 def test_subscribing_to_a_view_the_instance_does_not_have_is_not_found(tmp_path: Path) -> None:
     async def scenario() -> None:
         dispatcher = runtime(instance_at(tmp_path))

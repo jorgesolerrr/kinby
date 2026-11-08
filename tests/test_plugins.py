@@ -255,10 +255,6 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
 
         assert [tool.name for tool in model.bound_tools[0]] == [
             "bash",
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "edit",
             "forget",
@@ -345,10 +341,6 @@ def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeyp
         assert groups == ["kinby.tools"]
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
             [
-                "code_add_package",
-                "code_delete",
-                "code_expose_tool",
-                "code_run",
                 "code_write",
                 "forget",
                 "memory_open",
@@ -371,10 +363,6 @@ def test_registry_reads_installed_tools_once_per_session(tmp_path: Path, monkeyp
                 "view_write",
             ],
             [
-                "code_add_package",
-                "code_delete",
-                "code_expose_tool",
-                "code_run",
                 "code_write",
                 "forget",
                 "memory_open",
@@ -468,10 +456,6 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
             [
                 "available",
-                "code_add_package",
-                "code_delete",
-                "code_expose_tool",
-                "code_run",
                 "code_write",
                 "forget",
                 "memory_open",
@@ -494,10 +478,6 @@ def test_two_entry_points_exporting_one_name_emit_a_warning(
             ],
             [
                 "available",
-                "code_add_package",
-                "code_delete",
-                "code_expose_tool",
-                "code_run",
                 "code_write",
                 "forget",
                 "memory_open",
@@ -553,10 +533,6 @@ def test_disabling_defaults_keeps_a_third_party_entry_point_named_defaults(
         await _start_turn(instance, model)
 
         assert [tool.name for tool in model.bound_tools[0]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",
@@ -605,10 +581,6 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
         }
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
             [
-                "code_add_package",
-                "code_delete",
-                "code_expose_tool",
-                "code_run",
                 "code_write",
                 "forget",
                 "memory_open",
@@ -647,10 +619,6 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
         assert warning.sources == (str(broken),)
         assert [tool.name for tool in model.bound_tools[0]] == [
             "bash",
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "edit",
             "forget",
@@ -1191,10 +1159,6 @@ def greet(name: str) -> str:
 
         assert len(model.bound_tools) == 1
         assert [tool.name for tool in model.bound_tools[0]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "greet",
@@ -1665,10 +1629,6 @@ def {tool_name}() -> str:
 
         assert [tool.name for tool in model.bound_tools[0]] == [
             "alpha",
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",
@@ -1733,10 +1693,6 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
         ) in system_message.text
         assert "These are the detailed planning instructions." not in system_message.text
         assert [tool.name for tool in model.bound_tools[0]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",
@@ -2290,10 +2246,6 @@ def version() -> str:
         ]
         assert results == ["one", "two"]
         assert [tool.name for tool in model.bound_tools[0]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",
@@ -2316,10 +2268,6 @@ def version() -> str:
             "view_write",
         ]
         assert [tool.name for tool in model.bound_tools[1]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",
@@ -2342,10 +2290,6 @@ def version() -> str:
             "view_write",
         ]
         assert [tool.name for tool in model.bound_tools[2]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",
@@ -2435,10 +2379,6 @@ def fresh() -> str:
         ]
         assert all("SyntaxError" in warning.message for warning in warnings)
         assert [tool.name for tool in model.bound_tools[1]] == [
-            "code_add_package",
-            "code_delete",
-            "code_expose_tool",
-            "code_run",
             "code_write",
             "forget",
             "memory_open",

@@ -662,12 +662,13 @@ def instance_tools(instance: Instance) -> tuple[Tool, ...]:
 
     code_expose_tool = replace(code_expose_tool, preview=_expose_preview)
 
+    code_tools = (code_add_package, code_delete, code_expose_tool, code_run, code_write)
+    if not (instance.path / CODE_DIR).is_dir():
+        # The other code tools need instance code, and code_write starts it.
+        code_tools = (code_write,)
+
     return (
-        code_add_package,
-        code_delete,
-        code_expose_tool,
-        code_run,
-        code_write,
+        *code_tools,
         repository_commands_write,
         routine_list,
         routine_read,

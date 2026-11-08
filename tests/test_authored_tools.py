@@ -62,12 +62,18 @@ def greet(name: str) -> str:
     """Greet someone."""
     return f"{greeting.hello()}, {name}"
 '''
+    writing = asyncio.run(
+        turn(
+            instance,
+            [("code_write", {"path": "tools/greet.py", "content": module})],
+            PermissionMode.FULL_ACCESS,
+        )
+    )
     exposing = asyncio.run(
         turn(
             instance,
             [
                 ("code_add_package", {"name": str(wheel)}),
-                ("code_write", {"path": "tools/greet.py", "content": module}),
                 ("code_expose_tool", {"name": "greet"}),
             ],
             PermissionMode.FULL_ACCESS,
@@ -78,7 +84,7 @@ def greet(name: str) -> str:
         turn(instance, [("greet", {"name": "Jorge"})], PermissionMode.FULL_ACCESS)
     )
 
-    exposed = [p for p in exposing if isinstance(p, ToolResult)]
+    exposed = [p for p in (*writing, *exposing) if isinstance(p, ToolResult)]
     assert not any(result.error for result in exposed), exposed
     result = next(p for p in calling if isinstance(p, ToolResult))
     assert (result.error, result.output) == (False, "hello from greeting, Jorge")

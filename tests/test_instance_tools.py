@@ -1359,6 +1359,7 @@ def test_skill_delete_refuses_to_remove_a_kinby_skill(tmp_path: Path) -> None:
 
 def test_instance_tool_metadata(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
+    (tmp_path / "code").mkdir()
     tools = {tool.name: tool for tool in instance_tools(instance)}
 
     assert set(tools) == {

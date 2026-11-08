@@ -65,13 +65,9 @@ async def call(instance: Instance, name: str, arguments: dict[str, JsonValue]) -
     return result
 
 
-async def turn(
-    instance: Instance,
-    calls: Sequence[tuple[str, dict[str, JsonValue]]],
-    mode: PermissionMode,
-) -> list[Payload]:
-    """Run one turn whose model makes *calls* one after another, in *mode*."""
-    model = ScriptedModel(
+def scripted(calls: Sequence[tuple[str, dict[str, JsonValue]]]) -> ScriptedModel:
+    """A model that makes *calls* one after another, then ends the turn."""
+    return ScriptedModel(
         [
             *(
                 AIMessageChunk(
@@ -90,6 +86,21 @@ async def turn(
             AIMessageChunk(content="Done."),
         ]
     )
+
+
+async def turn(
+    instance: Instance,
+    calls: Sequence[tuple[str, dict[str, JsonValue]]],
+    mode: PermissionMode,
+) -> list[Payload]:
+    """Run one turn whose model makes *calls* one after another, in *mode*."""
+    return await model_turn(instance, scripted(calls), mode)
+
+
+async def model_turn(
+    instance: Instance, model: ScriptedModel, mode: PermissionMode
+) -> list[Payload]:
+    """Run one turn of *model*, in *mode*."""
     runner = LangGraphRunner(instance, model_factory=lambda _: model)
     preparation = runner.prepare_for_turn()
     thread_id = uuid4()
@@ -120,16 +131,22 @@ async def turn(
     return payloads
 
 
-def test_a_turn_writes_a_script_adds_its_package_and_runs_it(tmp_path: Path) -> None:
+def test_turns_write_a_script_add_its_package_and_run_it(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     wheel = greeting_wheel(tmp_path)
     script = "import sys\nimport greeting\n\nprint(greeting.hello(), *sys.argv[1:])\n"
 
-    payloads = asyncio.run(
+    writing = asyncio.run(
+        turn(
+            instance,
+            [("code_write", {"path": "greet.py", "content": script})],
+            PermissionMode.FULL_ACCESS,
+        )
+    )
+    running = asyncio.run(
         turn(
             instance,
             [
-                ("code_write", {"path": "greet.py", "content": script}),
                 ("code_add_package", {"name": str(wheel)}),
                 ("code_run", {"script": "greet.py", "arguments": ["and", "Jorge"]}),
             ],
@@ -137,7 +154,7 @@ def test_a_turn_writes_a_script_adds_its_package_and_runs_it(tmp_path: Path) -> 
         )
     )
 
-    results = {p.name: p for p in payloads if isinstance(p, ToolResult)}
+    results = {p.name: p for p in (*writing, *running) if isinstance(p, ToolResult)}
     assert not any(result.error for result in results.values()), results
     assert results["code_run"].output == "hello from greeting and Jorge\n"
     assert (tmp_path / "code" / "uv.lock").is_file()
@@ -149,6 +166,23 @@ def test_a_turn_writes_a_script_adds_its_package_and_runs_it(tmp_path: Path) -> 
     ]
     assert all(change.turn_id is not None for change in changes)
     assert '+    "greeting",' in changes[0].diff
+
+
+CODE_TOOLS = {"code_add_package", "code_delete", "code_expose_tool", "code_run", "code_write"}
+
+
+def test_only_code_write_is_offered_until_the_instance_code_exists(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    first = scripted([("code_write", {"path": "greet.py", "content": "print('hi')\n"})])
+    second = scripted([])
+
+    asyncio.run(model_turn(instance, first, PermissionMode.FULL_ACCESS))
+    asyncio.run(model_turn(instance, second, PermissionMode.FULL_ACCESS))
+
+    [before] = {frozenset(tool.name for tool in tools) & CODE_TOOLS for tools in first.bound_tools}
+    [after] = {frozenset(tool.name for tool in tools) & CODE_TOOLS for tools in second.bound_tools}
+    assert before == {"code_write"}
+    assert after == CODE_TOOLS
 
 
 def test_code_delete_removes_a_file_and_records_the_change(tmp_path: Path) -> None:
@@ -171,6 +205,7 @@ def test_code_writes_refuse_a_path_outside_the_instance_code(
     tmp_path: Path, name: str, path: str
 ) -> None:
     instance = instance_at(tmp_path)
+    (tmp_path / "code").mkdir()
     (tmp_path / "escape.py").write_text("kept\n", encoding="utf-8")
     arguments: dict[str, JsonValue] = {"path": path.format(root=tmp_path)}
     if name == "code_write":
@@ -216,6 +251,7 @@ def test_code_run_cuts_output_past_the_bash_cap(tmp_path: Path) -> None:
 
 def test_code_run_refuses_a_script_outside_the_instance_code(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
+    (tmp_path / "code").mkdir()
     (tmp_path / "outside.py").write_text("print('ran')\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="inside the instance code"):
@@ -251,6 +287,7 @@ def test_a_secret_reaches_a_script_only_once_the_project_declares_it(
 
 def test_the_code_run_approval_names_the_script_and_its_arguments(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
+    (tmp_path / "code").mkdir()
     arguments: dict[str, JsonValue] = {"script": "greet.py", "arguments": ["--name", "Jorge"]}
 
     payloads = asyncio.run(turn(instance, [("code_run", arguments)], PermissionMode.ASK))
@@ -273,8 +310,8 @@ def test_the_code_run_approval_names_the_script_and_its_arguments(tmp_path: Path
 def test_code_tools_ask_in_ask_mode_and_are_denied_in_read_only(
     tmp_path: Path, name: str, arguments: dict[str, JsonValue]
 ) -> None:
-    (tmp_path / "asked").mkdir()
-    (tmp_path / "denied").mkdir()
+    (tmp_path / "asked" / "code").mkdir(parents=True)
+    (tmp_path / "denied" / "code").mkdir(parents=True)
     asked = instance_at(tmp_path / "asked")
     denied = instance_at(tmp_path / "denied")
 
@@ -284,5 +321,5 @@ def test_code_tools_ask_in_ask_mode_and_are_denied_in_read_only(
     assert any(isinstance(p, ApprovalRequested) for p in asked_payloads)
     gated = next(p for p in denied_payloads if isinstance(p, ToolGated))
     assert gated.action is GateOutcome.DENY
-    assert not (tmp_path / "asked" / "code").exists()
-    assert not (tmp_path / "denied" / "code").exists()
+    assert list((tmp_path / "asked" / "code").iterdir()) == []
+    assert list((tmp_path / "denied" / "code").iterdir()) == []
