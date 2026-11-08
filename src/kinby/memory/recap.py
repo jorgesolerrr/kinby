@@ -705,7 +705,13 @@ def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:
     return "\n\n".join(sections)
 
 
+#: The tool the home instance read the hub with before `kinby hub read`, still in unrecapped turns.
+_HUB_READ_TOOL = "hub_read"
+
+
 def _reads_the_hub(call: ToolCall) -> bool:
+    if call.name == _HUB_READ_TOOL:
+        return True
     return call.name == bash.name and "kinby hub read" in str(call.arguments.get("command", ""))
 
 

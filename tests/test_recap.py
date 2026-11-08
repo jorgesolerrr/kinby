@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 from langchain_core.exceptions import ModelNotFoundError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from kinby.contracts import (
     AcceptedResult,
@@ -376,8 +376,16 @@ def test_recap_model_receives_the_turn_frame_as_a_user_message(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("bash", {"command": "kinby hub read memory.open node=dentist | jq .body"}),
+        ("hub_read", {"method": "memory.open", "params": {"node": "dentist"}}),
+    ],
+    ids=["kinby-hub-read", "hub-read-before-the-cli"],
+)
 def test_what_the_home_instance_reads_through_the_hub_stays_out_of_its_recap(
-    tmp_path: Path,
+    tmp_path: Path, tool: str, arguments: dict[str, JsonValue]
 ) -> None:
     async def scenario() -> None:
         event_log = EventLog(tmp_path / ".state")
@@ -402,14 +410,10 @@ def test_what_the_home_instance_reads_through_the_hub_stays_out_of_its_recap(
         thread_id, turn_id = uuid4(), uuid4()
         for payload in (
             TurnStarted(message="What does alice know about my dentist?", model="openai:main"),
-            ToolCall(
-                call_id="read-1",
-                name="bash",
-                arguments={"command": "kinby hub read memory.open node=dentist | jq .body"},
-            ),
+            ToolCall(call_id="read-1", name=tool, arguments=arguments),
             ToolResult(
                 call_id="read-1",
-                name="bash",
+                name=tool,
                 output='"The dentist is Dr. Ruiz."',
                 error=False,
             ),
@@ -422,7 +426,7 @@ def test_what_the_home_instance_reads_through_the_hub_stays_out_of_its_recap(
 
         (message,) = model.calls[0]
         assert "Dr. Ruiz" not in message.text
-        assert "kinby hub read memory.open node=dentist" in message.text
+        assert json.dumps(arguments, ensure_ascii=False, sort_keys=True) in message.text
 
     asyncio.run(scenario())
 
