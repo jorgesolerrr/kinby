@@ -119,6 +119,9 @@ class ErrorCode(StrEnum):
     ROUTINE_PENDING = "ROUTINE_PENDING"
     #: Nobody finished the takeover the turn waited on before its deadline, so the turn ended.
     TAKEOVER_ABANDONED = "TAKEOVER_ABANDONED"
+    #: The provider refused a model call because the prompt was too long. The message names the
+    #: turn's largest tool results.
+    CONTEXT_OVERFLOW = "CONTEXT_OVERFLOW"
     #: Raised by a client, never sent by a server: its connection dropped under a call,
     #: or never came up.
     CONNECTION_LOST = "CONNECTION_LOST"

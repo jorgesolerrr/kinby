@@ -1987,6 +1987,7 @@
         "STALE",
         "ROUTINE_PENDING",
         "TAKEOVER_ABANDONED",
+        "CONTEXT_OVERFLOW",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
