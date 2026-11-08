@@ -3314,6 +3314,7 @@ export interface ToolResult {
   error: boolean;
   name: string;
   output: string;
+  size?: number | null;
   type: "tool.result";
 }
 /**

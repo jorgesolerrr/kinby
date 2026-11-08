@@ -24,7 +24,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from kinby.instance.code import authored_tool_module, code_python, script_environment
 from kinby.instance.layout import CODE_DIR
-from kinby.plugins.defaults.shell import OUTPUT_CAP, run_capped
+from kinby.plugins.defaults.shell import run_capped
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool, ToolContext
 
@@ -90,8 +90,7 @@ async def _call(
         await asyncio.to_thread(
             _run_child, "call", instance_path, name, source, exchanged, timeout_seconds
         )
-        result = _RESULT.validate_json(exchanged.read_bytes())
-        return None if result is None else result[:OUTPUT_CAP]
+        return _RESULT.validate_json(exchanged.read_bytes())
 
 
 def _run_child(
@@ -152,7 +151,7 @@ def _child(command: str, module: Path, name: str, exchanged: Path) -> None:
         return
     arguments = json.loads(exchanged.read_text(encoding="utf-8"))
     result = asyncio.run(tool.runnable.ainvoke(arguments))
-    exchanged.write_bytes(_RESULT.dump_json(None if result is None else str(result)[:OUTPUT_CAP]))
+    exchanged.write_bytes(_RESULT.dump_json(None if result is None else str(result)))
 
 
 if __name__ == "__main__":

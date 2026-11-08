@@ -110,6 +110,7 @@ from kinby.core.memory import InstanceMemory
 from kinby.core.models import count_tokens
 from kinby.core.pricing import SHIPPED_PRICES
 from kinby.core.routing import Dispatcher, instance_capabilities
+from kinby.core.saved_outputs import discard_outputs
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.snapshots import SnapshotStore, WorkspaceSnapshots
 from kinby.core.stats import (
@@ -205,6 +206,7 @@ def build_dispatcher(
     if turn_settings is not None:
 
         def after_turn(thread_id: UUID, turn_id: UUID) -> None:
+            discard_outputs(state_dir, turn_id)
             if turn_settings.recap is not None:
                 turn_settings.recap.schedule(thread_id, turn_id)
             if scheduler is not None:

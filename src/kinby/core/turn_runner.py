@@ -94,6 +94,7 @@ from kinby.core.prompt import (
     render_system_prompt,
     render_wake,
 )
+from kinby.core.saved_outputs import cut_to_cap, turn_outputs
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -1098,6 +1099,7 @@ class LangGraphRunner:
         granted = list(state.granted)
         read_only = list(state.read_only)
         seen_urls = _seen_urls(state.messages)
+        saved_outputs = turn_outputs(self._instance.manifest.state_dir, state.turn.turn_id)
         message_index = len(state.messages) - 1
         for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
@@ -1122,6 +1124,7 @@ class LangGraphRunner:
                 granted=name in granted,
                 marked_read_only=name in read_only,
                 seen_urls=seen_urls,
+                saved_outputs=saved_outputs,
             )
             approval_id = None
             if (
@@ -1211,12 +1214,15 @@ class LangGraphRunner:
                 )
                 self._forget_tool_call(state.turn, call)
                 continue
-            result = await self._run_tool(
-                call.call_id,
-                call.name,
-                call.arguments,
-                runtime,
-                resolution.approval_id,
+            result = cut_to_cap(
+                await self._run_tool(
+                    call.call_id,
+                    call.name,
+                    call.arguments,
+                    runtime,
+                    resolution.approval_id,
+                ),
+                saved_outputs,
             )
             await runtime.context.emit(result)
             messages.append(

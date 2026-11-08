@@ -323,6 +323,9 @@ class ToolResult(ContractModel):
     output: str
     error: bool
     duration_ms: int | None = None
+    #: The whole output's size in characters, when it was over the cap and *output* holds its
+    #: start and where it is saved (ADR 0121).
+    size: int | None = None
 
 
 class Warning(ContractModel):

@@ -55,6 +55,7 @@ def evaluate(
     granted: bool = False,
     marked_read_only: bool = False,
     seen_urls: Collection[str] = (),
+    saved_outputs: Path | None = None,
 ) -> GateDecision:
     """Evaluate one call without running the tool or changing state.
 
@@ -66,7 +67,8 @@ def evaluate(
     write whatever it declares, unless the user *marked_read_only* it (ADR 0109). A tool that
     opens a URL is allowed for one of the thread's *seen_urls*, and a write for any other
     (ADR 0110). A shell read runs unasked in ask and auto, once the bash patterns and a rule
-    naming bash had their say (ADR 0119).
+    naming bash had their say (ADR 0119), and so does a read of the turn's *saved_outputs*
+    (ADR 0121).
     """
     if tool is not None and tool.hub and tool.write:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ASK
@@ -102,7 +104,7 @@ def evaluate(
         and tool is not None
         and not tool.authored
         and isinstance(command := call.arguments.get("command"), str)
-        and is_shell_read(command, workspace)
+        and is_shell_read(command, workspace, saved_outputs=saved_outputs)
     ):
         return GateDecision(GateAction.ALLOW, GateRule("bash.read"))
     if tool is not None and tool.authored and not marked_read_only:

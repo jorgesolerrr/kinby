@@ -24,7 +24,6 @@ from mcp.types import Tool as McpTool
 
 from kinby.contracts import McpServer, McpUrlTransport
 from kinby.instance.skills_lock import LockedMcpServer
-from kinby.plugins.defaults.shell import OUTPUT_CAP
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool
 
@@ -154,4 +153,4 @@ async def _call(client: Client, tool: str, /, **arguments: object) -> str:
     )
     if result.is_error:
         raise ValueError(output or json.dumps(result.structured_content))
-    return output[:OUTPUT_CAP]
+    return output

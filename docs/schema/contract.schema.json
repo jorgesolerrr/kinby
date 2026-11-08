@@ -10310,6 +10310,17 @@
         "output": {
           "type": "string"
         },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "tool.result",
           "default": "tool.result",
