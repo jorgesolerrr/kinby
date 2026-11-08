@@ -32,13 +32,7 @@ A routine's prompt runs with its instance's own tools: the routine tools, the
 `memory_*` and `view_*` tools, `notify`, and the instance's plugins. It never
 holds a hub tool, even in the home instance, because hub tools exist only on
 turns the user starts. A run that calls one fails with the tool not available.
-The hub tools are `hub_read`, `instance_create`, `instance_lifecycle`,
-`instance_picks_set`, `instance_prompt_set`, `instance_routine_write`,
-`instance_routine_set_enabled`, `instance_routine_run`,
-`instance_routine_delete`, `instance_ask`, `image_prepare`,
-`library_skill_write`, `library_git_add`, `library_move`,
-`library_mcp_server_write`, `factory_write`, `channel_mute` and
-`channel_unmute`.
+The hub tools are `hub_read` and `hub_write`.
 
 Never write a step that calls one into a routine's prompt. A routine that needs
 hub data gets it another way, such as `routine_list` for the instance's own
@@ -254,36 +248,37 @@ failure streak.
 
 ## In another instance
 
-Every routine tool above has a twin that takes the target's `instance_id`:
-`instance_routine_write`, `instance_routine_set_enabled`, `instance_routine_run`
-and `instance_routine_delete`. Each one asks the user. Read the target with
+Every routine tool above has a twin, a `hub_write` operation whose arguments
+take the target's `instance_id`: `instance_routine_write`,
+`instance_routine_set_enabled`, `instance_routine_run` and
+`instance_routine_delete`. Each one asks the user. Read the target with
 `hub_read` first: `routine.list` for what it already runs, `routine.read` for one
 routine's file and hash, and `manifest.get` for its routines timezone. The target
-must be running. These `hub_read` reads and `instance_routine_*` calls belong to
+must be running. These `hub_read` reads and `hub_write` calls belong to
 this turn, the one writing the routine. They are never steps in the routine's
 prompt, which runs without hub tools.
 
 1. Draft the file as above, in the target's terms: its prompt runs in that
    instance, with that instance's tools, skills and memory, not yours.
-2. Call `instance_routine_write` with the routine name, the whole file, and
-   `hash` null for a new routine or the hash `routine.read` returned for an
-   edit. It writes `ROUTINE.md` only. A code step there must already be a tool
-   the target holds, named with `run`. If the routine needs new code, tell the
-   user, who adds the tool to that instance.
-3. Run it once now with `instance_routine_run`, so a broken routine shows up
-   while you are still talking with the user. Then read `routine.list` on the
-   target. The routine's `last_run` holds its outcome and the `thread_id` of the
-   run. While the outcome is `running`, read again later. On `failed`, read
-   that thread's turns, fix the file and run it again. On `work` or `no-work`,
-   tell the user what the run did, with a Markdown link to the run's thread,
-   `[a short label](/instances/<instance_id>/threads/<thread_id>)`, never the
-   path as code.
+2. Call `hub_write` with `instance_routine_write` and the routine name, the
+   whole file, and `hash` null for a new routine or the hash `routine.read`
+   returned for an edit. It writes `ROUTINE.md` only. A code step there must
+   already be a tool the target holds, named with `run`. If the routine needs
+   new code, tell the user, who adds the tool to that instance.
+3. Run it once now with the `instance_routine_run` operation, so a broken
+   routine shows up while you are still talking with the user. Then read
+   `routine.list` on the target. The routine's `last_run` holds its outcome and
+   the `thread_id` of the run. While the outcome is `running`, read again later.
+   On `failed`, read that thread's turns, fix the file and run it again. On
+   `work` or `no-work`, tell the user what the run did, with a Markdown link to
+   the run's thread, `[a short label](/instances/<instance_id>/threads/<thread_id>)`,
+   never the path as code.
 
 Done when the routine is written in the target, a run of it ended in `work` or
 `no-work`, and the user has its next firing time or its signal path.
 
-To pause or resume a routine there, call `instance_routine_set_enabled`. To
-remove one, call `instance_routine_delete` with the hash `routine.read`
+To pause or resume a routine there, ask for `instance_routine_set_enabled`. To
+remove one, ask for `instance_routine_delete` with the hash `routine.read`
 returned. A manual run with a saved delivery body is a run in that instance's own
 command line, so ask the user to run it there or start a turn there with
-`instance_ask`.
+the `instance_ask` operation.

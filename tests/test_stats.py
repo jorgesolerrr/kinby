@@ -199,7 +199,7 @@ def test_stats_get_reports_one_turn_record_from_the_event_log(tmp_path: Path) ->
         started = events[0]
         closed = events[-1]
 
-        result = await dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+        result = await dispatcher.dispatch("stats.get", {"records": True}, {Scope.INSTANCE_READ})
 
         assert isinstance(result, StatsGetResult)
         assert result.unpriced_models == []
@@ -267,7 +267,7 @@ def test_stats_get_uses_a_manifest_price_override(tmp_path: Path) -> None:
             instance.manifest.state_dir,
             event_log=historical_event_log(instance.manifest.state_dir, events),
             prices=partial(instance_prices, instance),
-        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+        ).dispatch("stats.get", {"records": True}, {Scope.INSTANCE_READ})
     )
 
     assert isinstance(result, StatsGetResult)
@@ -292,7 +292,7 @@ def test_a_booted_instance_prices_stats_with_its_current_manifest_prices(tmp_pat
             await log.append(thread_id, turn_id, TurnCompleted(input_tokens=100, output_tokens=10))
         runtime = await boot_instance(instance)
         try:
-            booted = await call(runtime.dispatcher, "stats.get")
+            booted = await call(runtime.dispatcher, "stats.get", records=True)
             read = await call(runtime.dispatcher, "manifest.get")
             await call(
                 runtime.dispatcher,
@@ -301,7 +301,7 @@ def test_a_booted_instance_prices_stats_with_its_current_manifest_prices(tmp_pat
                 prices={"custom:priced": {"input": 4, "output": 8}},
                 hash=read.hash,
             )
-            repriced = await call(runtime.dispatcher, "stats.get")
+            repriced = await call(runtime.dispatcher, "stats.get", records=True)
         finally:
             await runtime.stop_after_running_routine()
 
@@ -376,7 +376,7 @@ def test_stats_get_cost_uses_cache_rates(tmp_path: Path) -> None:
             tmp_path,
             event_log=historical_event_log(tmp_path, events),
             prices=lambda: {"openai:gpt-5": ModelPrice(input=1.25, output=10, cache_read=0.125)},
-        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+        ).dispatch("stats.get", {"records": True}, {Scope.INSTANCE_READ})
     )
 
     assert isinstance(result, StatsGetResult)
@@ -428,7 +428,7 @@ def test_stats_warns_when_model_calls_disagree_with_the_closing_total(
 
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
-            "stats.get", {}, {Scope.INSTANCE_READ}
+            "stats.get", {"records": True}, {Scope.INSTANCE_READ}
         )
     )
 
@@ -573,7 +573,7 @@ def test_stats_get_measures_memory_tokens_from_model_call_deltas(tmp_path: Path)
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -609,7 +609,7 @@ def test_stats_get_counts_no_memory_from_a_step_its_input_shrank_across(tmp_path
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -650,7 +650,7 @@ def test_stats_get_adds_each_turns_profile_size_counted_once_per_profile_version
         for text in ("Prefers tea.", "Prefers tea.", "Prefers green tea."):
             profile.write_text(text, encoding="utf-8")
             await _record_metrics_turn(dispatcher)
-        result = await dispatcher.dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+        result = await dispatcher.dispatch("stats.get", {"records": True}, {Scope.INSTANCE_READ})
         assert isinstance(result, StatsGetResult)
         return result.records
 
@@ -790,7 +790,7 @@ def test_stats_get_lists_the_nodes_each_turn_recalled(tmp_path: Path) -> None:
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -920,7 +920,9 @@ def test_stats_and_daily_budget_count_failed_turn_tokens(tmp_path: Path) -> None
     log = historical_event_log(tmp_path, events)
 
     result = asyncio.run(
-        build_dispatcher(tmp_path, event_log=log).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+        build_dispatcher(tmp_path, event_log=log).dispatch(
+            "stats.get", {"records": True}, {Scope.INSTANCE_READ}
+        )
     )
 
     assert isinstance(result, StatsGetResult)
@@ -972,7 +974,7 @@ def test_stats_get_reports_unpriced_models_and_sums_only_priced_turns(
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -1043,7 +1045,7 @@ def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unkn
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -1750,7 +1752,7 @@ def test_stats_get_marks_missing_start_metadata_as_unknown(tmp_path: Path) -> No
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -1791,7 +1793,7 @@ def test_stats_get_carries_the_origin_its_turn_started_with(tmp_path: Path, orig
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -2039,7 +2041,7 @@ def test_stats_get_keeps_recap_latest_rating_and_every_closing_kind(tmp_path: Pa
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -2129,7 +2131,7 @@ def test_stats_get_counts_write_memory_calls_without_marking_consulted(
     result = asyncio.run(
         build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
             "stats.get",
-            {},
+            {"records": True},
             {Scope.INSTANCE_READ},
         )
     )
@@ -2208,11 +2210,14 @@ def test_stats_get_groups_monday_week_and_applies_inclusive_bounds(tmp_path: Pat
     ]
     dispatcher = build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events))
 
-    weekly = asyncio.run(dispatcher.dispatch("stats.get", {"by": "week"}, {Scope.INSTANCE_READ}))
+    weekly = asyncio.run(
+        dispatcher.dispatch("stats.get", {"by": "week", "records": True}, {Scope.INSTANCE_READ})
+    )
     bounded = asyncio.run(
         dispatcher.dispatch(
             "stats.get",
             {
+                "records": True,
                 "since": tuesday + timedelta(seconds=20),
                 "until": tuesday + timedelta(seconds=20),
             },

@@ -1,4 +1,5 @@
-"""Tell a shell read: a bash command that only reads inside the workspace (ADR 0119).
+"""Tell a shell read: a bash command that only reads inside the workspace (ADR 0119), the
+turn's saved outputs (ADR 0121), or the hub through kinby's CLI (ADR 0120).
 
 A command this module cannot parse or does not recognise is not a shell read, so a wrong guess
 asks.
@@ -9,6 +10,8 @@ from __future__ import annotations
 import re
 from glob import glob
 from pathlib import Path
+
+from kinby.contracts import HUB_READS, RELAYED_READS
 
 #: The programs a shell read may run. git is not one: its repository's config, attributes and
 #: hooks sit in the workspace, which auto writes unasked, and can make any git command run a
@@ -49,17 +52,18 @@ _WORD_PART = re.compile(r"""'([^']*)'|"((?:[^"\\]|\\.)*)"|\\(.)|([^'"\\]+)""", r
 _DOUBLE_QUOTED_ESCAPE = re.compile(r'\\([\\"\n])')
 
 
-def is_shell_read(command: str, workspace: Path) -> bool:
-    """Whether *command* only runs programs that read, on paths inside *workspace*, through any
-    link or glob."""
+def is_shell_read(command: str, workspace: Path, *, saved_outputs: Path | None = None) -> bool:
+    """Whether *command* only runs programs that read, on paths inside *workspace* or the turn's
+    *saved_outputs*, through any link or glob."""
     commands = _commands(command)
     if not commands:
         return False
     root = workspace.resolve()
+    roots = (root,) if saved_outputs is None else (root, saved_outputs.resolve())
     # Every directory a command may run in: a cd before it may have failed, or run in a pipe.
     directories = {root}
     for program, *arguments in commands:
-        if not _reads(program, arguments, directories, root):
+        if not _reads(program, arguments, directories, roots):
             return False
         if program == "cd":
             directories |= {(each / arguments[0]).resolve() for each in directories}
@@ -115,10 +119,14 @@ def _escaped(match: re.Match[str]) -> str:
     return "" if match.group(1) == "\n" else match.group(1)
 
 
-def _reads(program: str, arguments: list[str], directories: set[Path], root: Path) -> bool:
+def _reads(
+    program: str, arguments: list[str], directories: set[Path], roots: tuple[Path, ...]
+) -> bool:
+    if program == "kinby":
+        return _hub_read(arguments)
     if program not in _PROGRAMS or any(_unsafe(program, each) for each in arguments):
         return False
-    if not all(_confined(each, directories, root) for each in arguments):
+    if not all(_confined(each, directories, roots) for each in arguments):
         return False
     match program:
         case "cd":
@@ -131,6 +139,17 @@ def _reads(program: str, arguments: list[str], directories: set[Path], root: Pat
     return True
 
 
+def _hub_read(arguments: list[str]) -> bool:
+    """Whether kinby's *arguments* only read the hub. Their values go to the hub, never to a
+    path."""
+    match arguments:
+        case ["hub", "read", method, *_]:
+            return method in HUB_READS | RELAYED_READS
+        case ["hub", "help" | "methods" | "wait", *_]:
+            return True
+    return False
+
+
 def _unsafe(program: str, argument: str) -> bool:
     if program == "find":
         return argument in _FIND_UNSAFE
@@ -140,21 +159,21 @@ def _unsafe(program: str, argument: str) -> bool:
     return argument.startswith("-") and any(letter in argument[1:] for letter in letters)
 
 
-def _confined(argument: str, directories: set[Path], root: Path) -> bool:
-    """Whether *argument* names no path outside *root* from any of *directories*."""
+def _confined(argument: str, directories: set[Path], roots: tuple[Path, ...]) -> bool:
+    """Whether *argument* names no path outside *roots* from any of *directories*."""
     if argument.startswith("~") or "=~" in argument or ":~" in argument:
         return False
     if not argument.startswith("-"):
-        return _inside(argument, directories, root)
+        return _inside(argument, directories, roots)
     # An absolute path glued to a flag, as in -f/path, is not worth telling apart.
     if "/" in argument:
         return False
     glued = argument.partition("=")[2] if argument.startswith("--") else argument[2:]
-    return not glued or _inside(glued, directories, root)
+    return not glued or _inside(glued, directories, roots)
 
 
-def _inside(name: str, directories: set[Path], root: Path) -> bool:
-    """Whether *name*, read from each of *directories*, resolves inside *root* through its links,
+def _inside(name: str, directories: set[Path], roots: tuple[Path, ...]) -> bool:
+    """Whether *name*, read from each of *directories*, resolves inside *roots* through its links,
     and so does everything it matches as a glob."""
     # Before bash 5.2, a glob after a leading dot, as in .?, matches the parent directory.
     if any(part.startswith(".") and re.search(r"[*?\[]", part) for part in name.split("/")):
@@ -162,6 +181,7 @@ def _inside(name: str, directories: set[Path], root: Path) -> bool:
     for directory in directories:
         path = directory / name
         for each in glob(str(path)) or [path]:
-            if not Path(each).resolve().is_relative_to(root):
+            resolved = Path(each).resolve()
+            if not any(resolved.is_relative_to(root) for root in roots):
                 return False
     return True

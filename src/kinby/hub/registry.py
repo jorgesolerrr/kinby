@@ -1901,12 +1901,14 @@ class HubRegistry:
         *,
         since: datetime | None = None,
         until: datetime | None = None,
+        after: UUID | None = None,
     ) -> list[FactoryRun]:
         """The factory's runs, or every factory's, oldest first, in any of *statuses*, or in any
         status without them.
 
         With *instance_id*, only the runs that instance handed in. With *since* or *until*, only
-        the runs created in that range, both ends included.
+        the runs created in that range, both ends included. With *after*, only the runs handed in
+        after that one.
         """
         where = ["1"]
         parameters: list[str] = []
@@ -1925,6 +1927,9 @@ class HubRegistry:
         if until is not None:
             where.append("created_at <= ?")
             parameters.append(_stored(until))
+        if after is not None:
+            where.append("rowid > (SELECT rowid FROM factory_runs WHERE id = ?)")
+            parameters.append(str(after))
         with self._transaction() as connection:
             rows = connection.execute(
                 f"""

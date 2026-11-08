@@ -323,6 +323,9 @@ class ToolResult(ContractModel):
     output: str
     error: bool
     duration_ms: int | None = None
+    #: The whole output's size in characters, when it was over the cap and *output* holds its
+    #: start and where it is saved (ADR 0121).
+    size: int | None = None
 
 
 class Warning(ContractModel):
@@ -936,8 +939,8 @@ class ThreadListCommand(ContractModel):
     routine: RoutineName | None = None
     #: Where the previous page ended. The next page holds the threads that sort below it.
     cursor: ThreadCursor | None = None
-    #: The most threads on a page. Without one, a single page holds every thread.
-    limit: int | None = Field(default=None, ge=1)
+    #: The most threads on a page. Null puts every thread on one page.
+    limit: int | None = Field(default=50, ge=1)
 
 
 class ThreadRenameCommand(ContractModel):
@@ -1285,7 +1288,8 @@ class InstanceSecretsSetCommand(ContractModel):
 
 class InstanceLogsCommand(ContractModel):
     instance_id: UUID
-    tail: Annotated[int, Field(gt=0)] | None = None
+    #: The last lines to return. Null returns the whole log.
+    tail: Annotated[int, Field(gt=0)] | None = 200
 
 
 class InstanceRelayReadCommand(ContractModel):
@@ -1840,6 +1844,8 @@ class StatsGetCommand(ContractModel):
     since: AwareDatetime | None = None
     until: AwareDatetime | None = None
     by: StatsBucketSize = StatsBucketSize.DAY
+    #: Whether the result holds each turn's record, which grows with every turn in the range.
+    records: bool = False
 
 
 class PlanUse(ContractModel):
@@ -1884,6 +1890,7 @@ class RunTotals(ContractModel):
 
 
 class StatsGetResult(ContractModel):
+    #: Each turn closed in the range, when the command asks for records. Empty otherwise.
     records: list[TurnMetrics]
     buckets: list[StatsBucket]
     total: StatsSummary
@@ -3730,11 +3737,17 @@ class FactoryRunListCommand(ContractModel):
     status: FactoryRunStatus | None = None
     #: Only the runs this instance handed in. None lists every instance's.
     instance_id: UUID | None = None
+    #: The last run of the previous page. The next page holds the runs handed in after it.
+    cursor: UUID | None = None
+    #: The most runs on a page. Null puts every run on one page.
+    limit: int | None = Field(default=50, ge=1)
 
 
 class FactoryRunListResult(ContractModel):
     #: Oldest first.
     runs: list[FactoryRun]
+    #: What the next page starts after, or null on the last page.
+    cursor: UUID | None
 
 
 class FactoryRunGetCommand(ContractModel):

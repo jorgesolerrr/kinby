@@ -268,14 +268,6 @@ from kinby.hub.control import (
     InstanceControl,
 )
 from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.home import (
-    ChannelMute,
-    ChannelUnmute,
-    InstanceAsk,
-    LibraryMove,
-    RelayedWrite,
-    home_write,
-)
 from kinby.hub.library import Library, skill_names
 from kinby.hub.models import (
     ContainerRuntime,
@@ -332,7 +324,18 @@ from kinby.instance.read_only_tools import read_only_tools
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
-from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from kinby.plugins.hub import (
+    HUB_SCOPES_VARIABLE,
+    HUB_URL_VARIABLE,
+    ChannelMute,
+    ChannelUnmute,
+    InstanceAsk,
+    LibraryMove,
+    RelayedWrite,
+    home_write,
+    hub_write,
+    requested_write,
+)
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_search_key
 
@@ -854,10 +857,10 @@ class Hub:
         )
 
     async def write_for_home(self, home: UUID, command: HubWriteCommand) -> HubWriteResult:
-        """Run a hub tool's write once, for the approval the hub saw the user give that call."""
+        """Run a hub_write operation once, for the approval the hub saw the user give that call."""
         write = home_write(command.tool, command.arguments)
         approved = self.approvals.approved(command.approval_id)
-        if approved.name != command.tool or home_write(approved.name, approved.arguments) != write:
+        if approved.name != hub_write.name or requested_write(approved.arguments) != write:
             raise PermissionDenied(f'Approval "{command.approval_id}" is for another call.')
         self.approvals.use(command.approval_id)
         match write:

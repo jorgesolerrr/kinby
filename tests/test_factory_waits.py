@@ -671,7 +671,7 @@ def test_a_limited_client_step_parks_its_run_until_its_plan_window_resets(tmp_pa
         assert [(a.step, a.ending, a.summary) for a in found.attempts] == [
             ("implement", StepEnding.LIMITED, "You've hit your limit.")
         ]
-        assert listed == FactoryRunListResult(runs=[found.run])
+        assert listed == FactoryRunListResult(runs=[found.run], cursor=None)
         assert len(control.steps) == 1
         assert isinstance(cancelled, FactoryRun)
         assert (cancelled.status, cancelled.wakes_at) == (FactoryRunStatus.CANCELLED, None)

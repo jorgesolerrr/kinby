@@ -1332,11 +1332,14 @@ export interface FactoryRunIntakeCommand {
   };
 }
 export interface FactoryRunListCommand {
+  cursor?: string | null;
   factory: FactoryName;
   instance_id?: string | null;
+  limit?: number | null;
   status?: FactoryRunStatus | null;
 }
 export interface FactoryRunListResult {
+  cursor: string | null;
   runs: FactoryRun[];
 }
 /**
@@ -2381,6 +2384,7 @@ export interface SkillWriteCommand {
 }
 export interface StatsGetCommand {
   by?: StatsBucketSize;
+  records?: boolean;
   since?: string | null;
   until?: string | null;
 }
@@ -3314,6 +3318,7 @@ export interface ToolResult {
   error: boolean;
   name: string;
   output: string;
+  size?: number | null;
   type: "tool.result";
 }
 /**

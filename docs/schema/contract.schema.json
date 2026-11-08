@@ -2556,6 +2556,18 @@
     "FactoryRunListCommand": {
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "factory": {
           "$ref": "#/$defs/FactoryName"
         },
@@ -2570,6 +2582,18 @@
             }
           ],
           "default": null
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 50
         },
         "status": {
           "anyOf": [
@@ -2592,6 +2616,17 @@
     "FactoryRunListResult": {
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "runs": {
           "items": {
             "$ref": "#/$defs/FactoryRun"
@@ -2600,7 +2635,8 @@
         }
       },
       "required": [
-        "runs"
+        "runs",
+        "cursor"
       ],
       "title": "FactoryRunListResult",
       "type": "object"
@@ -3456,7 +3492,7 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": 200
         }
       },
       "required": [
@@ -8373,6 +8409,10 @@
         "by": {
           "$ref": "#/$defs/StatsBucketSize"
         },
+        "records": {
+          "default": false,
+          "type": "boolean"
+        },
         "since": {
           "anyOf": [
             {
@@ -9523,7 +9563,7 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": 50
         },
         "routine": {
           "anyOf": [
@@ -10309,6 +10349,17 @@
         },
         "output": {
           "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "type": {
           "const": "tool.result",

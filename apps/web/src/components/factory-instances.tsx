@@ -80,6 +80,7 @@ export function FactoryInstances({
         const { runs } = await client.call("factory.run.list", {
           factory,
           instance_id: instance.instance_id,
+          limit: null,
         })
         return {
           instance,

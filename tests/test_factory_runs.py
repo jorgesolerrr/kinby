@@ -339,7 +339,7 @@ def test_only_the_factorys_intake_routine_hands_in_work_items_the_factory_declar
             "issue": "Expected a value of type int.",
             "repo": "The factory's work item carries no value by this name.",
         }
-        assert listed == FactoryRunListResult(runs=[])
+        assert listed == FactoryRunListResult(runs=[], cursor=None)
         assert isinstance(from_the_user, ErrorEnvelope)
         assert from_the_user.code is ErrorCode.NOT_FOUND
 
@@ -378,8 +378,8 @@ def test_a_failing_step_is_tried_again_under_its_retry_then_needs_a_human(
         ]
         assert finished.attempts[-1].summary == '"uv run pytest" exited with code 1.'
         assert [command.attempt for _, command in control.steps] == list(range(1, attempts + 1))
-        assert stopped == FactoryRunListResult(runs=[finished.run])
-        assert done == FactoryRunListResult(runs=[])
+        assert stopped == FactoryRunListResult(runs=[finished.run], cursor=None)
+        assert done == FactoryRunListResult(runs=[], cursor=None)
 
     asyncio.run(scenario())
 
@@ -1598,7 +1598,7 @@ def test_intake_refuses_a_work_item_while_its_instance_lacks_a_list_its_roles_st
         assert isinstance(one_held, ErrorEnvelope)
         assert '"checks"' in one_held.message
         assert '"setup"' not in one_held.message
-        assert listed == FactoryRunListResult(runs=[])
+        assert listed == FactoryRunListResult(runs=[], cursor=None)
 
     asyncio.run(scenario())
 

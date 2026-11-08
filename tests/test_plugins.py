@@ -1768,6 +1768,72 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
+def test_skill_tool_reads_one_of_a_skills_other_files_and_refuses_a_path_outside_it(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path, defaults=False)
+        planning = _write_skill(
+            instance.path / "skills",
+            directory="planning",
+            name="planning",
+            description="Plan work before changing files.",
+            body="Read references/steps.md.",
+        )
+        (planning.parent / "references").mkdir()
+        (planning.parent / "references" / "steps.md").write_text("Every step.", encoding="utf-8")
+        _write_skill(
+            instance.path / "skills",
+            directory="secret",
+            name="secret",
+            description="Another skill.",
+            body="Not planning's.",
+        )
+        calls = {
+            "inside": "references/steps.md",
+            "missing": "references/none.md",
+            "outside": "../secret/SKILL.md",
+        }
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "skill",
+                            "args": {"name": "planning", "file": file},
+                            "id": call_id,
+                            "type": "tool_call",
+                        }
+                        for call_id, file in calls.items()
+                    ],
+                ),
+                AIMessageChunk(content="Done"),
+            ]
+        )
+
+        events = await _start_turn(instance, model)
+
+        results = {
+            event.payload.call_id: (event.payload.output, event.payload.error)
+            for event in events
+            if isinstance(event.payload, ToolResult)
+        }
+        assert results == {
+            "inside": ("Every step.", False),
+            "missing": (
+                'SkillFileError: Skill "planning" has no file "references/none.md".',
+                True,
+            ),
+            "outside": (
+                'SkillFileError: "../secret/SKILL.md" is outside the folder of skill "planning".',
+                True,
+            ),
+        }
+
+    asyncio.run(scenario())
+
+
 def test_skills_follow_source_order_and_instance_skill_shadows_workspace(
     tmp_path: Path,
 ) -> None:

@@ -81,7 +81,7 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.gate import AUTHORED_RULE, URL_READS, evaluate
+from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import price_map
@@ -94,6 +94,7 @@ from kinby.core.prompt import (
     render_system_prompt,
     render_wake,
 )
+from kinby.core.saved_outputs import cut_to_cap, turn_outputs
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -163,6 +164,8 @@ _BUDGET_STEPS = "kinby_budget_steps"
 _BUDGET_TOKENS = "kinby_budget_tokens"
 _BUDGET_SECONDS = "kinby_budget_seconds"
 _BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
+#: The size over which a tool result from an earlier turn reaches the model cleared.
+_CLEARED_OVER = 1_000
 _URL = re.compile(r"https?://[^\s<>\"'`()\[\]{}]+")
 #: The tools whose results bring URLs in from the web.
 _URL_SOURCES = frozenset({"web_search", "browser_snapshot", "browser_text", *URL_READS})
@@ -234,6 +237,8 @@ class ToolCallResolution:
     gate: ToolGated
     #: The approval the user gave the call, which a hub tool shows the hub.
     approval_id: UUID | None
+    #: What the tool's check found wrong with the arguments, which the model reads instead.
+    refusal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -303,6 +308,31 @@ def _mark_cache_prefix(
     marked_messages[0] = _with_cache_control(marked_messages[0])
     marked_messages[-1] = _with_cache_control(marked_messages[-1])
     return marked_messages
+
+
+def _clear_earlier_results(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
+    """*messages* as the model is sent them: each tool result over the threshold from before the
+    current turn's user message replaced by a stub (ADR 0122)."""
+    turn_start = max(
+        (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
+        default=0,
+    )
+    return [
+        _cleared(message)
+        if index < turn_start
+        and isinstance(message, ToolMessage)
+        and len(message.text) > _CLEARED_OVER
+        else message
+        for index, message in enumerate(messages)
+    ]
+
+
+def _cleared(result: ToolMessage) -> ToolMessage:
+    stub = (
+        f"[{result.name} result cleared: {len(result.text):,} characters from an earlier turn. "
+        f"Call {result.name} again if you need it.]"
+    )
+    return result.model_copy(update={"content": stub})
 
 
 class LangGraphRunner:
@@ -1052,7 +1082,7 @@ class LangGraphRunner:
         )
         response: AIMessageChunk | None = None
         started_at = asyncio.get_running_loop().time()
-        request_messages = [runtime.context.system_message, *messages]
+        request_messages = [runtime.context.system_message, *_clear_earlier_results(messages)]
         async for chunk in runtime.context.model.astream(
             _mark_cache_prefix(state.turn.model, request_messages)
         ):
@@ -1098,6 +1128,7 @@ class LangGraphRunner:
         granted = list(state.granted)
         read_only = list(state.read_only)
         seen_urls = _seen_urls(state.messages)
+        saved_outputs = turn_outputs(self._instance.manifest.state_dir, state.turn.turn_id)
         message_index = len(state.messages) - 1
         for call_index, model_call in enumerate(response.tool_calls):
             name = model_call["name"]
@@ -1122,9 +1153,23 @@ class LangGraphRunner:
                 granted=name in granted,
                 marked_read_only=name in read_only,
                 seen_urls=seen_urls,
+                saved_outputs=saved_outputs,
             )
             approval_id = None
-            if (
+            refusal = (
+                selected.check(arguments)
+                if selected is not None and selected.check is not None
+                else None
+            )
+            if refusal is not None:
+                gate = ToolGated(
+                    call_id=call.call_id,
+                    name=call.name,
+                    action=GateOutcome.DENY,
+                    rule=INVALID_ARGUMENTS,
+                    decided_by=GateDecider.POLICY,
+                )
+            elif (
                 selected is not None
                 and name == browser_takeover.name
                 and gate_decision.action is not GateAction.DENY
@@ -1187,7 +1232,7 @@ class LangGraphRunner:
                     rule=gate_decision.rule,
                     decided_by=GateDecider.POLICY,
                 )
-            calls.append(ToolCallResolution(call, gate, approval_id))
+            calls.append(ToolCallResolution(call, gate, approval_id, refusal))
 
         messages: list[AnyMessage] = []
         for resolution in calls:
@@ -1197,7 +1242,7 @@ class LangGraphRunner:
                 result = ToolResult(
                     call_id=call.call_id,
                     name=call.name,
-                    output=_denial(resolution.gate),
+                    output=resolution.refusal or _denial(resolution.gate),
                     error=True,
                 )
                 await runtime.context.emit(result)
@@ -1211,12 +1256,15 @@ class LangGraphRunner:
                 )
                 self._forget_tool_call(state.turn, call)
                 continue
-            result = await self._run_tool(
-                call.call_id,
-                call.name,
-                call.arguments,
-                runtime,
-                resolution.approval_id,
+            result = cut_to_cap(
+                await self._run_tool(
+                    call.call_id,
+                    call.name,
+                    call.arguments,
+                    runtime,
+                    resolution.approval_id,
+                ),
+                saved_outputs,
             )
             await runtime.context.emit(result)
             messages.append(

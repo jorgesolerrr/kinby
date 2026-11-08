@@ -93,7 +93,7 @@ export function StatsPage({
   // The charts' buckets come from the moment the read asked about, so midnight never splits them.
   const read = useCallback(async () => {
     const now = new Date()
-    const stats = await client.call("stats.get", statsCommand(range, now))
+    const stats = await client.call("stats.get", { ...statsCommand(range, now), records: true })
     return { stats, starts: bucketStarts(range, bucketSize(range), now) }
   }, [client, range])
   const { value, failure, readAgain } = useRead(read, clock)
