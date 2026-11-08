@@ -35,12 +35,7 @@ def memory_tools(
         *,
         context: ToolContext,
     ) -> str:
-        """Search the facts you learned by their descriptions and subjects, and by those of the
-        episodes each fact was learned from.
-
-        A search with an inclusive after or before date also returns the episodes in that range,
-        and a search no fact matches returns the matching episodes instead.
-        """
+        """Search your facts by description and subject, and with after or before, the episodes."""
         hits = memory.recall(query, after=after, before=before)
         if hits:
             await context.report_recall(tuple(hit.node for hit in hits))
