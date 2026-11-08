@@ -170,6 +170,46 @@ def test_a_read_of_another_turns_outputs_or_the_state_directory_is_not(command: 
     assert not is_shell_read(command, WORKSPACE, saved_outputs=OUTPUTS)
 
 
+ALICE = "00000000-0000-0000-0000-000000000001"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "kinby hub read instance.list",
+        f"kinby hub read routine.list instance_id={ALICE}",
+        f"kinby hub read instance.logs instance_id={ALICE} tail=20 --table",
+        "kinby hub read library.skill.file.read name=tdd path=../../.env",
+        "kinby hub read instance.list --help",
+        "kinby hub read instance.list | jq -c .instances",
+        "kinby hub methods",
+        "kinby hub help instance_create",
+        f"kinby hub wait {ALICE} --timeout 60",
+    ],
+)
+def test_a_hub_read_through_the_cli_is_a_shell_read(command: str) -> None:
+    assert is_shell_read(command, WORKSPACE)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"kinby hub read instance.remove instance_id={ALICE}",
+        "kinby hub read hub.write",
+        "kinby hub read instance.relay.read",
+        f"kinby hub read routine.delete instance_id={ALICE} name=news",
+        "kinby hub read",
+        "kinby hub read --table instance.list",
+        "kinby hub read instance.list > out.json",
+        "kinby hub update --connect wss://hub/ws x --revision y",
+        "kinby hub ./hub",
+        "kinby thread list",
+    ],
+)
+def test_another_kinby_command_is_not_a_shell_read(command: str) -> None:
+    assert not is_shell_read(command, WORKSPACE)
+
+
 def _gate(
     command: str, mode: PermissionMode, policy: GatePolicy = SHIPPED_POLICY, tool: Tool = bash
 ) -> tuple[GateAction, str]:

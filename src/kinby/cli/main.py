@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from kinby.cli.client import ContractClient, format_error
 from kinby.cli.contract_socket import TOKEN_VARIABLE, InsecureContractUrl, contract_client
 from kinby.cli.hub_adopt import adopt_on_hub
+from kinby.cli.hub_reads import read_on_hub
 from kinby.cli.hub_update import update_on_hub
 from kinby.cli.repl import render_event, run_repl
 from kinby.cli.routines import show_routines
@@ -777,13 +778,15 @@ def main(
     now: Callable[[], datetime] = utc_now,
 ) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    # `hub update` and `hub adopt` drive a hub over the network and take no hub directory.
-    # argparse cannot let a subcommand stand where `hub` expects that directory, so each
-    # parses alone.
+    # `hub update`, `hub adopt` and the hub reads reach a hub over the network and take no hub
+    # directory. argparse cannot let a subcommand stand where `hub` expects that directory, so
+    # each parses alone.
     if arguments[:2] == ["hub", "update"]:
         return update_on_hub(arguments[2:])
     if arguments[:2] == ["hub", "adopt"]:
         return adopt_on_hub(arguments[2:])
+    if arguments[:2] in (["hub", "read"], ["hub", "methods"], ["hub", "help"], ["hub", "wait"]):
+        return read_on_hub(arguments[1:])
     parser = argparse.ArgumentParser(prog="kinby")
     parser.set_defaults(verbose=False)
     parser.add_argument(
@@ -807,7 +810,8 @@ def main(
         help="run the instance management hub",
         epilog=(
             "kinby hub update --help: update one instance on a running hub, as CI does. "
-            "kinby hub adopt --help: preview or adopt an existing instance."
+            "kinby hub adopt --help: preview or adopt an existing instance. "
+            "kinby hub methods: the reads the home instance makes with kinby hub read."
         ),
     )
     hub_parser.add_argument("directory", type=Path, help="hub state directory")

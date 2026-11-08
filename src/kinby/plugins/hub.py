@@ -20,6 +20,7 @@ from kinby.contracts import (
     CallFrame,
     ChannelMuteCommand,
     ContractModel,
+    ErrorEnvelope,
     ErrorFrame,
     FactoryEditCommand,
     FactoryName,
@@ -67,31 +68,25 @@ class LifecycleAction(StrEnum):
     RECREATE = "recreate"
 
 
+class HubRefused(ValueError):
+    """The hub answered a call with an error."""
+
+    def __init__(self, named: str, error: ErrorEnvelope) -> None:
+        super().__init__(f"The hub refused {named}: {error.explained}")
+        self.error = error
+
+
+def holds_hub_home() -> bool:
+    """Whether this instance's hub grants it hub:home on its hub route."""
+    granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
+    return bool(os.environ.get(HUB_URL_VARIABLE)) and Scope.HUB_HOME in granted
+
+
 def hub_tools() -> tuple[Tool, ...]:
     """The hub tools, in the instance its hub grants hub:home on its hub route."""
-    granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
-    if not os.environ.get(HUB_URL_VARIABLE) or Scope.HUB_HOME not in granted:
+    if not holds_hub_home():
         return ()
-    return (
-        hub_read,
-        instance_create,
-        instance_lifecycle,
-        instance_picks_set,
-        instance_prompt_set,
-        instance_routine_write,
-        instance_routine_set_enabled,
-        instance_routine_run,
-        instance_routine_delete,
-        instance_ask,
-        image_prepare,
-        library_skill_write,
-        library_git_add,
-        library_move,
-        library_mcp_server_write,
-        factory_write,
-        channel_mute,
-        channel_unmute,
-    )
+    return (hub_read, *HUB_WRITES)
 
 
 @tool(write=False, hub=True)
@@ -107,15 +102,20 @@ async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
     usage.get, stats.get, prompt.get, manifest.get, permissions.get and config.history: name the
     instance in params as instance_id, beside the read's own params.
     """
+    return json.dumps(await read_hub(method, params), ensure_ascii=False)
+
+
+async def read_hub(method: str, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Make one hub read, or a relayed read of the instance params names as instance_id."""
     if method not in RELAYED_READS:
-        return json.dumps(await call_hub(method, params, "the read"), ensure_ascii=False)
+        return await call_hub(method, params, "the read")
     own = {name: value for name, value in params.items() if name != "instance_id"}
     relayed = await call_hub(
         INSTANCE_RELAY_READ.name,
         {"instance_id": params.get("instance_id"), "method": method, "params": own},
         "the read",
     )
-    return json.dumps(InstanceRelayReadResult.model_validate(relayed).result, ensure_ascii=False)
+    return InstanceRelayReadResult.model_validate(relayed).result
 
 
 @tool(write=True, hub=True)
@@ -342,6 +342,28 @@ async def channel_unmute(channel_id: UUID, instance_id: UUID, context: ToolConte
     return await _write(channel_unmute, command.model_dump(mode="json"), context)
 
 
+#: The hub tools that write, one per write the hub runs for the home instance.
+HUB_WRITES = (
+    instance_create,
+    instance_lifecycle,
+    instance_picks_set,
+    instance_prompt_set,
+    instance_routine_write,
+    instance_routine_set_enabled,
+    instance_routine_run,
+    instance_routine_delete,
+    instance_ask,
+    image_prepare,
+    library_skill_write,
+    library_git_add,
+    library_move,
+    library_mcp_server_write,
+    factory_write,
+    channel_mute,
+    channel_unmute,
+)
+
+
 async def _relayed_write(
     write: Tool, instance_id: UUID, command: ContractModel, context: ToolContext
 ) -> str:
@@ -389,6 +411,6 @@ async def call_hub(method: str, params: dict[str, JsonValue], named: str) -> dic
         case ResultFrame(result=result):
             return result
         case ErrorFrame(error=error):
-            raise ValueError(f"The hub refused {named}: {error.explained}")
+            raise HubRefused(named, error)
         case other:
             raise ConnectionError(f"The hub answered {named} with {other!r}.")

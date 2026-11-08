@@ -785,6 +785,9 @@ SUBSCRIPTIONS = (
     BROWSER_TAKEOVER_START,
 )
 
+#: The hub's own reads, which the home instance makes on its hub route.
+HUB_READS = frozenset(method.name for method in METHODS if method.scope is Scope.HUB_READ)
+
 #: The methods of an instance the hub relays to the home instance: reads only.
 RELAYED_READS = frozenset(
     method.name
