@@ -183,7 +183,7 @@ def test_hub_read_help_prints_the_same_as_hub_help(capsys):
     assert main(["hub", "read", "instance.logs", "--help"]) == 0
 
     assert capsys.readouterr().out == helped
-    assert "  tail: int | null = null" in helped.splitlines()
+    assert "  tail: int | null = 200" in helped.splitlines()
 
 
 def test_hub_help_prints_a_writes_arguments(capsys):
