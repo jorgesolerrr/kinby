@@ -30,6 +30,10 @@ class SkillNotFoundError(LookupError):
     """A requested skill is not part of the current turn."""
 
 
+class SkillFileError(LookupError):
+    """A requested file is not one of the skill's files."""
+
+
 @dataclass(frozen=True)
 class Skill:
     name: SkillName
@@ -146,11 +150,20 @@ def skill_tool(skills: Sequence[Skill]) -> Tool:
     by_name = {skill.name: skill for skill in skills}
 
     @tool(write=False)
-    def skill(name: SkillName) -> SkillBody:
-        """Read a skill's full instructions by name."""
+    def skill(name: SkillName, file: str | None = None) -> str:
+        """Read a skill's full instructions by name, or one of its other files by its path in the
+        skill's folder."""
         selected = by_name.get(name)
         if selected is None:
             raise SkillNotFoundError(f'Skill "{name}" is not available in this turn.')
-        return selected.body
+        if file is None:
+            return selected.body
+        folder = selected.source.parent.resolve()
+        path = (folder / file).resolve()
+        if not path.is_relative_to(folder):
+            raise SkillFileError(f'"{file}" is outside the folder of skill "{name}".')
+        if not path.is_file():
+            raise SkillFileError(f'Skill "{name}" has no file "{file}".')
+        return path.read_text(encoding="utf-8")
 
     return skill
