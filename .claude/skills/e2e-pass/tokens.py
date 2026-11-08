@@ -6,7 +6,8 @@
 - Tool results: by tool, and by method for `hub_read`. The characters the results returned, the
   characters sent again on later model calls of their turn and on the model calls of later turns
   of their thread, and the errors. A result is first sent on the model call after it, and every
-  call after that one sends it again.
+  call after that one sends it again. Only a completed turn's results reach later turns: a failed
+  or interrupted turn stays out of the thread's history.
 - Source reads: the bash commands that name kinby's installed package.
 
 It opens the instance's database read-only and writes nothing to the instance.
@@ -58,6 +59,8 @@ class Turn:
     #: The calls before the turn closed. A memory recap's call comes after.
     loop_calls: int = 0
     closed: bool = False
+    #: Whether it ran to its end, which keeps its results in the thread's history.
+    completed: bool = False
     #: The loop calls of the later turns of its thread.
     later_calls: int = 0
 
@@ -76,7 +79,7 @@ class Result:
 
     @property
     def resent_later(self) -> int:
-        return self.chars * self.turn.later_calls
+        return self.chars * self.turn.later_calls if self.turn.completed else 0
 
 
 @dataclass(frozen=True)
@@ -116,7 +119,9 @@ def spend(events: Iterable[Event]) -> Spend:
                 results.append(
                     Result(turn, tool, len(result.output), result.error, turn.loop_calls)
                 )
-            case TurnCompleted() | TurnFailed() | TurnInterrupted():
+            case TurnCompleted():
+                turn.closed = turn.completed = True
+            case TurnFailed() | TurnInterrupted():
                 turn.closed = True
     remaining: defaultdict[UUID, int] = defaultdict(int)
     for turn in turns.values():

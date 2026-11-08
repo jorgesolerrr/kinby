@@ -8,12 +8,14 @@ from uuid import UUID, uuid4
 import pytest
 
 from kinby.contracts import (
+    ErrorCode,
     Event,
     ModelCompleted,
     Payload,
     ToolCall,
     ToolResult,
     TurnCompleted,
+    TurnFailed,
 )
 from tests.helpers import write_events
 
@@ -89,6 +91,10 @@ def _instance(directory: Path) -> Path:
         *_turn(THREAD, 5, _call(9000, cache_read=8000), _call(9100, cache_read=9000)),
         *_turn(OTHER_THREAD, 9, _call(2000, cache_write=2000)),
     ]
+    return _write(directory, history)
+
+
+def _write(directory: Path, history: list[Event]) -> Path:
     sequences: dict[UUID, int] = {}
     records = []
     for event in history:
@@ -132,6 +138,29 @@ def test_the_probe_prints_result_sizes_resent_characters_and_errors_by_tool(
         ["hub_read", "stats.get", "1", "5,000", "5,000", "5,000", "10,000", "0"],
         ["bash", "1", "300", "300", "300", "600", "0"],
         ["hub_read", "factory.get", "1", refusal, refusal, "0", f"{2 * len(REFUSAL):,}", "1"],
+    ]
+
+
+def test_a_failed_turns_results_are_not_resent_on_later_turns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    history = [
+        *_turn(
+            THREAD,
+            0,
+            _call(1000),
+            ToolResult(call_id="ls", name="bash", output="b" * 300, error=False),
+            _call(2000),
+            TurnFailed(code=ErrorCode.INTERNAL, message="boom"),
+        ),
+        *_turn(THREAD, 5, _call(900), _call(950)),
+    ]
+
+    assert e2e_tokens.main([str(_write(tmp_path, history))]) == 0
+
+    assert _section(capsys.readouterr().out, "Tool results") == [
+        RESULTS_HEADER,
+        ["bash", "1", "300", "300", "0", "0", "0"],
     ]
 
 

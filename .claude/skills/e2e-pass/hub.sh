@@ -14,7 +14,8 @@ set -euo pipefail
 
 args=()
 for arg in "$@"; do
-    if [[ ! $arg =~ ^(#[0-9]+|[A-Za-z0-9_:-]+)$ ]]; then
+    # '.' and '+' admit an ISO time's fractional seconds and positive UTC offset.
+    if [[ ! $arg =~ ^(#[0-9]+|[A-Za-z0-9_:.+-]+)$ ]]; then
         echo "hub.sh: unexpected argument '$arg'" >&2
         exit 2
     fi
