@@ -920,7 +920,7 @@ describe("an instance's tabs", () => {
     const name = await screen.findByRole("heading", { name: "Ada", level: 1 })
     expect(name.closest(column)).not.toBeNull()
     expect(screen.getByRole("tablist", { name: "Ada" }).closest(column)).not.toBeNull()
-    expect(screen.getByText(/^Start a thread with/).closest(column)).not.toBeNull()
+    expect((await screen.findByText(/^Start a thread with/)).closest(column)).not.toBeNull()
   })
 
   it("opens each tab at its own path, and Back moves between them", async () => {
