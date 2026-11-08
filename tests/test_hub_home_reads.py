@@ -11,10 +11,8 @@ from uuid import UUID
 import aiohttp
 import pytest
 from aiohttp import web
-from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
-    ApprovalRequested,
     ControlToken,
     ErrorCode,
     FactoryRunOrigin,
@@ -24,7 +22,6 @@ from kinby.contracts import (
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
-    ToolResult,
     UserOrigin,
     is_turn_closing,
 )
@@ -38,7 +35,6 @@ from kinby.hub import Hub, relay
 from kinby.hub.models import InstanceEndpoint
 from kinby.instance import Serve
 from tests.test_factory_runs import started
-from tests.test_gate import ScriptedModel, _instance, _run
 from tests.test_hub import FakeRuntime, hub_at, hub_client, started_instance
 from tests.test_hub_routing import control_token, instance_served
 from tests.test_hub_server import frame, served, url
@@ -335,55 +331,6 @@ def test_factory_run_list_holds_50_runs_and_a_cursor_to_the_rest(tmp_path):
     asyncio.run(scenario())
 
 
-def hub_read_call(call_id: str, method: str, params: dict[str, object]) -> dict[str, object]:
-    return {
-        "name": "hub_read",
-        "args": {"method": method, "params": params},
-        "id": call_id,
-        "type": "tool_call",
-    }
-
-
-def test_kinby_reads_the_hub_and_another_instance_without_asking(tmp_path, monkeypatch):
-    async def scenario() -> None:
-        async with home_hub(tmp_path) as hub:
-            as_the_home_instance(monkeypatch, hub.route(hub.home))
-            monkeypatch.setenv("KINBY_CONTROL_TOKEN", hub.home_token)
-            model = ScriptedModel(
-                [
-                    AIMessageChunk(
-                        content="",
-                        tool_calls=[
-                            hub_read_call("list-1", "instance.list", {}),
-                            hub_read_call(
-                                "routines-1", "routine.list", {"instance_id": str(hub.alice)}
-                            ),
-                            hub_read_call(
-                                "file-1",
-                                "library.skill.file.read",
-                                {"name": "tdd", "path": "mocking.md"},
-                            ),
-                        ],
-                    ),
-                    AIMessageChunk(content="Alice runs one routine."),
-                ]
-            )
-            _, payloads = await _run(_instance(tmp_path), model)
-
-        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
-        results = {
-            payload.call_id: payload for payload in payloads if isinstance(payload, ToolResult)
-        }
-        assert not results["list-1"].error, results["list-1"].output
-        assert '"manifest_id": "alice"' in results["list-1"].output
-        assert not results["routines-1"].error, results["routines-1"].output
-        assert '"name": "news"' in results["routines-1"].output
-        assert not results["file-1"].error, results["file-1"].output
-        assert '"path": "mocking.md"' in results["file-1"].output
-
-    asyncio.run(scenario())
-
-
 @pytest.mark.parametrize(
     ("origin", "present"),
     [
@@ -427,11 +374,8 @@ def test_hub_tools_are_on_turns_the_user_starts_only(
 
     asyncio.run(scenario())
 
-    hub_tools = {"hub_read", "hub_write"}
-    if present:
-        assert hub_tools <= set(model.tools)
-    else:
-        assert hub_tools.isdisjoint(model.tools)
+    assert "hub_read" not in model.tools
+    assert ("hub_write" in model.tools) is present
 
 
 @asynccontextmanager

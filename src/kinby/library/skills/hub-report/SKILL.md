@@ -3,7 +3,7 @@ name: hub-report
 description: Answer "how is the hub going?" from the instances' statuses, usage, factory runs and the threads that need the user. Use when the user asks how the hub, an instance or a factory is doing.
 ---
 
-The user asks so they don't have to open each instance. Lead with what needs them, then what is wrong, then the rest in a line or two. Every read here runs through `hub_read` and asks nothing.
+The user asks so they don't have to open each instance. Lead with what needs them, then what is wrong, then the rest in a line or two. Every read here is a `kinby hub read` and asks nothing. Pipe each answer through `jq` to keep the fields named below, as in `kinby hub read thread.list instance_id=<id> | jq '.threads[] | {id, title, status, approval}'`.
 
 ## 1. Gather
 

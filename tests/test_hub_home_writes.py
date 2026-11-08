@@ -75,7 +75,7 @@ from tests.test_hub_channels import (
     paired_channel,
 )
 from tests.test_hub_factories import FILES, renamed
-from tests.test_hub_home_reads import answers, as_the_home_instance, error_code
+from tests.test_hub_home_reads import answers, as_the_home_instance, error_code, result_of
 from tests.test_hub_library_git import commit, head, repository, skill
 from tests.test_hub_replies import next_edit, replied
 from tests.test_hub_routing import control_token, instance_served
@@ -887,7 +887,6 @@ def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up
         # Read once the turn starts, after the test created the channel.
         [phone] = created
         mute: dict[str, object] = {"channel_id": str(phone.channel_id), "instance_id": str(alice)}
-        yield calling("list-1", "hub_read", {"method": "channel.list", "params": {}})
         yield writing("mute-1", "channel_mute", mute)
         yield writing("unmute-1", "channel_unmute", mute)
         yield AIMessageChunk(content="Alice is muted, then unmuted, on your phone.")
@@ -903,9 +902,10 @@ def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up
                 "kind": "fake",
                 "secrets": {"token": "sentinel-new"},
             }
-            refused = await answers(
+            shown_list, *refused = await answers(
                 kinby.route(kinby.home),
                 kinby.home_token,
+                ("channel.list", {}),
                 ("channel.create", setup),
                 ("channel.update", {**channel, "enabled": False}),
                 ("channel.delete", channel),
@@ -919,9 +919,11 @@ def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up
             "channel_mute",
             "channel_unmute",
         ]
-        [shown] = json.loads(results["list-1"].output)["channels"]
+        channels = result_of(shown_list)["channels"]
+        assert isinstance(channels, list)
+        [shown] = channels
         assert shown["name"] == "phone"
-        assert "sentinel-fake-token" not in results["list-1"].output
+        assert "sentinel-fake-token" not in json.dumps(shown_list)
         assert Channel.model_validate_json(results["mute-1"].output).muted == [kinby.alice]
         assert Channel.model_validate_json(results["unmute-1"].output).muted == []
         assert [error_code(answer) for answer in refused] == [
@@ -939,7 +941,6 @@ def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
     def script(_: UUID) -> list[AIMessageChunk]:
         return [
             writing("prepare-1", "image_prepare", {}),
-            calling("describe-1", "hub_read", {"method": "image.describe", "params": {}}),
             AIMessageChunk(content="The image is prepared."),
         ]
 
@@ -949,15 +950,18 @@ def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
             results = tool_results(payloads)
             accepted = ImagePrepareResult.model_validate_json(results["prepare-1"].output)
             operation = await finished_operation(hub_client(kinby.hub), accepted)
-            [forged] = await answers(
-                kinby.route(kinby.home), kinby.home_token, written(uuid4(), "image_prepare", {})
+            described, forged = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("image.describe", {}),
+                written(uuid4(), "image_prepare", {}),
             )
 
         assert operations(payloads) == ["image_prepare"]
         assert operation.kind is OperationKind.PREPARE
         assert operation.state is OperationState.SUCCEEDED
         assert operation.requester == kinby.home
-        assert "setup_fields" in json.loads(results["describe-1"].output)
+        assert "setup_fields" in result_of(described)
         assert error_code(forged) == ErrorCode.PERMISSION_DENIED.value
 
     asyncio.run(scenario())
@@ -1087,7 +1091,7 @@ def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, sco
 
     names = {tool.name for tool in hub_tools()}
     if present:
-        assert names == {"hub_read", "hub_write"}
+        assert names == {"hub_write"}
     else:
         assert not names
 

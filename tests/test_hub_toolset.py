@@ -5,13 +5,10 @@ a profile or a vault entry."""
 import asyncio
 import json
 
-from langchain_core.messages import AIMessageChunk
-
 from kinby.contracts import (
     BROWSER_VAULT_ADD,
     INSTANCE_PICKS_SET,
     INSTANCE_TOOLSET_GET,
-    ApprovalRequested,
     AuthoredTool,
     DefaultTool,
     ErrorCode,
@@ -23,22 +20,15 @@ from kinby.contracts import (
     PickState,
     SearchBackend,
     SearchSetup,
-    ToolResult,
 )
 from kinby.instance import inspect_instance
 from kinby.instance.read_only_tools import set_read_only
-from tests.test_gate import ScriptedModel, _instance, _run
 from tests.test_hub import hub_client
 from tests.test_hub_browser import _LIMITS, browser_hub
-from tests.test_hub_home_reads import (
-    answers,
-    as_the_home_instance,
-    error_code,
-    home_hub,
-    hub_read_call,
-)
+from tests.test_hub_home_reads import answers, error_code, home_hub
 from tests.test_hub_library_mcp_servers import FETCH
 from tests.test_hub_mcp_picks import _library_server
+from tests.test_hub_read_command import as_home, kinby
 from tests.test_hub_vault import _PASSWORD, _SEED, _USERNAME, _linkedin
 
 _PROJECT = """\
@@ -101,49 +91,39 @@ def test_the_toolset_shows_the_manifest_the_search_key_picks_authored_tools_and_
 
 
 def test_kinby_reads_an_instances_toolset_picks_profiles_and_vault_without_vault_values(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
-    async def scenario() -> dict[str, ToolResult]:
+    async def scenario() -> dict[str, str]:
+        printed = {}
         async with home_hub(tmp_path) as hub:
             hub.hub.browser_profiles.save(
                 hub.alice, "LinkedIn", "www.linkedin.com", {"cookies": [], "origins": []}
             )
             await hub_client(hub.hub).call(BROWSER_VAULT_ADD, _linkedin(hub.alice))
-            as_the_home_instance(monkeypatch, hub.route(hub.home))
-            monkeypatch.setenv("KINBY_CONTROL_TOKEN", hub.home_token)
-            alice: dict[str, object] = {"instance_id": str(hub.alice)}
-            model = ScriptedModel(
-                [
-                    AIMessageChunk(
-                        content="",
-                        tool_calls=[
-                            hub_read_call("toolset", "instance.toolset.get", alice),
-                            hub_read_call("picks", "instance.picks.get", alice),
-                            hub_read_call("profiles", "browser.profile.list", alice),
-                            hub_read_call("vault", "browser.vault.list", alice),
-                        ],
-                    ),
-                    AIMessageChunk(content="Alice can search the web."),
-                ]
-            )
-            _, payloads = await _run(_instance(tmp_path), model)
-        assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
-        return {payload.call_id: payload for payload in payloads if isinstance(payload, ToolResult)}
+            as_home(monkeypatch, hub)
+            for method in (
+                "instance.toolset.get",
+                "instance.picks.get",
+                "browser.profile.list",
+                "browser.vault.list",
+            ):
+                assert await kinby("hub", "read", method, f"instance_id={hub.alice}") == 0
+                printed[method] = capsys.readouterr().out
+        return printed
 
-    results = asyncio.run(scenario())
+    printed = asyncio.run(scenario())
 
-    assert not any(result.error for result in results.values()), results
-    toolset = InstanceToolsetResult.model_validate_json(results["toolset"].output)
+    toolset = InstanceToolsetResult.model_validate_json(printed["instance.toolset.get"])
     assert (toolset.search.variable, toolset.browser) == ("BRAVE_API_KEY", False)
-    assert json.loads(results["picks"].output)["mcp_servers"] == []
-    assert json.loads(results["profiles"].output) == {
+    assert json.loads(printed["instance.picks.get"])["mcp_servers"] == []
+    assert json.loads(printed["browser.profile.list"]) == {
         "profiles": [{"name": "LinkedIn", "site": "www.linkedin.com"}]
     }
-    assert json.loads(results["vault"].output) == {
+    assert json.loads(printed["browser.vault.list"]) == {
         "entries": [{"name": "LinkedIn", "site": "https://www.linkedin.com"}]
     }
     for value in (_USERNAME, _PASSWORD, _SEED):
-        assert not any(value in result.output for result in results.values())
+        assert not any(value in output for output in printed.values())
 
 
 def test_the_home_instance_is_refused_the_profile_writes(tmp_path):

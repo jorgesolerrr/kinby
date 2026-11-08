@@ -404,13 +404,13 @@ def test_what_the_home_instance_reads_through_the_hub_stays_out_of_its_recap(
             TurnStarted(message="What does alice know about my dentist?", model="openai:main"),
             ToolCall(
                 call_id="read-1",
-                name="hub_read",
-                arguments={"method": "memory.open", "params": {"node": "dentist"}},
+                name="bash",
+                arguments={"command": "kinby hub read memory.open node=dentist | jq .body"},
             ),
             ToolResult(
                 call_id="read-1",
-                name="hub_read",
-                output='{"body": "The dentist is Dr. Ruiz."}',
+                name="bash",
+                output='"The dentist is Dr. Ruiz."',
                 error=False,
             ),
             TurnCompleted(input_tokens=4, output_tokens=2),
@@ -422,7 +422,7 @@ def test_what_the_home_instance_reads_through_the_hub_stays_out_of_its_recap(
 
         (message,) = model.calls[0]
         assert "Dr. Ruiz" not in message.text
-        assert '"node": "dentist"' in message.text
+        assert "kinby hub read memory.open node=dentist" in message.text
 
     asyncio.run(scenario())
 

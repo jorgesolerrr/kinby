@@ -32,12 +32,12 @@ A routine's prompt runs with its instance's own tools: the routine tools, the
 `memory_*` and `view_*` tools, `notify`, and the instance's plugins. It never
 holds a hub tool, even in the home instance, because hub tools exist only on
 turns the user starts. A run that calls one fails with the tool not available.
-The hub tools are `hub_read` and `hub_write`.
+The hub tool is `hub_write`.
 
-Never write a step that calls one into a routine's prompt. A routine that needs
-hub data gets it another way, such as `routine_list` for the instance's own
-routines or memory for what earlier turns learned. When no other way exists,
-tell the user the work can't run as a routine.
+Never write a step that calls it into a routine's prompt. A routine in the home
+instance reads the hub with `kinby hub read` in bash, as any turn there can, so
+a run can report on the hub. When the work needs a hub write, tell the user it
+can't run as a routine.
 
 ## Frontmatter
 
@@ -251,12 +251,12 @@ failure streak.
 Every routine tool above has a twin, a `hub_write` operation whose arguments
 take the target's `instance_id`: `instance_routine_write`,
 `instance_routine_set_enabled`, `instance_routine_run` and
-`instance_routine_delete`. Each one asks the user. Read the target with
-`hub_read` first: `routine.list` for what it already runs, `routine.read` for one
+`instance_routine_delete`. Each one asks the user. Read the target first with
+`kinby hub read`: `routine.list` for what it already runs, `routine.read` for one
 routine's file and hash, and `manifest.get` for its routines timezone. The target
-must be running. These `hub_read` reads and `hub_write` calls belong to
-this turn, the one writing the routine. They are never steps in the routine's
-prompt, which runs without hub tools.
+must be running. These `hub_write` calls belong to this turn, the one writing
+the routine. They are never steps in the routine's prompt, which runs without
+hub tools.
 
 1. Draft the file as above, in the target's terms: its prompt runs in that
    instance, with that instance's tools, skills and memory, not yours.

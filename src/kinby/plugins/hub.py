@@ -1,5 +1,5 @@
-"""Hub tools: the home instance reads the hub and its instances on its hub route, and asks the
-hub for the writes the user approves, each an operation of hub_write (ADR 0096, ADR 0120)."""
+"""Hub tools: the home instance asks the hub for the writes the user approves, each an operation
+of hub_write (ADR 0096). It reads the hub and its instances with `kinby hub read` (ADR 0120)."""
 
 from __future__ import annotations
 
@@ -105,23 +105,7 @@ def hub_tools() -> tuple[Tool, ...]:
     """The hub tools, in the instance its hub grants hub:home on its hub route."""
     if not holds_hub_home():
         return ()
-    return (hub_read, hub_write)
-
-
-@tool(write=False, hub=True)
-async def hub_read(method: str, params: dict[str, JsonValue]) -> str:
-    """Read the hub or one of its instances, and return the answer as JSON.
-
-    Hub reads include instance.list, instance.status, instance.logs, instance.picks.get,
-    instance.toolset.get, browser.profile.list, browser.vault.list, stats.summary, stats.runs,
-    factory.list, factory.get, factory.check, factory.run.list, library.list,
-    library.skill.read, library.skill.file.read, library.skill.check, library.git.preview,
-    library.mcp_server.read, hub.secret.list and channel.list. An instance's own reads are
-    memory.list, memory.open, thread.list, thread.turn.list, routine.list, routine.read,
-    usage.get, stats.get, prompt.get, manifest.get, permissions.get and config.history: name the
-    instance in params as instance_id, beside the read's own params.
-    """
-    return json.dumps(await read_hub(method, params), ensure_ascii=False)
+    return (hub_write,)
 
 
 async def read_hub(method: str, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
@@ -145,7 +129,7 @@ async def hub_write(operation: str, arguments: dict[str, JsonValue], context: To
     instance_prompt_set, instance_routine_write, instance_routine_set_enabled,
     instance_routine_run, instance_routine_delete, instance_ask, image_prepare,
     library_skill_write, library_git_add, library_move, library_mcp_server_write, factory_write,
-    channel_mute and channel_unmute.
+    channel_mute and channel_unmute. `kinby hub help <operation>` prints its arguments.
     """
     write = home_write(operation, arguments)
     if context.approval_id is None:
