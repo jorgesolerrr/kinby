@@ -162,6 +162,19 @@ def calling(call_id: str, tool: str, arguments: dict[str, object]) -> AIMessageC
     )
 
 
+def writing(call_id: str, operation: str, arguments: Mapping[str, object]) -> AIMessageChunk:
+    return calling(call_id, "hub_write", {"operation": operation, "arguments": arguments})
+
+
+def operations(payloads: Sequence[Payload]) -> list[object]:
+    """The operation of each hub write the turn asked the user to approve."""
+    return [
+        payload.arguments["operation"]
+        for payload in payloads
+        if isinstance(payload, ApprovalRequested) and payload.name == "hub_write"
+    ]
+
+
 async def relayed_turn(kinby: KinbyHub, approvals: int = 1) -> list[Payload]:
     """Start a turn in the home instance through the relay, as the user does, and approve its
     first *approvals* approvals. Return what it emitted once it ends or parks again."""
@@ -231,7 +244,7 @@ def test_kinby_creates_an_instance_once_the_user_approves_it_through_the_relay(
 ):
     def script(_: UUID) -> list[AIMessageChunk]:
         return [
-            calling("create-1", "instance_create", {"manifest_id": "bob", "model": "openai:gpt-5"}),
+            writing("create-1", "instance_create", {"manifest_id": "bob", "model": "openai:gpt-5"}),
             AIMessageChunk(content="Bob is being created."),
         ]
 
@@ -244,7 +257,7 @@ def test_kinby_creates_an_instance_once_the_user_approves_it_through_the_relay(
             created = LifecycleOperationResult.model_validate_json(result.output)
             operation = await finished_operation(hub_client(kinby.hub), created)
 
-        assert approval.name == "instance_create"
+        assert (approval.name, approval.arguments["operation"]) == ("hub_write", "instance_create")
         assert operation.state is OperationState.SUCCEEDED
         assert operation.requester == kinby.home
         assert str(created.instance_id) in [spec.instance_id for spec in kinby.runtime.created]
@@ -303,7 +316,7 @@ async def closed_turn(kinby: KinbyHub, thread_id: str) -> list[Payload]:
 def test_kinby_creates_an_instance_once_the_user_approves_it_from_a_channel(tmp_path, monkeypatch):
     def script(_: UUID) -> list[AIMessageChunk]:
         return [
-            calling("create-1", "instance_create", {"manifest_id": "bob", "model": "openai:gpt-5"}),
+            writing("create-1", "instance_create", {"manifest_id": "bob", "model": "openai:gpt-5"}),
             AIMessageChunk(content="Bob is being created."),
         ]
 
@@ -326,7 +339,7 @@ def test_kinby_creates_an_instance_once_the_user_approves_it_from_a_channel(tmp_
             "Kinby · Set things up.",
             "Approval waiting",
         )
-        assert notification.text.startswith("instance_create: manifest_id=bob")
+        assert notification.text.startswith("hub_write: operation=instance_create")
         assert notification.options == ("Approve", "Deny", "Mute this instance")
         assert edited == (sent.ref, "Approved.")
         assert isinstance(payloads[-1], TurnCompleted)
@@ -343,7 +356,7 @@ def test_kinby_creates_an_instance_with_the_setup_values_the_user_approved(tmp_p
             "model": "openai:gpt-5",
             "setup": {"behavior_prompt": "Answer in haiku.\n"},
         }
-        return [calling("create-1", "instance_create", bob), AIMessageChunk(content="Done.")]
+        return [writing("create-1", "instance_create", bob), AIMessageChunk(content="Done.")]
 
     async def scenario() -> None:
         async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
@@ -366,8 +379,8 @@ def test_the_hub_runs_a_home_write_once_for_the_approval_it_saw_and_its_argument
     def script(alice: UUID) -> list[AIMessageChunk]:
         stop = {"instance_id": str(alice), "action": "stop"}
         return [
-            calling("stop-1", "instance_lifecycle", stop),
-            calling("stop-2", "instance_lifecycle", stop),
+            writing("stop-1", "instance_lifecycle", stop),
+            writing("stop-2", "instance_lifecycle", stop),
         ]
 
     async def scenario() -> None:
@@ -402,38 +415,6 @@ def test_the_hub_runs_a_home_write_once_for_the_approval_it_saw_and_its_argument
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("field", ["secrets", "save_to_hub"])
-def test_the_hub_refuses_an_approved_creation_that_carries_a_secret(
-    tmp_path, monkeypatch, field: str
-):
-    def script(_: UUID) -> list[AIMessageChunk]:
-        bob = {"manifest_id": "bob", "model": "openai:gpt-5", field: {"api_key": "sk-bob"}}
-        return [
-            calling("create-1", "instance_create", bob),
-            calling("create-2", "instance_create", bob),
-        ]
-
-    async def scenario() -> None:
-        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
-            monkeypatch.setenv(HUB_URL_VARIABLE, url(kinby.address, "/nowhere"))
-            payloads = await relayed_turn(kinby)
-            approval = next(
-                payload for payload in payloads if isinstance(payload, ApprovalRequested)
-            )
-            refused, listed = await answers(
-                kinby.route(kinby.home),
-                kinby.home_token,
-                written(approval.approval_id, "instance_create", approval.arguments),
-                ("instance.list", {}),
-            )
-
-        assert error_code(refused) == ErrorCode.PERMISSION_DENIED.value
-        assert isinstance(listed["result"], dict), listed
-        assert "bob" not in [instance["manifest_id"] for instance in listed["result"]["instances"]]
-
-    asyncio.run(scenario())
-
-
 def tool_results(payloads: Sequence[Payload]) -> dict[str, ToolResult]:
     results = {payload.call_id: payload for payload in payloads if isinstance(payload, ToolResult)}
     for result in results.values():
@@ -462,8 +443,8 @@ def test_kinby_writes_a_routine_into_another_instance_and_runs_it_once(tmp_path,
     def script(alice: UUID) -> list[AIMessageChunk]:
         jobs = {"instance_id": str(alice), "name": "jobs"}
         return [
-            calling("write-1", "instance_routine_write", {**jobs, "content": JOBS, "hash": None}),
-            calling("run-1", "instance_routine_run", jobs),
+            writing("write-1", "instance_routine_write", {**jobs, "content": JOBS, "hash": None}),
+            writing("run-1", "instance_routine_run", jobs),
             AIMessageChunk(content="The routine ran once."),
         ]
 
@@ -483,7 +464,7 @@ def test_kinby_writes_a_routine_into_another_instance_and_runs_it_once(tmp_path,
                         break
                     await asyncio.sleep(0.01)
 
-        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+        assert operations(payloads) == [
             "instance_routine_write",
             "instance_routine_run",
         ]
@@ -499,12 +480,12 @@ def test_kinby_sets_another_instances_picks_and_prompt_once_the_user_approves(
     def script(alice: UUID) -> list[AIMessageChunk]:
         prompt = {"name": "behavior", "content": "Be brief.", "hash": file_hash(b"")}
         return [
-            calling(
+            writing(
                 "picks-1",
                 "instance_picks_set",
                 {"instance_id": str(alice), "skills": ["tdd"], "mcp_servers": [], "hash": None},
             ),
-            calling("prompt-1", "instance_prompt_set", {"instance_id": str(alice), **prompt}),
+            writing("prompt-1", "instance_prompt_set", {"instance_id": str(alice), **prompt}),
             AIMessageChunk(content="Alice is set up."),
         ]
 
@@ -566,7 +547,7 @@ def test_kinby_starts_a_turn_in_another_instance_whose_origin_is_the_home_instan
     def script(alice: UUID) -> list[AIMessageChunk]:
         ask = {"instance_id": str(alice), "message": "Check my job applications."}
         return [
-            calling("ask-1", "instance_ask", ask),
+            writing("ask-1", "instance_ask", ask),
             AIMessageChunk(content="Alice is on it."),
         ]
 
@@ -580,8 +561,7 @@ def test_kinby_starts_a_turn_in_another_instance_whose_origin_is_the_home_instan
                 relayed_read(kinby.alice, "thread.list", filter="all"),
             )
 
-        [approval] = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
-        assert approval.name == "instance_ask"
+        assert operations(payloads) == ["instance_ask"]
         [thread] = ThreadListResult.model_validate(relayed(listed)).threads
         assert isinstance(thread.origin, HomeInstanceOrigin)
         assert asked["link"] == f"/instances/{kinby.alice}/threads/{thread.id}"
@@ -651,10 +631,10 @@ def test_kinby_writes_a_factory_that_passes_the_check_and_never_one_that_fails_i
 
     def script(_: UUID) -> list[AIMessageChunk]:
         return [
-            calling(
+            writing(
                 "tickets-1", "factory_write", {"name": "tickets", "files": FILES, "hash": None}
             ),
-            calling("broken-1", "factory_write", {"name": "broken", "files": broken, "hash": None}),
+            writing("broken-1", "factory_write", {"name": "broken", "files": broken, "hash": None}),
             AIMessageChunk(content="The tickets factory is written."),
         ]
 
@@ -685,7 +665,7 @@ def test_kinby_writes_a_skill_into_the_library_once_the_user_approves(tmp_path, 
     def script(_: UUID) -> list[AIMessageChunk]:
         grill = {"name": "grill", "content": skill("grill"), "hash": None}
         return [
-            calling("grill-1", "library_skill_write", grill),
+            writing("grill-1", "library_skill_write", grill),
             AIMessageChunk(content="Grill is in the library."),
         ]
 
@@ -697,9 +677,7 @@ def test_kinby_writes_a_skill_into_the_library_once_the_user_approves(tmp_path, 
             )
 
         tool_results(payloads)
-        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
-            "library_skill_write"
-        ]
+        assert operations(payloads) == ["library_skill_write"]
         assert "grill" in library_names(listed)
 
     asyncio.run(scenario())
@@ -713,7 +691,7 @@ def test_kinby_adds_an_mcp_server_to_the_library_only_once_the_user_approves_in_
     def script(_: UUID) -> list[AIMessageChunk]:
         server = {"name": "fetch", "server": fetch, "hash": None}
         return [
-            calling("fetch-1", "library_mcp_server_write", server),
+            writing("fetch-1", "library_mcp_server_write", server),
             AIMessageChunk(content="Fetch is in the library."),
         ]
 
@@ -732,9 +710,7 @@ def test_kinby_adds_an_mcp_server_to_the_library_only_once_the_user_approves_in_
         tool_results(payloads)
         [started] = [payload for payload in payloads if isinstance(payload, TurnStarted)]
         assert started.permission_mode is PermissionMode.FULL_ACCESS
-        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
-            "library_mcp_server_write"
-        ]
+        assert operations(payloads) == ["library_mcp_server_write"]
         assert isinstance(read["result"], dict), read
         assert McpServer.model_validate(read["result"]["server"]) == McpServer.model_validate(fetch)
 
@@ -756,7 +732,7 @@ def test_kinby_picks_an_mcp_server_for_another_instance_only_once_the_user_appro
             "hash": None,
         }
         return [
-            calling("picks-1", "instance_picks_set", picks),
+            writing("picks-1", "instance_picks_set", picks),
             AIMessageChunk(content="Alice can fetch."),
         ]
 
@@ -777,9 +753,7 @@ def test_kinby_picks_an_mcp_server_for_another_instance_only_once_the_user_appro
             )
 
         tool_results(payloads)
-        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
-            "instance_picks_set"
-        ]
+        assert operations(payloads) == ["instance_picks_set"]
         assert isinstance(picks["result"], dict), picks
         assert picks["result"]["mcp_servers"] == [
             {"name": "fetch", "trust_hints": False, "state": "up-to-date"}
@@ -796,7 +770,7 @@ def test_kinby_previews_a_repository_and_adds_its_skill_once_the_user_approves(
     def script(_: UUID) -> list[AIMessageChunk]:
         add = {"address": str(source), "commit": head(source), "skills": ["grill"]}
         return [
-            calling("add-1", "library_git_add", add),
+            writing("add-1", "library_git_add", add),
             AIMessageChunk(content="Grill is in the library."),
         ]
 
@@ -831,8 +805,8 @@ def test_kinby_moves_a_library_skill_only_with_the_diff_the_move_brings_in_its_a
         # Read once the turn starts, after the test checked the skill.
         [shown] = checked
         move = {"name": "grill", "hash": shown.hash, "commit": shown.commit, "overwrite": False}
-        yield calling("forged-1", "library_move", {**move, "diff": "+Nothing changes.\n"})
-        yield calling("move-1", "library_move", {**move, "diff": shown.diff})
+        yield writing("forged-1", "library_move", {**move, "diff": "+Nothing changes.\n"})
+        yield writing("move-1", "library_move", {**move, "diff": shown.diff})
         yield AIMessageChunk(content="Grill moved.")
 
     async def scenario() -> None:
@@ -856,8 +830,12 @@ def test_kinby_moves_a_library_skill_only_with_the_diff_the_move_brings_in_its_a
                 kinby.route(kinby.home), kinby.home_token, ("library.skill.read", {"name": "grill"})
             )
 
-        approvals = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
-        assert [approval.arguments["diff"] for approval in approvals] == [
+        shown = [
+            payload.arguments["arguments"]
+            for payload in payloads
+            if isinstance(payload, ApprovalRequested)
+        ]
+        assert [arguments["diff"] for arguments in shown if isinstance(arguments, dict)] == [
             "+Nothing changes.\n",
             newer.diff,
         ]
@@ -875,7 +853,7 @@ def test_kinby_moves_a_library_skill_only_with_the_diff_the_move_brings_in_its_a
 def test_the_home_instance_never_deletes_a_library_skill(tmp_path, monkeypatch):
     def script(_: UUID) -> list[AIMessageChunk]:
         grill = {"name": "grill", "content": skill("grill"), "hash": None}
-        return [calling("grill-1", "library_skill_write", grill), AIMessageChunk(content="Done.")]
+        return [writing("grill-1", "library_skill_write", grill), AIMessageChunk(content="Done.")]
 
     async def scenario() -> None:
         async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
@@ -910,8 +888,8 @@ def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up
         [phone] = created
         mute: dict[str, object] = {"channel_id": str(phone.channel_id), "instance_id": str(alice)}
         yield calling("list-1", "hub_read", {"method": "channel.list", "params": {}})
-        yield calling("mute-1", "channel_mute", mute)
-        yield calling("unmute-1", "channel_unmute", mute)
+        yield writing("mute-1", "channel_mute", mute)
+        yield writing("unmute-1", "channel_unmute", mute)
         yield AIMessageChunk(content="Alice is muted, then unmuted, on your phone.")
 
     async def scenario() -> None:
@@ -937,7 +915,7 @@ def test_kinby_lists_channels_and_mutes_an_instance_on_one_but_never_sets_one_up
             listed = await listed_channel(hub_client(kinby.hub), phone.channel_id)
 
         results = tool_results(payloads)
-        assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
+        assert operations(payloads) == [
             "channel_mute",
             "channel_unmute",
         ]
@@ -960,7 +938,7 @@ def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
 ):
     def script(_: UUID) -> list[AIMessageChunk]:
         return [
-            calling("prepare-1", "image_prepare", {}),
+            writing("prepare-1", "image_prepare", {}),
             calling("describe-1", "hub_read", {"method": "image.describe", "params": {}}),
             AIMessageChunk(content="The image is prepared."),
         ]
@@ -968,7 +946,6 @@ def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
     async def scenario() -> None:
         async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
             payloads = await relayed_turn(kinby)
-            [approval] = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
             results = tool_results(payloads)
             accepted = ImagePrepareResult.model_validate_json(results["prepare-1"].output)
             operation = await finished_operation(hub_client(kinby.hub), accepted)
@@ -976,7 +953,7 @@ def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
                 kinby.route(kinby.home), kinby.home_token, written(uuid4(), "image_prepare", {})
             )
 
-        assert approval.name == "image_prepare"
+        assert operations(payloads) == ["image_prepare"]
         assert operation.kind is OperationKind.PREPARE
         assert operation.state is OperationState.SUCCEEDED
         assert operation.requester == kinby.home
@@ -986,35 +963,40 @@ def test_kinby_prepares_the_image_once_the_user_approves_and_never_without_it(
     asyncio.run(scenario())
 
 
-def lifecycle_runner(tmp_path: Path, policy: GatePolicy | None = None) -> LangGraphRunner:
+def hub_write_runner(
+    tmp_path: Path,
+    policy: GatePolicy | None = None,
+    operation: str = "instance_lifecycle",
+    arguments: Mapping[str, object] | None = None,
+) -> LangGraphRunner:
+    stop = {"instance_id": str(uuid4()), "action": "stop"}
     model = ScriptedModel(
         [
-            calling(
-                "stop-1", "instance_lifecycle", {"instance_id": str(uuid4()), "action": "stop"}
-            ),
+            writing("write-1", operation, stop if arguments is None else arguments),
             AIMessageChunk(content="Done."),
         ]
     )
     return LangGraphRunner(_instance(tmp_path), model_factory=lambda _: model, gate_policy=policy)
 
 
-def test_a_hub_write_parks_in_full_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "mode", [PermissionMode.ASK, PermissionMode.AUTO, PermissionMode.FULL_ACCESS]
+)
+def test_a_hub_write_parks_in_every_mode_but_read_only(tmp_path, monkeypatch, mode):
     as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
-    runner = lifecycle_runner(tmp_path, GatePolicy(mode=PermissionMode.FULL_ACCESS))
+    runner = hub_write_runner(tmp_path, GatePolicy(mode=mode))
 
     result, payloads = asyncio.run(_run_turn(runner))
 
     assert isinstance(result, ParkedTurn)
-    assert [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)] == [
-        "instance_lifecycle"
-    ]
+    assert operations(payloads) == ["instance_lifecycle"]
 
 
 def test_an_allow_rule_in_permissions_does_not_lower_a_hub_writes_ask(tmp_path, monkeypatch):
     as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
-    runner = lifecycle_runner(tmp_path)
+    runner = hub_write_runner(tmp_path)
     (tmp_path / "instance" / "permissions.toml").write_text(
-        'mode = "full-access"\n\n[tools]\ninstance_lifecycle = "allow"\n', encoding="utf-8"
+        'mode = "full-access"\n\n[tools]\nhub_write = "allow"\n', encoding="utf-8"
     )
 
     result, payloads = asyncio.run(_run_turn(runner))
@@ -1025,7 +1007,7 @@ def test_an_allow_rule_in_permissions_does_not_lower_a_hub_writes_ask(tmp_path, 
 
 def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
     as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
-    runner = lifecycle_runner(tmp_path, GatePolicy(mode=PermissionMode.READ_ONLY))
+    runner = hub_write_runner(tmp_path, GatePolicy(mode=PermissionMode.READ_ONLY))
 
     result, payloads = asyncio.run(_run_turn(runner))
 
@@ -1033,6 +1015,43 @@ def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
     assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
     [gated] = [payload for payload in payloads if isinstance(payload, ToolGated)]
     assert gated.action.value == "deny"
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments", "named"),
+    [
+        ("instance_lifecycle", {"action": "pause"}, ["instance_id: ", "action: "]),
+        ("instance_routine_run", {"enabled": True}, ["instance_id: ", "name: ", "enabled: "]),
+        ("library_move", {"name": "grill", "commit": None}, ["hash: ", "diff: "]),
+        (
+            "instance_create",
+            {"model": "openai:gpt-5", "secrets": {"api_key": "sk-bob"}},
+            ["secrets: "],
+        ),
+        (
+            "instance_create",
+            {"model": "openai:gpt-5", "save_to_hub": {"api_key": "openai"}},
+            ["save_to_hub: "],
+        ),
+        ("instance_destroy", {}, ['"instance_destroy"']),
+    ],
+    ids=["lifecycle", "relayed", "move", "secret", "saved-secret", "unknown"],
+)
+def test_an_invalid_hub_write_names_each_wrong_field_without_asking(
+    tmp_path, monkeypatch, operation, arguments, named
+):
+    as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
+    policy = GatePolicy(mode=PermissionMode.FULL_ACCESS)
+    runner = hub_write_runner(tmp_path, policy, operation, arguments)
+
+    result, payloads = asyncio.run(_run_turn(runner))
+
+    assert not isinstance(result, ParkedTurn)
+    assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+    [refused] = [payload for payload in payloads if isinstance(payload, ToolResult)]
+    assert refused.error
+    assert [name for name in named if name in refused.output] == named
+    assert "sk-bob" not in refused.output
 
 
 def test_the_hub_writes_each_instance_the_scopes_its_hub_route_grants(tmp_path):
@@ -1068,13 +1087,7 @@ def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, sco
 
     names = {tool.name for tool in hub_tools()}
     if present:
-        assert {
-            "hub_read",
-            "instance_create",
-            "instance_lifecycle",
-            "instance_prompt_set",
-            "image_prepare",
-        } <= names
+        assert names == {"hub_read", "hub_write"}
     else:
         assert not names
 
@@ -1084,8 +1097,11 @@ def test_a_replayed_request_keeps_the_approval_the_user_gave():
     thread_id = uuid4()
     request = ApprovalRequested(
         approval_id=uuid4(),
-        name="instance_lifecycle",
-        arguments={"instance_id": str(uuid4()), "action": "stop"},
+        name="hub_write",
+        arguments={
+            "operation": "instance_lifecycle",
+            "arguments": {"instance_id": str(uuid4()), "action": "stop"},
+        },
         rule=GateRule("hub.write"),
     )
     event = Event(

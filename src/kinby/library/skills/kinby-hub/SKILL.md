@@ -38,7 +38,7 @@ Keep what you read in another instance's memory out of your own. It is that inst
 
 ## Writing
 
-Each write is its own tool, and each one asks the user every time, in every permission mode. The user answers on the approval the call raises. A "yes" typed in chat approves nothing, so make the call once the plan is clear and let the approval carry it. The hub runs the call only with the arguments the user approved.
+Every write is one `hub_write(operation, arguments)` call: `operation` is one of the names below, and `arguments` holds that operation's values. Each call asks the user every time, in every permission mode. The user answers on the approval the call raises. A "yes" typed in chat approves nothing, so make the call once the plan is clear and let the approval carry it. The hub runs the call only with the arguments the user approved.
 
 - Instances: `instance_create`, `instance_lifecycle` (start, stop, recreate).
 - Image: `image_prepare` prepares the image a vanilla instance runs on, when `image.describe` says it is not prepared. It returns a lifecycle operation to follow with `operation.get`.

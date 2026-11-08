@@ -34,6 +34,8 @@ NotificationReporter = Callable[
 ViewReporter = Callable[[ViewChanged], Awaitable[object]]
 #: What an approval of a call shows beside its arguments, from the call's arguments.
 Preview = Callable[[Mapping[str, JsonValue], Instance], str | None]
+#: What is wrong with a call's arguments, or None when the tool takes them.
+ArgumentCheck = Callable[[Mapping[str, JsonValue]], str | None]
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,8 @@ class Tool:
     #: (ADR 0109).
     authored: bool = False
     preview: Preview | None = field(default=None, repr=False)
+    #: Run before the gate: a call it refuses returns its refusal and never asks.
+    check: ArgumentCheck | None = field(default=None, repr=False)
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(

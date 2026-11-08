@@ -1,21 +1,29 @@
 """Hub tools: the home instance reads the hub and its instances on its hub route, and asks the
-hub for the writes the user approves."""
+hub for the writes the user approves, each an operation of hub_write (ADR 0096, ADR 0120)."""
 
 from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from uuid import UUID
 
 import aiohttp
-from pydantic import JsonValue
+from pydantic import ConfigDict, JsonValue, ValidationError
+from pydantic.fields import FieldInfo
 
 from kinby.contracts import (
     HUB_ROUTE_FRAME_BYTES,
     HUB_WRITE,
     INSTANCE_RELAY_READ,
+    PROMPT_SET,
     RELAYED_READS,
+    ROUTINE_DELETE,
+    ROUTINE_RUN,
+    ROUTINE_SET_ENABLED,
+    ROUTINE_WRITE,
     AcceptedResult,
     CallFrame,
     ChannelMuteCommand,
@@ -23,37 +31,26 @@ from kinby.contracts import (
     ErrorEnvelope,
     ErrorFrame,
     FactoryEditCommand,
-    FactoryName,
-    FactoryRole,
-    FileHash,
     FrameId,
-    GitCommit,
-    HubSecretName,
     HubWriteCommand,
     HubWriteResult,
+    ImagePrepareCommand,
     InstanceCreateCommand,
     InstancePicksSetCommand,
+    InstanceRecreateCommand,
     InstanceRelayReadResult,
+    InstanceStartCommand,
+    InstanceStopCommand,
     LibraryGitAddCommand,
     LibraryMcpServerWriteCommand,
     LibrarySkillMoveCommand,
     LibrarySkillWriteCommand,
-    McpServer,
-    McpServerChoice,
-    McpServerName,
-    PromptName,
-    PromptSetCommand,
+    Method,
     ResultFrame,
-    RoutineDeleteCommand,
-    RoutineName,
-    RoutineRunCommand,
-    RoutineSetEnabledCommand,
-    RoutineWriteCommand,
     Scope,
-    SetupValue,
-    SkillName,
     parse_server_frame,
 )
+from kinby.core.errors import PermissionDenied
 from kinby.plugins.tools import Tool, ToolContext, tool
 
 #: This instance's route on its hub. A hub sets it only in an instance its registry grants a scope.
@@ -82,11 +79,33 @@ def holds_hub_home() -> bool:
     return bool(os.environ.get(HUB_URL_VARIABLE)) and Scope.HUB_HOME in granted
 
 
+class HubWriteOperation(StrEnum):
+    """The writes hub_write asks the hub for, each named as its own hub tool was (ADR 0120)."""
+
+    INSTANCE_CREATE = "instance_create"
+    INSTANCE_LIFECYCLE = "instance_lifecycle"
+    INSTANCE_PICKS_SET = "instance_picks_set"
+    INSTANCE_PROMPT_SET = "instance_prompt_set"
+    INSTANCE_ROUTINE_WRITE = "instance_routine_write"
+    INSTANCE_ROUTINE_SET_ENABLED = "instance_routine_set_enabled"
+    INSTANCE_ROUTINE_RUN = "instance_routine_run"
+    INSTANCE_ROUTINE_DELETE = "instance_routine_delete"
+    INSTANCE_ASK = "instance_ask"
+    IMAGE_PREPARE = "image_prepare"
+    LIBRARY_SKILL_WRITE = "library_skill_write"
+    LIBRARY_GIT_ADD = "library_git_add"
+    LIBRARY_MOVE = "library_move"
+    LIBRARY_MCP_SERVER_WRITE = "library_mcp_server_write"
+    FACTORY_WRITE = "factory_write"
+    CHANNEL_MUTE = "channel_mute"
+    CHANNEL_UNMUTE = "channel_unmute"
+
+
 def hub_tools() -> tuple[Tool, ...]:
     """The hub tools, in the instance its hub grants hub:home on its hub route."""
     if not holds_hub_home():
         return ()
-    return (hub_read, *HUB_WRITES)
+    return (hub_read, hub_write)
 
 
 @tool(write=False, hub=True)
@@ -119,271 +138,229 @@ async def read_hub(method: str, params: dict[str, JsonValue]) -> dict[str, JsonV
 
 
 @tool(write=True, hub=True)
-async def instance_create(
-    model: str,
-    context: ToolContext,
-    manifest_id: str | None = None,
-    persona_name: str | None = None,
-    factory_role: FactoryRole | None = None,
-    setup: dict[str, SetupValue] | None = None,
-    hub_secrets: dict[str, HubSecretName] | None = None,
-    picks: list[SkillName] | None = None,
-) -> str:
-    """Create an instance through onboarding, and return its lifecycle operation as JSON.
+async def hub_write(operation: str, arguments: dict[str, JsonValue], context: ToolContext) -> str:
+    """Ask the hub for one write the user approves, and return the hub's answer as JSON.
 
-    model is the instance's model, like "anthropic:claude-sonnet-5". A factory_role, a factory
-    and the name of one of its roles, makes the instance that role, named after it; leave it out
-    for a vanilla instance. setup holds the setup fields the image or the role declares. A
-    secret field takes only a hub secret, named in hub_secrets by field name: never put a
-    secret's value in any argument. A secret field left out waits as pending setup. picks names
-    the library skills the instance picks.
+    operation is one of instance_create, instance_lifecycle, instance_picks_set,
+    instance_prompt_set, instance_routine_write, instance_routine_set_enabled,
+    instance_routine_run, instance_routine_delete, instance_ask, image_prepare,
+    library_skill_write, library_git_add, library_move, library_mcp_server_write, factory_write,
+    channel_mute and channel_unmute.
     """
-    command = InstanceCreateCommand(
-        manifest_id=manifest_id,
-        persona_name=persona_name,
-        factory_role=factory_role,
-        model=model,
-        config=setup or {},
-        hub_secrets=hub_secrets or {},
-        picks=picks or [],
-    )
-    arguments = command.model_dump(mode="json")
-    arguments["setup"] = arguments.pop("config")
-    return await _write(instance_create, arguments, context)
+    write = home_write(operation, arguments)
+    if context.approval_id is None:
+        raise PermissionError(f"The hub runs {operation} only with the user's approval.")
+    command = HubWriteCommand(approval_id=context.approval_id, tool=operation, arguments=arguments)
+    answer = await call_hub(HUB_WRITE.name, command.model_dump(mode="json"), "the write")
+    result = HubWriteResult.model_validate(answer).result
+    if isinstance(write, InstanceAsk):
+        accepted = AcceptedResult.model_validate(result)
+        link = f"/instances/{write.instance_id}/threads/{accepted.thread_id}"
+        result = {**accepted.model_dump(mode="json"), "link": link}
+    return json.dumps(result, ensure_ascii=False)
 
 
-@tool(write=True, hub=True)
-async def instance_lifecycle(
-    instance_id: UUID, action: LifecycleAction, context: ToolContext
-) -> str:
-    """Start, stop or recreate an instance, and return its lifecycle operation as JSON."""
-    arguments: dict[str, JsonValue] = {"instance_id": str(instance_id), "action": action.value}
-    return await _write(instance_lifecycle, arguments, context)
+def _refusal(call: Mapping[str, JsonValue]) -> str | None:
+    try:
+        requested_write(call)
+    except PermissionDenied as exc:
+        return str(exc)
+    return None
 
 
-@tool(write=True, hub=True)
-async def instance_picks_set(
-    instance_id: UUID,
-    skills: list[SkillName],
-    mcp_servers: list[McpServerChoice],
-    hash: FileHash | None,
-    context: ToolContext,
-) -> str:
-    """Set the library skills and MCP servers an instance picks, and return its picks as JSON.
-
-    skills and mcp_servers name every pick the instance should hold: one left out is dropped.
-    Each MCP server's trust_hints says whether its tools that declare themselves read-only run
-    without asking; leave it false unless the user asked to trust them. hash is the one
-    instance.picks.get returned.
-    """
-    command = InstancePicksSetCommand(
-        instance_id=instance_id, skills=skills, mcp_servers=mcp_servers, hash=hash
-    )
-    return await _write(instance_picks_set, command.model_dump(mode="json"), context)
+hub_write = replace(hub_write, check=_refusal)
 
 
-@tool(write=True, hub=True)
-async def instance_prompt_set(
-    instance_id: UUID, name: PromptName, content: str, hash: FileHash, context: ToolContext
-) -> str:
-    """Set one of an instance's prompts, and return it as JSON.
+@dataclass(frozen=True)
+class RelayedWrite:
+    """An instance method the hub calls on the target with the target's own control token."""
 
-    hash is the one prompt.get returned for that prompt.
-    """
-    command = PromptSetCommand(name=name, content=content, hash=hash)
-    return await _relayed_write(instance_prompt_set, instance_id, command, context)
+    instance_id: UUID
+    method: Method
+    command: ContractModel
 
 
-@tool(write=True, hub=True)
-async def instance_routine_write(
-    instance_id: UUID, name: RoutineName, content: str, hash: FileHash | None, context: ToolContext
-) -> str:
-    """Write a routine's ROUTINE.md into an instance, and return the routine file as JSON.
+class InstanceAsk(ContractModel):
+    """A turn the hub starts in the target, on a new thread, with the home instance as origin."""
 
-    hash is the one routine.read returned, or null to create the routine.
-    """
-    command = RoutineWriteCommand(name=name, content=content, hash=hash)
-    return await _relayed_write(instance_routine_write, instance_id, command, context)
+    instance_id: UUID
+    message: str
 
 
-@tool(write=True, hub=True)
-async def instance_routine_set_enabled(
-    instance_id: UUID, name: RoutineName, *, enabled: bool, context: ToolContext
-) -> str:
-    """Enable or disable one of an instance's routines, and return the routine file as JSON."""
-    command = RoutineSetEnabledCommand(name=name, enabled=enabled)
-    return await _relayed_write(instance_routine_set_enabled, instance_id, command, context)
+class LibraryMove(LibrarySkillMoveCommand):
+    """A move the hub runs only when it brings the diff the user approved."""
+
+    diff: str
 
 
-@tool(write=True, hub=True)
-async def instance_routine_run(instance_id: UUID, name: RoutineName, context: ToolContext) -> str:
-    """Run one of an instance's routines once, now, in that instance."""
-    command = RoutineRunCommand(name=name)
-    return await _relayed_write(instance_routine_run, instance_id, command, context)
+class ChannelMute(ChannelMuteCommand):
+    """A mute the hub adds to a channel."""
 
 
-@tool(write=True, hub=True)
-async def instance_routine_delete(
-    instance_id: UUID, name: RoutineName, hash: FileHash, context: ToolContext
-) -> str:
-    """Delete one of an instance's routines.
-
-    hash is the one routine.read returned.
-    """
-    command = RoutineDeleteCommand(name=name, hash=hash)
-    return await _relayed_write(instance_routine_delete, instance_id, command, context)
+class ChannelUnmute(ChannelMuteCommand):
+    """A mute the hub takes off a channel."""
 
 
-@tool(write=True, hub=True)
-async def instance_ask(instance_id: UUID, message: str, context: ToolContext) -> str:
-    """Start a turn in an instance, on a new thread, with a request for it to work on there.
-
-    Ask for work that needs that instance's own judgment or memory. Returns the thread and the
-    turn as JSON, with the thread's link in the web app to give the user as a Markdown link.
-    """
-    arguments: dict[str, JsonValue] = {"instance_id": str(instance_id), "message": message}
-    accepted = AcceptedResult.model_validate(await _written(instance_ask, arguments, context))
-    link = f"/instances/{instance_id}/threads/{accepted.thread_id}"
-    return json.dumps({**accepted.model_dump(mode="json"), "link": link}, ensure_ascii=False)
-
-
-@tool(write=True, hub=True)
-async def image_prepare(context: ToolContext) -> str:
-    """Prepare the image a vanilla instance runs on, and return its lifecycle operation as JSON.
-
-    While a preparation is running, this returns that one. Follow it with operation.get.
-    """
-    return await _write(image_prepare, {}, context)
-
-
-@tool(write=True, hub=True)
-async def library_skill_write(
-    name: SkillName, content: str, hash: FileHash | None, context: ToolContext
-) -> str:
-    """Write a library skill's SKILL.md, and return the skill as JSON.
-
-    hash is the one library.skill.read returned, or null to add a new skill to the library.
-    """
-    command = LibrarySkillWriteCommand(name=name, content=content, hash=hash)
-    return await _write(library_skill_write, command.model_dump(mode="json"), context)
-
-
-@tool(write=True, hub=True)
-async def library_git_add(
-    address: str, commit: GitCommit, skills: list[SkillName], context: ToolContext
-) -> str:
-    """Add skills from a git repository to the library, and return their entries as JSON.
-
-    address and commit are the ones library.git.preview took and returned, and skills names the
-    previewed skills to add.
-    """
-    command = LibraryGitAddCommand(address=address, commit=commit, skills=skills)
-    return await _write(library_git_add, command.model_dump(mode="json"), context)
-
-
-@tool(write=True, hub=True)
-async def library_move(
-    name: SkillName,
-    hash: FileHash,
-    commit: GitCommit | None,
-    diff: str,
-    context: ToolContext,
-    *,
-    overwrite: bool = False,
-) -> str:
-    """Move a library skill to its newer version, and return the library as JSON.
-
-    hash, commit and diff are the ones library.skill.check returned: the user approves the move
-    reading the diff. overwrite replaces edits the user made to the skill since it landed.
-    """
-    command = LibrarySkillMoveCommand(name=name, hash=hash, commit=commit, overwrite=overwrite)
-    return await _write(library_move, {**command.model_dump(mode="json"), "diff": diff}, context)
-
-
-@tool(write=True, hub=True)
-async def library_mcp_server_write(
-    name: McpServerName, server: McpServer, hash: FileHash | None, context: ToolContext
-) -> str:
-    """Write an MCP server's definition into the library, and return it as JSON.
-
-    server holds its transport, a url or a uvx package, the env variables a local server gets
-    from an instance's .env, and include, the names of its tools a turn is offered. hash is the
-    one library.mcp_server.read returned, or null to add a new server to the library.
-    """
-    command = LibraryMcpServerWriteCommand(name=name, server=server, hash=hash)
-    return await _write(library_mcp_server_write, command.model_dump(mode="json"), context)
-
-
-@tool(write=True, hub=True)
-async def factory_write(
-    name: FactoryName, files: dict[str, str], hash: FileHash | None, context: ToolContext
-) -> str:
-    """Write a factory's files, each whole, and return the factory as JSON.
-
-    files holds each file to write by its path in the factory's folder; the others stay. hash
-    is the one factory.get returned, or null to create a new factory. The hub keeps the write
-    only if the factory check passes.
-    """
-    command = FactoryEditCommand(name=name, files=files, hash=hash)
-    return await _write(factory_write, command.model_dump(mode="json"), context)
-
-
-@tool(write=True, hub=True)
-async def channel_mute(channel_id: UUID, instance_id: UUID, context: ToolContext) -> str:
-    """Stop a channel sending an instance's notifications, and return the channel as JSON."""
-    command = ChannelMuteCommand(channel_id=channel_id, instance_id=instance_id)
-    return await _write(channel_mute, command.model_dump(mode="json"), context)
-
-
-@tool(write=True, hub=True)
-async def channel_unmute(channel_id: UUID, instance_id: UUID, context: ToolContext) -> str:
-    """Let a channel send an instance's notifications again, and return the channel as JSON."""
-    command = ChannelMuteCommand(channel_id=channel_id, instance_id=instance_id)
-    return await _write(channel_unmute, command.model_dump(mode="json"), context)
-
-
-#: The hub tools that write, one per write the hub runs for the home instance.
-HUB_WRITES = (
-    instance_create,
-    instance_lifecycle,
-    instance_picks_set,
-    instance_prompt_set,
-    instance_routine_write,
-    instance_routine_set_enabled,
-    instance_routine_run,
-    instance_routine_delete,
-    instance_ask,
-    image_prepare,
-    library_skill_write,
-    library_git_add,
-    library_move,
-    library_mcp_server_write,
-    factory_write,
-    channel_mute,
-    channel_unmute,
+type HomeWrite = (
+    InstanceCreateCommand
+    | InstanceStartCommand
+    | InstanceStopCommand
+    | InstanceRecreateCommand
+    | InstancePicksSetCommand
+    | RelayedWrite
+    | InstanceAsk
+    | ImagePrepareCommand
+    | LibrarySkillWriteCommand
+    | LibraryGitAddCommand
+    | LibraryMove
+    | LibraryMcpServerWriteCommand
+    | FactoryEditCommand
+    | ChannelMute
+    | ChannelUnmute
 )
 
+#: The operations whose write runs in the target instance, and the instance method each calls.
+_RELAYED_WRITES: Mapping[str, Method] = {
+    HubWriteOperation.INSTANCE_PROMPT_SET: PROMPT_SET,
+    HubWriteOperation.INSTANCE_ROUTINE_WRITE: ROUTINE_WRITE,
+    HubWriteOperation.INSTANCE_ROUTINE_SET_ENABLED: ROUTINE_SET_ENABLED,
+    HubWriteOperation.INSTANCE_ROUTINE_RUN: ROUTINE_RUN,
+    HubWriteOperation.INSTANCE_ROUTINE_DELETE: ROUTINE_DELETE,
+}
 
-async def _relayed_write(
-    write: Tool, instance_id: UUID, command: ContractModel, context: ToolContext
-) -> str:
-    arguments = {"instance_id": str(instance_id), **command.model_dump(mode="json")}
-    return await _write(write, arguments, context)
+_NO_SECRET_VALUES = "the home instance names hub secrets in hub_secrets, never a secret's value"
 
 
-async def _write(write: Tool, arguments: dict[str, JsonValue], context: ToolContext) -> str:
-    return json.dumps(await _written(write, arguments, context), ensure_ascii=False)
+class _LifecycleCall(ContractModel):
+    instance_id: UUID
+    action: LifecycleAction
 
 
-async def _written(
-    write: Tool, arguments: dict[str, JsonValue], context: ToolContext
-) -> dict[str, JsonValue]:
-    """Ask the hub to run the call, with the approval the user gave it."""
-    if context.approval_id is None:
-        raise PermissionError(f"The hub runs {write.name} only with the user's approval.")
-    command = HubWriteCommand(approval_id=context.approval_id, tool=write.name, arguments=arguments)
-    written = await call_hub(HUB_WRITE.name, command.model_dump(mode="json"), "the write")
-    return HubWriteResult.model_validate(written).result
+class _Target(ContractModel):
+    """The instance a relayed write runs in, beside the write's own arguments."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    instance_id: UUID
+
+
+#: The model each operation that runs on the hub reads its arguments as.
+_HUB_RUN_WRITES: Mapping[str, type[ContractModel]] = {
+    HubWriteOperation.INSTANCE_CREATE: InstanceCreateCommand,
+    HubWriteOperation.INSTANCE_LIFECYCLE: _LifecycleCall,
+    HubWriteOperation.INSTANCE_PICKS_SET: InstancePicksSetCommand,
+    HubWriteOperation.INSTANCE_ASK: InstanceAsk,
+    HubWriteOperation.IMAGE_PREPARE: ImagePrepareCommand,
+    HubWriteOperation.LIBRARY_SKILL_WRITE: LibrarySkillWriteCommand,
+    HubWriteOperation.LIBRARY_GIT_ADD: LibraryGitAddCommand,
+    HubWriteOperation.LIBRARY_MOVE: LibraryMove,
+    HubWriteOperation.LIBRARY_MCP_SERVER_WRITE: LibraryMcpServerWriteCommand,
+    HubWriteOperation.FACTORY_WRITE: FactoryEditCommand,
+    HubWriteOperation.CHANNEL_MUTE: ChannelMute,
+    HubWriteOperation.CHANNEL_UNMUTE: ChannelUnmute,
+}
+
+
+def write_arguments(operation: HubWriteOperation) -> dict[str, FieldInfo]:
+    """The arguments one hub_write operation takes, by name, as home_write reads them."""
+    if operation in _RELAYED_WRITES:
+        return {**_Target.model_fields, **_RELAYED_WRITES[operation].command.model_fields}
+    fields = dict(_HUB_RUN_WRITES[operation].model_fields)
+    if operation is HubWriteOperation.INSTANCE_CREATE:
+        fields["setup"] = fields.pop("config")
+        for refused in ("secrets", "save_to_hub"):
+            del fields[refused]
+    return fields
+
+
+def requested_write(call: Mapping[str, JsonValue]) -> HomeWrite:
+    """The hub operation one hub_write call asks for, from its operation and its arguments."""
+    operation, arguments = call.get("operation"), call.get("arguments")
+    if not isinstance(operation, str) or not isinstance(arguments, dict):
+        raise PermissionDenied("hub_write takes an operation and its arguments as an object.")
+    return home_write(operation, arguments)
+
+
+def home_write(operation: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
+    """The hub operation one hub_write operation asks for. A refusal names each wrong field. A
+    secret's value never comes this way."""
+    try:
+        match operation:
+            case HubWriteOperation.INSTANCE_CREATE:
+                # The tool took the config as setup: LangChain keeps a tool's config for itself.
+                own = dict(arguments)
+                if "setup" in own:
+                    own["config"] = own.pop("setup") or {}
+                create = InstanceCreateCommand.model_validate(own)
+                sent = {"secrets": create.secrets, "save_to_hub": create.save_to_hub}
+                if any(sent.values()):
+                    raise _refused(
+                        operation, {name: _NO_SECRET_VALUES for name in sent if sent[name]}
+                    )
+                return create
+            case HubWriteOperation.INSTANCE_LIFECYCLE:
+                call = _LifecycleCall.model_validate(arguments)
+                match call.action:
+                    case LifecycleAction.START:
+                        return InstanceStartCommand(instance_id=call.instance_id)
+                    case LifecycleAction.STOP:
+                        return InstanceStopCommand(instance_id=call.instance_id)
+                    case LifecycleAction.RECREATE:
+                        return InstanceRecreateCommand(instance_id=call.instance_id)
+            case HubWriteOperation.INSTANCE_PICKS_SET:
+                return InstancePicksSetCommand.model_validate(arguments)
+            case HubWriteOperation.INSTANCE_ASK:
+                return InstanceAsk.model_validate(arguments)
+            case HubWriteOperation.IMAGE_PREPARE:
+                return ImagePrepareCommand.model_validate(arguments)
+            case HubWriteOperation.LIBRARY_SKILL_WRITE:
+                return LibrarySkillWriteCommand.model_validate(arguments)
+            case HubWriteOperation.LIBRARY_GIT_ADD:
+                return LibraryGitAddCommand.model_validate(arguments)
+            case HubWriteOperation.LIBRARY_MOVE:
+                return LibraryMove.model_validate(arguments)
+            case HubWriteOperation.LIBRARY_MCP_SERVER_WRITE:
+                return LibraryMcpServerWriteCommand.model_validate(arguments)
+            case HubWriteOperation.FACTORY_WRITE:
+                return FactoryEditCommand.model_validate(arguments)
+            case HubWriteOperation.CHANNEL_MUTE:
+                return ChannelMute.model_validate(arguments)
+            case HubWriteOperation.CHANNEL_UNMUTE:
+                return ChannelUnmute.model_validate(arguments)
+            case _ if operation in _RELAYED_WRITES:
+                return _relayed_write(operation, _RELAYED_WRITES[operation], arguments)
+    except ValidationError as exc:
+        raise _refused(operation, _fields(exc)) from exc
+    raise PermissionDenied(f'"{operation}" is not a write the hub runs for the home instance.')
+
+
+def _relayed_write(
+    operation: str, method: Method, arguments: Mapping[str, JsonValue]
+) -> RelayedWrite:
+    """The relayed write, refused with what is wrong with both the target and the command."""
+    own = {name: value for name, value in arguments.items() if name != "instance_id"}
+    fields: dict[str, str] = {}
+    target = command = None
+    try:
+        target = _Target.model_validate(arguments).instance_id
+    except ValidationError as exc:
+        fields |= _fields(exc)
+    try:
+        command = method.command.model_validate(own)
+    except ValidationError as exc:
+        fields |= _fields(exc)
+    if target is None or command is None:
+        raise _refused(operation, fields)
+    return RelayedWrite(target, method, command)
+
+
+def _fields(exc: ValidationError) -> dict[str, str]:
+    return {".".join(str(part) for part in error["loc"]): error["msg"] for error in exc.errors()}
+
+
+def _refused(operation: str, fields: Mapping[str, str]) -> PermissionDenied:
+    named = "; ".join(f"{name}: {why}" for name, why in fields.items())
+    return PermissionDenied(f'The hub cannot run "{operation}" with these arguments: {named}')
 
 
 async def call_hub(method: str, params: dict[str, JsonValue], named: str) -> dict[str, JsonValue]:
