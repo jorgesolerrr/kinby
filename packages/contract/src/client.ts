@@ -471,6 +471,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   STALE: true,
   ROUTINE_PENDING: true,
   TAKEOVER_ABANDONED: true,
+  CONTEXT_OVERFLOW: true,
   CONNECTION_LOST: true,
   INTERNAL: true,
 }

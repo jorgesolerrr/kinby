@@ -203,6 +203,7 @@ export type ErrorCode =
   | "STALE"
   | "ROUTINE_PENDING"
   | "TAKEOVER_ABANDONED"
+  | "CONTEXT_OVERFLOW"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";

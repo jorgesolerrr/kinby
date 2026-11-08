@@ -14,6 +14,7 @@ from functools import partial
 from typing import Annotated, Protocol, cast
 from uuid import UUID, uuid4, uuid5
 
+from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -72,6 +73,7 @@ from kinby.core.errors import (
     BudgetExceeded,
     CodeStepFailed,
     CodeStepNotFound,
+    ContextOverflow,
     GrantOutsideRoutine,
     InvalidApprovalRequest,
     InvalidParkedTurn,
@@ -713,6 +715,13 @@ class LangGraphRunner:
             if budgets.steps is None:
                 raise
             raise BudgetExceeded("steps", budgets.steps) from exc
+        except ContextOverflowError as exc:
+            results = [
+                event.payload
+                for event in self._event_log.turn_events(turn.turn_id)
+                if isinstance(event.payload, ToolResult)
+            ]
+            raise ContextOverflow(results) from exc
         await self.prune_checkpoints(turn.thread_id)
         if isinstance(parked, TakeoverRequested):
             # The user drives the page on the hub. With no browser free, the turn parks all the

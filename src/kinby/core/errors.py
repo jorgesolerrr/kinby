@@ -7,12 +7,14 @@ from collections.abc import Sequence
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
-from kinby.contracts import ErrorCode, ErrorEnvelope
+from kinby.contracts import ErrorCode, ErrorEnvelope, ToolResult
 
 if TYPE_CHECKING:
     from kinby.core.turn_metrics import UnpricedModel
 
 BudgetName = Literal["steps", "tokens", "seconds", "usd_per_day"]
+#: How many of a turn's tool results a context overflow names.
+_LARGEST_RESULTS = 3
 
 
 class CoreError(Exception):
@@ -336,6 +338,27 @@ class ModelUnpriced(CoreError):
 
     def __init__(self, model: UnpricedModel) -> None:
         super().__init__(f'Model "{model}" has no price. Add [prices."{model}"] to kinby.toml.')
+
+
+class ContextOverflow(CoreError):
+    """The provider refused a model call because the prompt was too long for the model."""
+
+    code = ErrorCode.CONTEXT_OVERFLOW
+
+    def __init__(self, results: Sequence[ToolResult]) -> None:
+        largest = sorted(results, key=_whole_size, reverse=True)[:_LARGEST_RESULTS]
+        named = ", ".join(
+            f"{result.name} ({_whole_size(result):,} characters)" for result in largest
+        )
+        super().__init__(
+            "The prompt grew too long for the model."
+            + (f" The turn's largest tool results: {named}." if named else "")
+            + " Narrow the call, such as with a filter or a limit, before trying it again."
+        )
+
+
+def _whole_size(result: ToolResult) -> int:
+    return len(result.output) if result.size is None else result.size
 
 
 class NoActiveTurn(CoreError):
