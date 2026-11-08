@@ -51,7 +51,7 @@ from kinby.instance.layout import CLAUDE_DIR, GRAPH_DIR, MEMORY_DIR
 from kinby.instance.recap import load_recap_lens
 from kinby.memory.facade import Episode, Memory, RecappedRun, RecappedTurn, new_node_id
 from kinby.memory.session_digest import MissingSession, SessionDigest, digest_session
-from kinby.plugins.hub import hub_read
+from kinby.plugins.defaults.shell import bash
 
 if TYPE_CHECKING:
     from kinby.contracts import Event
@@ -679,7 +679,7 @@ def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:
     for call in calls:
         result = results.get(call.call_id)
         rendered_result = "No result was recorded."
-        if call.name == hub_read.name:
+        if _reads_the_hub(call):
             # What another instance holds stays out of this instance's memory.
             rendered_result = "Withheld: it was read through the hub."
         elif result is not None:
@@ -703,6 +703,16 @@ def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:
             rendered_closing = "Interrupted"
     sections.append(f"# Closing event\n{rendered_closing}")
     return "\n\n".join(sections)
+
+
+#: The tool the home instance read the hub with before `kinby hub read`, still in unrecapped turns.
+_HUB_READ_TOOL = "hub_read"
+
+
+def _reads_the_hub(call: ToolCall) -> bool:
+    if call.name == _HUB_READ_TOOL:
+        return True
+    return call.name == bash.name and "kinby hub read" in str(call.arguments.get("command", ""))
 
 
 def _truncate_result(output: str) -> str:

@@ -29,7 +29,7 @@ def test_every_tool_of_a_home_instance_fits_the_budget(tmp_path, monkeypatch):
 
     sizes = {tool.name: len(definition(tool)) for tool in tools}
 
-    assert "hub_read" in sizes
+    assert "hub_write" in sizes
     assert {name: size for name, size in sizes.items() if size > TOOL_BUDGET} == {}
 
 
