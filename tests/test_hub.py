@@ -250,7 +250,8 @@ class FakeRuntime:
         return self.addresses.get(instance_id)
 
     async def logs(self, instance_id: str, *, tail: int | None = None) -> AsyncIterator[bytes]:
-        yield self.log_output
+        lines = self.log_output.splitlines(keepends=True)
+        yield b"".join(lines if tail is None else lines[-tail:])
 
     async def list(self) -> Sequence[str]:
         return tuple(self.states)

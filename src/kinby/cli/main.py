@@ -219,7 +219,9 @@ def _usage_command(args: argparse.Namespace) -> UsageGetCommand:
 
 
 def _stats_command(args: argparse.Namespace) -> StatsGetCommand:
-    return StatsGetCommand.model_validate({"since": args.since, "until": args.until, "by": args.by})
+    return StatsGetCommand.model_validate(
+        {"since": args.since, "until": args.until, "by": args.by, "records": True}
+    )
 
 
 def _range_command[Command](build: Callable[[], Command]) -> Command | None:
@@ -638,7 +640,7 @@ async def _thread_for_session(
         if isinstance(created, ErrorEnvelope):
             return created
         return created.id
-    listed = await client.call(THREAD_LIST, ThreadListCommand(filter=ThreadFilter.ALL))
+    listed = await client.call(THREAD_LIST, ThreadListCommand(filter=ThreadFilter.ALL, limit=None))
     if isinstance(listed, ErrorEnvelope):
         return listed
     if thread_id not in {thread.id for thread in listed.threads}:
@@ -664,7 +666,7 @@ async def _list_threads(
     client: ContractClient, thread_filter: ThreadFilter, routine: RoutineName | None
 ) -> int:
     listed = await client.call(
-        THREAD_LIST, ThreadListCommand(filter=thread_filter, routine=routine)
+        THREAD_LIST, ThreadListCommand(filter=thread_filter, routine=routine, limit=None)
     )
     if isinstance(listed, ErrorEnvelope):
         print(format_error(listed), file=sys.stderr)

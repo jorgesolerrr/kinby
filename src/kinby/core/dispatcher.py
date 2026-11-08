@@ -288,7 +288,7 @@ def build_dispatcher(
         runs += [TurnRun(None, step_run.reported) for step_run in step_runs]
         selected_turns = {TurnKey(record.thread_id, record.turn_id) for record in records}
         return StatsGetResult(
-            records=records,
+            records=records if command.records else [],
             buckets=stats_buckets(records, runs, command.by),
             total=stats_summary(records, runs),
             plan_use=plan_use(delegated, now),
