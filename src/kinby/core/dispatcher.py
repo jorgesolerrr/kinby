@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +48,7 @@ from kinby.contracts import (
     THREAD_APPROVAL_RESPOND,
     THREAD_ARCHIVE,
     THREAD_ASK,
+    THREAD_COMPACT,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_MODE_SET,
@@ -86,6 +87,7 @@ from kinby.contracts import (
     StepRunCommand,
     Stream,
     ThreadArchiveCommand,
+    ThreadCompactCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -144,6 +146,8 @@ class TurnConfig:
     snapshots: SnapshotStore | None = None
     #: The browser the runner's turns use, which a turn ended on its takeover closes.
     browser: BrowserService | None = None
+    #: Compacts a thread with the focus given, and returns the compaction's event.
+    compact: Callable[[UUID, str | None], Awaitable[Event]] | None = None
 
 
 @dataclass(frozen=True)
@@ -456,6 +460,14 @@ def build_dispatcher(
         dispatcher.register(THREAD_TURN_INTERRUPT, turn_service.interrupt)
         dispatcher.register(THREAD_APPROVAL_RESPOND, turn_service.respond)
         dispatcher.register(THREAD_TAKEOVER_RESUME, turn_service.resume_takeover)
+        compact = turn_settings.compact if turn_settings is not None else None
+        if compact is not None:
+
+            async def compact_thread(command: ThreadCompactCommand) -> AcceptedResult:
+                async with turn_service.compacting(command.thread_id):
+                    return accepted(await compact(command.thread_id, command.focus))
+
+            dispatcher.register(THREAD_COMPACT, compact_thread)
     return dispatcher
 
 
@@ -495,4 +507,5 @@ async def turn_config(
         recap,
         snapshots,
         browser,
+        runner.compact,
     )

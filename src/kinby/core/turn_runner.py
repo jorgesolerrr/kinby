@@ -58,6 +58,7 @@ from kinby.contracts import (
     RunDelegated,
     SignalReceived,
     TakeoverRequested,
+    ThreadCompacted,
     ToolCall,
     ToolGated,
     ToolResult,
@@ -78,6 +79,7 @@ from kinby.core.errors import (
     InvalidApprovalRequest,
     InvalidParkedTurn,
     ModelNoResponse,
+    NothingToCompact,
     PermissionDenied,
     ReadOnlyMarkRefused,
     RoutineNotFound,
@@ -97,6 +99,7 @@ from kinby.core.prompt import (
     render_wake,
 )
 from kinby.core.saved_outputs import cut_to_cap, turn_outputs
+from kinby.core.sent_history import kept_from, sent_history, summary_request
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -166,8 +169,6 @@ _BUDGET_STEPS = "kinby_budget_steps"
 _BUDGET_TOKENS = "kinby_budget_tokens"
 _BUDGET_SECONDS = "kinby_budget_seconds"
 _BUDGET_USD_PER_DAY = "kinby_budget_usd_per_day"
-#: The size over which a tool result from an earlier turn reaches the model cleared.
-_CLEARED_OVER = 1_000
 _URL = re.compile(r"https?://[^\s<>\"'`()\[\]{}]+")
 #: The tools whose results bring URLs in from the web.
 _URL_SOURCES = frozenset({"web_search", "browser_snapshot", "browser_text", *URL_READS})
@@ -231,6 +232,8 @@ class ModelContext:
     tool_context: ToolContext
     user_message: HumanMessage
     budgets: Budgets
+    #: The thread's latest compaction, which the model is sent in place of the older messages.
+    compaction: ThreadCompacted | None
 
 
 @dataclass(frozen=True)
@@ -310,31 +313,6 @@ def _mark_cache_prefix(
     marked_messages[0] = _with_cache_control(marked_messages[0])
     marked_messages[-1] = _with_cache_control(marked_messages[-1])
     return marked_messages
-
-
-def _clear_earlier_results(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
-    """*messages* as the model is sent them: each tool result over the threshold from before the
-    current turn's user message replaced by a stub (ADR 0122)."""
-    turn_start = max(
-        (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
-        default=0,
-    )
-    return [
-        _cleared(message)
-        if index < turn_start
-        and isinstance(message, ToolMessage)
-        and len(message.text) > _CLEARED_OVER
-        else message
-        for index, message in enumerate(messages)
-    ]
-
-
-def _cleared(result: ToolMessage) -> ToolMessage:
-    stub = (
-        f"[{result.name} result cleared: {len(result.text):,} characters from an earlier turn. "
-        f"Call {result.name} again if you need it.]"
-    )
-    return result.model_copy(update={"content": stub})
 
 
 class LangGraphRunner:
@@ -701,6 +679,7 @@ class LangGraphRunner:
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)
                             ),
                             budgets=budgets,
+                            compaction=self._latest_compaction(turn.thread_id),
                         ),
                         # ADR 0011 keeps interrupted tool calls out of completed history.
                         durability="exit",
@@ -1008,6 +987,60 @@ class LangGraphRunner:
         )
         return output
 
+    async def compact(self, thread_id: UUID, focus: str | None) -> Event:
+        """Compact the thread with the main model's summary of its turns since its last
+        compaction, but for the newest turns it keeps. The summary call and the compaction are
+        recorded under the thread's latest turn."""
+        async with self._graph() as (graph, _):
+            completed = await _newest_completed(graph, _thread_config(thread_id))
+        messages: list[AnyMessage] = [] if completed is None else completed.values["messages"]
+        previous = self._latest_compaction(thread_id)
+        start = 0 if previous is None else previous.boundary
+        boundary = kept_from(messages, start)
+        if boundary <= start:
+            raise NothingToCompact(
+                f'Thread "{thread_id}" has nothing to compact: its turns since its last '
+                "compaction fit in what a compaction keeps."
+            )
+        model = reload_manifest(self._instance, model_override=self._model_override).models.main
+        request = summary_request(
+            None if previous is None else previous.summary, messages[start:boundary], focus
+        )
+        started_at = asyncio.get_running_loop().time()
+        response: AIMessageChunk | None = None
+        async for chunk in self._model_factory(model).astream([request]):
+            response = chunk if response is None else response + chunk
+        if response is None:
+            raise ModelNoResponse("The model returned no summary.")
+        turn_id = next(
+            event.turn_id
+            for event in reversed(self._event_log.thread_events(thread_id))
+            if isinstance(event.payload, TurnStarted)
+        )
+        await self._event_log.append(
+            thread_id,
+            turn_id,
+            completed_model_call(
+                model,
+                response.usage_metadata,
+                started_at=started_at,
+                completed_at=asyncio.get_running_loop().time(),
+            ),
+        )
+        return await self._event_log.append(
+            thread_id, turn_id, ThreadCompacted(summary=response.text, boundary=boundary)
+        )
+
+    def _latest_compaction(self, thread_id: UUID) -> ThreadCompacted | None:
+        return next(
+            (
+                event.payload
+                for event in reversed(self._event_log.thread_events(thread_id))
+                if isinstance(event.payload, ThreadCompacted)
+            ),
+            None,
+        )
+
     async def prune_checkpoints(self, thread_id: UUID) -> None:
         """Delete the thread's checkpoints older than its newest completed one. A newer one,
         such as a turn parked on an approval or a takeover, stays."""
@@ -1091,7 +1124,10 @@ class LangGraphRunner:
         )
         response: AIMessageChunk | None = None
         started_at = asyncio.get_running_loop().time()
-        request_messages = [runtime.context.system_message, *_clear_earlier_results(messages)]
+        request_messages = [
+            runtime.context.system_message,
+            *sent_history(messages, runtime.context.compaction),
+        ]
         async for chunk in runtime.context.model.astream(
             _mark_cache_prefix(state.turn.model, request_messages)
         ):

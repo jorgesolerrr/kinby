@@ -246,6 +246,14 @@ class StepClaim:
     """Held while a factory step runs in the instance."""
 
 
+@dataclass(frozen=True)
+class CompactionClaim:
+    """Held while a thread compacts on demand, so no turn starts on it meanwhile."""
+
+
+type Claim = TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim | CompactionClaim
+
+
 class Turns:
     def __init__(
         self,
@@ -272,7 +280,7 @@ class Turns:
         self._deadlines: set[asyncio.Task[None]] = set()
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
-        self._claims: dict[UUID, TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim] = {}
+        self._claims: dict[UUID, Claim] = {}
         self._admitting = True
         self._answering = True
 
@@ -363,6 +371,19 @@ class Turns:
         finally:
             self._release_claim(key, claim)
 
+    @asynccontextmanager
+    async def compacting(self, thread_id: UUID) -> AsyncIterator[None]:
+        """Hold the idle thread while it compacts. A draining instance compacts nothing."""
+        self.require_admitting()
+        self._require_thread(thread_id)
+        self._require_idle(thread_id)
+        claim = CompactionClaim()
+        self._claims[thread_id] = claim
+        try:
+            yield
+        finally:
+            self._release_claim(thread_id, claim)
+
     async def step_turn(self, title: str, message: str, origin: FactoryRunOrigin) -> list[Event]:
         """Run an agent step's turn on a new thread, and wait for it to close.
 
@@ -432,11 +453,7 @@ class Turns:
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
         self._require_thread(command.thread_id)
-        events = self._log.thread_events(command.thread_id)
-        running = self._running.get(command.thread_id)
-        active = running is not None and not running.task.done()
-        if command.thread_id in self._claims or active or parked_on(events) is not None:
-            raise _thread_busy(command.thread_id)
+        self._require_idle(command.thread_id)
         ceiling = self._permission_ceiling()
         if exceeds_ceiling(command.mode, ceiling):
             raise PermissionDenied(
@@ -608,13 +625,7 @@ class Turns:
     ) -> AcceptedResult:
         self._require_thread(thread_id)
         self.require_available(origin)
-        events = self._log.thread_events(thread_id)
-        pending = parked_on(events)
-        running = self._running.get(thread_id)
-        active = running is not None and not running.task.done()
-        if thread_id in self._claims or active or pending is not None:
-            raise _thread_busy(thread_id)
-
+        self._require_idle(thread_id)
         return await self._wake(lambda: thread_id, message, origin, uuid4())
 
     async def wake_recorded(
@@ -886,10 +897,19 @@ class Turns:
         if not self._store.exists(thread_id):
             raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
 
+    def _require_idle(self, thread_id: UUID) -> None:
+        """Refuse when a turn on the thread runs, waits, or is being started, or the thread is
+        held some other way."""
+        running = self._running.get(thread_id)
+        active = running is not None and not running.task.done()
+        parked = parked_on(self._log.thread_events(thread_id))
+        if thread_id in self._claims or active or parked is not None:
+            raise _thread_busy(thread_id)
+
     def _release_claim(
         self,
         thread_id: UUID,
-        claim: TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim,
+        claim: Claim,
     ) -> None:
         if self._claims.get(thread_id) is claim:
             del self._claims[thread_id]

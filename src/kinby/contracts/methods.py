@@ -189,6 +189,7 @@ from kinby.contracts.models import (
     ThreadApprovalRespondCommand,
     ThreadArchiveCommand,
     ThreadAskCommand,
+    ThreadCompactCommand,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -306,6 +307,10 @@ THREAD_APPROVAL_RESPOND = Method(
     Scope.THREAD_OPERATE,
     ThreadApprovalRespondCommand,
     AcceptedResult,
+)
+#: The user compacts the thread. The agent has no tool for it (ADR 0123).
+THREAD_COMPACT = Method(
+    "thread.compact", Scope.THREAD_OPERATE, ThreadCompactCommand, AcceptedResult
 )
 THREAD_TAKEOVER_START = Subscription(
     "thread.takeover.start", Scope.THREAD_OPERATE, ThreadTakeoverStartCommand, TakeoverFrame
@@ -639,6 +644,7 @@ METHODS = (
     THREAD_LIST,
     THREAD_RENAME,
     THREAD_ARCHIVE,
+    THREAD_COMPACT,
     THREAD_UNARCHIVE,
     THREAD_MODE_SET,
     THREAD_TURN_START,

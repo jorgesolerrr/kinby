@@ -361,6 +361,7 @@ def signal_runtime(
                 runner.prepare_for_turn,
                 runner.permission_ceiling,
                 runner,
+                compact=runner.compact,
             ),
             SchedulerConfig(instance),
         ),
