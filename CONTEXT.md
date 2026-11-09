@@ -397,6 +397,11 @@ The **instance** setting that chooses whether to ask for a **turn rating** after
 The input and output tokens attributed to a turn, with totals rolled up for its thread. Input tokens include the cached tokens the provider reports, recorded as a split so a lost prompt cache is visible.
 `usage.get` includes completed turns whose closing timestamp falls within its **time range**, and lists beside each one its **delegated runs** whose own timestamp falls within it.
 
+### Context size
+
+The tokens one **model call** sent the model, by the provider's own count. A **thread**'s context size is that of its latest model call, and it is measured against the model's window. Distinct from **token usage**, which adds every model call of a turn together and so counts the same context once per call.
+_Avoid_: tokens used, context usage
+
 ### Price map
 
 The table of input, output, cache read, and cache write prices per million tokens, keyed by exact `provider:model` names.
@@ -644,6 +649,18 @@ The whole output of a **tool** call too long to give the model, kept as a file f
 ### Cleared result
 
 A large **tool** result from an earlier **turn** of a **thread**, which the model is sent as a stub naming the tool and its size. The thread keeps the result itself, and the model can call the tool again.
+
+### Compaction
+
+Replacing the older part of a **thread**'s history, in what the model is sent, with a **compaction summary**. The newest **turns** stay whole. The thread keeps every message, and the user still sees all of it with a mark where the compaction fell. It runs when the user asks for it, at the start of a turn whose thread has passed the **compaction trigger**, and inside a turn only when the next **model call** would not fit the model's window.
+
+### Compaction summary
+
+What a **compaction** leaves in place of the history it covers: the goal, the decisions, the constraints, the progress and the next steps, written by a model. A later compaction summarizes it together with the turns since. Distinct from an **episode**, which the **recap** writes for memory.
+
+### Compaction trigger
+
+The **context size** at which an **instance** compacts a **thread** on its own. An instance setting, which can also turn automatic **compaction** off.
 
 ### Default tools
 
