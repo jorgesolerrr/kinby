@@ -125,6 +125,8 @@ class Manifest:
     tools: Tools
     budgets: Budgets
     prices: Mapping[str, ModelPrice]
+    #: Context windows in tokens, by the models the manifest prices.
+    windows: Mapping[str, int]
     routines: Routines = field(default_factory=Routines)
     serve: Serve | None = None
     browser: bool = False

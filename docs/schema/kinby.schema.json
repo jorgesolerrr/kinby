@@ -166,6 +166,19 @@
           "minimum": 0,
           "title": "Output",
           "type": "number"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window"
         }
       },
       "required": [

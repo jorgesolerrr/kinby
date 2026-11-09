@@ -21,7 +21,7 @@ from kinby.core.dispatcher import (
     turn_config,
 )
 from kinby.core.events import EventLog
-from kinby.core.pricing import instance_prices
+from kinby.core.pricing import instance_prices, instance_windows
 from kinby.core.saved_outputs import sweep_outputs
 from kinby.core.scheduler import Scheduler, SchedulerConfig
 from kinby.core.threads import PARKING_EVENTS, parked_on
@@ -108,6 +108,7 @@ async def boot_instance(
         turns=ScheduledTurnConfig(turns, SchedulerConfig(instance, clock)),
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
+        windows=partial(instance_windows, instance),
         facts=GraphStore(instance.path).fact_ids,
         clock=clock,
     )

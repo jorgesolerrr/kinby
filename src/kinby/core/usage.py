@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
 from kinby.contracts import (
     Event,
+    ModelCompleted,
     ThreadUsage,
     TurnClosingKind,
     TurnUsage,
     UsageGetResult,
 )
+from kinby.core.pricing import SHIPPED_WINDOWS
 from kinby.core.turn_metrics import turn_metrics
 
 
@@ -36,7 +38,14 @@ class TimeRange:
 def usage_totals(
     events: Iterable[Event],
     time_range: TimeRange,
+    windows: Mapping[str, int] = SHIPPED_WINDOWS,
 ) -> UsageGetResult:
+    events = list(events)
+    latest_calls = {
+        event.thread_id: event.payload
+        for event in events
+        if isinstance(event.payload, ModelCompleted)
+    }
     turns_by_thread: dict[UUID, list[TurnUsage]] = {}
     for record in turn_metrics(events).records:
         if record.closing_kind is not TurnClosingKind.COMPLETED:
@@ -59,8 +68,10 @@ def usage_totals(
         )
         turns_by_thread.setdefault(record.thread_id, []).append(turn)
 
-    return UsageGetResult(
-        threads=[
+    threads: list[ThreadUsage] = []
+    for thread_id, turns in turns_by_thread.items():
+        latest = latest_calls.get(thread_id)
+        threads.append(
             ThreadUsage(
                 thread_id=thread_id,
                 input_tokens=sum(turn.input_tokens for turn in turns),
@@ -68,7 +79,8 @@ def usage_totals(
                 cache_read_tokens=sum(turn.cache_read_tokens for turn in turns),
                 cache_creation_tokens=sum(turn.cache_creation_tokens for turn in turns),
                 turns=turns,
+                context_size=latest.input_tokens if latest is not None else None,
+                window=windows.get(latest.model) if latest is not None else None,
             )
-            for thread_id, turns in turns_by_thread.items()
-        ]
-    )
+        )
+    return UsageGetResult(threads=threads)

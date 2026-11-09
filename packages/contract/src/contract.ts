@@ -2994,10 +2994,12 @@ export interface UsageGetResult {
 export interface ThreadUsage {
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
+  context_size?: number | null;
   input_tokens: number;
   output_tokens: number;
   thread_id: string;
   turns: TurnUsage[];
+  window?: number | null;
 }
 export interface TurnUsage {
   cache_creation_tokens?: number;

@@ -1681,6 +1681,10 @@ class TurnUsage(TokenTotals):
 class ThreadUsage(TokenTotals):
     thread_id: UUID
     turns: list[TurnUsage]
+    #: The input tokens of the thread's latest model call. None before its first one.
+    context_size: int | None = None
+    #: The window of that call's model. None when kinby knows no window for it.
+    window: int | None = None
 
 
 class UsageGetResult(ContractModel):
