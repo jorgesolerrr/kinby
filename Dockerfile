@@ -39,6 +39,10 @@ RUN bun run --filter @kinby/web build
 # `kinby hub` serves the app from this path unless --web-app names another. The hub drives the
 # browser and runs its browser service from this image, so only the hub image carries Playwright.
 FROM instance AS hub
+# Playwright's own Node needs libatomic before `--with-deps` can install Chromium's libraries.
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir ".[hub]" && playwright install --with-deps --only-shell chromium
 COPY --from=web /web/apps/web/dist /usr/local/share/kinby/web
 
