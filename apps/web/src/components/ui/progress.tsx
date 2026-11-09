@@ -1,12 +1,22 @@
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress"
 import { cn } from "cn"
 
-function Progress({ className, children, value, ...props }: ProgressPrimitive.Root.Props) {
+function Progress({
+  className,
+  children,
+  value,
+  size = "default",
+  ...props
+}: ProgressPrimitive.Root.Props & { size?: "default" | "inline" }) {
   return (
     <ProgressPrimitive.Root
       value={value}
       data-slot="progress"
-      className={cn("flex flex-wrap gap-3", className)}
+      data-size={size}
+      className={cn(
+        "group/progress flex flex-wrap gap-3 data-[size=inline]:flex-nowrap data-[size=inline]:items-center data-[size=inline]:gap-2",
+        className,
+      )}
       {...props}
     >
       {children}
@@ -21,7 +31,7 @@ function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
   return (
     <ProgressPrimitive.Track
       className={cn(
-        "relative flex h-3 w-full items-center overflow-x-hidden rounded-full bg-muted",
+        "relative flex h-3 w-full items-center overflow-x-hidden rounded-full bg-muted group-data-[size=inline]/progress:h-1.5",
         className,
       )}
       data-slot="progress-track"
@@ -43,7 +53,10 @@ function ProgressIndicator({ className, ...props }: ProgressPrimitive.Indicator.
 function ProgressLabel({ className, ...props }: ProgressPrimitive.Label.Props) {
   return (
     <ProgressPrimitive.Label
-      className={cn("text-sm font-medium", className)}
+      className={cn(
+        "text-sm font-medium group-data-[size=inline]/progress:text-xs group-data-[size=inline]/progress:font-normal group-data-[size=inline]/progress:text-muted-foreground",
+        className,
+      )}
       data-slot="progress-label"
       {...props}
     />
@@ -53,7 +66,10 @@ function ProgressLabel({ className, ...props }: ProgressPrimitive.Label.Props) {
 function ProgressValue({ className, ...props }: ProgressPrimitive.Value.Props) {
   return (
     <ProgressPrimitive.Value
-      className={cn("ml-auto text-sm text-muted-foreground tabular-nums", className)}
+      className={cn(
+        "ml-auto text-sm text-muted-foreground tabular-nums group-data-[size=inline]/progress:ml-0 group-data-[size=inline]/progress:text-xs",
+        className,
+      )}
       data-slot="progress-value"
       {...props}
     />

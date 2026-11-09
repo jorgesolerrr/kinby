@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { bucketStarts } from "@/lib/stats"
+import { bucketStarts, contextFill } from "@/lib/stats"
 
 const now = new Date("2026-09-30T15:20:00Z")
 
@@ -46,5 +46,15 @@ describe("the bucket starts of a range", () => {
       "2026-09-21",
       "2026-09-28",
     ])
+  })
+})
+
+describe("a context size's fill", () => {
+  it("is its share of the model's window, in percent", () => {
+    expect(contextFill(50_000, 200_000)).toBe(25)
+  })
+
+  it("stops at full when the context size passes the window", () => {
+    expect(contextFill(210_000, 200_000)).toBe(100)
   })
 })

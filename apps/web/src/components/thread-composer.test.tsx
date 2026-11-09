@@ -143,7 +143,7 @@ describe("a thread's panel", () => {
       const client: typeof lister = {
         ...lister,
         call: (method, params) => {
-          if (method === "thread.list") return lister.call(method, params)
+          if (method === "thread.list" || method === "usage.get") return lister.call(method, params)
           sent.push(method)
           return new Promise<never>((_resolve, reject) => (fail = reject))
         },

@@ -40,7 +40,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **item**: the description's `lines` variant: `one` truncates to a line, as a hub secret's links, `two` clamps to two, `all` shows every line. The `row` size, flush with no side padding and its description at `text-xs`, for the rows of a Settings section's flat list. The media's `tile` variant, an icon on a muted 32px square, for a channel's kind. The group's `outline` variant, its rows in one bordered `rounded-xl` group with dividers between them and no gap, for the rows of the Library, an instance's Overview and its Routines. Each row sits in its own `li` (a divider doesn't show on an `Item` that is the `li`), and the row's `Item` there has square corners.
 - **marker**: `tabular-nums`, and the `destructive` variant.
 - **message-scroller**: the item has no `content-visibility` (#377).
-- **progress**: as the registry has it, for Usage's plan meters.
+- **progress**: the `inline` size, its label, value and a thin track on one line at `text-xs`, for a thread's context size in the composer's foot.
 - **resizable**: the handle's `ghost` variant, whose line shows only under the pointer, for the split between a thread and the pane beside it.
 - **sidebar**: the softer hover on menu buttons, the sub-button's `muted` variant for a group's "No threads yet" row, the selected row's icon in the sidebar primary (kin), the action and badge centred on the lg menu button at `top-4.5`, and `SidebarContext` exported, so a component that may render outside the provider reads the sidebar without `useSidebar` throwing.
 - **table**: the `fit` size, for the Stats tables: its headers may wrap, and below `md` its cells pad 8px a side, so a phone fits every column the table shows.

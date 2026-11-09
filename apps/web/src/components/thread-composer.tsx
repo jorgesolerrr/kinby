@@ -10,9 +10,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { useListedThread } from "@/hooks/use-listed-thread"
 import { reason } from "@/lib/operation"
+import { contextFill, shortTokens, tokens } from "@/lib/stats"
 
 /** Every mode, from the least the instance may do to the most. */
 const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
@@ -24,8 +26,8 @@ const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
 
 /**
  * The composer of a thread: a message starts the next turn, and the foot holds the mode the thread
- * runs in, from the thread list the header reads. Every kept list is read again after a change of
- * mode so the sidebar shows it too.
+ * runs in, from the thread list the header reads, and the thread's context size. Every kept list is
+ * read again after a change of mode so the sidebar shows it too.
  */
 export function ThreadComposer({
   ref,
@@ -33,12 +35,17 @@ export function ThreadComposer({
   threadId,
   name,
   running,
+  contextSize,
+  modelWindow,
 }: {
   ref?: Ref<HTMLTextAreaElement>
   client: Pick<InstanceClient, "call">
   threadId: string
   name: string
   running: boolean
+  /** None before the thread's first model call, and then the foot shows none. */
+  contextSize: number | undefined
+  modelWindow: number | undefined
 }) {
   const { threads, thread, ceiling } = useListedThread(client, threadId)
   const [failure, setFailure] = useState<string>()
@@ -66,7 +73,40 @@ export function ThreadComposer({
       {thread !== undefined && ceiling !== undefined && (
         <ModePicker mode={thread.mode} ceiling={ceiling} onPick={setMode} />
       )}
+      {contextSize !== undefined && (
+        <ContextSize contextSize={contextSize} modelWindow={modelWindow} />
+      )}
     </Composer>
+  )
+}
+
+/** The context size on a bar that fills toward the model's window, or alone with no window. */
+function ContextSize({
+  contextSize,
+  modelWindow,
+}: {
+  contextSize: number
+  modelWindow: number | undefined
+}) {
+  if (modelWindow === undefined) {
+    return (
+      <span className="text-xs text-muted-foreground tabular-nums">
+        Context {shortTokens(contextSize)}
+      </span>
+    )
+  }
+  return (
+    <Progress
+      value={contextFill(contextSize, modelWindow)}
+      getAriaValueText={() => `${tokens(contextSize)} of ${tokens(modelWindow)} tokens`}
+      size="inline"
+      className="max-w-48 min-w-0 flex-1"
+    >
+      <ProgressLabel>Context</ProgressLabel>
+      <ProgressValue>
+        {() => `${shortTokens(contextSize)} / ${shortTokens(modelWindow)}`}
+      </ProgressValue>
+    </Progress>
   )
 }
 
