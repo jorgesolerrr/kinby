@@ -62,7 +62,13 @@ export function ThreadPanel({
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
   const notifications = useNotifications(hub, clock, threadId, timeline.turns)
   const closed = timeline.turns.filter((turn) => turn.end !== undefined).length
-  const modelWindow = useModelWindow(client, clock, threadId, closed)
+  const modelWindow = useModelWindow(
+    client,
+    clock,
+    threadId,
+    timeline.contextModel,
+    replayed ? closed : undefined,
+  )
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
   const takeover = latest?.takeover
