@@ -104,8 +104,10 @@ from kinby.core.sent_history import (
     context_size,
     effective_trigger,
     kept_from,
+    passes_window,
     sent_history,
     summary_request,
+    turn_start,
 )
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
@@ -222,6 +224,10 @@ class ModelState:
     #: The authored tools the user marked read-only: those marked when the turn started, and
     #: those marked from its approvals since, kept for a resume's replay as *granted* is.
     read_only: tuple[str, ...] = ()
+    #: Where a compaction inside the turn cut into it. Its summary stands in for the turn's
+    #: messages before the cut, while the compaction is recorded at the turn's start: a turn that
+    #: does not complete keeps none of its messages.
+    cut: int | None = None
 
 
 _MODEL_STATE = TypeAdapter(ModelState)
@@ -241,6 +247,8 @@ class ModelContext:
     budgets: Budgets
     #: The thread's latest compaction, which the model is sent in place of the older messages.
     compaction: ThreadCompacted | None
+    #: The model's window in tokens, when it is known.
+    window: int | None
 
 
 @dataclass(frozen=True)
@@ -644,12 +652,13 @@ class LangGraphRunner:
         tools = prepared.tools
         progress = prepared.progress
         budgets = progress.budgets
+        window = instance_windows(self._instance).get(turn.model)
         if isinstance(graph_input, ModelState):
             compacting = asyncio.timeout(progress.seconds_remaining)
             compaction_started = asyncio.get_running_loop().time()
             try:
                 async with compacting:
-                    await self._compact_over_trigger(turn, emit)
+                    await self._compact_over_trigger(turn, window, emit)
             except TimeoutError as exc:
                 if not compacting.expired() or budgets.seconds is None:
                     raise
@@ -703,6 +712,7 @@ class LangGraphRunner:
                             ),
                             budgets=budgets,
                             compaction=self._latest_compaction(turn.thread_id),
+                            window=window,
                         ),
                         # ADR 0011 keeps interrupted tool calls out of completed history.
                         durability="exit",
@@ -1014,7 +1024,7 @@ class LangGraphRunner:
         """Compact the thread with the main model's summary. The summary call and the compaction
         are recorded under the thread's latest turn."""
         model = reload_manifest(self._instance, model_override=self._model_override).models.main
-        completed, compaction = await self._summarize(thread_id, model, focus)
+        completed, compaction = await self._summarize_thread(thread_id, model, focus)
         turn_id = next(
             event.turn_id
             for event in reversed(self._event_log.thread_events(thread_id))
@@ -1023,23 +1033,59 @@ class LangGraphRunner:
         await self._event_log.append(thread_id, turn_id, completed)
         return await self._event_log.append(thread_id, turn_id, compaction)
 
-    async def _compact_over_trigger(self, turn: PreparedTurnRequest, emit: Emit) -> None:
+    async def _compact_over_trigger(
+        self, turn: PreparedTurnRequest, window: int | None, emit: Emit
+    ) -> None:
         """Compact the turn's thread once, before the turn's first model call, when its context
-        size is past the effective compaction trigger. A failed summary call is recorded on the
-        thread, and the turn runs uncompacted."""
-        trigger = effective_trigger(
-            self._instance.manifest.compaction.trigger,
-            instance_windows(self._instance).get(turn.model),
-        )
+        size is past the effective compaction trigger."""
+        trigger = effective_trigger(self._instance.manifest.compaction.trigger, window)
         size = context_size(self._event_log.thread_events(turn.thread_id))
         if trigger is None or size is None or size <= trigger:
             return
+        compaction = await self._summary_in_turn(
+            emit, self._summarize_thread(turn.thread_id, turn.model, None)
+        )
+        if compaction is not None:
+            await emit(compaction)
+
+    async def _compact_running(
+        self,
+        turn: PreparedTurnRequest,
+        messages: Sequence[AnyMessage],
+        compaction: ThreadCompacted | None,
+        cut: int | None,
+        emit: Emit,
+    ) -> tuple[ThreadCompacted, int | None] | None:
+        """Compact the running turn's thread over *messages*, which its next model call sends
+        under *compaction* and *cut*. Return the compaction and where it cut into the turn, or
+        None when the thread did not compact."""
+        start = cut if cut is not None else 0 if compaction is None else compaction.boundary
+        running = turn_start(messages)
+        boundary = kept_from(messages, start, running)
+        made = await self._summary_in_turn(
+            emit,
+            self._summarize(turn.thread_id, turn.model, compaction, messages, start, boundary),
+        )
+        if made is None:
+            return None
+        if made.boundary <= running:
+            await emit(made)
+            return made, None
+        recorded = made.model_copy(update={"boundary": running})
+        await emit(recorded)
+        return recorded, made.boundary
+
+    async def _summary_in_turn(
+        self, emit: Emit, summarizing: Awaitable[tuple[ModelCompleted, ThreadCompacted]]
+    ) -> ThreadCompacted | None:
+        """The compaction *summarizing* makes for a turn, or None when there is nothing to
+        compact. A failed summary call is recorded on the thread, and the turn runs uncompacted.
+        The summary call is recorded only in the compaction, which carries its tokens: as a model
+        call of the turn it would count in the turn's own totals."""
         try:
-            # The summary call is recorded only in the compaction, which carries its tokens: as
-            # a model call of the turn it would count in the turn's own totals.
-            _, compaction = await self._summarize(turn.thread_id, turn.model, None)
+            _, compaction = await summarizing
         except NothingToCompact:
-            return
+            return None
         except Exception as exc:
             logger.warning("The compaction failed.", exc_info=True)
             await emit(
@@ -1051,10 +1097,10 @@ class LangGraphRunner:
                     ),
                 )
             )
-            return
-        await emit(compaction)
+            return None
+        return compaction
 
-    async def _summarize(
+    async def _summarize_thread(
         self, thread_id: UUID, model: ModelName, focus: str | None
     ) -> tuple[ModelCompleted, ThreadCompacted]:
         """*model*'s summary call over the thread's turns since its last compaction, but for the
@@ -1065,6 +1111,20 @@ class LangGraphRunner:
         previous = self._latest_compaction(thread_id)
         start = 0 if previous is None else previous.boundary
         boundary = kept_from(messages, start)
+        return await self._summarize(thread_id, model, previous, messages, start, boundary, focus)
+
+    async def _summarize(
+        self,
+        thread_id: UUID,
+        model: ModelName,
+        previous: ThreadCompacted | None,
+        messages: Sequence[AnyMessage],
+        start: int,
+        boundary: int,
+        focus: str | None = None,
+    ) -> tuple[ModelCompleted, ThreadCompacted]:
+        """*model*'s summary call over *messages* from *start*, where the *previous* compaction
+        left off, to *boundary*, and the compaction it makes."""
         if boundary <= start:
             raise NothingToCompact(
                 f'Thread "{thread_id}" has nothing to compact: its turns since its last '
@@ -1179,42 +1239,52 @@ class LangGraphRunner:
         state: ModelState,
         runtime: Runtime[ModelContext],
     ) -> ModelState:
+        context = runtime.context
         # Keep the user message atomic with the call so failures cannot checkpoint it.
         following_tool_call = bool(state.messages) and isinstance(state.messages[-1], ToolMessage)
         messages = (
-            state.messages
-            if following_tool_call
-            else [*state.messages, runtime.context.user_message]
+            state.messages if following_tool_call else [*state.messages, context.user_message]
         )
-        response: AIMessageChunk | None = None
-        started_at = asyncio.get_running_loop().time()
-        request_messages = [
-            runtime.context.system_message,
-            *sent_history(messages, runtime.context.compaction),
-        ]
-        async for chunk in runtime.context.model.astream(
-            _mark_cache_prefix(state.turn.model, request_messages)
-        ):
-            response = chunk if response is None else response + chunk
-            if chunk.text:
-                await runtime.context.emit(MessageDelta(text=chunk.text))
-        if response is None:
-            raise ModelNoResponse("The model returned no response.")
-        completed = completed_model_call(
-            state.turn.model,
-            response.usage_metadata,
-            started_at=started_at,
-            completed_at=asyncio.get_running_loop().time(),
+        events = self._event_log.turn_events(state.turn.turn_id)
+        compaction = next(
+            (
+                event.payload
+                for event in reversed(events)
+                if isinstance(event.payload, ThreadCompacted)
+            ),
+            context.compaction,
         )
-        await runtime.context.emit(completed)
+        cut = state.cut
+        compacting = passes_window(context.window, events, messages)
+        if compacting:
+            compacted = await self._compact_running(
+                state.turn, messages, compaction, cut, context.emit
+            )
+            if compacted is not None:
+                compaction, cut = compacted
+        try:
+            response, completed = await self._send(state, context, messages, compaction, cut)
+        except ContextOverflowError:
+            # The provider's overflow compacts once, and is the only guard for a model with no
+            # known window.
+            if compacting:
+                raise
+            compacted = await self._compact_running(
+                state.turn, messages, compaction, cut, context.emit
+            )
+            if compacted is None:
+                raise
+            compaction, cut = compacted
+            response, completed = await self._send(state, context, messages, compaction, cut)
+        await context.emit(completed)
         input_tokens = state.input_tokens + completed.input_tokens
         output_tokens = state.output_tokens + completed.output_tokens
-        token_budget = runtime.context.budgets.tokens
+        token_budget = context.budgets.tokens
         if token_budget is not None and input_tokens + output_tokens > token_budget:
             raise BudgetExceeded("tokens", token_budget)
         returned_messages: list[AnyMessage] = [response]
         if not following_tool_call:
-            returned_messages.insert(0, runtime.context.user_message)
+            returned_messages.insert(0, context.user_message)
         return ModelState(
             turn=state.turn,
             messages=returned_messages,
@@ -1223,6 +1293,34 @@ class LangGraphRunner:
             granted=state.granted,
             revision=state.revision,
             read_only=state.read_only,
+            cut=cut,
+        )
+
+    async def _send(
+        self,
+        state: ModelState,
+        context: ModelContext,
+        messages: Sequence[AnyMessage],
+        compaction: ThreadCompacted | None,
+        cut: int | None,
+    ) -> tuple[AIMessageChunk, ModelCompleted]:
+        """Send the model *messages* under *compaction* and *cut*, streaming its text."""
+        response: AIMessageChunk | None = None
+        started_at = asyncio.get_running_loop().time()
+        request_messages = [context.system_message, *sent_history(messages, compaction, cut)]
+        async for chunk in context.model.astream(
+            _mark_cache_prefix(state.turn.model, request_messages)
+        ):
+            response = chunk if response is None else response + chunk
+            if chunk.text:
+                await context.emit(MessageDelta(text=chunk.text))
+        if response is None:
+            raise ModelNoResponse("The model returned no response.")
+        return response, completed_model_call(
+            state.turn.model,
+            response.usage_metadata,
+            started_at=started_at,
+            completed_at=asyncio.get_running_loop().time(),
         )
 
     async def _call_tools(
@@ -1393,6 +1491,7 @@ class LangGraphRunner:
             granted=tuple(granted),
             revision=state.revision,
             read_only=tuple(read_only),
+            cut=state.cut,
         )
 
     async def _emit_tool_call_once(
