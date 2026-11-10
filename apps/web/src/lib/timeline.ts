@@ -14,6 +14,10 @@ export interface Timeline {
   /** The sequence of the last event projected. A subscription asks for what comes after it. */
   sequence: number
   turns: TurnBlock[]
+  /** The input tokens of the thread's latest model call. None before its first one. */
+  contextSize?: number
+  /** The model of that call, whose window the context size fills. */
+  contextModel?: string
 }
 
 export const EMPTY_TIMELINE: Timeline = { sequence: 0, turns: [] }
@@ -127,13 +131,18 @@ export function project(timeline: Timeline, event: Event): Timeline {
       request: payload.message,
       steps: [],
     }
-    return { sequence: event.sequence, turns: [...timeline.turns, turn] }
+    return { ...timeline, sequence: event.sequence, turns: [...timeline.turns, turn] }
   }
   return {
+    ...timeline,
     sequence: event.sequence,
     turns: timeline.turns.map((turn) =>
       turn.turnId === event.turn_id ? projectTurn(turn, event) : turn,
     ),
+    ...(payload.type === "model.completed" && {
+      contextSize: payload.input_tokens,
+      contextModel: payload.model,
+    }),
   }
 }
 

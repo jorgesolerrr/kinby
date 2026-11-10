@@ -69,6 +69,8 @@ describe("a thread's timeline", () => {
 
     expect(timeline).toEqual({
       sequence: 9,
+      contextSize: 90,
+      contextModel: "claude",
       turns: [
         {
           turnId: "turn-1",
@@ -217,6 +219,35 @@ describe("a thread's timeline", () => {
     ]).turns
 
     expect(turn?.startedBy).toEqual({ kind: "factory-run", factory: "software", step: "review" })
+  })
+
+  it("takes the thread's context size and its model from its latest model call, as each one lands", () => {
+    const called = (inputTokens: number, model = "claude"): Payload => ({
+      type: "model.completed",
+      model,
+      input_tokens: inputTokens,
+      output_tokens: 50,
+      duration_ms: 900,
+    })
+    const finished: [string, ...Payload[]] = [
+      "turn-1",
+      started("Fix the runtime"),
+      called(12_000),
+      called(14_500),
+      { type: "turn.completed", input_tokens: 26_500, output_tokens: 100 },
+    ]
+
+    const running = replay(finished, ["turn-2", started("Now the tests"), called(15_200, "gpt")])
+
+    expect(replay(finished)).toMatchObject({ contextSize: 14_500, contextModel: "claude" })
+    expect(running).toMatchObject({ contextSize: 15_200, contextModel: "gpt" })
+  })
+
+  it("has no context size before the thread's first model call", () => {
+    const timeline = replay(["turn-1", started("Fix the runtime")])
+
+    expect(timeline.contextSize).toBeUndefined()
+    expect(timeline.contextModel).toBeUndefined()
   })
 
   it("starts each turn on its day in the browser's time zone, though both share a UTC date", () => {

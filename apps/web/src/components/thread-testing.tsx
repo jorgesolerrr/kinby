@@ -72,8 +72,9 @@ export function openThread(
     if (latest === undefined) throw new Error("The panel did not subscribe.")
     return latest
   }
-  /** What the panel called besides the header listing the threads. */
-  const sent = () => client.calls.filter((call) => call.method !== "thread.list")
+  /** What the panel called besides the header listing the threads and the bar reading the usage. */
+  const sent = () =>
+    client.calls.filter((call) => call.method !== "thread.list" && call.method !== "usage.get")
   return { client, relist, sent, subscription, unmount: rendered.unmount }
 }
 

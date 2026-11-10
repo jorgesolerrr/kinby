@@ -3,7 +3,7 @@ import { act, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { openThread, started, thread } from "@/components/thread-testing"
+import { openThread, type Payload, started, thread } from "@/components/thread-testing"
 
 const loading = () => screen.queryByRole("status", { name: "Loading the thread" })
 
@@ -46,6 +46,69 @@ describe("a thread's panel", () => {
 
     expect(loading()).toBeNull()
     expect(screen.getByRole("alert").textContent).toContain("No thread t1.")
+  })
+
+  describe("the context size", () => {
+    const called = (inputTokens: number, model = "claude"): Payload => ({
+      type: "model.completed",
+      model,
+      input_tokens: inputTokens,
+      output_tokens: 50,
+      duration_ms: 900,
+    })
+    const completed: Payload = { type: "turn.completed", input_tokens: 1, output_tokens: 1 }
+    const usage = (window: number) => ({
+      threads: [{ thread_id: "t1", input_tokens: 0, output_tokens: 0, turns: [], window }],
+    })
+    const usageReads = (client: ReturnType<typeof openThread>["client"]) =>
+      client.calls.filter((call) => call.method === "usage.get").length
+    const bar = () => screen.getByRole("progressbar", { name: "Context" }).textContent
+
+    it("reads the model's window once the replay reaches the head, not for each turn it replays", async () => {
+      const events = thread(
+        ["turn-1", started("Fix the runtime")],
+        ["turn-1", called(12_000)],
+        ["turn-1", completed],
+        ["turn-2", started("Now the tests")],
+        ["turn-2", called(14_500)],
+        ["turn-2", completed],
+      )
+      const { client, subscription } = openThread({ "usage.get": () => usage(200_000) })
+      await act(async () => subscription().subscribed(events.length))
+
+      for (const event of events.slice(0, -1)) {
+        await act(async () => subscription().deliver(event))
+      }
+      expect(usageReads(client)).toBe(0)
+
+      await act(async () => subscription().deliver(events.at(-1) as Event))
+      expect(usageReads(client)).toBe(1)
+      expect(bar()).toContain("14.5k / 200k")
+    })
+
+    it("reads the window again when a model call runs on another model", async () => {
+      const events = thread(
+        ["turn-1", started("Fix the runtime")],
+        ["turn-1", called(12_000)],
+        ["turn-1", completed],
+        ["turn-2", started("Now the tests")],
+        ["turn-2", called(61_000, "gpt")],
+      )
+      let window = 200_000
+      const { client, subscription } = openThread({ "usage.get": () => usage(window) })
+      await act(async () => {
+        subscription().subscribed(3)
+        for (const event of events.slice(0, 3)) subscription().deliver(event)
+      })
+      expect(usageReads(client)).toBe(1)
+
+      window = 1_000_000
+      await act(async () => subscription().deliver(events[3] as Event))
+      await act(async () => subscription().deliver(events[4] as Event))
+
+      expect(usageReads(client)).toBe(2)
+      expect(bar()).toContain("61k / 1m")
+    })
   })
 
   describe("the instance's notices", () => {

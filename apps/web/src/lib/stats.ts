@@ -113,6 +113,11 @@ export function shortTokens(count: number): string {
   return SHORT.format(count).toLowerCase()
 }
 
+/** How much of the model's window a context size fills, in percent. */
+export function contextFill(contextSize: number, window: number): number {
+  return Math.min(100, (contextSize / window) * 100)
+}
+
 /** The middle of `values`, or the mean of the two middle ones. `values` holds at least one. */
 export function median(values: number[]): number {
   const sorted = values.toSorted((a, b) => a - b)

@@ -10,6 +10,7 @@ import { Transcript, TranscriptSkeleton } from "@/components/thread-transcript"
 import { ViewPane } from "@/components/view-page"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { useModelWindow } from "@/hooks/use-model-window"
 import { useNotifications } from "@/hooks/use-notifications"
 import { useView } from "@/hooks/use-view"
 import { when } from "@/lib/config-changes"
@@ -60,6 +61,14 @@ export function ThreadPanel({
   useEffect(() => store.follow(), [store])
   const { timeline, replayed, failure } = useSyncExternalStore(store.onChange, store.view)
   const notifications = useNotifications(hub, clock, threadId, timeline.turns)
+  const closed = timeline.turns.filter((turn) => turn.end !== undefined).length
+  const modelWindow = useModelWindow(
+    client,
+    clock,
+    threadId,
+    timeline.contextModel,
+    replayed ? closed : undefined,
+  )
   const latest = timeline.turns.at(-1)
   const approval = latest?.approval
   const takeover = latest?.takeover
@@ -199,6 +208,8 @@ export function ThreadPanel({
                   threadId={threadId}
                   name={name}
                   running={latest !== undefined && latest.end === undefined}
+                  contextSize={timeline.contextSize}
+                  modelWindow={modelWindow}
                 />
               </div>
             </>
