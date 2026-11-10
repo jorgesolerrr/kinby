@@ -54,6 +54,7 @@ READ = {
 INSTALLED_PACKAGE = "-packages/kinby"
 COMMAND_WIDTH = 160
 METHOD = re.compile(r"[\w.]+")
+SUBSTITUTION = re.compile(r"\$\(|`")
 
 
 @dataclass(eq=False)
@@ -138,16 +139,19 @@ def spend(events: Iterable[Event]) -> Spend:
 
 
 def _hub_reads(command: str) -> list[str]:
-    """The methods of the `kinby hub read` commands in *command*: the first argument of each that
-    is not an option or the value of `--params`."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    """The methods of the `kinby hub read` commands in *command*, inside command substitutions and
+    quotes too: the first argument of each that is not an option or the value of `--params`."""
+    lexer = shlex.shlex(SUBSTITUTION.sub(" ; ", command), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
         words = list(lexer)
     except ValueError:
         return []
     methods = []
-    for start in range(len(words)):
+    for start, word in enumerate(words):
+        # A word holds whitespace only where it was quoted, as in "$(kinby hub read …)".
+        if " " in word:
+            methods += _hub_reads(word)
         if words[start : start + 3] != ["kinby", "hub", "read"]:
             continue
         arguments = iter(words[start + 3 :])

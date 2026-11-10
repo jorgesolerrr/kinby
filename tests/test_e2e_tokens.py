@@ -151,6 +151,7 @@ def test_the_probe_names_every_hub_method_a_bash_command_reads(
     reads = (
         "kinby hub read --table instance.list; "
         """kinby hub read --params '{"instance_id": "a"}' 'thread.list' | head; """
+        'stats="$(kinby hub read stats.get)"; logs=`kinby hub read instance.logs`; '
         "for m in a b; do kinby hub read $m; done"
     )
     history = _turn(
@@ -166,7 +167,16 @@ def test_the_probe_names_every_hub_method_a_bash_command_reads(
 
     assert _section(capsys.readouterr().out, "Tool results") == [
         RESULTS_HEADER,
-        ["bash", "instance.list,thread.list", "1", "40", "40", "0", "0", "0"],
+        [
+            "bash",
+            "instance.list,thread.list,stats.get,instance.logs",
+            "1",
+            "40",
+            "40",
+            "0",
+            "0",
+            "0",
+        ],
     ]
 
 
