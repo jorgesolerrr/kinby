@@ -510,17 +510,17 @@ class LangGraphRunner:
 
     def _closed_on(self, day: date) -> list[Event]:
         """The events daily_cost folds for the turns closed on *day*: those stored since the day
-        began, after the start of each turn that began before it."""
-        events = self._event_log.events_of(
-            DAILY_COST_EVENTS, since=datetime.combine(day, time(), UTC)
-        )
+        began, after the start of each turn that began before it and the compactions it made
+        before the day began."""
+        since = datetime.combine(day, time(), UTC)
+        events = self._event_log.events_of(DAILY_COST_EVENTS, since=since)
         started = {event.turn_id for event in events if isinstance(event.payload, TurnStarted)}
         earlier = [
             event
             for closing in events
             if is_turn_closing(closing.payload) and closing.turn_id not in started
             for event in self._event_log.turn_events(closing.turn_id)
-            if isinstance(event.payload, TurnStarted)
+            if event.timestamp < since and isinstance(event.payload, TurnStarted | ThreadCompacted)
         ]
         return [*earlier, *events]
 
@@ -645,7 +645,21 @@ class LangGraphRunner:
         progress = prepared.progress
         budgets = progress.budgets
         if isinstance(graph_input, ModelState):
-            await self._compact_over_trigger(turn, emit)
+            compacting = asyncio.timeout(progress.seconds_remaining)
+            compaction_started = asyncio.get_running_loop().time()
+            try:
+                async with compacting:
+                    await self._compact_over_trigger(turn, emit)
+            except TimeoutError as exc:
+                if not compacting.expired() or budgets.seconds is None:
+                    raise
+                raise BudgetExceeded("seconds", budgets.seconds) from exc
+            progress = replace(
+                progress,
+                seconds_used=progress.seconds_used
+                + asyncio.get_running_loop().time()
+                - compaction_started,
+            )
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model

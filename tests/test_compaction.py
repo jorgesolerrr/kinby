@@ -5,9 +5,10 @@ the thread keeps every message (ADR 0123)."""
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Self
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import (
@@ -26,16 +27,21 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     ModelCompleted,
+    Payload,
     StatsGetResult,
     ThreadCompacted,
     ToolCall,
     TurnCompleted,
+    TurnFailed,
+    TurnStarted,
     Warning,
     is_turn_closing,
 )
 from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.core.events import EventLog
+from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import Instance, load_instance
+from tests.helpers import historical_event_log
 from tests.test_cleared_results import checkpoint_holds, closed
 from tests.test_routines import signal_runtime
 from tests.test_saved_outputs import instance_at, until
@@ -52,8 +58,9 @@ class Sized:
     input_tokens: int
 
 
-#: A model step: the calls one model call makes, the text it answers with, or what it raises.
-type Step = Sequence[Call] | str | Sized | Exception
+#: A model step: the calls one model call makes, the text it answers with, what it raises, or an
+#: event it waits on without answering.
+type Step = Sequence[Call] | str | Sized | Exception | asyncio.Event
 
 #: A user message of about 12,500 tokens: two of them pass what a compaction keeps.
 LONG = 50_000
@@ -80,6 +87,9 @@ class CompactingModel:
         step = self._steps.pop(0)
         if isinstance(step, Exception):
             raise step
+        if isinstance(step, asyncio.Event):
+            await step.wait()
+            return
         if isinstance(step, str):
             yield AIMessageChunk(content=step, usage_metadata=TEXT_USAGE)
             return
@@ -442,3 +452,55 @@ def test_an_automatic_compaction_counts_apart_in_its_turn(tmp_path: Path) -> Non
     assert (latest.input_tokens, latest.output_tokens) == (20_000, 1_000)
     assert latest.cost == pytest.approx(0.035)
     assert stats.warnings == []
+
+
+def test_a_stalled_summary_call_fails_the_turn_on_its_seconds_budget(tmp_path: Path) -> None:
+    instance = with_manifest(instance_at(tmp_path), "[budgets]\nseconds = 0.5\n")
+    model = CompactingModel([], Sized("Done.", OVER), asyncio.Event())
+    dispatcher, log = signal_runtime(instance, model)
+
+    thread_id = asyncio.run(three_turns(dispatcher))
+
+    assert latest_turn(log, thread_id)[-1].payload == TurnFailed(
+        code=ErrorCode.BUDGET_EXCEEDED,
+        message="The turn exceeded the seconds budget of 0.5.",
+    )
+    assert len(model.requests) == 3
+
+
+def test_the_daily_budget_counts_a_compaction_made_before_midnight_in_a_turn_closed_after(
+    tmp_path: Path,
+) -> None:
+    instance = with_manifest(instance_at(tmp_path), "[budgets]\nusd_per_day = 1\n")
+    today = date(2026, 11, 10)
+    midnight = datetime(2026, 11, 10, tzinfo=UTC)
+    thread_id, turn_id = uuid4(), uuid4()
+
+    def at(moment: datetime, payload: Payload) -> Event:
+        return Event(
+            sequence=1, thread_id=thread_id, turn_id=turn_id, timestamp=moment, payload=payload
+        )
+
+    log = historical_event_log(
+        instance.manifest.state_dir,
+        [
+            at(midnight - timedelta(minutes=2), TurnStarted(message="Go.", model="openai:gpt-5")),
+            at(
+                midnight - timedelta(minutes=1),
+                ThreadCompacted(
+                    summary="Summary one.",
+                    boundary=2,
+                    input_tokens=20_000,
+                    output_tokens=1_000,
+                    model="openai:gpt-5",
+                ),
+            ),
+            at(midnight + timedelta(minutes=1), TurnCompleted(input_tokens=0, output_tokens=0)),
+        ],
+    )
+    runner = LangGraphRunner(instance, event_log=log, today=lambda: today)
+
+    budget = runner.prepare_for_turn().daily_budget
+
+    assert budget is not None
+    assert budget.cost.usd == pytest.approx(0.035)
