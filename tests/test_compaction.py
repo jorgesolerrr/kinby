@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Self
 from uuid import UUID
 
-from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
+import pytest
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+    UsageMetadata,
+)
 from langchain_core.tools import StructuredTool
 from pydantic import JsonValue
 
@@ -17,6 +24,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     Event,
     ModelCompleted,
+    StatsGetResult,
     ThreadCompacted,
     ToolCall,
     is_turn_closing,
@@ -35,11 +43,13 @@ type Step = Sequence[Call] | str
 #: A user message of about 12,500 tokens: two of them pass what a compaction keeps.
 LONG = 50_000
 SKILL_BODY = "Deploy with the blue-green steps."
+#: What the model reports each text answer, such as a summary, used.
+TEXT_USAGE = UsageMetadata(input_tokens=20_000, output_tokens=1_000, total_tokens=21_000)
 
 
 class CompactingModel:
-    """Takes one step per model call: makes its calls, or answers with its text. Keeps every
-    request it is sent and the names of the tools it was given."""
+    """Takes one step per model call: makes its calls, or answers with its text and
+    ``TEXT_USAGE``. Keeps every request it is sent and the names of the tools it was given."""
 
     def __init__(self, *steps: Step) -> None:
         self._steps = list(steps)
@@ -54,7 +64,7 @@ class CompactingModel:
         self.requests.append(list(messages))
         step = self._steps.pop(0)
         if isinstance(step, str):
-            yield AIMessageChunk(content=step)
+            yield AIMessageChunk(content=step, usage_metadata=TEXT_USAGE)
             return
         yield AIMessageChunk(
             content="" if step else "Done.",
@@ -173,6 +183,29 @@ def test_a_second_compaction_summarizes_the_first_summary_and_the_turns_since(
     assert "Summary two." in summary
     assert "Summary one." not in summary
     assert rest == ["c" * LONG, "Done.", "Again."]
+
+
+def test_a_compaction_on_demand_counts_apart_under_the_latest_turn_and_adds_to_its_cost(
+    tmp_path: Path,
+) -> None:
+    model = CompactingModel([], [], "Summary one.")
+    dispatcher, _ = signal_runtime(instance_at(tmp_path), model)
+
+    async def scenario() -> object:
+        thread_id = await new_thread(dispatcher)
+        await turn(dispatcher, thread_id, "a" * LONG)
+        await turn(dispatcher, thread_id, "b" * LONG)
+        await compact(dispatcher, thread_id, "the release date")
+        return await call(dispatcher, "stats.get", records=True)
+
+    stats = asyncio.run(scenario())
+
+    assert isinstance(stats, StatsGetResult)
+    first, latest = stats.records
+    assert (first.compaction_input_tokens, first.compaction_output_tokens) == (0, 0)
+    assert (latest.compaction_input_tokens, latest.compaction_output_tokens) == (20_000, 1_000)
+    assert (latest.input_tokens, latest.output_tokens) == (20_000, 1_000)
+    assert latest.cost == pytest.approx(0.035)
 
 
 def test_a_thread_whose_turns_all_fit_has_nothing_to_compact(tmp_path: Path) -> None:

@@ -475,14 +475,16 @@ class WorkspaceReverted(ContractModel):
     restored: TreeId
 
 
-class ThreadCompacted(ContractModel):
+class ThreadCompacted(TokenTotals):
     """The model is sent ``summary`` in place of the thread's messages before ``boundary``, the
-    first message of the kept turns. The thread keeps every message (ADR 0123)."""
+    first message of the kept turns. The thread keeps every message (ADR 0123). The tokens are
+    what ``model`` spent writing the summary."""
 
     type: Literal[EventType.THREAD_COMPACTED] = EventType.THREAD_COMPACTED
     summary: str
     #: How many of the thread's messages, from its first, the summary stands in for.
     boundary: Annotated[int, Field(ge=0)]
+    model: str
 
 
 class TurnVerdict(StrEnum):
@@ -1693,6 +1695,8 @@ class TurnUsage(TokenTotals):
     turn_id: UUID
     recap_input_tokens: int
     recap_output_tokens: int
+    compaction_input_tokens: int = 0
+    compaction_output_tokens: int = 0
     delegated_runs: list[ReportedRun] = Field(default_factory=list)
 
 
@@ -1770,6 +1774,9 @@ class TurnMetrics(TokenTotals):
     duration_seconds: float | None
     recap_input_tokens: int
     recap_output_tokens: int
+    #: The part of the turn's tokens that its thread's compactions spent.
+    compaction_input_tokens: int = 0
+    compaction_output_tokens: int = 0
     cost: float | None = None
     tool_calls: dict[str, int]
     memory_calls: MemoryCallCounts

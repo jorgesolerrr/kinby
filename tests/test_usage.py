@@ -16,6 +16,7 @@ from kinby.contracts import (
     MessageDelta,
     ModelCompleted,
     Scope,
+    ThreadCompacted,
     ThreadCreateResult,
     ThreadUsage,
     TokenTotals,
@@ -342,9 +343,50 @@ def test_cli_shows_token_totals_per_thread_and_turn(
         f"thread {recorded.thread_id}: input=24 output=12 total=36",
         (
             f"  turn {recorded.turn_id}: input=24 output=12 cache_read=8 cache_creation=2 "
-            "recap_input=13 recap_output=5 total=36"
+            "recap_input=13 recap_output=5 compaction_input=0 compaction_output=0 total=36"
         ),
     ]
+
+
+def test_cli_shows_a_compactions_tokens_apart_from_the_turns(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+
+    async def record_usage() -> RecordedTurn:
+        loaded = load_instance(instance)
+        event_log = EventLog(loaded.manifest.state_dir)
+        dispatcher = build_dispatcher(
+            loaded.manifest.state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                UsageRunner(),
+            ),
+        )
+        recorded = await _record_turn(dispatcher, "First")
+        await event_log.append(
+            recorded.thread_id,
+            recorded.turn_id,
+            ThreadCompacted(
+                summary="Summary.", boundary=2, input_tokens=20, output_tokens=4, model="test"
+            ),
+        )
+        return recorded
+
+    recorded = asyncio.run(record_usage())
+
+    exit_code = main(["usage", str(instance)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.out.splitlines()[1] == (
+        f"  turn {recorded.turn_id}: input=31 output=11 cache_read=0 cache_creation=0 "
+        "recap_input=0 recap_output=0 compaction_input=20 compaction_output=4 total=42"
+    )
 
 
 def test_cli_rejects_a_usage_range_without_timezone(

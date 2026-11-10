@@ -600,7 +600,7 @@ def test_cli_usage_shows_delegated_runs_under_their_turn(
         f"thread {events[0].thread_id}: input=0 output=0 total=0",
         (
             f"  turn {events[0].turn_id}: input=0 output=0 cache_read=0 cache_creation=0 "
-            "recap_input=0 recap_output=0 total=0"
+            "recap_input=0 recap_output=0 compaction_input=0 compaction_output=0 total=0"
         ),
         (
             f"    delegated run {first.timestamp.isoformat()}: source=claude-subscription "

@@ -31,6 +31,7 @@ from kinby.contracts import (
     ReportedRun,
     RunDelegated,
     RunStopped,
+    ThreadCompacted,
     TokenTotals,
     ToolCall,
     ToolGated,
@@ -79,6 +80,7 @@ METRICS_EVENTS = frozenset(
         EventType.TURN_FAILED,
         EventType.TURN_INTERRUPTED,
         EventType.MEMORY_RECAPPED,
+        EventType.THREAD_COMPACTED,
         EventType.TURN_RATED,
     }
 )
@@ -107,6 +109,18 @@ class _ModelCall:
     output_tokens: int
     #: The tool results that came back before the next call.
     results: list[ToolResult] = field(default_factory=list)
+
+
+@dataclass
+class _Spend:
+    """A closed turn's own calls, and the calls recorded under it after it closed: its recap's
+    and its thread's compactions'."""
+
+    own: TokenTotals
+    #: None when the turn's model is unpriced.
+    own_cost: float | None
+    recap: MemoryRecapped | None = None
+    compactions: list[ThreadCompacted] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -223,7 +237,7 @@ def turn_metrics(
     """Read event history once and return its closed turns in closing order."""
     open_turns: dict[TurnKey, _TurnEvents] = {}
     closed_turns: dict[TurnKey, TurnMetrics] = {}
-    closing_totals: dict[TurnKey, TokenTotals] = {}
+    spends: dict[TurnKey, _Spend] = {}
     records: list[TurnMetrics] = []
     unpriced_models_by_turn: dict[TurnKey, set[UnpricedModel]] = {}
     mismatches: list[ModelCallMismatch] = []
@@ -336,6 +350,7 @@ def turn_metrics(
             if turn is not None and price is None and not no_work:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(turn.model))
             memory = _memory_use(turn, price) if turn is not None else _MemoryUse()
+            own_cost = 0 if no_work else token_cost(payload, price) if price is not None else None
             record = TurnMetrics(
                 thread_id=event.thread_id,
                 turn_id=event.turn_id,
@@ -356,7 +371,7 @@ def turn_metrics(
                 cache_creation_tokens=payload.cache_creation_tokens,
                 recap_input_tokens=0,
                 recap_output_tokens=0,
-                cost=(0 if no_work else token_cost(payload, price) if price is not None else None),
+                cost=own_cost,
                 tool_calls=dict(turn.tool_calls) if turn else {},
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
@@ -376,36 +391,26 @@ def turn_metrics(
             if turn is not None and turn.model_calls and turn.profile_version is not None:
                 profiled.append((record, turn.profile_version))
             closed_turns[key] = record
-            closing_totals[key] = payload
+            spends[key] = _Spend(payload, own_cost)
             continue
 
         record = closed_turns.get(key)
         if record is None:
             if isinstance(payload, MemoryRecapped) and event.thread_id in stopped_runs:
-                cost = _recap_cost(payload, prices)
+                cost = _call_cost(payload, prices)
                 run_recaps.append(RunRecap(event.thread_id, event.timestamp, payload, cost))
             continue
-        if isinstance(payload, MemoryRecapped):
-            if record.outcome is CompletionOutcome.NO_WORK:
+        if isinstance(payload, MemoryRecapped | ThreadCompacted):
+            spend = spends[key]
+            if isinstance(payload, ThreadCompacted):
+                spend.compactions.append(payload)
+            elif record.outcome is CompletionOutcome.NO_WORK:
                 continue
-            main_totals = closing_totals[key]
-            main_price = prices.get(record.model) if record.model is not None else None
-            recap_cost = _recap_cost(payload, prices)
-            if recap_cost is None and payload.model is not None:
+            else:
+                spend.recap = payload
+            if _call_cost(payload, prices) is None and payload.model is not None:
                 unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
-            record.input_tokens += payload.input_tokens - record.recap_input_tokens
-            record.output_tokens += payload.output_tokens - record.recap_output_tokens
-            record.cache_read_tokens = main_totals.cache_read_tokens + payload.cache_read_tokens
-            record.cache_creation_tokens = (
-                main_totals.cache_creation_tokens + payload.cache_creation_tokens
-            )
-            record.recap_input_tokens = payload.input_tokens
-            record.recap_output_tokens = payload.output_tokens
-            record.cost = (
-                token_cost(main_totals, main_price) + recap_cost
-                if main_price is not None and recap_cost is not None
-                else None
-            )
+            _settle(record, spend, prices)
         elif isinstance(payload, TurnRated):
             record.rating = payload
 
@@ -425,12 +430,32 @@ def turn_metrics(
     )
 
 
-def _recap_cost(recap: MemoryRecapped, prices: Mapping[str, ModelPrice]) -> float | None:
-    """The recap's cost at its model: nothing when it spent no tokens, None when unpriced."""
-    price = prices.get(recap.model) if recap.model is not None else None
+def _settle(record: TurnMetrics, spend: _Spend, prices: Mapping[str, ModelPrice]) -> None:
+    """Total *record* over its turn's own calls and those recorded under it after it closed."""
+    later = [*([spend.recap] if spend.recap is not None else []), *spend.compactions]
+    calls = [spend.own, *later]
+    record.input_tokens = sum(call.input_tokens for call in calls)
+    record.output_tokens = sum(call.output_tokens for call in calls)
+    record.cache_read_tokens = sum(call.cache_read_tokens for call in calls)
+    record.cache_creation_tokens = sum(call.cache_creation_tokens for call in calls)
+    record.recap_input_tokens = spend.recap.input_tokens if spend.recap is not None else 0
+    record.recap_output_tokens = spend.recap.output_tokens if spend.recap is not None else 0
+    record.compaction_input_tokens = sum(call.input_tokens for call in spend.compactions)
+    record.compaction_output_tokens = sum(call.output_tokens for call in spend.compactions)
+    costs = [spend.own_cost, *(_call_cost(call, prices) for call in later)]
+    priced = [cost for cost in costs if cost is not None]
+    record.cost = sum(priced) if len(priced) == len(costs) else None
+
+
+def _call_cost(
+    call: MemoryRecapped | ThreadCompacted, prices: Mapping[str, ModelPrice]
+) -> float | None:
+    """A recap's or a compaction's cost at its model: nothing when it spent no tokens, None when
+    unpriced."""
+    price = prices.get(call.model) if call.model is not None else None
     if price is not None:
-        return token_cost(recap, price)
-    if not (recap.total or recap.cache_read_tokens or recap.cache_creation_tokens):
+        return token_cost(call, price)
+    if not (call.total or call.cache_read_tokens or call.cache_creation_tokens):
         return 0
     return None
 
