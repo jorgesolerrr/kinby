@@ -108,6 +108,7 @@ from kinby.core.sent_history import (
     sent_history,
     summary_request,
     turn_start,
+    unanswered,
 )
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
@@ -1057,11 +1058,12 @@ class LangGraphRunner:
         emit: Emit,
     ) -> tuple[ThreadCompacted, int | None] | None:
         """Compact the running turn's thread over *messages*, which its next model call sends
-        under *compaction* and *cut*. Return the compaction and where it cut into the turn, or
-        None when the thread did not compact."""
+        under *compaction* and *cut*. The messages the model has not answered yet stay whole.
+        Return the compaction and where it cut into the turn, or None when the thread did not
+        compact."""
         start = cut if cut is not None else 0 if compaction is None else compaction.boundary
         running = turn_start(messages)
-        boundary = kept_from(messages, start, running)
+        boundary = min(kept_from(messages, start, running), unanswered(messages))
         made = await self._summary_in_turn(
             emit,
             self._summarize(turn.thread_id, turn.model, compaction, messages, start, boundary),

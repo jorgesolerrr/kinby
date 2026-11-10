@@ -116,6 +116,16 @@ def turn_start(messages: Sequence[AnyMessage]) -> int:
     )
 
 
+def unanswered(messages: Sequence[AnyMessage]) -> int:
+    """Where the messages the model has not answered yet begin: the user message, or the latest
+    tool calls with their results."""
+    return next(
+        index
+        for index in range(len(messages) - 1, -1, -1)
+        if not isinstance(messages[index], ToolMessage)
+    )
+
+
 def kept_from(messages: Sequence[AnyMessage], start: int, running: int | None = None) -> int:
     """Where the turns a compaction keeps begin: the newest whole turns from *start* on that fit
     in what it keeps, as they are sent: cleared, but for the turn running from *running*.

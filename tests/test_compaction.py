@@ -637,8 +637,10 @@ def test_a_turn_too_long_for_what_a_compaction_keeps_compacts_its_own_messages(
 
     [summary_call] = model.requests[1]
     assert "Go." in summary_call.text
-    [summary] = texts(model.requests[2])
+    assert "report" not in summary_call.text
+    [summary, *unanswered] = texts(model.requests[2])
     assert "Summary one." in summary
+    assert unanswered == ["", "x" * 30_000, "x" * 30_000, "x" * 30_000]
     [compaction] = compactions(log, thread_id)
     assert compaction.boundary == 0
     [summary, asked, *_, answer, again] = texts(model.requests[3])
