@@ -63,7 +63,7 @@ export async function saveManifest(
   }
 }
 
-type NumberText = Record<keyof ManifestBudgets | "bash_timeout_seconds", string>
+type NumberText = Record<keyof ManifestBudgets | "bash_timeout_seconds" | "trigger", string>
 
 /** The form's copy of the values. The numbers stay as typed, so a blank budget can mean no limit. */
 export interface ManifestDraft {
@@ -81,6 +81,7 @@ export function draftOf(values: ManifestValues): ManifestDraft {
       seconds: text(values.budgets.seconds),
       usd_per_day: text(values.budgets.usd_per_day),
       bash_timeout_seconds: text(values.tools.bash_timeout_seconds),
+      trigger: text(values.compaction.trigger),
     },
   }
 }
@@ -94,13 +95,14 @@ export function valuesOf(draft: ManifestDraft): ManifestValues | undefined {
     seconds: budget(draft.numbers.seconds),
     usd_per_day: budget(draft.numbers.usd_per_day),
   }
-  const timeout = draft.numbers.bash_timeout_seconds
-  if (timeout.trim() === "") return undefined
+  const { bash_timeout_seconds: timeout, trigger } = draft.numbers
+  if (timeout.trim() === "" || trigger.trim() === "") return undefined
   if (Object.values(budgets).some((value) => Number.isNaN(value))) return undefined
-  if (Number.isNaN(Number(timeout))) return undefined
+  if (Number.isNaN(Number(timeout)) || Number.isNaN(Number(trigger))) return undefined
   return {
     ...draft.values,
     budgets,
     tools: { ...draft.values.tools, bash_timeout_seconds: Number(timeout) },
+    compaction: { ...draft.values.compaction, trigger: Number(trigger) },
   }
 }

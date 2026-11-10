@@ -27,6 +27,7 @@ from tomlkit.items import InlineTable
 from kinby.contracts import CommandListName, ContractModel, ManifestValues, NewModelPrice
 from kinby.instance.dataclasses import (
     Budgets,
+    Compaction,
     Conventions,
     Feedback,
     FeedbackPolicy,
@@ -109,6 +110,12 @@ class RawFeedback(_Section):
     ask: FeedbackPolicy = Field(default=FeedbackPolicy.EVERY_TURN, strict=False)
 
 
+class RawCompaction(_Section):
+    automatic: bool = True
+    #: The context size, in tokens, past which a thread compacts at the start of its next turn.
+    trigger: Annotated[int, Field(gt=0)] = 100_000
+
+
 class RawTools(_Section):
     defaults: bool = True
     #: Default tools switched off by name, while the others stay on.
@@ -181,6 +188,7 @@ class RawManifest(_Section):
     workspace: RawWorkspace = RawWorkspace()
     memory: RawMemory = RawMemory()
     feedback: RawFeedback = RawFeedback()
+    compaction: RawCompaction = RawCompaction()
     tools: RawTools = RawTools()
     #: Whether the instance gets the browser tools and the hub's browser methods (ADR 0114).
     browser: bool = False
@@ -347,6 +355,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         ),
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
+        compaction=Compaction(trigger=raw.compaction.trigger if raw.compaction.automatic else None),
         tools=_tools(raw.tools),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
         serve=raw.serve.listen if raw.serve is not None else None,

@@ -223,6 +223,34 @@ export function ManifestSection({ client, clock }: { client: Caller; clock: Cloc
         </FieldGroup>
       </FieldSet>
       <FieldSet>
+        <FieldLegend>Compaction</FieldLegend>
+        <FieldDescription>
+          A thread past the trigger compacts at the start of its next turn. A model with a smaller
+          window compacts 16,000 tokens short of it.
+        </FieldDescription>
+        <FieldGroup>
+          <SwitchField
+            label="Compact automatically"
+            description="Off keeps each thread's whole history until you compact it."
+            checked={draft.values.compaction.automatic}
+            onChange={(automatic) =>
+              edit({
+                ...draft,
+                values: { ...draft.values, compaction: { ...draft.values.compaction, automatic } },
+              })
+            }
+          />
+          <NumberField
+            label="Compaction trigger, tokens"
+            description="The context size past which a thread compacts."
+            step={1}
+            value={draft.numbers.trigger}
+            error={refused["compaction.trigger"]}
+            onChange={(text) => edit({ ...draft, numbers: { ...draft.numbers, trigger: text } })}
+          />
+        </FieldGroup>
+      </FieldSet>
+      <FieldSet>
         <FieldLegend>Routines</FieldLegend>
         <FieldGroup>
           <TimezonePicker
@@ -328,6 +356,7 @@ const FIELD_KEYS: Record<string, true> = Object.fromEntries(
     ...BUDGET_FIELDS.map(({ key }) => `budgets.${key}`),
     "routines.timezone",
     "tools.bash_timeout_seconds",
+    "compaction.trigger",
     "persona_name",
   ].map((field) => [field, true]),
 )

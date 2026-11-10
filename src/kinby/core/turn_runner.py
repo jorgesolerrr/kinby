@@ -48,6 +48,7 @@ from kinby.contracts import (
     GateOutcome,
     MemoryRecalled,
     MessageDelta,
+    ModelCompleted,
     PermissionMode,
     ProfileCounted,
     ProfileVersion,
@@ -88,7 +89,7 @@ from kinby.core.events import EventLog
 from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
-from kinby.core.pricing import price_map
+from kinby.core.pricing import instance_windows, price_map
 from kinby.core.prompt import (
     PromptSection,
     PromptSectionName,
@@ -99,7 +100,13 @@ from kinby.core.prompt import (
     render_wake,
 )
 from kinby.core.saved_outputs import cut_to_cap, turn_outputs
-from kinby.core.sent_history import kept_from, sent_history, summary_request
+from kinby.core.sent_history import (
+    context_size,
+    effective_trigger,
+    kept_from,
+    sent_history,
+    summary_request,
+)
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -503,17 +510,17 @@ class LangGraphRunner:
 
     def _closed_on(self, day: date) -> list[Event]:
         """The events daily_cost folds for the turns closed on *day*: those stored since the day
-        began, after the start of each turn that began before it."""
-        events = self._event_log.events_of(
-            DAILY_COST_EVENTS, since=datetime.combine(day, time(), UTC)
-        )
+        began, after the start of each turn that began before it and the compactions it made
+        before the day began."""
+        since = datetime.combine(day, time(), UTC)
+        events = self._event_log.events_of(DAILY_COST_EVENTS, since=since)
         started = {event.turn_id for event in events if isinstance(event.payload, TurnStarted)}
         earlier = [
             event
             for closing in events
             if is_turn_closing(closing.payload) and closing.turn_id not in started
             for event in self._event_log.turn_events(closing.turn_id)
-            if isinstance(event.payload, TurnStarted)
+            if event.timestamp < since and isinstance(event.payload, TurnStarted | ThreadCompacted)
         ]
         return [*earlier, *events]
 
@@ -637,6 +644,22 @@ class LangGraphRunner:
         tools = prepared.tools
         progress = prepared.progress
         budgets = progress.budgets
+        if isinstance(graph_input, ModelState):
+            compacting = asyncio.timeout(progress.seconds_remaining)
+            compaction_started = asyncio.get_running_loop().time()
+            try:
+                async with compacting:
+                    await self._compact_over_trigger(turn, emit)
+            except TimeoutError as exc:
+                if not compacting.expired() or budgets.seconds is None:
+                    raise
+                raise BudgetExceeded("seconds", budgets.seconds) from exc
+            progress = replace(
+                progress,
+                seconds_used=progress.seconds_used
+                + asyncio.get_running_loop().time()
+                - compaction_started,
+            )
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model
@@ -988,9 +1011,54 @@ class LangGraphRunner:
         return output
 
     async def compact(self, thread_id: UUID, focus: str | None) -> Event:
-        """Compact the thread with the main model's summary of its turns since its last
-        compaction, but for the newest turns it keeps. The summary call and the compaction are
-        recorded under the thread's latest turn."""
+        """Compact the thread with the main model's summary. The summary call and the compaction
+        are recorded under the thread's latest turn."""
+        model = reload_manifest(self._instance, model_override=self._model_override).models.main
+        completed, compaction = await self._summarize(thread_id, model, focus)
+        turn_id = next(
+            event.turn_id
+            for event in reversed(self._event_log.thread_events(thread_id))
+            if isinstance(event.payload, TurnStarted)
+        )
+        await self._event_log.append(thread_id, turn_id, completed)
+        return await self._event_log.append(thread_id, turn_id, compaction)
+
+    async def _compact_over_trigger(self, turn: PreparedTurnRequest, emit: Emit) -> None:
+        """Compact the turn's thread once, before the turn's first model call, when its context
+        size is past the effective compaction trigger. A failed summary call is recorded on the
+        thread, and the turn runs uncompacted."""
+        trigger = effective_trigger(
+            self._instance.manifest.compaction.trigger,
+            instance_windows(self._instance).get(turn.model),
+        )
+        size = context_size(self._event_log.thread_events(turn.thread_id))
+        if trigger is None or size is None or size <= trigger:
+            return
+        try:
+            # The summary call is recorded only in the compaction, which carries its tokens: as
+            # a model call of the turn it would count in the turn's own totals.
+            _, compaction = await self._summarize(turn.thread_id, turn.model, None)
+        except NothingToCompact:
+            return
+        except Exception as exc:
+            logger.warning("The compaction failed.", exc_info=True)
+            await emit(
+                Warning(
+                    sources=("compaction",),
+                    message=(
+                        "The thread could not be compacted, so the turn runs uncompacted: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            )
+            return
+        await emit(compaction)
+
+    async def _summarize(
+        self, thread_id: UUID, model: ModelName, focus: str | None
+    ) -> tuple[ModelCompleted, ThreadCompacted]:
+        """*model*'s summary call over the thread's turns since its last compaction, but for the
+        newest turns a compaction keeps, and the compaction it makes."""
         async with self._graph() as (graph, _):
             completed = await _newest_completed(graph, _thread_config(thread_id))
         messages: list[AnyMessage] = [] if completed is None else completed.values["messages"]
@@ -1002,7 +1070,6 @@ class LangGraphRunner:
                 f'Thread "{thread_id}" has nothing to compact: its turns since its last '
                 "compaction fit in what a compaction keeps."
             )
-        model = reload_manifest(self._instance, model_override=self._model_override).models.main
         request = summary_request(
             None if previous is None else previous.summary, messages[start:boundary], focus
         )
@@ -1012,30 +1079,20 @@ class LangGraphRunner:
             response = chunk if response is None else response + chunk
         if response is None or not response.text.strip():
             raise ModelNoResponse("The model returned no summary.")
-        turn_id = next(
-            event.turn_id
-            for event in reversed(self._event_log.thread_events(thread_id))
-            if isinstance(event.payload, TurnStarted)
-        )
         completed = completed_model_call(
             model,
             response.usage_metadata,
             started_at=started_at,
             completed_at=asyncio.get_running_loop().time(),
         )
-        await self._event_log.append(thread_id, turn_id, completed)
-        return await self._event_log.append(
-            thread_id,
-            turn_id,
-            ThreadCompacted(
-                summary=response.text,
-                boundary=boundary,
-                input_tokens=completed.input_tokens,
-                output_tokens=completed.output_tokens,
-                cache_read_tokens=completed.cache_read_tokens,
-                cache_creation_tokens=completed.cache_creation_tokens,
-                model=model,
-            ),
+        return completed, ThreadCompacted(
+            summary=response.text,
+            boundary=boundary,
+            input_tokens=completed.input_tokens,
+            output_tokens=completed.output_tokens,
+            cache_read_tokens=completed.cache_read_tokens,
+            cache_creation_tokens=completed.cache_creation_tokens,
+            model=model,
         )
 
     def _latest_compaction(self, thread_id: UUID) -> ThreadCompacted | None:

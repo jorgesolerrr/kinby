@@ -64,6 +64,14 @@ class Memory:
 
 
 @dataclass(frozen=True)
+class Compaction:
+    """When a thread compacts on its own."""
+
+    #: The compaction trigger in tokens. None when automatic compaction is off.
+    trigger: int | None
+
+
+@dataclass(frozen=True)
 class Feedback:
     """Turn-rating prompt behavior selected for one instance."""
 
@@ -122,6 +130,7 @@ class Manifest:
     workspace: Workspace
     memory: Memory
     feedback: Feedback
+    compaction: Compaction
     tools: Tools
     budgets: Budgets
     prices: Mapping[str, ModelPrice]

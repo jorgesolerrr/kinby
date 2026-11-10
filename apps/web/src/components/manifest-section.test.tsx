@@ -16,6 +16,7 @@ const manifest: ManifestResult = {
     tools: { defaults: true, bash_timeout_seconds: 120 },
     memory: { recap: "every-turn" },
     feedback: { ask: "every-turn" },
+    compaction: { automatic: true, trigger: 100000 },
   },
   model_choices: [
     { model: "anthropic:claude-sonnet-5", priced_from: "shipped", key_set: false },
@@ -129,6 +130,19 @@ describe("ManifestSection", () => {
       budgets: { steps: 20, tokens: null, seconds: null, usd_per_day: 2.5 },
       routines: { timezone: "Europe/Madrid" },
     })
+  })
+
+  it("sends the compaction trigger as a number and automatic compaction turned off", async () => {
+    const { caller, user } = openSection()
+
+    const trigger = await screen.findByRole("spinbutton", { name: "Compaction trigger, tokens" })
+    await user.clear(trigger)
+    await user.type(trigger, "60000")
+    await user.click(screen.getByRole("switch", { name: "Compact automatically" }))
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    await screen.findByText(/^Saved\./)
+    expect(sent(caller)[0].values.compaction).toEqual({ automatic: false, trigger: 60000 })
   })
 
   it("shows the instance's reason next to the value it refused", async () => {

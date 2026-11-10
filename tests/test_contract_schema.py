@@ -274,6 +274,7 @@ def test_the_schema_declares_the_manifest_calls() -> None:
         "tools",
         "memory",
         "feedback",
+        "compaction",
     }
     assert _object(definitions["PriceSource"])["enum"] == ["shipped", "manifest"]
 
