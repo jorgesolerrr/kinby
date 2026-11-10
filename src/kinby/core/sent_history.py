@@ -1,9 +1,11 @@
 """A thread's history as the model is sent it: earlier turns' large tool results cleared
 (ADR 0122), and the latest compaction's summary in place of the messages before its boundary
 (ADR 0123). The checkpoint keeps every message. A thread whose context size passes the
-compaction trigger compacts at the start of its next turn."""
+compaction trigger compacts at the start of its next turn, and a turn whose next model call would
+not fit the model's window compacts before it."""
 
 from collections.abc import Sequence
+from itertools import takewhile
 from typing import TypeGuard
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
@@ -33,16 +35,18 @@ not sent again: name each skill, so it can be read again when the work needs it.
 
 
 def sent_history(
-    messages: Sequence[AnyMessage], compaction: ThreadCompacted | None
+    messages: Sequence[AnyMessage], compaction: ThreadCompacted | None, cut: int | None = None
 ) -> list[AnyMessage]:
-    """*messages* as the model is sent them under *compaction*, the thread's latest."""
+    """*messages* as the model is sent them under *compaction*, the thread's latest. Its summary
+    also stands in for the running turn's messages before *cut*, when it cut into the turn."""
     if compaction is None:
         return clear_earlier_results(messages)
     summary = HumanMessage(
         content=f"This thread was compacted. A summary of its earlier turns:\n\n"
         f"{compaction.summary}"
     )
-    return [summary, *clear_earlier_results(messages[compaction.boundary :])]
+    kept = compaction.boundary if cut is None else cut
+    return [summary, *clear_earlier_results(messages[kept:])]
 
 
 def effective_trigger(trigger: int | None, window: int | None) -> int | None:
@@ -72,26 +76,65 @@ def context_size(events: Sequence[Event]) -> int | None:
     return None
 
 
+def passes_window(
+    window: int | None, turn_events: Sequence[Event], messages: Sequence[AnyMessage]
+) -> bool:
+    """Whether a running turn's next model call, which sends *messages*, would pass the model's
+    *window* less the reserve: its latest call's input and output, with the tool results since at
+    four characters a token. False with no known window, before the turn's first model call, or
+    when the thread compacted since that call."""
+    latest = next(
+        (
+            event.payload
+            for event in reversed(turn_events)
+            if isinstance(event.payload, ModelCompleted | ThreadCompacted)
+        ),
+        None,
+    )
+    if window is None or not isinstance(latest, ModelCompleted):
+        return False
+    results = takewhile(lambda message: isinstance(message, ToolMessage), reversed(messages))
+    added = sum(len(result.text) for result in results) // 4
+    return latest.input_tokens + latest.output_tokens + added > window - _WINDOW_RESERVE
+
+
 def clear_earlier_results(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
     """*messages* with each tool result over the threshold from before the current turn's user
     message replaced by a stub."""
-    turn_start = max(
-        (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
-        default=0,
-    )
+    start = turn_start(messages)
     return [
-        _cleared(message) if index < turn_start and _clears(message) else message
+        _cleared(message) if index < start and _clears(message) else message
         for index, message in enumerate(messages)
     ]
 
 
-def kept_from(messages: Sequence[AnyMessage], start: int) -> int:
+def turn_start(messages: Sequence[AnyMessage]) -> int:
+    """Where the current turn begins in *messages*: at its user message."""
+    return max(
+        (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
+        default=0,
+    )
+
+
+def unanswered(messages: Sequence[AnyMessage]) -> int:
+    """Where the messages the model has not answered yet begin: the user message, or the latest
+    tool calls with their results."""
+    return next(
+        index
+        for index in range(len(messages) - 1, -1, -1)
+        if not isinstance(messages[index], ToolMessage)
+    )
+
+
+def kept_from(messages: Sequence[AnyMessage], start: int, running: int | None = None) -> int:
     """Where the turns a compaction keeps begin: the newest whole turns from *start* on that fit
-    in what it keeps, as they are sent cleared. ``len(messages)`` when none fits."""
+    in what it keeps, as they are sent: cleared, but for the turn running from *running*.
+    ``len(messages)`` when none fits."""
     kept = len(messages)
     size = 0
     for index in range(len(messages) - 1, start - 1, -1):
-        size += _sent_characters(messages[index])
+        whole = running is not None and index >= running
+        size += _sent_characters(messages[index], whole=whole)
         if size > _KEPT_CHARACTERS:
             break
         if isinstance(messages[index], HumanMessage):
@@ -128,8 +171,8 @@ def _transcript_line(message: AnyMessage) -> str:
             return message.text
 
 
-def _sent_characters(message: AnyMessage) -> int:
-    sent = _cleared(message) if _clears(message) else message
+def _sent_characters(message: AnyMessage, *, whole: bool) -> int:
+    sent = _cleared(message) if not whole and _clears(message) else message
     calls = message.tool_calls if isinstance(message, AIMessage) else []
     return len(sent.text) + sum(len(str(call["args"])) for call in calls)
 

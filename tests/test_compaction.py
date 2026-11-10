@@ -1,16 +1,19 @@
-"""Compaction on demand and at the start of a turn over the compaction trigger: the model is sent
-a compaction summary in place of the thread's older messages, and the newest turns whole, while
-the thread keeps every message (ADR 0123)."""
+"""Compaction on demand, at the start of a turn over the compaction trigger, and inside a turn
+whose next model call would not fit the window: the model is sent a compaction summary in place of
+the thread's older messages, and the newest turns whole, while the thread keeps every message
+(ADR 0123)."""
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Self
 from uuid import UUID, uuid4
 
 import pytest
+from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AIMessageChunk,
     BaseMessage,
@@ -18,6 +21,7 @@ from langchain_core.messages import (
     ToolMessage,
     UsageMetadata,
 )
+from langchain_core.messages.tool import ToolCall as ToolCallDict
 from langchain_core.tools import StructuredTool
 from pydantic import JsonValue
 
@@ -52,10 +56,12 @@ type Call = tuple[str, dict[str, JsonValue]]
 
 @dataclass(frozen=True)
 class Sized:
-    """A text answer whose call reports *input_tokens*: the thread's context size after it."""
+    """An answer whose call reports *input_tokens*: the thread's context size after it. It makes
+    *calls*, or else ends the turn with *text*."""
 
     text: str
     input_tokens: int
+    calls: Sequence[Call] = ()
 
 
 #: A model step: the calls one model call makes, the text it answers with, what it raises, or an
@@ -99,20 +105,22 @@ class CompactingModel:
                 output_tokens=100,
                 total_tokens=step.input_tokens + 100,
             )
-            yield AIMessageChunk(content=step.text, usage_metadata=usage)
+            yield AIMessageChunk(
+                content=step.text, tool_calls=self._tool_calls(step.calls), usage_metadata=usage
+            )
             return
-        yield AIMessageChunk(
-            content="" if step else "Done.",
-            tool_calls=[
-                {
-                    "id": f"call-{len(self.requests)}-{index}",
-                    "name": name,
-                    "args": arguments,
-                    "type": "tool_call",
-                }
-                for index, (name, arguments) in enumerate(step)
-            ],
-        )
+        yield AIMessageChunk(content="" if step else "Done.", tool_calls=self._tool_calls(step))
+
+    def _tool_calls(self, calls: Sequence[Call]) -> list[ToolCallDict]:
+        return [
+            {
+                "id": f"call-{len(self.requests)}-{index}",
+                "name": name,
+                "args": arguments,
+                "type": "tool_call",
+            }
+            for index, (name, arguments) in enumerate(calls)
+        ]
 
 
 def with_skill(instance: Instance) -> Instance:
@@ -318,6 +326,14 @@ async def three_turns(dispatcher: ScheduledDispatcher) -> UUID:
     return thread_id
 
 
+async def turns(dispatcher: ScheduledDispatcher, *messages: str) -> UUID:
+    """Run a turn for each of *messages* on a new thread, and return the thread."""
+    thread_id = await new_thread(dispatcher)
+    for message in messages:
+        await turn(dispatcher, thread_id, message)
+    return thread_id
+
+
 def latest_turn(log: EventLog, thread_id: UUID) -> list[Event]:
     events = log.thread_events(thread_id)
     return [event for event in events if event.turn_id == events[-1].turn_id]
@@ -504,3 +520,150 @@ def test_the_daily_budget_counts_a_compaction_made_before_midnight_in_a_turn_clo
 
     assert budget is not None
     assert budget.cost.usd == pytest.approx(0.035)
+
+
+#: A window of 50,000 tokens: a next call past 34,000 would not fit it with the reserve left free.
+WINDOW = '[prices."openai:gpt-5"]\ninput = 1.25\noutput = 10\nwindow = 50000\n'
+
+
+def test_a_turn_whose_next_call_would_not_fit_the_window_compacts_and_carries_on(
+    tmp_path: Path,
+) -> None:
+    instance = with_manifest(instance_at(tmp_path), WINDOW)
+    model = CompactingModel(
+        [],
+        [],
+        Sized("", 33_000, [("report", {"size": 8_000})]),
+        "Summary one.",
+        [],
+    )
+    dispatcher, log = signal_runtime(instance, model)
+
+    thread_id = asyncio.run(three_turns(dispatcher))
+
+    [summary_call] = model.requests[3]
+    assert "a" * LONG in summary_call.text
+    assert "b" * LONG not in summary_call.text
+    [summary, *rest] = texts(model.requests[4])
+    assert "Summary one." in summary
+    assert rest == ["b" * LONG, "Done.", "Again.", "", "x" * 8_000]
+    events = latest_turn(log, thread_id)
+    kinds = [type(event.payload) for event in events]
+    assert kinds.count(ThreadCompacted) == 1
+    assert kinds.index(ModelCompleted) < kinds.index(ThreadCompacted)
+    assert kinds[-1] is TurnCompleted
+
+
+def test_a_turn_under_the_window_sends_the_same_prefix_on_every_call(tmp_path: Path) -> None:
+    instance = with_manifest(instance_at(tmp_path), WINDOW)
+    model = CompactingModel(
+        Sized("", 20_000, [("report", {"size": 8_000})]),
+        Sized("", 30_000, [("report", {"size": 8_000})]),
+        [],
+    )
+    dispatcher, log = signal_runtime(instance, model)
+
+    thread_id = asyncio.run(turns(dispatcher, "Go."))
+
+    sent = [[message.text for message in request] for request in model.requests]
+    assert len(sent) == 3
+    assert all(later[: len(earlier)] == earlier for earlier, later in pairwise(sent))
+    assert compactions(log, thread_id) == []
+
+
+def without_window(instance: Instance) -> Instance:
+    manifest = instance.path / "kinby.toml"
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(text.replace("openai:gpt-5", "custom:unwindowed", 1), encoding="utf-8")
+    return load_instance(instance.path)
+
+
+def test_a_provider_overflow_compacts_once_and_the_turn_carries_on(tmp_path: Path) -> None:
+    model = CompactingModel(
+        [],
+        [],
+        Sized("", 500_000, [("report", {"size": 100})]),
+        ContextOverflowError("prompt is too long"),
+        "Summary one.",
+        [],
+    )
+    dispatcher, log = signal_runtime(without_window(instance_at(tmp_path)), model)
+
+    thread_id = asyncio.run(three_turns(dispatcher))
+
+    [summary_call] = model.requests[4]
+    assert "a" * LONG in summary_call.text
+    [summary, *rest] = texts(model.requests[5])
+    assert "Summary one." in summary
+    assert rest == ["b" * LONG, "Done.", "Again.", "", "x" * 100]
+    [compaction] = compactions(log, thread_id)
+    assert compaction.summary == "Summary one."
+    assert isinstance(latest_turn(log, thread_id)[-1].payload, TurnCompleted)
+
+
+def test_a_turn_that_overflows_after_a_compaction_fails_with_context_overflow(
+    tmp_path: Path,
+) -> None:
+    model = CompactingModel(
+        [],
+        [],
+        ContextOverflowError("prompt is too long"),
+        "Summary one.",
+        ContextOverflowError("prompt is too long"),
+    )
+    dispatcher, log = signal_runtime(instance_at(tmp_path), model)
+
+    thread_id = asyncio.run(three_turns(dispatcher))
+
+    assert len(model.requests) == 5
+    assert len(compactions(log, thread_id)) == 1
+    failed = latest_turn(log, thread_id)[-1].payload
+    assert isinstance(failed, TurnFailed)
+    assert failed.code is ErrorCode.CONTEXT_OVERFLOW
+
+
+#: A call whose results alone pass what a compaction keeps, in a turn whose next call would not
+#: fit the window.
+LONG_RESULTS = Sized("", 33_000, [("report", {"size": 30_000})] * 3)
+
+
+def test_a_turn_too_long_for_what_a_compaction_keeps_compacts_its_own_messages(
+    tmp_path: Path,
+) -> None:
+    model = CompactingModel(LONG_RESULTS, "Summary one.", [], [])
+    dispatcher, log = signal_runtime(with_manifest(instance_at(tmp_path), WINDOW), model)
+
+    thread_id = asyncio.run(turns(dispatcher, "Go.", "Again."))
+
+    [summary_call] = model.requests[1]
+    assert "Go." in summary_call.text
+    assert "report" not in summary_call.text
+    [summary, *unanswered] = texts(model.requests[2])
+    assert "Summary one." in summary
+    assert unanswered == ["", "x" * 30_000, "x" * 30_000, "x" * 30_000]
+    [compaction] = compactions(log, thread_id)
+    assert compaction.boundary == 0
+    [summary, asked, *_, answer, again] = texts(model.requests[3])
+    assert "Summary one." in summary
+    assert [asked, answer, again] == ["Go.", "Done.", "Again."]
+
+
+def test_a_turn_that_fails_after_compacting_its_own_messages_keeps_the_next_message(
+    tmp_path: Path,
+) -> None:
+    model = CompactingModel(
+        LONG_RESULTS, "Summary one.", ContextOverflowError("prompt is too long"), []
+    )
+    dispatcher, log = signal_runtime(with_manifest(instance_at(tmp_path), WINDOW), model)
+
+    thread_id = asyncio.run(turns(dispatcher, "Go.", "Again."))
+
+    [summary, again] = texts(model.requests[3])
+    assert "Summary one." in summary
+    assert again == "Again."
+    failed = [
+        event.payload
+        for event in log.thread_events(thread_id)
+        if isinstance(event.payload, TurnFailed)
+    ]
+    assert [payload.code for payload in failed] == [ErrorCode.CONTEXT_OVERFLOW]
