@@ -50,6 +50,7 @@ from kinby.contracts import (
     StatsGetResult,
     StatsSummary,
     SubscriptionUse,
+    ThreadCompacted,
     ThreadCreateResult,
     ToolCall,
     ToolGated,
@@ -1055,6 +1056,56 @@ def test_stats_get_prices_recap_tokens_at_their_model_and_keeps_old_markers_unkn
     assert result.records[1].cost is None
     assert result.records[1].prompt_version is None
     assert result.buckets[0].cost == 0.00045
+
+
+def test_stats_get_adds_compactions_to_their_turn_apart_and_prices_them_at_their_model(
+    tmp_path: Path,
+) -> None:
+    thread_id = uuid4()
+    priced_id = uuid4()
+    unpriced_id = uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+
+    def compacted(model: str) -> ThreadCompacted:
+        return ThreadCompacted(
+            summary="Summary.", boundary=2, input_tokens=200, output_tokens=20, model=model
+        )
+
+    events = [
+        _event(1, thread_id, priced_id, now, TurnStarted(message="go", model="openai:gpt-5")),
+        _event(2, thread_id, priced_id, now, TurnCompleted(input_tokens=100, output_tokens=10)),
+        _event(3, thread_id, priced_id, now, compacted("openai:gpt-5")),
+        _event(
+            4,
+            thread_id,
+            priced_id,
+            now,
+            MemoryRecapped(
+                node=None, input_tokens=50, output_tokens=5, model="anthropic:claude-sonnet-4-6"
+            ),
+        ),
+        _event(5, thread_id, priced_id, now, compacted("openai:gpt-5")),
+        _event(6, thread_id, unpriced_id, now, TurnStarted(message="go", model="openai:gpt-5")),
+        _event(7, thread_id, unpriced_id, now, TurnCompleted(input_tokens=100, output_tokens=10)),
+        _event(8, thread_id, unpriced_id, now, compacted("other:model")),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=historical_event_log(tmp_path, events)).dispatch(
+            "stats.get",
+            {"records": True},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    priced, unpriced = result.records
+    assert (priced.input_tokens, priced.output_tokens) == (550, 55)
+    assert (priced.compaction_input_tokens, priced.compaction_output_tokens) == (400, 40)
+    assert (priced.recap_input_tokens, priced.recap_output_tokens) == (50, 5)
+    assert priced.cost == pytest.approx(0.000225 + 2 * 0.00045 + 0.000225)
+    assert unpriced.cost is None
+    assert result.unpriced_models == ["other:model"]
 
 
 def test_stats_get_joins_a_factory_runs_turns_delegated_runs_and_recap_on_its_run_id(

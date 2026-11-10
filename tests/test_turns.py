@@ -24,6 +24,7 @@ from kinby.contracts import (
     PromptVersion,
     Scope,
     SystemPrompt,
+    ThreadCompacted,
     ThreadCreateResult,
     TurnCompleted,
     TurnFailed,
@@ -960,6 +961,55 @@ def test_daily_cost_budget_uses_cache_rates(tmp_path: Path) -> None:
         )
 
         assert isinstance(accepted, AcceptedResult)
+
+    asyncio.run(scenario())
+
+
+def test_daily_cost_budget_counts_a_compaction_under_its_turn(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance_path = tmp_path / "compacted"
+        init_instance(instance_path, model="other:model")
+        with (instance_path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write(
+                '\n[budgets]\nusd_per_day = 0.5\n\n[prices."other:model"]\ninput = 1\noutput = 1\n'
+            )
+        instance = load_instance(instance_path)
+        turn = _historical_turn(datetime.now(UTC), "other:model")
+        compacted = Event(
+            sequence=3,
+            thread_id=turn[0].thread_id,
+            turn_id=turn[0].turn_id,
+            timestamp=turn[-1].timestamp,
+            payload=ThreadCompacted(
+                summary="Summary.",
+                boundary=2,
+                input_tokens=1_000_000,
+                output_tokens=0,
+                model="other:model",
+            ),
+        )
+        event_log = historical_event_log(instance.manifest.state_dir, [*turn, compacted])
+        runner = LangGraphRunner(instance, event_log=event_log)
+        dispatcher = build_dispatcher(
+            instance.manifest.state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                runner.prepare_for_turn,
+                runner.permission_ceiling,
+                ScriptedRunner(),
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+
+        refused = await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Hello"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.BUDGET_EXCEEDED
 
     asyncio.run(scenario())
 

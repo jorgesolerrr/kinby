@@ -205,7 +205,9 @@ def _turn_token_totals(usage: TurnUsage) -> str:
         f"cache_read={usage.cache_read_tokens} "
         f"cache_creation={usage.cache_creation_tokens} "
         f"recap_input={usage.recap_input_tokens} "
-        f"recap_output={usage.recap_output_tokens} total={usage.total}"
+        f"recap_output={usage.recap_output_tokens} "
+        f"compaction_input={usage.compaction_input_tokens} "
+        f"compaction_output={usage.compaction_output_tokens} total={usage.total}"
     )
 
 

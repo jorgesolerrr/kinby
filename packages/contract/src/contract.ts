@@ -2509,6 +2509,8 @@ export interface TurnMetrics {
   cache_read_tokens?: number;
   closed_at: string;
   closing_kind: TurnClosingKind;
+  compaction_input_tokens?: number;
+  compaction_output_tokens?: number;
   cost?: number | null;
   delegated_runs?: ReportedRun[];
   denies?: DenyCounts;
@@ -3012,6 +3014,8 @@ export interface ThreadUsage {
 export interface TurnUsage {
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
+  compaction_input_tokens?: number;
+  compaction_output_tokens?: number;
   delegated_runs?: ReportedRun[];
   input_tokens: number;
   output_tokens: number;
@@ -3462,10 +3466,16 @@ export interface WorkspaceReverted {
 }
 /**
  * The model is sent ``summary`` in place of the thread's messages before ``boundary``, the
- * first message of the kept turns. The thread keeps every message (ADR 0123).
+ * first message of the kept turns. The thread keeps every message (ADR 0123). The tokens are
+ * what ``model`` spent writing the summary.
  */
 export interface ThreadCompacted {
   boundary: number;
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  input_tokens: number;
+  model: string;
+  output_tokens: number;
   summary: string;
   type: "thread.compacted";
 }

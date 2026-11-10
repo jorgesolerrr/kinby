@@ -9502,10 +9502,27 @@
     },
     "ThreadCompacted": {
       "additionalProperties": false,
-      "description": "The model is sent ``summary`` in place of the thread's messages before ``boundary``, the\nfirst message of the kept turns. The thread keeps every message (ADR 0123).",
+      "description": "The model is sent ``summary`` in place of the thread's messages before ``boundary``, the\nfirst message of the kept turns. The thread keeps every message (ADR 0123). The tokens are\nwhat ``model`` spent writing the summary.",
       "properties": {
         "boundary": {
           "minimum": 0,
+          "type": "integer"
+        },
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output_tokens": {
           "type": "integer"
         },
         "summary": {
@@ -9518,8 +9535,11 @@
         }
       },
       "required": [
+        "input_tokens",
+        "output_tokens",
         "summary",
         "boundary",
+        "model",
         "type"
       ],
       "title": "ThreadCompacted",
@@ -10672,6 +10692,14 @@
         "closing_kind": {
           "$ref": "#/$defs/TurnClosingKind"
         },
+        "compaction_input_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "compaction_output_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
         "cost": {
           "anyOf": [
             {
@@ -11029,6 +11057,14 @@
           "type": "integer"
         },
         "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "compaction_input_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "compaction_output_tokens": {
           "default": 0,
           "type": "integer"
         },

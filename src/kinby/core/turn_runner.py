@@ -1017,18 +1017,25 @@ class LangGraphRunner:
             for event in reversed(self._event_log.thread_events(thread_id))
             if isinstance(event.payload, TurnStarted)
         )
-        await self._event_log.append(
+        completed = completed_model_call(
+            model,
+            response.usage_metadata,
+            started_at=started_at,
+            completed_at=asyncio.get_running_loop().time(),
+        )
+        await self._event_log.append(thread_id, turn_id, completed)
+        return await self._event_log.append(
             thread_id,
             turn_id,
-            completed_model_call(
-                model,
-                response.usage_metadata,
-                started_at=started_at,
-                completed_at=asyncio.get_running_loop().time(),
+            ThreadCompacted(
+                summary=response.text,
+                boundary=boundary,
+                input_tokens=completed.input_tokens,
+                output_tokens=completed.output_tokens,
+                cache_read_tokens=completed.cache_read_tokens,
+                cache_creation_tokens=completed.cache_creation_tokens,
+                model=model,
             ),
-        )
-        return await self._event_log.append(
-            thread_id, turn_id, ThreadCompacted(summary=response.text, boundary=boundary)
         )
 
     def _latest_compaction(self, thread_id: UUID) -> ThreadCompacted | None:
