@@ -75,6 +75,7 @@ from kinby.contracts import (
     EventType,
     InstanceProbeCommand,
     InstanceProbeResult,
+    ModelCompleted,
     NodeId,
     PermissionMode,
     RunStop,
@@ -262,8 +263,16 @@ def build_dispatcher(
 
         def totals() -> UsageGetResult:
             with event_log.reader() as reader:
+                latest_calls = {
+                    event.thread_id: event.payload
+                    for event in reader.latest_while_turn_open({EventType.MODEL_COMPLETED})
+                    if isinstance(event.payload, ModelCompleted)
+                }
                 return usage_totals(
-                    metrics_events(reader, command.since), time_range, current_windows
+                    metrics_events(reader, command.since),
+                    time_range,
+                    latest_calls,
+                    current_windows,
                 )
 
         return await asyncio.to_thread(totals)

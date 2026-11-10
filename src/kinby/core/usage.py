@@ -38,14 +38,11 @@ class TimeRange:
 def usage_totals(
     events: Iterable[Event],
     time_range: TimeRange,
+    latest_calls: Mapping[UUID, ModelCompleted],
     windows: Mapping[str, int] = SHIPPED_WINDOWS,
 ) -> UsageGetResult:
-    events = list(events)
-    latest_calls = {
-        event.thread_id: event.payload
-        for event in events
-        if isinstance(event.payload, ModelCompleted)
-    }
+    """Total the completed turns in *time_range*, with each thread's context size taken
+    from its entry in *latest_calls*, the latest model call its turns made."""
     turns_by_thread: dict[UUID, list[TurnUsage]] = {}
     for record in turn_metrics(events).records:
         if record.closing_kind is not TurnClosingKind.COMPLETED:

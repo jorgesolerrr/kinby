@@ -532,3 +532,64 @@ def test_cli_shows_each_threads_context_size_beside_its_window_when_the_model_ha
         "context_size=4000 window=64000",
         f"thread {unwindowed.thread_id}: input=7000 output=50 total=7050 context_size=7000",
     ]
+
+
+def test_usage_get_keeps_a_threads_context_size_when_its_last_call_is_before_since(
+    tmp_path: Path,
+) -> None:
+    opus = "anthropic:claude-opus-5-5"
+
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ModelCallRunner({"First": [_model_call(opus, 9_000, 6_000, 2_000)]}),
+            ),
+        )
+        first = await _record_turn(dispatcher, "First")
+        await asyncio.sleep(0.001)
+        no_call = await _record_turn(dispatcher, "No call", first.thread_id)
+
+        result = await dispatcher.dispatch(
+            "usage.get", {"since": no_call.completed_at}, {Scope.INSTANCE_READ}
+        )
+
+        assert isinstance(result, UsageGetResult)
+        assert [(thread.context_size, thread.window) for thread in result.threads] == [
+            (9_000, 1_000_000)
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_usage_get_leaves_a_recap_call_out_of_the_context_size(tmp_path: Path) -> None:
+    opus = "anthropic:claude-opus-5-5"
+
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+        dispatcher = build_dispatcher(
+            tmp_path,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ModelCallRunner({"First": [_model_call(opus, 9_000, 6_000, 2_000)]}),
+            ),
+        )
+        recorded = await _record_turn(dispatcher, "First")
+        await event_log.append(
+            recorded.thread_id,
+            recorded.turn_id,
+            _model_call("anthropic:claude-haiku-4-5", 700, 0, 0),
+        )
+
+        result = await dispatcher.dispatch("usage.get", {}, {Scope.INSTANCE_READ})
+
+        assert isinstance(result, UsageGetResult)
+        assert [(thread.context_size, thread.window) for thread in result.threads] == [
+            (9_000, 1_000_000)
+        ]
+
+    asyncio.run(scenario())

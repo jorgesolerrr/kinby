@@ -1021,7 +1021,7 @@ def fetch() -> None:
         assert metrics.unpriced_models_by_turn == {}
         assert metrics.records[0].cost == 0
         assert metrics.records[0].total == 0
-        assert usage_totals(stored, TimeRange(None, None)).threads[0].total == 0
+        assert usage_totals(stored, TimeRange(None, None), {}).threads[0].total == 0
         cost = daily_cost(stored, price_map(), datetime.now(UTC).date())
         assert cost.usd == 0
         assert cost.unpriced_models == ()
