@@ -14,6 +14,7 @@ from kinby.contracts import (
     Event,
     MemoryRecapped,
     MessageDelta,
+    ModelCompleted,
     Scope,
     ThreadCreateResult,
     ThreadUsage,
@@ -86,6 +87,8 @@ async def _record_turn(
         dispatcher, {"thread_id": thread_id, "after_sequence": accepted.sequence}
     )
     completed = await asyncio.wait_for(anext(subscription), timeout=1)
+    while isinstance(completed, Event) and isinstance(completed.payload, ModelCompleted):
+        completed = await asyncio.wait_for(anext(subscription), timeout=1)
     await subscription.aclose()
     assert isinstance(completed, Event)
     assert isinstance(completed.payload, TurnCompleted)
@@ -410,5 +413,183 @@ def test_usage_get_limits_totals_to_the_requested_event_range(tmp_path: Path) ->
                 )
             ]
         )
+
+    asyncio.run(scenario())
+
+
+class ModelCallRunner:
+    """Emits each turn's model calls by its message, and returns their summed usage."""
+
+    def __init__(self, calls: dict[str, list[ModelCompleted]]) -> None:
+        self._calls = calls
+
+    async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+        calls = self._calls.get(turn.message, [])
+        for call in calls:
+            await context.emit(call)
+        return TurnOutcome(
+            input_tokens=sum(call.input_tokens for call in calls),
+            output_tokens=sum(call.output_tokens for call in calls),
+        )
+
+    resume = does_not_park
+    restore = cannot_restore
+    routine_mode = no_routines
+
+
+def _model_call(
+    model: str, input_tokens: int, cache_read: int, cache_creation: int
+) -> ModelCompleted:
+    return ModelCompleted(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=50,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
+        duration_ms=1,
+    )
+
+
+def test_usage_get_returns_each_threads_context_size_and_its_models_window(
+    tmp_path: Path,
+) -> None:
+    opus = "anthropic:claude-opus-5-5"
+
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ModelCallRunner(
+                    {
+                        "First": [
+                            _model_call(opus, 9_000, 6_000, 2_000),
+                            _model_call(opus, 30_000, 25_000, 4_000),
+                        ],
+                        "Next": [_model_call(opus, 12_000, 10_000, 1_500)],
+                    }
+                ),
+            ),
+        )
+        first = await _record_turn(dispatcher, "First")
+        await _record_turn(dispatcher, "Next", first.thread_id)
+        silent = await _record_turn(dispatcher, "Silent")
+
+        result = await dispatcher.dispatch("usage.get", {}, {Scope.INSTANCE_READ})
+
+        assert isinstance(result, UsageGetResult)
+        sizes = {
+            thread.thread_id: (thread.context_size, thread.window) for thread in result.threads
+        }
+        assert sizes == {first.thread_id: (12_000, 1_000_000), silent.thread_id: (None, None)}
+
+    asyncio.run(scenario())
+
+
+def test_cli_shows_each_threads_context_size_beside_its_window_when_the_model_has_one(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = tmp_path / "alice"
+    init_instance(instance)
+    with (instance / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            '[prices."custom:windowed"]\ninput = 1\noutput = 2\nwindow = 64000\n'
+            '[prices."custom:unwindowed"]\ninput = 1\noutput = 2\n'
+        )
+
+    async def record_usage() -> tuple[RecordedTurn, RecordedTurn]:
+        loaded = load_instance(instance)
+        dispatcher = build_dispatcher(
+            loaded.manifest.state_dir,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ModelCallRunner(
+                    {
+                        "Windowed": [_model_call("custom:windowed", 4_000, 3_000, 500)],
+                        "Unwindowed": [_model_call("custom:unwindowed", 7_000, 0, 0)],
+                    }
+                ),
+            ),
+        )
+        return (
+            await _record_turn(dispatcher, "Windowed"),
+            await _record_turn(dispatcher, "Unwindowed"),
+        )
+
+    windowed, unwindowed = asyncio.run(record_usage())
+
+    exit_code = main(["usage", str(instance)])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == ""
+    threads = [line for line in output.out.splitlines() if line.startswith("thread ")]
+    assert threads == [
+        f"thread {windowed.thread_id}: input=4000 output=50 total=4050 "
+        "context_size=4000 window=64000",
+        f"thread {unwindowed.thread_id}: input=7000 output=50 total=7050 context_size=7000",
+    ]
+
+
+def test_usage_get_keeps_a_threads_context_size_when_its_last_call_is_before_since(
+    tmp_path: Path,
+) -> None:
+    opus = "anthropic:claude-opus-5-5"
+
+    async def scenario() -> None:
+        dispatcher = build_dispatcher(
+            tmp_path,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ModelCallRunner({"First": [_model_call(opus, 9_000, 6_000, 2_000)]}),
+            ),
+        )
+        first = await _record_turn(dispatcher, "First")
+        await asyncio.sleep(0.001)
+        no_call = await _record_turn(dispatcher, "No call", first.thread_id)
+
+        result = await dispatcher.dispatch(
+            "usage.get", {"since": no_call.completed_at}, {Scope.INSTANCE_READ}
+        )
+
+        assert isinstance(result, UsageGetResult)
+        assert [(thread.context_size, thread.window) for thread in result.threads] == [
+            (9_000, 1_000_000)
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_usage_get_leaves_a_recap_call_out_of_the_context_size(tmp_path: Path) -> None:
+    opus = "anthropic:claude-opus-5-5"
+
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path)
+        dispatcher = build_dispatcher(
+            tmp_path,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                ModelCallRunner({"First": [_model_call(opus, 9_000, 6_000, 2_000)]}),
+            ),
+        )
+        recorded = await _record_turn(dispatcher, "First")
+        await event_log.append(
+            recorded.thread_id,
+            recorded.turn_id,
+            _model_call("anthropic:claude-haiku-4-5", 700, 0, 0),
+        )
+
+        result = await dispatcher.dispatch("usage.get", {}, {Scope.INSTANCE_READ})
+
+        assert isinstance(result, UsageGetResult)
+        assert [(thread.context_size, thread.window) for thread in result.threads] == [
+            (9_000, 1_000_000)
+        ]
 
     asyncio.run(scenario())

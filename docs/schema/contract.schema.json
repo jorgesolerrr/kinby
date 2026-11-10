@@ -10161,6 +10161,17 @@
           "default": 0,
           "type": "integer"
         },
+        "context_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "input_tokens": {
           "type": "integer"
         },
@@ -10176,6 +10187,17 @@
             "$ref": "#/$defs/TurnUsage"
           },
           "type": "array"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

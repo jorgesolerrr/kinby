@@ -8,6 +8,10 @@ at the short-context rate where a model has a long-context one: cached input is 
 of the input rate, and pro models have no cached-input rate. Cache writes are 1.25x
 input from GPT-5.6 on, with no surcharge before it
 (https://developers.openai.com/api/docs/guides/prompt-caching).
+
+Shipped windows are the providers' published context windows
+(https://platform.claude.com/docs/en/about-claude/models/overview,
+https://developers.openai.com/api/docs/models). A model missing from the table has no window.
 """
 
 from __future__ import annotations
@@ -50,6 +54,19 @@ SHIPPED_PRICES: Mapping[str, ModelPrice] = {
     "openai:gpt-5-pro": ModelPrice(input=15, output=120),
 }
 
+SHIPPED_WINDOWS: Mapping[str, int] = {
+    "anthropic:claude-opus-5-5": 1_000_000,
+    "anthropic:claude-sonnet-5-5": 1_000_000,
+    "anthropic:claude-haiku-4-5": 200_000,
+    "openai:gpt-5.2": 400_000,
+    "openai:gpt-5.2-pro": 400_000,
+    "openai:gpt-5.1": 400_000,
+    "openai:gpt-5": 400_000,
+    "openai:gpt-5-mini": 400_000,
+    "openai:gpt-5-nano": 400_000,
+    "openai:gpt-5-pro": 400_000,
+}
+
 
 def price_map(overrides: Mapping[str, ModelPrice] | None = None) -> dict[str, ModelPrice]:
     """Return shipped prices with exact-name manifest overrides applied."""
@@ -62,6 +79,11 @@ def price_map(overrides: Mapping[str, ModelPrice] | None = None) -> dict[str, Mo
 def instance_prices(instance: Instance) -> dict[str, ModelPrice]:
     """Return the prices of the instance's manifest as it is on disk now."""
     return price_map(reload_manifest(instance).prices)
+
+
+def instance_windows(instance: Instance) -> dict[str, int]:
+    """Return shipped windows with the manifest's windows, as it is on disk now, applied."""
+    return {**SHIPPED_WINDOWS, **reload_manifest(instance).windows}
 
 
 def token_cost(totals: TokenTotals, price: ModelPrice) -> float:

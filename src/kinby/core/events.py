@@ -80,6 +80,16 @@ class EventReader:
             [*types],
         )
 
+    def latest_while_turn_open(self, types: Collection[EventType]) -> Iterator[Event]:
+        """Each thread's latest event of *types* stored before its turn closed."""
+        latest = (
+            f"SELECT max(rowid) FROM events WHERE type IN ({', '.join('?' * len(types))})"
+            " AND NOT EXISTS (SELECT 1 FROM events AS closing"
+            " WHERE closing.turn_id = events.turn_id AND closing.rowid < events.rowid"
+            f" AND closing.type IN {_CLOSING_TYPES}) GROUP BY thread_id"
+        )
+        return self._events(f"rowid IN ({latest})", [*types])
+
     def last_activity(self) -> dict[UUID, datetime]:
         """When each thread's latest event was stored, from its head."""
         return {

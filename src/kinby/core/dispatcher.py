@@ -75,6 +75,7 @@ from kinby.contracts import (
     EventType,
     InstanceProbeCommand,
     InstanceProbeResult,
+    ModelCompleted,
     NodeId,
     PermissionMode,
     RunStop,
@@ -108,7 +109,7 @@ from kinby.core.events import EventLog
 from kinby.core.held_results import HeldResults
 from kinby.core.memory import InstanceMemory
 from kinby.core.models import count_tokens
-from kinby.core.pricing import SHIPPED_PRICES
+from kinby.core.pricing import SHIPPED_PRICES, SHIPPED_WINDOWS
 from kinby.core.routing import Dispatcher, instance_capabilities
 from kinby.core.saved_outputs import discard_outputs
 from kinby.core.scheduler import Scheduler, SchedulerConfig
@@ -169,6 +170,7 @@ def build_dispatcher(
     event_log: EventLog | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
+    windows: Callable[[], Mapping[str, int]] = lambda: SHIPPED_WINDOWS,
     facts: Callable[[], Collection[NodeId]] = frozenset,
     clock: Callable[[], datetime] = utc_now,
 ) -> ScheduledDispatcher: ...
@@ -182,6 +184,7 @@ def build_dispatcher(
     event_log: EventLog | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
+    windows: Callable[[], Mapping[str, int]] = lambda: SHIPPED_WINDOWS,
     facts: Callable[[], Collection[NodeId]] = frozenset,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher: ...
@@ -194,6 +197,7 @@ def build_dispatcher(
     turns: TurnConfig | ScheduledTurnConfig | None = None,
     permissions: Callable[[], GatePolicy] = lambda: SHIPPED_POLICY,
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
+    windows: Callable[[], Mapping[str, int]] = lambda: SHIPPED_WINDOWS,
     facts: Callable[[], Collection[NodeId]] = frozenset,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher:
@@ -255,10 +259,21 @@ def build_dispatcher(
 
     async def get_usage(command: UsageGetCommand) -> UsageGetResult:
         time_range = TimeRange(command.since, command.until)
+        current_windows = windows()
 
         def totals() -> UsageGetResult:
             with event_log.reader() as reader:
-                return usage_totals(metrics_events(reader, command.since), time_range)
+                latest_calls = {
+                    event.thread_id: event.payload
+                    for event in reader.latest_while_turn_open({EventType.MODEL_COMPLETED})
+                    if isinstance(event.payload, ModelCompleted)
+                }
+                return usage_totals(
+                    metrics_events(reader, command.since),
+                    time_range,
+                    latest_calls,
+                    current_windows,
+                )
 
         return await asyncio.to_thread(totals)
 

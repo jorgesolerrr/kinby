@@ -129,6 +129,8 @@ class RawModelPrice(_Section):
     output: Annotated[float, Field(ge=0)]
     cache_read: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
     cache_write: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None
+    #: The model's context window in tokens.
+    window: Annotated[int, Field(gt=0)] | None = None
 
 
 class RawRoutines(_Section):
@@ -363,6 +365,9 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
                 cache_write=price.cache_write,
             )
             for model, price in raw.prices.items()
+        },
+        windows={
+            model: price.window for model, price in raw.prices.items() if price.window is not None
         },
     )
 

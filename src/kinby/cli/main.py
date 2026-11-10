@@ -57,6 +57,7 @@ from kinby.contracts import (
     ThreadListCommand,
     ThreadSubscribeCommand,
     ThreadUnarchiveCommand,
+    ThreadUsage,
     TokenTotals,
     TurnFailed,
     TurnUsage,
@@ -67,7 +68,7 @@ from kinby.core.clock import utc_now, utc_today
 from kinby.core.contract_server import ContractServer
 from kinby.core.dispatcher import build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.pricing import instance_prices
+from kinby.core.pricing import instance_prices, instance_windows
 from kinby.core.prompt import assemble_system_prompt
 from kinby.core.receiver import Receiver
 from kinby.core.routing import Dispatcher
@@ -190,6 +191,14 @@ def _token_totals(usage: TokenTotals) -> str:
     return f"input={usage.input_tokens} output={usage.output_tokens} total={usage.total}"
 
 
+def _context_size(usage: ThreadUsage) -> str:
+    if usage.context_size is None:
+        return ""
+    if usage.window is None:
+        return f" context_size={usage.context_size}"
+    return f" context_size={usage.context_size} window={usage.window}"
+
+
 def _turn_token_totals(usage: TurnUsage) -> str:
     return (
         f"input={usage.input_tokens} output={usage.output_tokens} "
@@ -252,6 +261,7 @@ def _contract_client(instance: Instance, clock: Callable[[], datetime]) -> Contr
         instance.manifest.state_dir,
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
+        windows=partial(instance_windows, instance),
         facts=GraphStore(instance.path).fact_ids,
         clock=clock,
     )
@@ -268,7 +278,7 @@ async def _show_usage(client: ContractClient, command: UsageGetCommand) -> int:
         print(format_error(result), file=sys.stderr)
         return 1
     for thread in result.threads:
-        print(f"thread {thread.thread_id}: {_token_totals(thread)}")
+        print(f"thread {thread.thread_id}: {_token_totals(thread)}{_context_size(thread)}")
         for turn in thread.turns:
             print(f"  turn {turn.turn_id}: {_turn_token_totals(turn)}")
             for reported in turn.delegated_runs:
