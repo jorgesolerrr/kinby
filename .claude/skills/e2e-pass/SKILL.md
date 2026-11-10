@@ -121,8 +121,18 @@ bash .claude/skills/e2e-pass/hub.sh tokens <hub-instance-id> [--since 2026-11-07
 
 It prints three sections:
 
-- **Turns.** Each turn's model calls, input tokens, cache reads and cache writes, with a total.
-- **Tool results.** By tool, and by method for `hub_read`: the characters returned, the largest result, the characters sent again on later calls of the turn and on later turns of the thread, and the errors.
+- **Turns.** Each turn's model calls, input tokens, cache reads and cache writes, and the cache writes after its first call, with a total. A turn that keeps its cache writes only what each call adds. A write after the first call close to that call's whole input means the turn lost its cache.
+- **Tool results.** By tool, and by method for a bash command that runs `kinby hub read`: the characters returned, the largest result, the characters sent again on later calls of the turn and on later turns of the thread, and the errors. A command that reads several methods counts under all of them joined, such as `bash instance.list,thread.list`.
 - **Source reads.** Shell commands that read kinby's installed package.
 
 `--since` takes an ISO date or time, in UTC unless it names a zone. To compare spend before and after a change, run the same tasks and pass the time the run started.
+
+## Benchmark
+
+`benchmark.md` holds the five tasks that measure home's spend. Rerun them after a change meant to make home cheaper, on the model the last run used:
+
+1. Delete what the last run created: the Bench instance, the better-writing skill and the bench-brief factory.
+2. For each task in order, note the time in UTC and send its prompt in a new thread on home, in Ask mode. Approve what the task needs, and count the approvals.
+3. Once the task's turns end, run `hub.sh tokens <home-instance-id> --since <that time>`, before the next task starts, so the output covers that task alone. **Turns** gives its model calls, input tokens and cache writes after the first call, **Tool results** its heavy reads and tool errors, and **Source reads** its reads of kinby's package.
+
+Record the figures as a comment on the issue the change came from, next to the last run's. A change loses nothing when every task still succeeds with no more approvals and no more tool errors than before.

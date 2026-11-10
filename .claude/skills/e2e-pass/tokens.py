@@ -2,18 +2,21 @@
 
     tokens.py <instance-dir> [--since WHEN]
 
-- Turns: each turn's model calls, its input tokens, and the cache reads and writes among them.
-- Tool results: by tool, and by method for `hub_read`. The characters the results returned, the
-  characters sent again on later model calls of their turn and on the model calls of later turns
-  of their thread, and the errors. A result is first sent on the model call after it, and every
-  call after that one sends it again. Only a completed turn's results reach later turns: a failed
-  or interrupted turn stays out of the thread's history.
+- Turns: each turn's model calls, its input tokens, the cache reads and writes among them, and
+  the cache writes after its first call, which show when the turn lost its cache.
+- Tool results: by tool, and by method for a bash command that runs `kinby hub read`. The
+  characters the results returned, the characters sent again on later model calls of their turn
+  and on the model calls of later turns of their thread, and the errors. A result is first sent
+  on the model call after it, and every call after that one sends it again. Only a completed
+  turn's results reach later turns: a failed or interrupted turn stays out of the thread's
+  history.
 - Source reads: the bash commands that name kinby's installed package.
 
 It opens the instance's database read-only and writes nothing to the instance.
 """
 
 import argparse
+import re
 import sqlite3
 import sys
 from collections import defaultdict
@@ -49,6 +52,7 @@ READ = {
 #: In a path under site-packages or dist-packages.
 INSTALLED_PACKAGE = "-packages/kinby"
 COMMAND_WIDTH = 160
+HUB_READ = re.compile(r"kinby hub read ([\w.]+)")
 
 
 @dataclass(eq=False)
@@ -107,11 +111,11 @@ def spend(events: Iterable[Event]) -> Spend:
             case ModelCompleted() as completed:
                 turn.calls.append(completed)
                 turn.loop_calls += not turn.closed
-            case ToolCall(name="bash", arguments={"command": str(command)}):
+            case ToolCall(call_id=call_id, name="bash", arguments={"command": str(command)}):
                 if INSTALLED_PACKAGE in command:
                     source_reads.append(SourceRead(event.timestamp, event.thread_id, command))
-            case ToolCall(call_id=call_id, name="hub_read", arguments={"method": str(method)}):
-                methods[call_id] = method
+                if read := HUB_READ.findall(command):
+                    methods[call_id] = ",".join(dict.fromkeys(read))
             case ToolResult() as result:
                 tool = result.name
                 if result.call_id in methods:
@@ -162,10 +166,30 @@ def _usage(calls: list[ModelCompleted]) -> tuple[int, int, int, int]:
     )
 
 
+def _later_writes(turn: Turn) -> int:
+    return sum(call.cache_creation_tokens for call in turn.calls[1 : turn.loop_calls])
+
+
 def _turns(turns: list[Turn]) -> str:
-    rows = [(_when(turn.started), str(turn.thread_id)[:8], *_usage(turn.calls)) for turn in turns]
-    total = ("total", "", *_usage([call for turn in turns for call in turn.calls]))
-    header = ("started", "thread", "calls", "input", "cache read", "cache write")
+    rows = [
+        (_when(turn.started), str(turn.thread_id)[:8], *_usage(turn.calls), _later_writes(turn))
+        for turn in turns
+    ]
+    total = (
+        "total",
+        "",
+        *_usage([call for turn in turns for call in turn.calls]),
+        sum(_later_writes(turn) for turn in turns),
+    )
+    header = (
+        "started",
+        "thread",
+        "calls",
+        "input",
+        "cache read",
+        "cache write",
+        "cache write after first call",
+    )
     return _table(header, [*rows, total])
 
 
