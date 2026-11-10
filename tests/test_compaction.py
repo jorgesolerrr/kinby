@@ -208,3 +208,24 @@ def test_a_thread_with_a_running_turn_does_not_compact(tmp_path: Path) -> None:
 
     assert isinstance(refused, ErrorEnvelope)
     assert refused.code is ErrorCode.THREAD_BUSY
+
+
+def test_an_empty_summary_leaves_the_thread_uncompacted(tmp_path: Path) -> None:
+    model = CompactingModel([], [], " \n", [])
+    dispatcher, log = signal_runtime(instance_at(tmp_path), model)
+
+    async def scenario() -> tuple[UUID, object]:
+        thread_id = await new_thread(dispatcher)
+        await turn(dispatcher, thread_id, "a" * LONG)
+        await turn(dispatcher, thread_id, "b" * LONG)
+        refused = await call(dispatcher, "thread.compact", thread_id=thread_id)
+        await turn(dispatcher, thread_id, "Again.")
+        return thread_id, refused
+
+    thread_id, refused = asyncio.run(scenario())
+
+    assert isinstance(refused, ErrorEnvelope)
+    assert not any(
+        isinstance(event.payload, ThreadCompacted) for event in log.thread_events(thread_id)
+    )
+    assert texts(model.requests[3]) == ["a" * LONG, "Done.", "b" * LONG, "Done.", "Again."]

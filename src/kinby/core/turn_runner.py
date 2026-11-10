@@ -1010,7 +1010,7 @@ class LangGraphRunner:
         response: AIMessageChunk | None = None
         async for chunk in self._model_factory(model).astream([request]):
             response = chunk if response is None else response + chunk
-        if response is None:
+        if response is None or not response.text.strip():
             raise ModelNoResponse("The model returned no summary.")
         turn_id = next(
             event.turn_id
