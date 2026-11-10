@@ -90,7 +90,7 @@ def _instance(directory: Path) -> Path:
             _call(7100, cache_read=7000, cache_write=100),
             TurnCompleted(input_tokens=15100, output_tokens=30),
             # The memory recap's call, after the turn closed.
-            _call(500),
+            _call(500, cache_write=500),
         ),
         *_turn(THREAD, 5, _call(9000, cache_read=8000), _call(9100, cache_read=9000)),
         *_turn(OTHER_THREAD, 9, _call(2000, cache_write=2000)),
@@ -124,10 +124,10 @@ def test_the_probe_prints_each_turns_tokens_and_model_calls(
 
     assert _section(capsys.readouterr().out, "Turns") == [
         TURNS_HEADER,
-        ["2026-11-01", "10:00:00", "aaaaaaaa", "4", "15,600", "8,000", "6,900", "6,100"],
+        ["2026-11-01", "10:00:00", "aaaaaaaa", "4", "15,600", "8,000", "7,400", "6,100"],
         ["2026-11-01", "10:05:00", "aaaaaaaa", "2", "18,100", "17,000", "0", "0"],
         ["2026-11-01", "10:09:00", "bbbbbbbb", "1", "2,000", "0", "2,000", "0"],
-        ["total", "7", "35,700", "25,000", "8,900", "6,100"],
+        ["total", "7", "35,700", "25,000", "9,400", "6,100"],
     ]
 
 
@@ -148,7 +148,11 @@ def test_the_probe_prints_result_sizes_resent_characters_and_errors_by_tool(
 def test_the_probe_names_every_hub_method_a_bash_command_reads(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):
-    reads = "kinby hub read instance.list; kinby hub read thread.list instance_id=a | head"
+    reads = (
+        "kinby hub read --table instance.list; "
+        """kinby hub read --params '{"instance_id": "a"}' 'thread.list' | head; """
+        "for m in a b; do kinby hub read $m; done"
+    )
     history = _turn(
         THREAD,
         0,

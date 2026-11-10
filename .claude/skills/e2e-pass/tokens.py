@@ -17,6 +17,7 @@ It opens the instance's database read-only and writes nothing to the instance.
 
 import argparse
 import re
+import shlex
 import sqlite3
 import sys
 from collections import defaultdict
@@ -52,7 +53,7 @@ READ = {
 #: In a path under site-packages or dist-packages.
 INSTALLED_PACKAGE = "-packages/kinby"
 COMMAND_WIDTH = 160
-HUB_READ = re.compile(r"kinby hub read ([\w.]+)")
+METHOD = re.compile(r"[\w.]+")
 
 
 @dataclass(eq=False)
@@ -114,7 +115,7 @@ def spend(events: Iterable[Event]) -> Spend:
             case ToolCall(call_id=call_id, name="bash", arguments={"command": str(command)}):
                 if INSTALLED_PACKAGE in command:
                     source_reads.append(SourceRead(event.timestamp, event.thread_id, command))
-                if read := HUB_READ.findall(command):
+                if read := _hub_reads(command):
                     methods[call_id] = ",".join(dict.fromkeys(read))
             case ToolResult() as result:
                 tool = result.name
@@ -134,6 +135,30 @@ def spend(events: Iterable[Event]) -> Spend:
         remaining[turn.thread_id] -= turn.loop_calls
         turn.later_calls = remaining[turn.thread_id]
     return Spend(list(turns.values()), results, source_reads)
+
+
+def _hub_reads(command: str) -> list[str]:
+    """The methods of the `kinby hub read` commands in *command*: the first argument of each that
+    is not an option or the value of `--params`."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return []
+    methods = []
+    for start in range(len(words)):
+        if words[start : start + 3] != ["kinby", "hub", "read"]:
+            continue
+        arguments = iter(words[start + 3 :])
+        for word in arguments:
+            if word == "--params":
+                next(arguments, None)
+            elif not word.startswith("-"):
+                if METHOD.fullmatch(word):
+                    methods.append(word)
+                break
+    return methods
 
 
 def _cell(value: str | int) -> str:
