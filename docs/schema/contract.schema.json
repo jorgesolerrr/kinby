@@ -2075,6 +2075,7 @@
               "run.stopped": "#/$defs/RunStopped",
               "signal.received": "#/$defs/SignalReceived",
               "takeover.requested": "#/$defs/TakeoverRequested",
+              "thread.compacted": "#/$defs/ThreadCompacted",
               "tool.call": "#/$defs/ToolCall",
               "tool.gated": "#/$defs/ToolGated",
               "tool.result": "#/$defs/ToolResult",
@@ -2161,6 +2162,9 @@
             },
             {
               "$ref": "#/$defs/WorkspaceReverted"
+            },
+            {
+              "$ref": "#/$defs/ThreadCompacted"
             },
             {
               "$ref": "#/$defs/NotificationRaised"
@@ -9471,6 +9475,56 @@
       "title": "ThreadAskCommand",
       "type": "object"
     },
+    "ThreadCompactCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "focus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadCompactCommand",
+      "type": "object"
+    },
+    "ThreadCompacted": {
+      "additionalProperties": false,
+      "description": "The model is sent ``summary`` in place of the thread's messages before ``boundary``, the\nfirst message of the kept turns. The thread keeps every message (ADR 0123).",
+      "properties": {
+        "boundary": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "type": {
+          "const": "thread.compacted",
+          "default": "thread.compacted",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "boundary",
+        "type"
+      ],
+      "title": "ThreadCompacted",
+      "type": "object"
+    },
     "ThreadCreateCommand": {
       "additionalProperties": false,
       "properties": {
@@ -13897,6 +13951,22 @@
           ],
           "type": "object"
         },
+        "thread.compact": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadCompactCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/AcceptedResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.create": {
           "additionalProperties": false,
           "properties": {
@@ -14255,6 +14325,7 @@
         "thread.list",
         "thread.rename",
         "thread.archive",
+        "thread.compact",
         "thread.unarchive",
         "thread.mode.set",
         "thread.turn.start",

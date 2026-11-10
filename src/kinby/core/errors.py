@@ -310,6 +310,12 @@ class TurnOpen(CoreError):
     code = ErrorCode.TURN_OPEN
 
 
+class NothingToCompact(CoreError):
+    """Every turn since the thread's last compaction fits in what a compaction keeps."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class TurnNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 

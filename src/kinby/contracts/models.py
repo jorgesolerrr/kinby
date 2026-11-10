@@ -194,6 +194,7 @@ class EventType(StrEnum):
     ROUTINE_FAILURES_RESET = "routine.failures.reset"
     SIGNAL_RECEIVED = "signal.received"
     WORKSPACE_REVERTED = "workspace.reverted"
+    THREAD_COMPACTED = "thread.compacted"
     NOTIFICATION_RAISED = "notification.raised"
     NOTIFICATION_ACCEPTED = "notification.accepted"
     NOTIFICATION_REFUSED = "notification.refused"
@@ -474,6 +475,16 @@ class WorkspaceReverted(ContractModel):
     restored: TreeId
 
 
+class ThreadCompacted(ContractModel):
+    """The model is sent ``summary`` in place of the thread's messages before ``boundary``, the
+    first message of the kept turns. The thread keeps every message (ADR 0123)."""
+
+    type: Literal[EventType.THREAD_COMPACTED] = EventType.THREAD_COMPACTED
+    summary: str
+    #: How many of the thread's messages, from its first, the summary stands in for.
+    boundary: Annotated[int, Field(ge=0)]
+
+
 class TurnVerdict(StrEnum):
     GOOD = "good"
     BAD = "bad"
@@ -661,6 +672,7 @@ Payload = Annotated[
     | RoutineFailuresReset
     | SignalReceived
     | WorkspaceReverted
+    | ThreadCompacted
     | NotificationRaised
     | NotificationAccepted
     | NotificationRefused
@@ -757,6 +769,12 @@ class ThreadModeSetCommand(ContractModel):
 
 class ThreadTurnInterruptCommand(ContractModel):
     thread_id: UUID
+
+
+class ThreadCompactCommand(ContractModel):
+    thread_id: UUID
+    #: What the summary should keep for the work that comes next.
+    focus: str | None = None
 
 
 class ThreadTurnRateCommand(ContractModel):

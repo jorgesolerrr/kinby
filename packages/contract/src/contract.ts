@@ -689,6 +689,10 @@ export interface Contract {
       command: ThreadAskCommand;
       result: AcceptedResult;
     };
+    "thread.compact": {
+      command: ThreadCompactCommand;
+      result: AcceptedResult;
+    };
     "thread.create": {
       command: ThreadCreateCommand;
       result: ThreadCreateResult;
@@ -2843,6 +2847,10 @@ export interface ThreadSummary {
 export interface ThreadAskCommand {
   message: string;
 }
+export interface ThreadCompactCommand {
+  focus?: string | null;
+  thread_id: string;
+}
 export interface ThreadCreateCommand {
   title?: string | null;
 }
@@ -3261,6 +3269,7 @@ export interface Event {
     | RoutineFailuresReset
     | SignalReceived
     | WorkspaceReverted
+    | ThreadCompacted
     | NotificationRaised
     | NotificationAccepted
     | NotificationRefused
@@ -3450,6 +3459,15 @@ export interface WorkspaceReverted {
   restored: string;
   target_turn_id: string;
   type: "workspace.reverted";
+}
+/**
+ * The model is sent ``summary`` in place of the thread's messages before ``boundary``, the
+ * first message of the kept turns. The thread keeps every message (ADR 0123).
+ */
+export interface ThreadCompacted {
+  boundary: number;
+  summary: string;
+  type: "thread.compacted";
 }
 /**
  * A notification the instance raises on its hub route, again on each scheduler pass, until
