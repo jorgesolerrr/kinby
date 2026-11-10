@@ -2,18 +2,22 @@
 
     tokens.py <instance-dir> [--since WHEN]
 
-- Turns: each turn's model calls, its input tokens, and the cache reads and writes among them.
-- Tool results: by tool, and by method for `hub_read`. The characters the results returned, the
-  characters sent again on later model calls of their turn and on the model calls of later turns
-  of their thread, and the errors. A result is first sent on the model call after it, and every
-  call after that one sends it again. Only a completed turn's results reach later turns: a failed
-  or interrupted turn stays out of the thread's history.
+- Turns: each turn's model calls, its input tokens, the cache reads and writes among them, and
+  the cache writes after its first call, which show when the turn lost its cache.
+- Tool results: by tool, and by method for a bash command that runs `kinby hub read`. The
+  characters the results returned, the characters sent again on later model calls of their turn
+  and on the model calls of later turns of their thread, and the errors. A result is first sent
+  on the model call after it, and every call after that one sends it again. Only a completed
+  turn's results reach later turns: a failed or interrupted turn stays out of the thread's
+  history.
 - Source reads: the bash commands that name kinby's installed package.
 
 It opens the instance's database read-only and writes nothing to the instance.
 """
 
 import argparse
+import re
+import shlex
 import sqlite3
 import sys
 from collections import defaultdict
@@ -49,6 +53,15 @@ READ = {
 #: In a path under site-packages or dist-packages.
 INSTALLED_PACKAGE = "-packages/kinby"
 COMMAND_WIDTH = 160
+METHOD = re.compile(r"[\w.]+")
+SUBSTITUTION = re.compile(r"\$\(|`")
+#: What a substitution's start becomes: a separator, then a mark that stays in a quoted word.
+SUBSTITUTED = " ;\0 "
+SHELLS = {"bash", "sh", "zsh"}
+#: The option that makes a shell run its next argument as a command: `-c`, `-lc`, `-ec`.
+SHELL_COMMAND = re.compile(r"-[a-z]*c")
+#: The words after which a command starts. A newline becomes `;` before the split.
+COMMAND_STARTS = {";", "&&", "||", "|", "&", "(", "\0", "do", "then", "else", "{", "!"}
 
 
 @dataclass(eq=False)
@@ -107,11 +120,11 @@ def spend(events: Iterable[Event]) -> Spend:
             case ModelCompleted() as completed:
                 turn.calls.append(completed)
                 turn.loop_calls += not turn.closed
-            case ToolCall(name="bash", arguments={"command": str(command)}):
+            case ToolCall(call_id=call_id, name="bash", arguments={"command": str(command)}):
                 if INSTALLED_PACKAGE in command:
                     source_reads.append(SourceRead(event.timestamp, event.thread_id, command))
-            case ToolCall(call_id=call_id, name="hub_read", arguments={"method": str(method)}):
-                methods[call_id] = method
+                if read := _hub_reads(command):
+                    methods[call_id] = ",".join(dict.fromkeys(read))
             case ToolResult() as result:
                 tool = result.name
                 if result.call_id in methods:
@@ -130,6 +143,50 @@ def spend(events: Iterable[Event]) -> Spend:
         remaining[turn.thread_id] -= turn.loop_calls
         turn.later_calls = remaining[turn.thread_id]
     return Spend(list(turns.values()), results, source_reads)
+
+
+def _hub_reads(command: str) -> list[str]:
+    """The methods of the `kinby hub read` commands in *command*, inside command substitutions
+    and `bash -c` too: the first argument of each that is not an option or the value of
+    `--params`."""
+    lexer = shlex.shlex(
+        SUBSTITUTION.sub(SUBSTITUTED, command.replace("\n", " ; ")),
+        posix=True,
+        punctuation_chars=True,
+    )
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return []
+    methods = []
+    for start, word in enumerate(words):
+        # A substitution inside quotes, as in "$(kinby hub read …)", stays in one word, and so
+        # does the command a shell runs, as in bash -c 'kinby hub read …'.
+        if ("\0" in word and word != "\0") or _shell_command(words[:start]):
+            methods += _hub_reads(word)
+        if words[start : start + 3] != ["kinby", "hub", "read"]:
+            continue
+        arguments = iter(words[start + 3 :])
+        for word in arguments:
+            if word == "--params":
+                next(arguments, None)
+            elif not word.startswith("-"):
+                if METHOD.fullmatch(word):
+                    methods.append(word)
+                break
+    return methods
+
+
+def _shell_command(before: list[str]) -> bool:
+    """Whether the word after *before* is the command of a shell's `-c`, the shell starting a
+    command rather than being printed, as in `echo bash -c '…'`."""
+    return (
+        len(before) >= 2
+        and SHELL_COMMAND.fullmatch(before[-1]) is not None
+        and before[-2].rsplit("/", 1)[-1] in SHELLS
+        and (len(before) == 2 or before[-3] in COMMAND_STARTS)
+    )
 
 
 def _cell(value: str | int) -> str:
@@ -162,10 +219,30 @@ def _usage(calls: list[ModelCompleted]) -> tuple[int, int, int, int]:
     )
 
 
+def _later_writes(turn: Turn) -> int:
+    return sum(call.cache_creation_tokens for call in turn.calls[1 : turn.loop_calls])
+
+
 def _turns(turns: list[Turn]) -> str:
-    rows = [(_when(turn.started), str(turn.thread_id)[:8], *_usage(turn.calls)) for turn in turns]
-    total = ("total", "", *_usage([call for turn in turns for call in turn.calls]))
-    header = ("started", "thread", "calls", "input", "cache read", "cache write")
+    rows = [
+        (_when(turn.started), str(turn.thread_id)[:8], *_usage(turn.calls), _later_writes(turn))
+        for turn in turns
+    ]
+    total = (
+        "total",
+        "",
+        *_usage([call for turn in turns for call in turn.calls]),
+        sum(_later_writes(turn) for turn in turns),
+    )
+    header = (
+        "started",
+        "thread",
+        "calls",
+        "input",
+        "cache read",
+        "cache write",
+        "cache write after first call",
+    )
     return _table(header, [*rows, total])
 
 
