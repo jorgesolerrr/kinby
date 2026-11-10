@@ -60,6 +60,8 @@ SUBSTITUTED = " ;\0 "
 SHELLS = {"bash", "sh", "zsh"}
 #: The option that makes a shell run its next argument as a command: `-c`, `-lc`, `-ec`.
 SHELL_COMMAND = re.compile(r"-[a-z]*c")
+#: The words after which a command starts. A newline becomes `;` before the split.
+COMMAND_STARTS = {";", "&&", "||", "|", "&", "(", "\0", "do", "then", "else", "{", "!"}
 
 
 @dataclass(eq=False)
@@ -147,7 +149,11 @@ def _hub_reads(command: str) -> list[str]:
     """The methods of the `kinby hub read` commands in *command*, inside command substitutions
     and `bash -c` too: the first argument of each that is not an option or the value of
     `--params`."""
-    lexer = shlex.shlex(SUBSTITUTION.sub(SUBSTITUTED, command), posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(
+        SUBSTITUTION.sub(SUBSTITUTED, command.replace("\n", " ; ")),
+        posix=True,
+        punctuation_chars=True,
+    )
     lexer.whitespace_split = True
     try:
         words = list(lexer)
@@ -173,11 +179,13 @@ def _hub_reads(command: str) -> list[str]:
 
 
 def _shell_command(before: list[str]) -> bool:
-    """Whether the word after *before* is the command of a shell's `-c`."""
+    """Whether the word after *before* is the command of a shell's `-c`, the shell starting a
+    command rather than being printed, as in `echo bash -c '…'`."""
     return (
         len(before) >= 2
         and SHELL_COMMAND.fullmatch(before[-1]) is not None
         and before[-2].rsplit("/", 1)[-1] in SHELLS
+        and (len(before) == 2 or before[-3] in COMMAND_STARTS)
     )
 
 
