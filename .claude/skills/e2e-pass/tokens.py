@@ -55,6 +55,8 @@ INSTALLED_PACKAGE = "-packages/kinby"
 COMMAND_WIDTH = 160
 METHOD = re.compile(r"[\w.]+")
 SUBSTITUTION = re.compile(r"\$\(|`")
+#: What a substitution's start becomes: a separator, then a mark that stays in a quoted word.
+SUBSTITUTED = " ;\0 "
 
 
 @dataclass(eq=False)
@@ -139,9 +141,9 @@ def spend(events: Iterable[Event]) -> Spend:
 
 
 def _hub_reads(command: str) -> list[str]:
-    """The methods of the `kinby hub read` commands in *command*, inside command substitutions and
-    quotes too: the first argument of each that is not an option or the value of `--params`."""
-    lexer = shlex.shlex(SUBSTITUTION.sub(" ; ", command), posix=True, punctuation_chars=True)
+    """The methods of the `kinby hub read` commands in *command*, inside command substitutions
+    too: the first argument of each that is not an option or the value of `--params`."""
+    lexer = shlex.shlex(SUBSTITUTION.sub(SUBSTITUTED, command), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
         words = list(lexer)
@@ -149,8 +151,8 @@ def _hub_reads(command: str) -> list[str]:
         return []
     methods = []
     for start, word in enumerate(words):
-        # A word holds whitespace only where it was quoted, as in "$(kinby hub read …)".
-        if " " in word:
+        # A substitution inside quotes, as in "$(kinby hub read …)", stays in one word.
+        if "\0" in word and word != "\0":
             methods += _hub_reads(word)
         if words[start : start + 3] != ["kinby", "hub", "read"]:
             continue
