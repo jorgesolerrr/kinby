@@ -2317,6 +2317,13 @@ class ManifestFeedback(ContractModel):
     ask: FeedbackPolicy
 
 
+class ManifestCompaction(ContractModel):
+    #: Whether a thread compacts on its own at the start of a turn, once past the trigger.
+    automatic: bool
+    #: The compaction trigger, in tokens.
+    trigger: int
+
+
 class ManifestValues(ContractModel):
     """The fields of ``kinby.toml`` a client may change. The hub owns the rest."""
 
@@ -2327,6 +2334,7 @@ class ManifestValues(ContractModel):
     tools: ManifestTools
     memory: ManifestMemory
     feedback: ManifestFeedback
+    compaction: ManifestCompaction
 
 
 class PriceSource(StrEnum):

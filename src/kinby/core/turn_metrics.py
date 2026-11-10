@@ -113,8 +113,8 @@ class _ModelCall:
 
 @dataclass
 class _Spend:
-    """A closed turn's own calls, and the calls recorded under it after it closed: its recap's
-    and its thread's compactions'."""
+    """A closed turn's own calls, and the calls recorded apart under it: its recap's and its
+    thread's compactions'."""
 
     own: TokenTotals
     #: None when the turn's model is unpriced.
@@ -159,6 +159,7 @@ class _TurnEvents:
     tokens_before_first_write: int = 0
     delegated_runs: list[ReportedRun] = field(default_factory=list)
     recalled: dict[NodeId, None] = field(default_factory=dict)
+    compactions: list[ThreadCompacted] = field(default_factory=list)
 
 
 def closing_day(record: TurnMetrics) -> date:
@@ -312,6 +313,9 @@ def turn_metrics(
             if turn is not None:
                 turn.approvals_requested += 1
             continue
+        if isinstance(payload, ThreadCompacted) and turn is not None:
+            turn.compactions.append(payload)
+            continue
         if isinstance(payload, RunDelegated):
             reported = ReportedRun(timestamp=event.timestamp, run=payload.run)
             if turn is not None:
@@ -391,7 +395,14 @@ def turn_metrics(
             if turn is not None and turn.model_calls and turn.profile_version is not None:
                 profiled.append((record, turn.profile_version))
             closed_turns[key] = record
-            spends[key] = _Spend(payload, own_cost)
+            spend = spends[key] = _Spend(
+                payload, own_cost, compactions=turn.compactions if turn is not None else []
+            )
+            if spend.compactions:
+                for compaction in spend.compactions:
+                    if (unpriced := _unpriced(compaction, prices)) is not None:
+                        unpriced_models_by_turn.setdefault(key, set()).add(unpriced)
+                _settle(record, spend, prices)
             continue
 
         record = closed_turns.get(key)
@@ -408,8 +419,8 @@ def turn_metrics(
                 continue
             else:
                 spend.recap = payload
-            if _call_cost(payload, prices) is None and payload.model is not None:
-                unpriced_models_by_turn.setdefault(key, set()).add(UnpricedModel(payload.model))
+            if (unpriced := _unpriced(payload, prices)) is not None:
+                unpriced_models_by_turn.setdefault(key, set()).add(unpriced)
             _settle(record, spend, prices)
         elif isinstance(payload, TurnRated):
             record.rating = payload
@@ -431,7 +442,7 @@ def turn_metrics(
 
 
 def _settle(record: TurnMetrics, spend: _Spend, prices: Mapping[str, ModelPrice]) -> None:
-    """Total *record* over its turn's own calls and those recorded under it after it closed."""
+    """Total *record* over its turn's own calls and those recorded apart under it."""
     later = [*([spend.recap] if spend.recap is not None else []), *spend.compactions]
     calls = [spend.own, *later]
     record.input_tokens = sum(call.input_tokens for call in calls)
@@ -457,6 +468,15 @@ def _call_cost(
         return token_cost(call, price)
     if not (call.total or call.cache_read_tokens or call.cache_creation_tokens):
         return 0
+    return None
+
+
+def _unpriced(
+    call: MemoryRecapped | ThreadCompacted, prices: Mapping[str, ModelPrice]
+) -> UnpricedModel | None:
+    """The model of a recap or a compaction that spent tokens at no known price."""
+    if _call_cost(call, prices) is None and call.model is not None:
+        return UnpricedModel(call.model)
     return None
 
 

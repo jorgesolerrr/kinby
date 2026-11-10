@@ -1,18 +1,21 @@
 """A thread's history as the model is sent it: earlier turns' large tool results cleared
 (ADR 0122), and the latest compaction's summary in place of the messages before its boundary
-(ADR 0123). The checkpoint keeps every message."""
+(ADR 0123). The checkpoint keeps every message. A thread whose context size passes the
+compaction trigger compacts at the start of its next turn."""
 
 from collections.abc import Sequence
 from typing import TypeGuard
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
-from kinby.contracts import ThreadCompacted
+from kinby.contracts import Event, ModelCompleted, ThreadCompacted, TurnStarted, is_turn_closing
 
 #: The size over which a tool result from an earlier turn reaches the model cleared.
 _CLEARED_OVER = 1_000
 #: What a compaction keeps whole: about 20,000 tokens, at four characters a token.
 _KEPT_CHARACTERS = 80_000
+#: What the effective compaction trigger leaves free of the model's window, in tokens.
+_WINDOW_RESERVE = 16_000
 COMPACTION_PROMPT = """\
 Summarize the conversation below so that the work can go on from your summary alone. The \
 conversation's newest turns follow your summary whole, so cover only what is below.
@@ -40,6 +43,33 @@ def sent_history(
         f"{compaction.summary}"
     )
     return [summary, *clear_earlier_results(messages[compaction.boundary :])]
+
+
+def effective_trigger(trigger: int | None, window: int | None) -> int | None:
+    """The context size past which a thread compacts at the start of a turn: the instance's
+    compaction *trigger*, or the model's *window* less the reserve when that is smaller. None when
+    automatic compaction is off."""
+    if trigger is None or window is None:
+        return trigger
+    return min(trigger, window - _WINDOW_RESERVE)
+
+
+def context_size(events: Sequence[Event]) -> int | None:
+    """The context size of the thread whose *events* these are: the input tokens of the latest
+    model call its turns made. A recap's call after its turn closed is not one. None when its
+    turns made none, or the thread compacted since."""
+    in_turn = False
+    for event in reversed(events):
+        payload = event.payload
+        if isinstance(payload, ThreadCompacted):
+            return None
+        if isinstance(payload, TurnStarted):
+            in_turn = False
+        elif is_turn_closing(payload):
+            in_turn = True
+        elif isinstance(payload, ModelCompleted) and in_turn:
+            return payload.input_tokens
+    return None
 
 
 def clear_earlier_results(messages: Sequence[AnyMessage]) -> list[AnyMessage]:

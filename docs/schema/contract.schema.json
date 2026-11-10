@@ -4672,6 +4672,23 @@
       "title": "ManifestBudgets",
       "type": "object"
     },
+    "ManifestCompaction": {
+      "additionalProperties": false,
+      "properties": {
+        "automatic": {
+          "type": "boolean"
+        },
+        "trigger": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "automatic",
+        "trigger"
+      ],
+      "title": "ManifestCompaction",
+      "type": "object"
+    },
     "ManifestFeedback": {
       "additionalProperties": false,
       "properties": {
@@ -4823,6 +4840,9 @@
         "budgets": {
           "$ref": "#/$defs/ManifestBudgets"
         },
+        "compaction": {
+          "$ref": "#/$defs/ManifestCompaction"
+        },
         "feedback": {
           "$ref": "#/$defs/ManifestFeedback"
         },
@@ -4856,7 +4876,8 @@
         "routines",
         "tools",
         "memory",
-        "feedback"
+        "feedback",
+        "compaction"
       ],
       "title": "ManifestValues",
       "type": "object"

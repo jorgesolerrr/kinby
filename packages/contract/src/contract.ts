@@ -1971,6 +1971,7 @@ export interface ModelChoice {
  */
 export interface ManifestValues {
   budgets: ManifestBudgets;
+  compaction: ManifestCompaction;
   feedback: ManifestFeedback;
   memory: ManifestMemory;
   models: ManifestModels;
@@ -1983,6 +1984,10 @@ export interface ManifestBudgets {
   steps: number | null;
   tokens: number | null;
   usd_per_day: number | null;
+}
+export interface ManifestCompaction {
+  automatic: boolean;
+  trigger: number;
 }
 export interface ManifestFeedback {
   ask: FeedbackPolicy;

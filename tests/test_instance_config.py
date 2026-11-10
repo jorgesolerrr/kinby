@@ -872,6 +872,7 @@ MANIFEST_VALUES: dict[str, JsonValue] = {
     "tools": {"defaults": False, "bash_timeout_seconds": 120},
     "memory": {"recap": "every-turn"},
     "feedback": {"ask": "every-turn"},
+    "compaction": {"automatic": True, "trigger": 100_000},
 }
 
 
@@ -903,6 +904,7 @@ def test_manifest_set_writes_the_offered_fields_and_keeps_the_comments(tmp_path:
         values["routines"]["timezone"] = "America/Bogota"
         values["tools"]["defaults"] = True
         values["feedback"]["ask"] = "off"
+        values["compaction"] = {"automatic": False, "trigger": 60_000}
 
         written = await call(dispatcher, "manifest.set", values=values, hash=read.hash)
 
@@ -930,6 +932,10 @@ def test_manifest_set_writes_the_offered_fields_and_keeps_the_comments(tmp_path:
             "\n"
             "[feedback]\n"
             'ask = "off"\n'
+            "\n"
+            "[compaction]\n"
+            "automatic = false\n"
+            "trigger = 60000\n"
         )
         assert written.values.model_dump(mode="json") == values
         assert written.hash == _sha256(saved)

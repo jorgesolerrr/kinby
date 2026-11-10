@@ -72,6 +72,24 @@
       "title": "RawBudgets",
       "type": "object"
     },
+    "RawCompaction": {
+      "additionalProperties": false,
+      "properties": {
+        "automatic": {
+          "default": true,
+          "title": "Automatic",
+          "type": "boolean"
+        },
+        "trigger": {
+          "default": 100000,
+          "exclusiveMinimum": 0,
+          "title": "Trigger",
+          "type": "integer"
+        }
+      },
+      "title": "RawCompaction",
+      "type": "object"
+    },
     "RawConventions": {
       "additionalProperties": false,
       "properties": {
@@ -380,6 +398,13 @@
     "budgets": {
       "$ref": "#/$defs/RawBudgets",
       "title": "Budgets"
+    },
+    "compaction": {
+      "$ref": "#/$defs/RawCompaction",
+      "default": {
+        "automatic": true,
+        "trigger": 100000
+      }
     },
     "feedback": {
       "$ref": "#/$defs/RawFeedback",
