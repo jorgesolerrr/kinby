@@ -57,6 +57,9 @@ METHOD = re.compile(r"[\w.]+")
 SUBSTITUTION = re.compile(r"\$\(|`")
 #: What a substitution's start becomes: a separator, then a mark that stays in a quoted word.
 SUBSTITUTED = " ;\0 "
+SHELLS = {"bash", "sh", "zsh"}
+#: The option that makes a shell run its next argument as a command: `-c`, `-lc`, `-ec`.
+SHELL_COMMAND = re.compile(r"-[a-z]*c")
 
 
 @dataclass(eq=False)
@@ -142,7 +145,8 @@ def spend(events: Iterable[Event]) -> Spend:
 
 def _hub_reads(command: str) -> list[str]:
     """The methods of the `kinby hub read` commands in *command*, inside command substitutions
-    too: the first argument of each that is not an option or the value of `--params`."""
+    and `bash -c` too: the first argument of each that is not an option or the value of
+    `--params`."""
     lexer = shlex.shlex(SUBSTITUTION.sub(SUBSTITUTED, command), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
@@ -151,8 +155,9 @@ def _hub_reads(command: str) -> list[str]:
         return []
     methods = []
     for start, word in enumerate(words):
-        # A substitution inside quotes, as in "$(kinby hub read …)", stays in one word.
-        if "\0" in word and word != "\0":
+        # A substitution inside quotes, as in "$(kinby hub read …)", stays in one word, and so
+        # does the command a shell runs, as in bash -c 'kinby hub read …'.
+        if ("\0" in word and word != "\0") or _shell_command(words[:start]):
             methods += _hub_reads(word)
         if words[start : start + 3] != ["kinby", "hub", "read"]:
             continue
@@ -165,6 +170,15 @@ def _hub_reads(command: str) -> list[str]:
                     methods.append(word)
                 break
     return methods
+
+
+def _shell_command(before: list[str]) -> bool:
+    """Whether the word after *before* is the command of a shell's `-c`."""
+    return (
+        len(before) >= 2
+        and SHELL_COMMAND.fullmatch(before[-1]) is not None
+        and before[-2].rsplit("/", 1)[-1] in SHELLS
+    )
 
 
 def _cell(value: str | int) -> str:

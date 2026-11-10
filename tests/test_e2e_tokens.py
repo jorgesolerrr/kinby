@@ -153,6 +153,7 @@ def test_the_probe_names_every_hub_method_a_bash_command_reads(
         """kinby hub read --params '{"instance_id": "a"}' 'thread.list' | head; """
         'stats="$(kinby hub read stats.get)"; logs=`kinby hub read instance.logs`; '
         "for m in a b; do kinby hub read $m; done; "
+        "bash -c 'kinby hub read factory.get'; "
         "echo 'kinby hub read factory.list'"
     )
     history = _turn(
@@ -170,7 +171,7 @@ def test_the_probe_names_every_hub_method_a_bash_command_reads(
         RESULTS_HEADER,
         [
             "bash",
-            "instance.list,thread.list,stats.get,instance.logs",
+            "instance.list,thread.list,stats.get,instance.logs,factory.get",
             "1",
             "40",
             "40",
