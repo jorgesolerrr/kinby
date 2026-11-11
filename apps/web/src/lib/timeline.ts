@@ -47,6 +47,8 @@ export interface TurnBlock {
   rating?: TurnVerdict
   /** The largest context size of the turn's model calls. None before its first one. */
   largestContext?: number
+  /** Whether the user compacted the thread after the turn closed, which marks it. */
+  compactedAfter?: boolean
 }
 
 /** An approval the user has not answered, and the tool call it asks about. */
@@ -68,7 +70,7 @@ export interface ParkedTakeover {
   site?: string
 }
 
-type Step = TextStep | ToolStep | NotificationStep | ViewStep
+type Step = TextStep | ToolStep | NotificationStep | ViewStep | CompactionStep
 
 interface TextStep {
   kind: "text"
@@ -111,6 +113,11 @@ export interface ViewStep {
   change: ViewChange
 }
 
+/** The thread compacted on its own while the turn ran. */
+interface CompactionStep {
+  kind: "compaction"
+}
+
 export type TurnEnd =
   /** A done turn's cost is that of its own model calls, and it has none when nothing priced them. */
   | { kind: "done"; cost?: number; durationMs: number }
@@ -136,6 +143,13 @@ export function project(timeline: Timeline, event: Event): Timeline {
     }
     return { ...timeline, sequence: event.sequence, turns: [...timeline.turns, turn] }
   }
+  // A call after the turn closed is its recap's or a compaction's, which sent no turn's context.
+  const running = timeline.turns.some(
+    (turn) => turn.turnId === event.turn_id && turn.end === undefined,
+  )
+  if (payload.type === "model.completed" && !running) {
+    return { ...timeline, sequence: event.sequence }
+  }
   return {
     ...timeline,
     sequence: event.sequence,
@@ -146,6 +160,7 @@ export function project(timeline: Timeline, event: Event): Timeline {
       contextSize: payload.input_tokens,
       contextModel: payload.model,
     }),
+    ...(payload.type === "thread.compacted" && { contextSize: undefined }),
   }
 }
 
@@ -283,6 +298,10 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
       }
     case "turn.rated":
       return { ...turn, rating: payload.verdict }
+    case "thread.compacted":
+      return turn.end === undefined
+        ? { ...turn, steps: [...turn.steps, { kind: "compaction" }] }
+        : { ...turn, compactedAfter: true }
     case "warning":
       return payload.sources.includes("recap")
         ? { ...turn, recap: { kind: "failed", message: payload.message } }
