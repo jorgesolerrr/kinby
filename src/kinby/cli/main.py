@@ -1011,7 +1011,7 @@ def main(
         help="print matching facts, and episodes under a date bound or when no fact matches",
     )
     memory_search.add_argument(
-        "query", nargs="+", help="words each hit's description or subjects hold"
+        "query", nargs="+", help="words a hit's description or subjects hold, any of them"
     )
     memory_search.add_argument(
         "--after",

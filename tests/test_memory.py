@@ -203,6 +203,47 @@ def test_recall_returns_no_guess_for_a_non_matching_query(tmp_path: Path) -> Non
     assert _graph_store(tmp_path).recall("gardening") == ()
 
 
+def test_recall_finds_a_fact_holding_any_word_of_the_query(tmp_path: Path) -> None:
+    _write_node(
+        tmp_path,
+        node_id="2026-08-30-the-ci-flakes-on-the-hub-tests",
+        node_date="2026-08-30",
+        description="The CI flakes on the hub tests",
+        subjects="kinby, ci",
+        body="Rerun the job once before looking for a cause.",
+    )
+
+    memories = _graph_store(tmp_path).recall("pytest flaky CI")
+
+    assert [memory.node for memory in memories] == [
+        NodeId("2026-08-30-the-ci-flakes-on-the-hub-tests")
+    ]
+
+
+def test_recall_ranks_facts_by_words_matched_then_newest(tmp_path: Path) -> None:
+    for node_date, description in (
+        ("2026-08-20", "The CI flakes on the hub tests"),
+        ("2026-08-25", "The CI image pins Python"),
+        ("2026-08-31", "The CI runs on Linux"),
+    ):
+        _write_node(
+            tmp_path,
+            node_id=f"{node_date}-fact",
+            node_date=node_date,
+            description=description,
+            subjects="kinby",
+            body="A lesson.",
+        )
+
+    memories = _graph_store(tmp_path).recall("flakes CI ci")
+
+    assert [memory.node for memory in memories] == [
+        NodeId("2026-08-20-fact"),
+        NodeId("2026-08-31-fact"),
+        NodeId("2026-08-25-fact"),
+    ]
+
+
 def test_recall_caps_matching_nodes_at_twenty(tmp_path: Path) -> None:
     for day in range(1, 26):
         _write_node(
@@ -284,7 +325,7 @@ def test_recall_finds_a_fact_by_its_source_episodes(tmp_path: Path) -> None:
     )
 
     assert {hit.node for hit in graph.recall("e2e")} == {inventory, other}
-    assert [hit.node for hit in graph.recall("e2e test instances")] == [inventory]
+    assert [hit.node for hit in graph.recall("e2e test instances")] == [inventory, other]
     assert [hit.node for hit in graph.recall("pirate stopped")] == [inventory]
 
 
