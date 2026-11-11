@@ -340,10 +340,10 @@ def test_cli_shows_token_totals_per_thread_and_turn(
     assert exit_code == 0
     assert output.err == ""
     assert output.out.splitlines() == [
-        f"thread {recorded.thread_id}: input=24 output=12 total=36",
+        f"thread {recorded.thread_id}: input=24 output=12 token_usage=36",
         (
             f"  turn {recorded.turn_id}: input=24 output=12 cache_read=8 cache_creation=2 "
-            "recap_input=13 recap_output=5 compaction_input=0 compaction_output=0 total=36"
+            "recap_input=13 recap_output=5 compaction_input=0 compaction_output=0 token_usage=36"
         ),
     ]
 
@@ -385,7 +385,7 @@ def test_cli_shows_a_compactions_tokens_apart_from_the_turns(
     assert exit_code == 0
     assert output.out.splitlines()[1] == (
         f"  turn {recorded.turn_id}: input=31 output=11 cache_read=0 cache_creation=0 "
-        "recap_input=0 recap_output=0 compaction_input=20 compaction_output=4 total=42"
+        "recap_input=0 recap_output=0 compaction_input=20 compaction_output=4 token_usage=42"
     )
 
 
@@ -570,9 +570,9 @@ def test_cli_shows_each_threads_context_size_beside_its_window_when_the_model_ha
     assert output.err == ""
     threads = [line for line in output.out.splitlines() if line.startswith("thread ")]
     assert threads == [
-        f"thread {windowed.thread_id}: input=4000 output=50 total=4050 "
+        f"thread {windowed.thread_id}: input=4000 output=50 token_usage=4050 "
         "context_size=4000 window=64000",
-        f"thread {unwindowed.thread_id}: input=7000 output=50 total=7050 context_size=7000",
+        f"thread {unwindowed.thread_id}: input=7000 output=50 token_usage=7050 context_size=7000",
     ]
 
 

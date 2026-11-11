@@ -188,7 +188,7 @@ def _print_turn_inputs(instance: Instance, today: date) -> None:
 
 
 def _token_totals(usage: TokenTotals) -> str:
-    return f"input={usage.input_tokens} output={usage.output_tokens} total={usage.total}"
+    return f"input={usage.input_tokens} output={usage.output_tokens} token_usage={usage.total}"
 
 
 def _context_size(usage: ThreadUsage) -> str:
@@ -207,7 +207,7 @@ def _turn_token_totals(usage: TurnUsage) -> str:
         f"recap_input={usage.recap_input_tokens} "
         f"recap_output={usage.recap_output_tokens} "
         f"compaction_input={usage.compaction_input_tokens} "
-        f"compaction_output={usage.compaction_output_tokens} total={usage.total}"
+        f"compaction_output={usage.compaction_output_tokens} token_usage={usage.total}"
     )
 
 
@@ -218,7 +218,7 @@ def _delegated_run(reported: ReportedRun) -> str:
         f"client={run.client} models={','.join(run.models)} outcome={run.outcome} "
         f"input={run.input_tokens} output={run.output_tokens} "
         f"cache_read={run.cache_read_tokens} cache_creation={run.cache_creation_tokens} "
-        f"total={run.total} duration_ms={run.duration_ms} client_turns={run.client_turns}"
+        f"token_usage={run.total} duration_ms={run.duration_ms} client_turns={run.client_turns}"
     )
     if run.resets_at is None:
         return line
@@ -1029,7 +1029,7 @@ def main(
     memory_open.add_argument("--instance", dest="instance_directory", help="instance to read")
     usage_parser = subparsers.add_parser(
         "usage",
-        help="show token totals",
+        help="show token usage and context size",
     )
     _add_instance_selector(usage_parser, "instance whose usage to show")
     usage_parser.add_argument(

@@ -117,7 +117,7 @@ describe("ManifestSection", () => {
     })
 
     await user.type(await screen.findByRole("spinbutton", { name: "Steps" }), "20")
-    await user.clear(screen.getByRole("spinbutton", { name: "Tokens" }))
+    await user.clear(screen.getByRole("spinbutton", { name: "Token usage" }))
     await user.type(screen.getByRole("spinbutton", { name: "Dollars per day" }), "2.5")
     const timezone = screen.getByRole("combobox", { name: "Routines timezone" })
     await user.clear(timezone)

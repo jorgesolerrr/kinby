@@ -218,7 +218,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
         <Tile
           title="API cost"
           value={money(usage.api.cost)}
-          note={`${tokens(usage.api.input_tokens)} in · ${tokens(usage.api.output_tokens)} out`}
+          note={`Token usage ${tokens(usage.api.input_tokens)} in · ${tokens(usage.api.output_tokens)} out`}
         />
         <Tile
           title="Plan runs"
@@ -230,7 +230,7 @@ function Totals({ usage }: { usage: StatsSummaryResult }) {
         <Tile
           title="Factory runs"
           value={String(usage.run_total.runs)}
-          note={`${tokens(usage.run_total.tokens)} tokens · ${money(usage.run_total.cost)}`}
+          note={`${tokens(usage.run_total.tokens)} token usage · ${money(usage.run_total.cost)}`}
         />
       </TileStrip>
     </Group>

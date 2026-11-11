@@ -127,7 +127,7 @@ from kinby.core.turns import (
     TurnRequest,
     TurnResult,
 )
-from kinby.instance import Budgets, Instance, ModelName, reload_manifest
+from kinby.instance import Budgets, Instance, ModelName, ModelPrice, reload_manifest
 from kinby.instance.config_changes import directory_hash
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
@@ -773,6 +773,7 @@ class LangGraphRunner:
         return TurnOutcome(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
+            price=self._price(turn.model),
         )
 
     async def _prepare_turn(
@@ -878,7 +879,9 @@ class LangGraphRunner:
                     - code_started,
                 )
                 if output is None:
-                    return TurnOutcome(outcome=CompletionOutcome.NO_WORK)
+                    return TurnOutcome(
+                        outcome=CompletionOutcome.NO_WORK, price=self._price(turn.model)
+                    )
                 payload = output
             elif delivery_body is not None:
                 payload = delivery_body
@@ -1195,6 +1198,9 @@ class LangGraphRunner:
             cache_creation_tokens=completed.cache_creation_tokens,
             model=model,
         )
+
+    def _price(self, model: ModelName) -> ModelPrice | None:
+        return price_map(self._instance.manifest.prices).get(model)
 
     async def prune_checkpoints(self, thread_id: UUID) -> None:
         """Delete the thread's checkpoints older than its newest completed one. A newer one,

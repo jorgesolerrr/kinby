@@ -33,7 +33,7 @@ describe("a thread's timeline", () => {
   beforeAll(() => vi.stubEnv("TZ", "America/New_York"))
   afterAll(() => vi.unstubAllEnvs())
 
-  it("shows a completed turn as its request, its text and tool steps in order, and done with its tokens and how long it took", () => {
+  it("shows a completed turn as its request, its text and tool steps in order, and done with its cost and how long it took", () => {
     const timeline = replay([
       "turn-1",
       started("Fix the runtime"),
@@ -64,7 +64,7 @@ describe("a thread's timeline", () => {
         output_tokens: 10,
         duration_ms: 900,
       },
-      { type: "turn.completed", input_tokens: 1_200, output_tokens: 300 },
+      { type: "turn.completed", input_tokens: 1_200, output_tokens: 300, cost: 0.042 },
     ])
 
     expect(timeline).toEqual({
@@ -90,7 +90,8 @@ describe("a thread's timeline", () => {
             },
             { kind: "text", text: "Done." },
           ],
-          end: { kind: "done", tokens: 1_500, durationMs: 8_000 },
+          largestContext: 90,
+          end: { kind: "done", cost: 0.042, durationMs: 8_000 },
         },
       ],
     })
@@ -243,6 +244,27 @@ describe("a thread's timeline", () => {
     expect(running).toMatchObject({ contextSize: 15_200, contextModel: "gpt" })
   })
 
+  it("keeps the largest context size of a turn's model calls, and no cost when nothing priced it", () => {
+    const call = (inputTokens: number): Payload => ({
+      type: "model.completed",
+      model: "claude",
+      input_tokens: inputTokens,
+      output_tokens: 50,
+      duration_ms: 900,
+    })
+    const [turn] = replay([
+      "turn-1",
+      started("Fix the runtime"),
+      call(38_000),
+      call(41_000),
+      call(12_000),
+      { type: "turn.completed", input_tokens: 91_000, output_tokens: 150, cost: null },
+    ]).turns
+
+    expect(turn?.largestContext).toBe(41_000)
+    expect(turn?.end).toEqual({ kind: "done", durationMs: 4_000 })
+  })
+
   it("has no context size before the thread's first model call", () => {
     const timeline = replay(["turn-1", started("Fix the runtime")])
 
@@ -365,7 +387,7 @@ describe("a thread's timeline", () => {
     it("is none on a completed turn until it reports", () => {
       const [turn] = replay(["turn-1", started("Fix the runtime"), completed]).turns
 
-      expect(turn?.end).toEqual({ kind: "done", tokens: 100, durationMs: 1_000 })
+      expect(turn?.end).toEqual({ kind: "done", durationMs: 1_000 })
       expect(turn?.recap).toBeUndefined()
     })
 

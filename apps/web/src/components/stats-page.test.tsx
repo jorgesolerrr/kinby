@@ -322,7 +322,7 @@ describe("the stats page", () => {
     const tile = (name: string) => within(strip).getByRole("region", { name }).textContent
 
     expect(tile("Turns")).toBe("Turns81 failed · 2 interrupted")
-    expect(tile("API cost")).toBe("API cost$1.2412,000 in · 3,400 out")
+    expect(tile("API cost")).toBe("API cost$1.24Token usage 12,000 in · 3,400 out")
     expect(tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
     expect(tile("Ratings")).toBe("Ratings3 good1 bad")
   })
@@ -1192,6 +1192,6 @@ describe("the Runs section", () => {
 
     const runs = section("Runs")
     expect(await within(runs).findByText("No factory run started in this range.")).toBeDefined()
-    expect(within(runs).getByText("Tokens leave out 2 instances")).toBeDefined()
+    expect(within(runs).getByText("Token usage leaves out 2 instances")).toBeDefined()
   })
 })

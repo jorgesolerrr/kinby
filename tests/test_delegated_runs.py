@@ -597,21 +597,21 @@ def test_cli_usage_shows_delegated_runs_under_their_turn(
     assert exit_code == 0
     assert output.err == ""
     assert output.out.splitlines() == [
-        f"thread {events[0].thread_id}: input=0 output=0 total=0",
+        f"thread {events[0].thread_id}: input=0 output=0 token_usage=0",
         (
             f"  turn {events[0].turn_id}: input=0 output=0 cache_read=0 cache_creation=0 "
-            "recap_input=0 recap_output=0 compaction_input=0 compaction_output=0 total=0"
+            "recap_input=0 recap_output=0 compaction_input=0 compaction_output=0 token_usage=0"
         ),
         (
             f"    delegated run {first.timestamp.isoformat()}: source=claude-subscription "
             "client=claude-code models=claude-opus-5-5,claude-haiku-4-5 outcome=completed "
-            "input=1200 output=300 cache_read=800 cache_creation=100 total=1500 "
+            "input=1200 output=300 cache_read=800 cache_creation=100 token_usage=1500 "
             "duration_ms=42000 client_turns=7"
         ),
         (
             f"    delegated run {second.timestamp.isoformat()}: source=claude-subscription "
             "client=claude-code models=claude-opus-5-5 outcome=limited "
-            "input=90 output=0 cache_read=0 cache_creation=0 total=90 "
+            "input=90 output=0 cache_read=0 cache_creation=0 token_usage=90 "
             "duration_ms=800 client_turns=0 resets_at=2026-09-25T18:40:00+00:00"
         ),
     ]

@@ -247,9 +247,9 @@ describe("the Usage section", () => {
     const tile = (name: string) => within(totals).getByRole("region", { name }).textContent
 
     expect(tile("Turns")).toBe("Turns71 failed · 1 interrupted")
-    expect(tile("API cost")).toBe("API cost$0.5012,000 in · 3,400 out")
+    expect(tile("API cost")).toBe("API cost$0.50Token usage 12,000 in · 3,400 out")
     expect(tile("Plan runs")).toBe("Plan runs4Claude 3 · ChatGPT 1")
-    expect(tile("Factory runs")).toBe("Factory runs21,376 tokens · $0.75")
+    expect(tile("Factory runs")).toBe("Factory runs21,376 token usage · $0.75")
     expect(within(totals).getByText("2 of 5 instances counted.")).toBeDefined()
   })
 

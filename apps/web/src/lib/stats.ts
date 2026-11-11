@@ -115,6 +115,32 @@ export function shortTokens(count: number): string {
   return SHORT.format(count).toLowerCase()
 }
 
+/**
+ * A finished turn's quiet figures: its steps, its cost on API use or its largest context size where
+ * nothing priced it, and its time.
+ */
+export function turnFigures({
+  steps,
+  cost,
+  largestContext,
+  durationMs,
+}: {
+  steps: number
+  cost?: number
+  largestContext?: number
+  durationMs: number
+}): string {
+  const spend =
+    cost !== undefined
+      ? money(cost)
+      : largestContext !== undefined
+        ? `${shortTokens(largestContext)} context`
+        : undefined
+  return [`${steps} ${steps === 1 ? "step" : "steps"}`, spend, duration(durationMs)]
+    .filter((figure) => figure !== undefined)
+    .join(" · ")
+}
+
 /** How much of the model's window a context size fills, in percent. */
 export function contextFill(contextSize: number, window: number): number {
   return Math.min(100, (contextSize / window) * 100)

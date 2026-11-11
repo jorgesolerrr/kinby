@@ -269,7 +269,7 @@ function Tiles({ total }: { total: StatsSummary }) {
         <Tile
           title="API cost"
           value={money(total.cost)}
-          note={`${total.input_tokens.toLocaleString("en")} in · ${total.output_tokens.toLocaleString("en")} out`}
+          note={`Token usage ${total.input_tokens.toLocaleString("en")} in · ${total.output_tokens.toLocaleString("en")} out`}
         />
         <Tile
           title="Plan runs"

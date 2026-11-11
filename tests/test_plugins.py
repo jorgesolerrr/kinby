@@ -2517,8 +2517,12 @@ def test_tool_loop_usage_accumulates_within_a_turn_and_resets_next_turn(
         second_completed = next(
             event.payload for event in second if isinstance(event.payload, TurnCompleted)
         )
-        assert first_completed == TurnCompleted(input_tokens=7, output_tokens=4)
-        assert second_completed == TurnCompleted(input_tokens=7, output_tokens=4)
+        assert first_completed == TurnCompleted(
+            input_tokens=7, output_tokens=4, cost=first_completed.cost
+        )
+        assert second_completed == TurnCompleted(
+            input_tokens=7, output_tokens=4, cost=second_completed.cost
+        )
 
     asyncio.run(scenario())
 

@@ -77,6 +77,7 @@ from kinby.core.errors import (
 )
 from kinby.core.events import EventLog
 from kinby.core.gate import AUTHORED_RULE
+from kinby.core.pricing import token_cost
 from kinby.core.snapshots import (
     SnapshotBoundary,
     SnapshotError,
@@ -93,7 +94,7 @@ from kinby.core.threads import (
     pending_takeover,
     pinned_mode,
 )
-from kinby.instance import Budgets, ModelName
+from kinby.instance import Budgets, ModelName, ModelPrice
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 from kinby.plugins.browser import BrowserService
 
@@ -148,6 +149,8 @@ class TurnOutcome:
     input_tokens: int = 0
     output_tokens: int = 0
     outcome: CompletionOutcome = CompletionOutcome.WORK
+    #: The price of the turn's model, None when it has none.
+    price: ModelPrice | None = None
 
 
 @dataclass(frozen=True)
@@ -1016,6 +1019,7 @@ class Turns:
                         turn.turn_id,
                         SnapshotBoundary.AFTER,
                     ),
+                    cost=None if outcome.price is None else token_cost(usage, outcome.price),
                     **usage.model_dump(),
                 )
             )

@@ -132,7 +132,7 @@ function CostRow({ cost }: { cost: BucketPoint["cost"] }) {
   )
 }
 
-/** The API's tokens and cost, and each plan's runs, tokens, and time, over the whole range. */
+/** The API's token usage and cost, and each plan's runs, token usage, and time, over the whole range. */
 function Sources({ stats: { total } }: { stats: StatsGetResult }) {
   return (
     <Card>
@@ -146,7 +146,7 @@ function Sources({ stats: { total } }: { stats: StatsGetResult }) {
             <TableRow>
               <TableHead>Source</TableHead>
               <TableHead className="text-right">Runs</TableHead>
-              <TableHead className="hidden text-right md:table-cell">Tokens</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Token usage</TableHead>
               <TableHead className="hidden text-right md:table-cell">Time</TableHead>
               <TableHead className="text-right">Cost</TableHead>
             </TableRow>

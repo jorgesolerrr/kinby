@@ -176,14 +176,14 @@ function RecallSplit({ usage, failure }: RunUsageState) {
     <div className="-mx-2 md:-mx-3">
       <Table size="fit">
         <TableCaption>
-          Median tokens and send-backs per run. Runs do different work, so a gap need not come from
-          memory.
+          Median token usage and send-backs per run. Runs do different work, so a gap need not come
+          from memory.
         </TableCaption>
         <TableHeader>
           <TableRow>
             <TableHead>Factory runs</TableHead>
             <TableHead className="text-right">Runs</TableHead>
-            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Token usage</TableHead>
             <TableHead className="text-right">Send-backs</TableHead>
           </TableRow>
         </TableHeader>

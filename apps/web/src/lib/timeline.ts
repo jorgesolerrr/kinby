@@ -45,6 +45,8 @@ export interface TurnBlock {
   recap?: Recap
   /** The user's latest verdict on the turn. A turn nobody rated has none. */
   rating?: TurnVerdict
+  /** The largest context size of the turn's model calls. None before its first one. */
+  largestContext?: number
 }
 
 /** An approval the user has not answered, and the tool call it asks about. */
@@ -110,7 +112,8 @@ export interface ViewStep {
 }
 
 export type TurnEnd =
-  | { kind: "done"; tokens: number; durationMs: number }
+  /** A done turn's cost is that of its own model calls, and it has none when nothing priced them. */
+  | { kind: "done"; cost?: number; durationMs: number }
   | { kind: "failed"; code: ErrorCode; message: string }
   | { kind: "stopped" }
 
@@ -248,6 +251,8 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
       })
     case "notification.refused":
       return updateNotification(turn, payload.raised, { kind: "refused", reason: payload.reason })
+    case "model.completed":
+      return { ...turn, largestContext: Math.max(turn.largestContext ?? 0, payload.input_tokens) }
     case "view.changed": {
       const { view, title, change } = payload
       return { ...turn, steps: [...turn.steps, { kind: "view", view, title, change }] }
@@ -258,7 +263,7 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
           ...turn,
           end: {
             kind: "done",
-            tokens: payload.input_tokens + payload.output_tokens,
+            ...(payload.cost != null && { cost: payload.cost }),
             durationMs: Date.parse(timestamp) - Date.parse(turn.startedAt),
           },
         },

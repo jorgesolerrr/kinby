@@ -54,7 +54,7 @@ Use one `key: value` per line between `---` delimiters.
 | `signal` | Absent | Inbound signal configuration. Without this block, the routine has no signal path. |
 | `arguments` | `{}` | JSON object passed to the code step, written on one line. |
 | `steps` | Inherit instance budget, otherwise unlimited | Positive integer counting node executions. |
-| `tokens` | Inherit instance budget, otherwise unlimited | Positive integer limiting input plus output tokens. |
+| `tokens` | Inherit instance budget, otherwise unlimited | Positive integer limiting the turn's token usage: input plus output added over its model calls, not its context size. |
 | `seconds` | Inherit instance budget, otherwise unlimited | Positive number limiting active execution time. Approval waiting time does not consume it. |
 
 A routine may lower a per-turn budget and never raise one. A value above the

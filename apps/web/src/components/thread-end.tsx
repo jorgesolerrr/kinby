@@ -12,7 +12,7 @@ import { Toggle } from "@/components/ui/toggle"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { reason } from "@/lib/operation"
 import { nodePath, openNode } from "@/lib/selection"
-import { duration, shortTokens } from "@/lib/stats"
+import { turnFigures } from "@/lib/stats"
 import type { Recap, TurnBlock, TurnEnd as End } from "@/lib/timeline"
 import {
   CheckIcon,
@@ -78,8 +78,8 @@ export function TurnEnd({
 }
 
 /**
- * A finished turn's quiet row: Copy, the rating, its steps, tokens and time, and its recap. It
- * shows on hover, while it holds focus or a popup, and always on the latest turn.
+ * A finished turn's quiet row: Copy, the rating, its figures, and its recap. It shows on hover,
+ * while it holds focus or a popup, and always on the latest turn.
  */
 function EndRow({
   turn,
@@ -111,7 +111,6 @@ function EndRow({
     }
   }
   const reply = turn.steps.flatMap((step) => (step.kind === "text" ? [step.text] : [])).join("\n\n")
-  const calls = turn.steps.filter((step) => step.kind === "tool").length
   return (
     <div
       className={cn(
@@ -130,8 +129,12 @@ function EndRow({
       </Toggle>
       <BadTurn pressed={turn.rating === "bad"} onRate={(why) => rate("bad", why)} />
       <span className="ml-2 tabular-nums">
-        {calls} {calls === 1 ? "step" : "steps"} · {shortTokens(end.tokens)} tokens ·{" "}
-        {duration(end.durationMs)}
+        {turnFigures({
+          steps: turn.steps.filter((step) => step.kind === "tool").length,
+          cost: end.cost,
+          largestContext: turn.largestContext,
+          durationMs: end.durationMs,
+        })}
       </span>
       {children && <span className="ml-3">{children}</span>}
       {failure !== undefined && <span className="ml-3 text-destructive">{failure}</span>}
