@@ -205,6 +205,7 @@ export function ThreadPanel({
                 <ThreadComposer
                   ref={composer}
                   client={client}
+                  clock={clock}
                   threadId={threadId}
                   name={name}
                   running={latest !== undefined && latest.end === undefined}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { bucketStarts, contextFill } from "@/lib/stats"
+import { bucketStarts, contextFill, contextRows } from "@/lib/stats"
 
 const now = new Date("2026-09-30T15:20:00Z")
 
@@ -56,5 +56,19 @@ describe("a context size's fill", () => {
 
   it("stops at full when the context size passes the window", () => {
     expect(contextFill(210_000, 200_000)).toBe(100)
+  })
+})
+
+describe("a context size's breakdown", () => {
+  it("names each row and gives its share of the context size, in percent", () => {
+    expect(
+      contextRows([
+        { category: "system_prompt", tokens: 500 },
+        { category: "mcp_tools", tokens: 1_500 },
+      ]),
+    ).toEqual([
+      { label: "System prompt", tokens: 500, share: 25 },
+      { label: "MCP tools", tokens: 1_500, share: 75 },
+    ])
   })
 })

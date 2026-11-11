@@ -1,7 +1,9 @@
-import type { InstanceClient, PermissionMode } from "@kinby/contract"
-import { type Ref, useState } from "react"
+import type { Clock, InstanceClient, PermissionMode } from "@kinby/contract"
+import { type Ref, useCallback, useState } from "react"
 
 import { Composer } from "@/components/composer"
+import { Button } from "@/components/ui/button"
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover"
 import {
   Select,
   SelectContent,
@@ -12,9 +14,11 @@ import {
 } from "@/components/ui/select"
 import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { useListedThread } from "@/hooks/use-listed-thread"
+import { useRead } from "@/hooks/use-read"
 import { reason } from "@/lib/operation"
-import { contextFill, shortTokens, tokens } from "@/lib/stats"
+import { contextFill, contextRows, shortTokens, tokens } from "@/lib/stats"
 
 /** Every mode, from the least the instance may do to the most. */
 const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
@@ -26,12 +30,13 @@ const MODES: { mode: PermissionMode; label: string; hint: string }[] = [
 
 /**
  * The composer of a thread: a message starts the next turn, and the foot holds the mode the thread
- * runs in, from the thread list the header reads, and the thread's context size. Every kept list is
- * read again after a change of mode so the sidebar shows it too.
+ * runs in, from the thread list the header reads, and the thread's context size, which opens what
+ * fills it. Every kept list is read again after a change of mode so the sidebar shows it too.
  */
 export function ThreadComposer({
   ref,
   client,
+  clock,
   threadId,
   name,
   running,
@@ -40,6 +45,7 @@ export function ThreadComposer({
 }: {
   ref?: Ref<HTMLTextAreaElement>
   client: Pick<InstanceClient, "call">
+  clock: Clock
   threadId: string
   name: string
   running: boolean
@@ -74,7 +80,17 @@ export function ThreadComposer({
         <ModePicker mode={thread.mode} ceiling={ceiling} onPick={setMode} />
       )}
       {contextSize !== undefined && (
-        <ContextSize contextSize={contextSize} modelWindow={modelWindow} />
+        <Popover>
+          <PopoverTrigger
+            render={<Button variant="ghost" size="sm" aria-label="What fills the context" />}
+            className="max-w-56 min-w-0 flex-1"
+          >
+            <ContextSize contextSize={contextSize} modelWindow={modelWindow} />
+          </PopoverTrigger>
+          <PopoverContent align="end" side="top" className="w-80">
+            <ContextBreakdown client={client} clock={clock} threadId={threadId} />
+          </PopoverContent>
+        </Popover>
       )}
     </Composer>
   )
@@ -100,13 +116,56 @@ function ContextSize({
       value={contextFill(contextSize, modelWindow)}
       getAriaValueText={() => `${tokens(contextSize)} of ${tokens(modelWindow)} tokens`}
       size="inline"
-      className="max-w-48 min-w-0 flex-1"
+      className="min-w-0 flex-1"
     >
       <ProgressLabel>Context</ProgressLabel>
       <ProgressValue>
         {() => `${shortTokens(contextSize)} / ${shortTokens(modelWindow)}`}
       </ProgressValue>
     </Progress>
+  )
+}
+
+/** What fills the thread's context size, read when the panel opens: a row per category. */
+function ContextBreakdown({
+  client,
+  clock,
+  threadId,
+}: {
+  client: Pick<InstanceClient, "call">
+  clock: Clock
+  threadId: string
+}) {
+  const read = useCallback(
+    () => client.call("thread.context.get", { thread_id: threadId }),
+    [client, threadId],
+  )
+  const { value, failure } = useRead(read, clock)
+  return (
+    <>
+      <PopoverTitle>Context</PopoverTitle>
+      {value === undefined ? (
+        failure === undefined ? (
+          <Spinner aria-label="Reading what fills the context" />
+        ) : (
+          <p className="text-muted-foreground">{reason(failure)}</p>
+        )
+      ) : value.rows.length === 0 ? (
+        <p className="text-muted-foreground">The breakdown shows once the next turn completes.</p>
+      ) : (
+        <Table>
+          <TableBody>
+            {contextRows(value.rows).map((row) => (
+              <TableRow key={row.label}>
+                <TableCell>{row.label}</TableCell>
+                <TableCell className="text-right">{shortTokens(row.tokens)}</TableCell>
+                <TableCell className="text-right">{row.share.toFixed(0)}%</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </>
   )
 }
 

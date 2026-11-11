@@ -57,8 +57,8 @@ _MEMORY_CALL_KINDS = {
     "remember": "remember",
     "forget": "forget",
 }
-_SKILL_TOOL = "skill"
-_NAVIGATION_EXCLUDED = frozenset((*_MEMORY_CALL_KINDS, _SKILL_TOOL))
+SKILL_TOOL = "skill"
+_NAVIGATION_EXCLUDED = frozenset((*_MEMORY_CALL_KINDS, SKILL_TOOL))
 
 UnpricedModel = NewType("UnpricedModel", str)
 

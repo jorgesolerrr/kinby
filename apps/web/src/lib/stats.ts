@@ -1,4 +1,6 @@
 import type {
+  ContextCategory,
+  ContextRow,
   OriginUse,
   StatsBucket,
   StatsBucketSize,
@@ -116,6 +118,31 @@ export function shortTokens(count: number): string {
 /** How much of the model's window a context size fills, in percent. */
 export function contextFill(contextSize: number, window: number): number {
   return Math.min(100, (contextSize / window) * 100)
+}
+
+const CONTEXT_LABELS: Record<ContextCategory, string> = {
+  system_prompt: "System prompt",
+  profile: "Profile",
+  skills_catalogue: "Skills catalogue",
+  core_tools: "Core tools",
+  authored_tools: "Authored tools",
+  mcp_tools: "MCP tools",
+  text: "User and model text",
+  tool_results: "Tool results",
+  skill_bodies: "Loaded skill bodies",
+  compaction_summary: "Compaction summary",
+}
+
+/** The rows of a context size's breakdown, each with its share of the context size in percent. */
+export function contextRows(
+  rows: ContextRow[],
+): { label: string; tokens: number; share: number }[] {
+  const size = rows.reduce((sum, row) => sum + row.tokens, 0)
+  return rows.map(({ category, tokens }) => ({
+    label: CONTEXT_LABELS[category],
+    tokens,
+    share: size === 0 ? 0 : (tokens / size) * 100,
+  }))
 }
 
 /** The middle of `values`, or the mean of the two middle ones. `values` holds at least one. */
