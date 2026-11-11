@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 
-import { bucketStarts, contextFill, contextRows, turnFigures } from "@/lib/stats"
+import {
+  bucketStarts,
+  contextAgainst,
+  contextFill,
+  contextLimit,
+  contextRows,
+  effectiveTrigger,
+  turnFigures,
+} from "@/lib/stats"
 
 const now = new Date("2026-09-30T15:20:00Z")
 
@@ -56,6 +64,43 @@ describe("a context size's fill", () => {
 
   it("stops at full when the context size passes the window", () => {
     expect(contextFill(210_000, 200_000)).toBe(100)
+  })
+})
+
+describe("what the bar fills toward", () => {
+  const automatic = { automatic: true, trigger: 100_000 }
+
+  it("is the compaction trigger on a model whose window leaves room for it", () => {
+    expect(contextLimit(automatic, 1_000_000)).toBe(100_000)
+  })
+
+  it("is the window less 16,000 tokens when that is smaller than the trigger", () => {
+    expect(contextLimit(automatic, 64_000)).toBe(48_000)
+  })
+
+  it("is the trigger on a model with no known window", () => {
+    expect(contextLimit(automatic, undefined)).toBe(100_000)
+  })
+
+  it("is the model's window with automatic compaction off", () => {
+    expect(contextLimit({ automatic: false, trigger: 100_000 }, 200_000)).toBe(200_000)
+  })
+
+  it("is the model's window until the manifest is read", () => {
+    expect(contextLimit(undefined, 200_000)).toBe(200_000)
+  })
+})
+
+describe("the effective compaction trigger", () => {
+  it("is none with automatic compaction off", () => {
+    expect(effectiveTrigger({ automatic: false, trigger: 100_000 }, 200_000)).toBeUndefined()
+  })
+})
+
+describe("a context size against a limit", () => {
+  it("reads as both sizes and the share, past 100% once it passes the limit", () => {
+    expect(contextAgainst(41_000, 100_000)).toBe("41k of 100k, 41%")
+    expect(contextAgainst(120_000, 100_000)).toBe("120k of 100k, 120%")
   })
 })
 

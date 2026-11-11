@@ -1,6 +1,7 @@
 import type {
   ContextCategory,
   ContextRow,
+  ManifestCompaction,
   OriginUse,
   StatsBucket,
   StatsBucketSize,
@@ -141,9 +142,41 @@ export function turnFigures({
     .join(" · ")
 }
 
-/** How much of the model's window a context size fills, in percent. */
-export function contextFill(contextSize: number, window: number): number {
-  return Math.min(100, (contextSize / window) * 100)
+/** How much of `limit` a context size fills, in percent. */
+export function contextFill(contextSize: number, limit: number): number {
+  return Math.min(100, (contextSize / limit) * 100)
+}
+
+/** What the effective compaction trigger leaves free of the model's window, in tokens. */
+const WINDOW_RESERVE = 16_000
+
+/**
+ * The context size past which a thread compacts at its next turn's start: the instance's trigger,
+ * or the model's window less the reserve when that is smaller. None with automatic compaction off,
+ * or before the manifest is read.
+ */
+export function effectiveTrigger(
+  compaction: ManifestCompaction | undefined,
+  window: number | undefined,
+): number | undefined {
+  if (!compaction?.automatic) return undefined
+  return window === undefined
+    ? compaction.trigger
+    : Math.min(compaction.trigger, window - WINDOW_RESERVE)
+}
+
+/** What the context bar fills toward: the effective compaction trigger, or else the model's window. */
+export function contextLimit(
+  compaction: ManifestCompaction | undefined,
+  window: number | undefined,
+): number | undefined {
+  return effectiveTrigger(compaction, window) ?? window
+}
+
+/** A context size against `limit`, as the panel states it: "41k of 100k, 41%". */
+export function contextAgainst(contextSize: number, limit: number): string {
+  const share = Math.round((contextSize / limit) * 100)
+  return `${shortTokens(contextSize)} of ${shortTokens(limit)}, ${share}%`
 }
 
 const CONTEXT_LABELS: Record<ContextCategory, string> = {
