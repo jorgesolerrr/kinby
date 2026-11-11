@@ -682,6 +682,7 @@ from kinby.contracts.models import (
     Warning,
     WorkspaceReverted,
     accepted,
+    described_fields,
     gate_denial_source,
     is_turn_closing,
 )
@@ -1364,6 +1365,7 @@ __all__ = [
     "Warning",
     "WorkspaceReverted",
     "accepted",
+    "described_fields",
     "gate_denial_source",
     "is_turn_closing",
     "parse_client_frame",

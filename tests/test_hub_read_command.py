@@ -196,6 +196,64 @@ def test_hub_help_prints_a_writes_arguments(capsys):
     ]
 
 
+def test_hub_help_prints_each_field_with_its_description(capsys):
+    assert main(["hub", "help", "library.git.preview"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    address = lines.index("  address: str, required")
+    assert lines[address + 1] == (
+        "    In the ``skills`` CLI's syntax: ``owner/repo``, ``owner/repo/path`` or a URL, each "
+        "with an optional ``#ref``."
+    )
+
+
+def test_hub_help_prints_a_reads_result_shape(capsys):
+    assert main(["hub", "help", "library.git.preview"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    result = lines[lines.index("Result:") :]
+    assert result[result.index("  ref: str | null") + 1] == (
+        "    None is the repository's default branch."
+    )
+    assert "  skills: list[PreviewedSkill]" in result
+    skill = result[result.index("PreviewedSkill:") :]
+    assert skill[skill.index("  path: str") + 1] == (
+        "    Its folder in the repository, ``.`` for the root."
+    )
+
+
+def test_hub_help_prints_a_writes_arguments_with_their_descriptions(capsys):
+    assert main(["hub", "help", "library_move", "instance_create"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[lines.index("  hash: FileHash, required") + 1] == (
+        "    The hash the check showed. STALE when the folder changed since."
+    )
+    assert lines[lines.index("  setup: dict[str, SetupValue] = {}") + 1] == (
+        "    Values for the configuration fields the prepared image, or the role's template, "
+        "declares, by field name."
+    )
+
+
+def test_hub_help_prints_each_name_it_is_given(capsys):
+    assert main(["hub", "help", "instance.logs", "instance_lifecycle", "memory.list"]) == 0
+
+    headers = [line for line in capsys.readouterr().out.splitlines() if line.startswith(("i", "m"))]
+    assert headers == [
+        "instance.logs: a hub read. Params:",
+        "instance_lifecycle: a hub write. Arguments:",
+        "memory.list: a relayed read. Params:",
+    ]
+
+
+def test_hub_help_without_a_name_lists_the_methods(capsys):
+    assert main(["hub", "methods"]) == 0
+    listed = capsys.readouterr().out
+
+    assert main(["hub", "help"]) == 0
+    assert capsys.readouterr().out == listed
+
+
 def test_hub_help_refuses_a_name_that_is_no_read_or_write(capsys):
     assert main(["hub", "help", "instance.remove"]) == 1
     assert "kinby hub methods" in capsys.readouterr().err
