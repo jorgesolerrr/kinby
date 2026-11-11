@@ -91,6 +91,15 @@ def unknown_operations(text: str) -> set[str]:
     return shaped - OPERATIONS - ARGUMENTS
 
 
+def _schema_fields(schema: dict) -> set[str]:
+    """Each field the JSON schema declares, at its top and in each of its nested models."""
+    return {
+        field
+        for declaration in (schema, *schema.get("$defs", {}).values())
+        for field in declaration.get("properties", {})
+    }
+
+
 @pytest.mark.parametrize("name", HOME_SKILLS)
 def test_a_home_skill_loads_under_its_folders_name(name):
     assert load_skill_file(SHIPPED_SKILLS / name / SKILL_FILE).name == name
@@ -140,12 +149,7 @@ def test_a_home_skill_names_no_other_skill_of_the_library(name):
 
 def test_the_factory_reference_names_every_factory_yaml_field():
     """A new field of factory.yaml fails this until the factory reference names it."""
-    schema = FACTORY_FILE_ADAPTER.json_schema(by_alias=True)
-    fields = {
-        field
-        for declaration in (schema, *schema["$defs"].values())
-        for field in declaration.get("properties", {})
-    }
+    fields = _schema_fields(FACTORY_FILE_ADAPTER.json_schema(by_alias=True))
     reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
 
     assert fields <= set(_CITED.findall(reference.read_text(encoding="utf-8")))
@@ -153,15 +157,15 @@ def test_the_factory_reference_names_every_factory_yaml_field():
 
 
 def test_the_factory_reference_names_what_a_templates_code_and_kinby_toml_use():
-    """A new step ending, hook field, tool argument, template setting or image recipe fails this
-    until the factory reference names it."""
+    """A new step ending, hook field, tool argument, kinby.toml table or key, or image recipe
+    fails this until the factory reference names it."""
     names = (
         {ending.value for ending in StepEnding}
         | {field.name for model in (StepEnd, HookResult) for field in fields(model)}
         | set(inspect.signature(tool).parameters)
         | set(inspect.signature(hand_over).parameters)
         | {each.__module__ for each in (hook, tool, hand_over)}
-        | set(RawManifest.model_fields)
+        | _schema_fields(RawManifest.model_json_schema(by_alias=True))
         | {recipe.stem for recipe in RECIPES_DIRECTORY.glob("*.Dockerfile")}
     )
     reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
