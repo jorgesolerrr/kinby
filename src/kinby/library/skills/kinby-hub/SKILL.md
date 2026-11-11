@@ -27,7 +27,9 @@ Read the hub from bash with `kinby hub read <method> name=value …`. It runs wi
 kinby hub read instance.list | jq '.instances[] | {instance_id, persona_name, process}'
 ```
 
-A value that parses as JSON is taken as JSON, and anything else as a string. `--params` takes all the params as one JSON object, for a nested value. `kinby hub methods` lists every read and write. `kinby hub help <name>` prints a read's params or a write's arguments, with their types and defaults: run it before a read or a write you have not made yet, rather than guess. A refused read exits nonzero and prints the code, the message and each field the hub named.
+A value that parses as JSON is taken as JSON, and anything else as a string. `--params` takes all the params as one JSON object, for a nested value. A refused read exits nonzero and prints the code, the message and each field the hub named.
+
+Your first hub command is `kinby hub help`, which lists every read and write. `kinby hub help <name> <name> …` then prints each read's params and result, and each write's arguments, with their types, defaults and descriptions. Run it once for the reads and writes your task needs, before you make one, rather than guess or read kinby's source.
 
 The hub's own reads:
 

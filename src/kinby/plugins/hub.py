@@ -48,6 +48,7 @@ from kinby.contracts import (
     Method,
     ResultFrame,
     Scope,
+    described_fields,
     parse_server_frame,
 )
 from kinby.core.errors import PermissionDenied
@@ -174,6 +175,7 @@ class InstanceAsk(ContractModel):
 class LibraryMove(LibrarySkillMoveCommand):
     """A move the hub runs only when it brings the diff the user approved."""
 
+    #: The diff the check showed.
     diff: str
 
 
@@ -246,10 +248,14 @@ _HUB_RUN_WRITES: Mapping[str, type[ContractModel]] = {
 
 
 def write_arguments(operation: HubWriteOperation) -> dict[str, FieldInfo]:
-    """The arguments one hub_write operation takes, by name, as home_write reads them."""
+    """The arguments one hub_write operation takes, by name, as home_write reads them, each with
+    its description."""
     if operation in _RELAYED_WRITES:
-        return {**_Target.model_fields, **_RELAYED_WRITES[operation].command.model_fields}
-    fields = dict(_HUB_RUN_WRITES[operation].model_fields)
+        return {
+            **described_fields(_Target),
+            **described_fields(_RELAYED_WRITES[operation].command),
+        }
+    fields = described_fields(_HUB_RUN_WRITES[operation])
     if operation is HubWriteOperation.INSTANCE_CREATE:
         fields["setup"] = fields.pop("config")
         for refused in ("secrets", "save_to_hub"):

@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Iterator
 from enum import Enum
 from types import NoneType, UnionType
 from typing import Annotated, Literal, get_args, get_origin
@@ -25,9 +26,11 @@ from kinby.contracts import (
     HUB_READS,
     OPERATION_GET,
     RELAYED_READS,
+    ContractModel,
     OperationGetCommand,
     OperationGetResult,
     OperationState,
+    described_fields,
 )
 from kinby.contracts.methods import METHODS
 from kinby.plugins.hub import (
@@ -47,8 +50,7 @@ CELL_WIDTH = 60
 
 
 _READS = HUB_READS | RELAYED_READS
-_PARAMS = {method.name: method.command.model_fields for method in METHODS if method.name in _READS}
-_WRITES = {operation.value: write_arguments(operation) for operation in HubWriteOperation}
+_READ_METHODS = {method.name: method for method in METHODS if method.name in _READS}
 _NOT_HOME = "kinby hub read and wait run only in the home instance, which its hub grants hub:home."
 _LISTED = "kinby hub methods lists them."
 
@@ -68,10 +70,19 @@ def read_on_hub(argv: list[str]) -> int:
         case "help":
             parser = argparse.ArgumentParser(
                 prog="kinby hub help",
-                description="Print a read's params or a write's arguments.",
+                description=(
+                    "Print each read's params and result, and each write's arguments, with "
+                    "their descriptions. With no name, list every read and write."
+                ),
             )
-            parser.add_argument("name", help="a read or a write, as kinby hub methods lists it")
-            return _help(parser.parse_args(rest).name)
+            parser.add_argument(
+                "names",
+                nargs="*",
+                metavar="name",
+                help="a read or a write, as kinby hub methods lists it",
+            )
+            names = parser.parse_args(rest).names
+            return _help(names) if names else _methods()
         case _:
             return _wait(rest)
 
@@ -108,7 +119,7 @@ def _read(argv: list[str]) -> int:
         if args.method is None:
             parser.print_help()
             return 0
-        return _help(args.method)
+        return _help([args.method])
     if args.method not in _READS:
         print(f'"{args.method}" is not a hub read. {_LISTED}', file=sys.stderr)
         return 1
@@ -173,7 +184,7 @@ def _methods() -> int:
     listed = [
         *((name, "hub read") for name in sorted(HUB_READS)),
         *((name, "relayed read") for name in sorted(RELAYED_READS)),
-        *((name, "hub write") for name in _WRITES),
+        *((operation.value, "hub write") for operation in HubWriteOperation),
     ]
     width = max(len(name) for name, _ in listed)
     for name, kind in listed:
@@ -181,23 +192,58 @@ def _methods() -> int:
     return 0
 
 
-def _help(name: str) -> int:
-    if name in _WRITES:
-        print(f"{name}: a hub write. Arguments:{_fields(_WRITES[name])}")
-    elif name in RELAYED_READS:
-        instance = "\n  instance_id: UUID, required"
-        print(f"{name}: a relayed read. Params:{instance}{_fields(_PARAMS[name])}")
-    elif name in HUB_READS:
-        print(f"{name}: a hub read. Params:{_fields(_PARAMS[name]) or ' none'}")
-    else:
-        print(f'"{name}" is not a hub read or a hub write. {_LISTED}', file=sys.stderr)
-        return 1
-    return 0
+def _help(names: list[str]) -> int:
+    helped = [(name, _described(name)) for name in names]
+    for name, described in helped:
+        if described is None:
+            print(f'"{name}" is not a hub read or a hub write. {_LISTED}', file=sys.stderr)
+    print("\n\n".join(described for _, described in helped if described is not None))
+    return 0 if all(described is not None for _, described in helped) else 1
 
 
-def _fields(fields: dict[str, FieldInfo]) -> str:
+def _described(name: str) -> str | None:
+    if name in HubWriteOperation:
+        arguments = write_arguments(HubWriteOperation(name))
+        return f"{name}: a hub write. Arguments:{_shape(arguments, call=True)}"
+    if name not in _READ_METHODS:
+        return None
+    method = _READ_METHODS[name]
+    kind, params = "hub read", described_fields(method.command)
+    if name in RELAYED_READS:
+        kind, params = "relayed read", {"instance_id": FieldInfo.from_annotation(UUID), **params}
+    result = _shape(described_fields(method.result), call=False)
+    return f"{name}: a {kind}. Params:{_shape(params, call=True)}\nResult:{result}"
+
+
+def _shape(fields: dict[str, FieldInfo], *, call: bool) -> str:
+    """The lines of *fields*, then of each model they name, each model once."""
+    shape = _fields(fields, call=call) or " none"
+    named = _named(fields)
+    for model in named:
+        own = described_fields(model)
+        shape += f"\n{model.__name__}:{_fields(own, call=call)}"
+        named.extend(each for each in _named(own) if each not in named)
+    return shape
+
+
+def _named(fields: dict[str, FieldInfo]) -> list[type[ContractModel]]:
+    return list(
+        dict.fromkeys(model for field in fields.values() for model in _models(field.annotation))
+    )
+
+
+def _models(annotation: object) -> Iterator[type[ContractModel]]:
+    if isinstance(annotation, type) and issubclass(annotation, ContractModel):
+        yield annotation
+    for each in get_args(annotation):
+        yield from _models(each)
+
+
+def _fields(fields: dict[str, FieldInfo], *, call: bool) -> str:
     return "".join(
-        f"\n  {name}: {_type(field.annotation)}{_default(field)}" for name, field in fields.items()
+        f"\n  {name}: {_type(field.annotation)}{_default(field) if call else ''}"
+        + (f"\n    {field.description}" if field.description else "")
+        for name, field in fields.items()
     )
 
 
@@ -220,6 +266,8 @@ def _type(annotation: object) -> str:
         return f"{_type(origin)}[{', '.join(_type(each) for each in arguments)}]"
     if annotation is NoneType:
         return "null"
+    if annotation is Ellipsis:
+        return "..."
     if isinstance(annotation, type) and issubclass(annotation, Enum):
         return " | ".join(str(member.value) for member in annotation)
     return getattr(annotation, "__name__", str(annotation))

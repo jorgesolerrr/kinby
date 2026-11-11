@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
+from copy import copy
 from datetime import date, datetime
 from enum import StrEnum
+from itertools import takewhile
 from pathlib import Path
 from typing import Annotated, Literal, NewType, Self, TypeIs
 from uuid import UUID
@@ -20,6 +25,7 @@ from pydantic import (
     field_serializer,
     model_validator,
 )
+from pydantic.fields import FieldInfo
 
 NodeId = NewType("NodeId", str)
 GateRule = NewType("GateRule", str)
@@ -29,6 +35,36 @@ class ContractModel(BaseModel):
     """Reject unknown input before a handler can mistake it for valid data."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+def described_fields(model: type[ContractModel]) -> dict[str, FieldInfo]:
+    """*model*'s fields, each described by the ``#:`` comment above it in its class's source."""
+    comments: dict[str, str] = {}
+    for each in reversed(model.__mro__[: model.__mro__.index(BaseModel)]):
+        comments |= _field_comments(each)
+    # A model naming a type defined below it holds that annotation unresolved until it completes.
+    model.model_rebuild()
+    described = {}
+    for name, field in model.model_fields.items():
+        described[name] = copy(field)
+        described[name].description = field.description or comments.get(name)
+    return described
+
+
+def _field_comments(model: type) -> dict[str, str]:
+    source = inspect.getsource(model)
+    lines = source.splitlines()
+    comments = {}
+    for node in ast.iter_child_nodes(ast.parse(textwrap.dedent(source)).body[0]):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            above = (line.strip() for line in reversed(lines[: node.lineno - 1]))
+            comment = [
+                line.removeprefix("#:").strip()
+                for line in takewhile(lambda line: line.startswith("#:"), above)
+            ]
+            if comment:
+                comments[node.target.id] = " ".join(reversed(comment))
+    return comments
 
 
 class Scope(StrEnum):
@@ -2848,6 +2884,7 @@ class LibraryGitPreviewResult(ContractModel):
 class LibraryGitAddCommand(ContractModel):
     """Add skills a preview showed to the library."""
 
+    #: The address the preview read.
     address: str
     #: The commit the preview resolved. It lands even when the ref has moved since.
     commit: GitCommit
