@@ -1,26 +1,32 @@
 """The skills kinby ships for the home instance cite only tools, writes and reads that exist."""
 
+import inspect
 import re
+from dataclasses import fields
 
 import pytest
 
 import kinby.core  # noqa: F401  kinby.plugins.core needs kinby.core imported first.
-from kinby.contracts import HUB_READS, RELAYED_READS, Scope
+from kinby.contracts import HUB_READS, RELAYED_READS, Scope, StepEnding
 from kinby.contracts.methods import METHODS
+from kinby.factories import RECIPES_DIRECTORY
 from kinby.factories.file import FACTORY_FILE_ADAPTER
 from kinby.instance import init_instance, inspect_instance
 from kinby.instance.layout import SKILL_FILE
+from kinby.instance.manifest import RawManifest
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.plugins import defaults, hub
 from kinby.plugins.core import core_tools
+from kinby.plugins.hooks import HookResult, StepEnd, hook
 from kinby.plugins.hub import (
     HUB_SCOPES_VARIABLE,
     HUB_URL_VARIABLE,
     HubWriteOperation,
     write_arguments,
 )
+from kinby.plugins.intake import hand_over
 from kinby.plugins.skills import load_skill_file
-from kinby.plugins.tools import Tool
+from kinby.plugins.tools import Tool, tool
 
 _CITED = re.compile(r"`([^`\n]+)`")
 _METHOD = re.compile(r"[a-z]+(\.[a-z_]+)+")
@@ -144,6 +150,23 @@ def test_the_factory_reference_names_every_factory_yaml_field():
 
     assert fields <= set(_CITED.findall(reference.read_text(encoding="utf-8")))
     assert FACTORY_REFERENCE in _cited("write-factory")
+
+
+def test_the_factory_reference_names_what_a_templates_code_and_kinby_toml_use():
+    """A new step ending, hook field, tool argument, template setting or image recipe fails this
+    until the factory reference names it."""
+    names = (
+        {ending.value for ending in StepEnding}
+        | {field.name for model in (StepEnd, HookResult) for field in fields(model)}
+        | set(inspect.signature(tool).parameters)
+        | set(inspect.signature(hand_over).parameters)
+        | {each.__module__ for each in (hook, tool, hand_over)}
+        | set(RawManifest.model_fields)
+        | {recipe.stem for recipe in RECIPES_DIRECTORY.glob("*.Dockerfile")}
+    )
+    reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
+
+    assert names <= _words(reference.read_text(encoding="utf-8"))
 
 
 def test_write_routine_names_every_hub_tool_a_routine_lacks():

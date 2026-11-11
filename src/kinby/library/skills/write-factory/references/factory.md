@@ -6,7 +6,8 @@ Every `factory.yaml` field, what each step kind does, where a run goes next, and
 
 - `name`: the factory's name, the same as its folder's. Lowercase letters, digits and `-`.
 - `instances`: each role, by name, with its declaration. At least one. Its template is `instances/<role>/`.
-  - `image`: one of the image recipes kinby ships, such as `coder`. Left out, the role runs kinby's base image.
+  - `image`: one of the image recipes kinby ships. Left out, the role runs kinby's base image. kinby ships one recipe:
+    - `coder`: the base image with `gh`, Claude Code, Codex, Bun, Node and pnpm, for `client` steps.
   - `setup_fields`: what an instance of the role asks for at creation, after kinby's built-in `model` and `api_key`. See Setup fields.
   - `logins`: the sign-ins the role runs at creation. See Logins.
   - `suggested_picks`: skills the role's instances are offered, each a skill kinby ships in its library.
@@ -137,13 +138,77 @@ A filter reads as a `wait`'s does. The signal can come in on any of the factory'
 
 ## Hooks
 
-A hook is a function in the template's `hooks/`, decorated with `hook` from `kinby.plugins.hooks`. The hook's name is the function's.
+A hook is a function in the template's `hooks/`, decorated with `hook`. The hook's name is the function's. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`:
 
-- It takes a `StepEnd`: the `instance`, the `workspace` the step ran in, its run worktree when the step names a `branch`, the step's `ending`, the `work_item` and the `results` the run holds so far.
-- It returns a `HookResult` with `values` and, when the step has `outcomes`, an `outcome`. None records nothing.
-- Raising fails the step.
-- It runs for every ending of the step, a failed one included.
+```python
+from kinby.plugins.hooks import HookResult, StepEnd, hook
+
+
+@hook
+def record_brief(end: StepEnd) -> HookResult | None:
+    if not (end.workspace / "brief.md").is_file():
+        raise FileNotFoundError("The step wrote no brief.md.")
+    return HookResult(values={"briefed": True})
+```
+
+- It takes a `StepEnd`, with these fields:
+  - `instance`: the instance the step ran in.
+  - `workspace`: the `Path` the step ran in, its run worktree when the step names a `branch`, else the instance's workspace.
+  - `ending`: how the step ended, a `StepEnding` from `kinby.contracts`. See Step endings.
+  - `work_item`: the work item's values, by name.
+  - `results`: every value the run's earlier steps recorded, by name.
+- It returns a `HookResult`, or None to record nothing. Its fields, each with a default:
+  - `values`: the values the step records, by name, as its `results` declare them. Each is a `str`, `int` or `bool`.
+  - `outcome`: the outcome it names, one of the step's `outcomes`. None takes the next step.
+  - `summary`: only a `code` step's tool sets it. A hook's step keeps the summary it ended with.
+- Raising fails a step that ended `clean`, and keeps any other ending.
+- It runs for every ending of the step, a failed one included. It may be `async def`. A plain `def` runs in a thread.
 - kinby's default hooks need no file. `record_branch` records `branch`, the workspace's current branch. `find_pull_request` records `pr`, the number of the pull request of the run's `branch`.
+
+### Step endings
+
+`StepEnding` is a string enum. A hook compares `end.ending` with its members or their values:
+
+- `clean`: the step did its work. The outcome says what the run does next.
+- `failed`: the step failed. The run tries it again under its `retry`.
+- `timed-out`: the step ran past its `timeout`. The run never tries it again.
+- `interrupted`: the hub stopped while the attempt ran. Only old runs hold it, and it counts as failed.
+- `needs-human`: the step cannot run until the user supplies what it lacks. The run stops for them.
+- `limited`: the subscription's limit stopped the step's coding client. The run waits for the reset and tries again without using a retry.
+
+## Tools
+
+A tool is a function in the template's `tools/` or in a routine's `run.py`, decorated with `tool` from `kinby.plugins.tools`. Its name is the function's, its description the docstring, and its parameters, with their type hints, are its arguments. It may be `async def`.
+
+```python
+from kinby.plugins.tools import ToolContext, tool
+
+
+@tool(write=True)
+async def hand_issue(issue: int, context: ToolContext) -> str:
+    """Hand the factory the issue to brief."""
+```
+
+The decorator's arguments, all by keyword:
+
+- `write`: required. True for a tool that changes anything, which the instance's permission mode governs.
+- `paths`: the names of the parameters that hold a path. kinby resolves each against the workspace before the call, and the `auto` mode lets a write with declared paths inside the workspace run unasked.
+- `hub`, `notify` and `view`: these mark kinby's own hub, notify and view tools. A template's tool leaves them out.
+
+A parameter typed `ToolContext` receives the call's context, never shown to the model: `instance`, `workspace`, and `routine`, the routine whose turn or code step runs the tool.
+
+## Intake
+
+The intake routine hands the factory one work item per call. The work item holds exactly the `work_item` values, each of its type. A work item matching an open run returns that run.
+
+- A routine's turn calls the tool `hand_to_factory` with its `work_item`, such as `{"issue": 42}`.
+- A routine's code step calls `hand_over` from `kinby.plugins.intake`:
+
+  ```python
+  async def hand_over(routine: str, work_item: Mapping[str, str | int | bool]) -> FactoryRun
+  ```
+
+  `routine` is the intake routine's name, `context.routine` in its tool. `work_item` maps each value's name to its value. The `FactoryRun` it returns carries the run's `run_id`, `factory` and `status`.
 
 ## Instance templates
 
@@ -152,11 +217,26 @@ A hook is a function in the template's `hooks/`, decorated with `hook` from `kin
 - It may hold `SYSTEM.md`, `kinby.toml`, `tools/`, `hooks/`, `routines/` and `skills/`, and other text files.
 - It may not hold `.state/`, `workspace/`, `.env`, or anything in `memory/` but `memory/profile.md`.
 - `SYSTEM.md` is the default of the instance's behavior prompt.
-- `kinby.toml` merges into the starter manifest. It may not set `id`, `persona_name` or `state_dir`.
+- `kinby.toml` merges into the starter manifest, table by table. See Template settings.
 - The factory check loads every tool and hook file, and creates an instance from the template with its defaults.
-- The intake routine hands the factory one work item per call: its turn calls `hand_to_factory`, or its code step calls `hand_over` from `kinby.plugins.intake`. The work item holds exactly the `work_item` values, each of its type. A work item matching an open run returns that run.
 - The factory names no repository's commands or conventions, and its prompts name no skill an instance picks. Each instance keeps those itself, in its lists of repository commands and its picks.
 - An instance update writes the template's changed files into an instance where the instance hasn't changed them, and removes files the template dropped. Files the instance changed stay.
+
+### Template settings
+
+A template's `kinby.toml` may set these tables and keys. It may not set `id`, `persona_name` or `state_dir`.
+
+- `models`: `main`, `recap` and `embed`, each as `provider:model`.
+- `workspace`: `path`; `source`, the git URL the instance clones on its first start; `snapshots`; `conventions`, with `enabled`, `instructions` and `skills`; and `commands`, the instance's lists of repository commands by name.
+- `memory`: `recap`, `every-turn` or `off`.
+- `feedback`: `ask`, `every-turn` or `off`. A factory's turns have nobody to answer, so set it `off`.
+- `compaction`: `automatic`, and `trigger`, a context size in tokens.
+- `tools`: `defaults`, false to switch off every default tool; `off`, default tools to switch off by name; `search`, `brave`, `tavily`, `exa` or `searxng`; and `bash_timeout_seconds`.
+- `browser`: true gives the instance the browser tools.
+- `routines`: `timezone`, an IANA time zone.
+- `serve`: `listen`, as `host:port`.
+- `budgets`: a turn's `steps`, `tokens` and `seconds`, and the instance's `usd_per_day`.
+- `prices`: by model, `input`, `output`, `cache_read`, `cache_write` and `window`.
 
 ## Run worktrees
 
