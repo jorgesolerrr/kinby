@@ -116,7 +116,7 @@ const STARTED_BY_ICONS: Record<Exclude<TurnBlock["startedBy"]["kind"], "user">, 
  * The day the turn starts on, when the turn before it started on another. Then the user's request
  * in a bubble on the right, or a line naming what started the turn on its own. Then the
  * instance's replies as prose across the column, and the tool calls between them as one line in
- * words. Then how the turn ended.
+ * words. Then how the turn ended, and a mark when the user compacted the thread after it.
  */
 function Turn({
   turn,
@@ -177,6 +177,8 @@ function Turn({
           <RaisedNotification key={run.key} step={run.step} notifications={notifications} />
         ) : run.kind === "view" ? (
           <ViewLine key={run.key} step={run.step} instanceId={instanceId} />
+        ) : run.kind === "compaction" ? (
+          <CompactionMark key={run.key} automatic />
         ) : (
           <Fragment key={run.key}>
             <ToolRun steps={run.steps} approval={turn.approval} end={turn.end} />
@@ -193,7 +195,17 @@ function Turn({
         threadId={threadId}
         instanceId={instanceId}
       />
+      {turn.compactedAfter && <CompactionMark automatic={false} />}
     </div>
+  )
+}
+
+/** Where a compaction fell: the turns above it reach the model as its summary. */
+function CompactionMark({ automatic }: { automatic: boolean }) {
+  return (
+    <Marker variant="separator">
+      <MarkerContent>{automatic ? "Compacted automatically" : "Compacted"}</MarkerContent>
+    </Marker>
   )
 }
 
@@ -206,6 +218,7 @@ type Run =
   | { kind: "text"; key: string; text: string }
   | { kind: "notification"; key: string; step: NotificationStep }
   | { kind: "view"; key: string; step: ViewStep }
+  | { kind: "compaction"; key: string }
   | { kind: "tools"; key: string; steps: ToolStep[] }
 
 /** A turn's steps with each stretch of consecutive tool calls gathered into one run. */
@@ -217,6 +230,8 @@ function grouped(steps: TurnBlock["steps"]): Run[] {
     else if (step.kind === "notification")
       runs.push({ kind: "notification", key: `notification-${step.raised}`, step })
     else if (step.kind === "view") runs.push({ kind: "view", key: `view-${index}`, step })
+    else if (step.kind === "compaction")
+      runs.push({ kind: "compaction", key: `compaction-${index}` })
     else if (last?.kind === "tools") last.steps.push(step)
     else runs.push({ kind: "tools", key: step.callId, steps: [step] })
   })

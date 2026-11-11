@@ -57,7 +57,8 @@ function InputGroupAddon({
       data-align={align}
       className={cn(inputGroupAddonVariants({ align }), className)}
       onClick={(e) => {
-        if ((e.target as HTMLElement).closest("button")) {
+        const target = e.target as HTMLElement
+        if (target.closest("button") || !e.currentTarget.contains(target)) {
           return
         }
         e.currentTarget.parentElement?.querySelector<HTMLElement>("input, textarea")?.focus()
