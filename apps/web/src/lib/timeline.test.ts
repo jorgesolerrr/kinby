@@ -265,6 +265,79 @@ describe("a thread's timeline", () => {
     expect(turn?.end).toEqual({ kind: "done", durationMs: 4_000 })
   })
 
+  describe("a compaction", () => {
+    const called = (inputTokens: number): Payload => ({
+      type: "model.completed",
+      model: "claude",
+      input_tokens: inputTokens,
+      output_tokens: 50,
+      duration_ms: 900,
+    })
+    const compacted: Payload = {
+      type: "thread.compacted",
+      summary: "Goal: fix the runtime.",
+      boundary: 4,
+      model: "claude",
+      input_tokens: 30_000,
+      output_tokens: 800,
+    }
+    const finished: [string, ...Payload[]] = [
+      "turn-1",
+      started("Fix the runtime"),
+      { type: "message.delta", text: "Fixed." },
+      called(120_000),
+      { type: "turn.completed", input_tokens: 120_000, output_tokens: 50 },
+    ]
+
+    it("shows an automatic one as a step of its turn, with no context size until the turn's next model call", () => {
+      const compacting = ["turn-2", started("Now the tests"), compacted] as const
+
+      const timeline = replay(finished, [...compacting])
+      const [first, second] = timeline.turns
+
+      expect(first?.steps).toEqual([{ kind: "text", text: "Fixed." }])
+      expect(second?.steps).toEqual([{ kind: "compaction" }])
+      expect(timeline.contextSize).toBeUndefined()
+      expect(replay(finished, [...compacting, called(9_000)]).contextSize).toBe(9_000)
+    })
+
+    it("marks one on demand after the turn it follows, which keeps its steps and its largest context size", () => {
+      const timeline = replay([...finished, called(130_000), compacted])
+      const [turn] = timeline.turns
+
+      expect(timeline.turns).toHaveLength(1)
+      expect(turn?.steps).toEqual([{ kind: "text", text: "Fixed." }])
+      expect(turn?.compactedAfter).toBe(true)
+      expect(turn?.largestContext).toBe(120_000)
+      expect(timeline.contextSize).toBeUndefined()
+    })
+  })
+
+  it("leaves the context size to the turn's own model calls, not the recap's after it closed", () => {
+    const timeline = replay([
+      "turn-1",
+      started("Fix the runtime"),
+      {
+        type: "model.completed",
+        model: "claude",
+        input_tokens: 41_000,
+        output_tokens: 50,
+        duration_ms: 900,
+      },
+      { type: "turn.completed", input_tokens: 41_000, output_tokens: 50 },
+      {
+        type: "model.completed",
+        model: "claude",
+        input_tokens: 3_000,
+        output_tokens: 200,
+        duration_ms: 900,
+      },
+    ])
+
+    expect(timeline.contextSize).toBe(41_000)
+    expect(timeline.turns[0]?.largestContext).toBe(41_000)
+  })
+
   it("has no context size before the thread's first model call", () => {
     const timeline = replay(["turn-1", started("Fix the runtime")])
 

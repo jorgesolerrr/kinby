@@ -92,6 +92,40 @@ describe("a thread's panel", () => {
     ).toBeDefined()
   })
 
+  it("compacts the thread from the bar with the line of focus given", async () => {
+    const events = thread(
+      ["turn-1", started("Fix the runtime")],
+      [
+        "turn-1",
+        {
+          type: "model.completed",
+          model: "claude",
+          input_tokens: 41_000,
+          output_tokens: 50,
+          duration_ms: 900,
+        },
+      ],
+      ["turn-1", { type: "turn.completed", input_tokens: 41_000, output_tokens: 50 }],
+    )
+    const { client, subscription } = openThread({
+      "thread.context.get": () => ({ context_size: 41_000, rows: [] }),
+      "thread.compact": () => ({ sequence: 4, thread_id: "t1", turn_id: "turn-1" }),
+    })
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "What fills the context" }))
+    await user.type(await screen.findByRole("textbox", { name: "Focus" }), "the deploy")
+    await user.click(screen.getByRole("button", { name: "Compact" }))
+
+    expect(client.calls.filter((call) => call.method === "thread.compact")).toEqual([
+      { method: "thread.compact", params: { thread_id: "t1", focus: "the deploy" } },
+    ])
+  })
+
   describe("the mode", () => {
     it("shows the thread's mode and disables the modes above the instance's ceiling", async () => {
       const { subscription } = openThread({ "thread.list": listing(undefined, "ask") })
