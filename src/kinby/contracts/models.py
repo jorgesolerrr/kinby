@@ -377,6 +377,8 @@ class TurnCompleted(TokenTotals):
     type: Literal[EventType.TURN_COMPLETED] = EventType.TURN_COMPLETED
     outcome: CompletionOutcome = CompletionOutcome.WORK
     snapshot: TreeId | None = None
+    #: What the turn's own model calls cost at its model's price, or None when it has no price.
+    cost: float | None = None
 
 
 class ModelCompleted(TokenTotals):

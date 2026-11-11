@@ -6,7 +6,12 @@ import { describe, expect, it } from "vitest"
 import { openThread, type Payload, started, thread } from "@/components/thread-testing"
 
 const accepted = (): AcceptedResult => ({ thread_id: "t1", turn_id: "turn-2", sequence: 9 })
-const completed: Payload = { type: "turn.completed", input_tokens: 1_200, output_tokens: 300 }
+const completed: Payload = {
+  type: "turn.completed",
+  input_tokens: 1_200,
+  output_tokens: 300,
+  cost: 0.042,
+}
 
 /** Open thread t1, answering from `answers`, on `events` replayed. */
 async function reopen(events: Event[], answers: Parameters<typeof openThread>[0] = {}) {
@@ -27,7 +32,7 @@ function turnOf(request: string) {
 
 describe("how a turn ends", () => {
   describe("a finished turn", () => {
-    it("ends in Copy, Good turn and Bad turn, then its steps, tokens and time", async () => {
+    it("ends in Copy, Good turn and Bad turn, then its steps, cost and time", async () => {
       const events = thread(
         ["turn-1", started("Fix the runtime")],
         ["turn-1", { type: "tool.call", call_id: "c1", name: "read", arguments: { path: "a" } }],
@@ -39,7 +44,7 @@ describe("how a turn ends", () => {
       for (const name of ["Copy", "Good turn", "Bad turn"]) {
         expect(screen.getByRole("button", { name })).toBeDefined()
       }
-      expect(screen.getByText("1 step · 1.5k tokens · 1m 12s")).toBeDefined()
+      expect(screen.getByText("1 step · $0.04 · 1m 12s")).toBeDefined()
     })
 
     it("has no row while it runs", async () => {

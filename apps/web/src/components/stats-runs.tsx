@@ -39,7 +39,7 @@ function Usage({ usage }: { usage: StatsRunsResult }) {
         <Alert>
           <TriangleAlertIcon />
           <AlertTitle>
-            Tokens leave out {leftOut === 1 ? "1 instance" : `${leftOut} instances`}
+            Token usage leaves out {leftOut === 1 ? "1 instance" : `${leftOut} instances`}
           </AlertTitle>
           <AlertDescription>
             An instance that is not running, did not answer, or runs an older core counts none.
@@ -75,7 +75,7 @@ function WeekTable({ weeks }: { weeks: RunWeek[] }) {
           <TableRow>
             <TableHead>Week of</TableHead>
             <TableHead className="text-right">Runs</TableHead>
-            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Token usage</TableHead>
             <TableHead className="hidden text-right md:table-cell">Attempts</TableHead>
             <TableHead className="hidden text-right md:table-cell">Duration</TableHead>
           </TableRow>
@@ -111,7 +111,7 @@ function RunTable({ runs }: { runs: RunUsage[] }) {
           <TableRow>
             <TableHead>Work item</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Token usage</TableHead>
             <TableHead className="text-right">API cost</TableHead>
             <TableHead className="hidden md:table-cell">Plan runs</TableHead>
             <TableHead className="hidden md:table-cell">Attempts</TableHead>

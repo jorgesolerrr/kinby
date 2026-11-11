@@ -10643,6 +10643,17 @@
           "default": 0,
           "type": "integer"
         },
+        "cost": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "input_tokens": {
           "type": "integer"
         },

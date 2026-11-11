@@ -297,12 +297,13 @@ async def _budget_session(
     tmp_path: Path,
     model: ChatModel,
     budget: str,
+    main: str = _MODEL,
 ) -> tuple[Dispatcher, UUID]:
     instance_path = tmp_path / "bounded"
     instance_path.mkdir()
     (instance_path / "kinby.toml").write_text(
         (
-            f'id = "bounded"\n\n[models]\nmain = "{_MODEL}"\n\n'
+            f'id = "bounded"\n\n[models]\nmain = "{main}"\n\n'
             f"[tools]\ndefaults = false\n\n[budgets]\n{budget}\n"
         ),
         encoding="utf-8",
@@ -512,12 +513,32 @@ def test_runner_records_each_model_call_and_closes_with_their_totals(tmp_path: P
             duration_ms=calls[1].duration_ms,
         )
         assert calls[1].duration_ms >= 0
-        assert events[-1].payload == TurnCompleted(
+        closed = events[-1].payload
+        assert isinstance(closed, TurnCompleted)
+        assert closed.cost == pytest.approx(45.375e-6)
+        assert closed == TurnCompleted(
             input_tokens=7,
             output_tokens=4,
             cache_read_tokens=3,
             cache_creation_tokens=1,
+            cost=closed.cost,
         )
+
+    asyncio.run(scenario())
+
+
+def test_turn_on_an_unpriced_model_closes_with_no_cost(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher, thread_id = await _budget_session(
+            tmp_path, TwoCallChatModel(), "", main="openai:unpriced"
+        )
+
+        events = await _budget_turn_events(dispatcher, thread_id, "Work")
+
+        closed = events[-1].payload
+        assert isinstance(closed, TurnCompleted)
+        assert closed.input_tokens == 7
+        assert closed.cost is None
 
     asyncio.run(scenario())
 

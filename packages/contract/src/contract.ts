@@ -3386,6 +3386,7 @@ export interface TakeoverRequested {
 export interface TurnCompleted {
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
+  cost?: number | null;
   input_tokens: number;
   outcome?: CompletionOutcome;
   output_tokens: number;

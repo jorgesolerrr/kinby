@@ -378,7 +378,7 @@ _Avoid_: task
 
 ### Budget
 
-A ceiling an **instance** sets on one **turn** (steps, tokens, seconds) or on a UTC day (cost). Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
+A ceiling an **instance** sets on one **turn** (steps, **token usage**, seconds) or on a UTC day (cost). The token budget limits token usage, never the **context size**. Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
 
 ### Turn interruption
 

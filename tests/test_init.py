@@ -42,6 +42,8 @@ def test_init_writes_the_starter_instance_tree(tmp_path):
         "# One step is one node execution.\n"
         "# A budget of 7 steps allows four model calls and three tool rounds.\n"
         "# steps = 7\n"
+        "# tokens limits the turn's token usage: input plus output added over its model\n"
+        "# calls. It does not limit the context size.\n"
         "# tokens = 50000\n"
         "# seconds = 300\n"
         "# usd_per_day = 5.0\n"

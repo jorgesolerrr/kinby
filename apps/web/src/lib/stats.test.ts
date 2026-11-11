@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { bucketStarts, contextFill, contextRows } from "@/lib/stats"
+import { bucketStarts, contextFill, contextRows, turnFigures } from "@/lib/stats"
 
 const now = new Date("2026-09-30T15:20:00Z")
 
@@ -70,5 +70,23 @@ describe("a context size's breakdown", () => {
       { label: "System prompt", tokens: 500, share: 25 },
       { label: "MCP tools", tokens: 1_500, share: 75 },
     ])
+  })
+})
+
+describe("a finished turn's figures", () => {
+  it("reads steps, cost and time on API use", () => {
+    expect(turnFigures({ steps: 3, cost: 0.042, largestContext: 41_000, durationMs: 8_000 })).toBe(
+      "3 steps · $0.04 · 8s",
+    )
+  })
+
+  it("shows the turn's largest context size in place of cost where nothing priced it", () => {
+    expect(turnFigures({ steps: 1, largestContext: 41_000, durationMs: 65_000 })).toBe(
+      "1 step · 41k context · 1m 5s",
+    )
+  })
+
+  it("shows steps and time alone for a turn with neither", () => {
+    expect(turnFigures({ steps: 0, durationMs: 2_000 })).toBe("0 steps · 2s")
   })
 })

@@ -103,6 +103,8 @@ class Budgets:
     """Limits configured for turns and instance spending."""
 
     steps: int | None = None
+    #: A limit on the turn's token usage: input and output added over its model calls, which
+    #: counts the context once per call. It does not limit the context size.
     tokens: int | None = None
     seconds: float | None = None
     usd_per_day: float | None = None

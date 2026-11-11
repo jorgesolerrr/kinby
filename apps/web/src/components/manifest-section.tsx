@@ -72,7 +72,12 @@ const MODEL_FIELDS: { key: keyof ManifestModels; label: string; none?: string }[
 
 const BUDGET_FIELDS = [
   { key: "steps", label: "Steps", step: 1, description: "Model and tool steps in one turn." },
-  { key: "tokens", label: "Tokens", step: 1, description: "Tokens in one turn." },
+  {
+    key: "tokens",
+    label: "Token usage",
+    step: 1,
+    description: "Input and output tokens added over one turn's model calls, not its context size.",
+  },
   { key: "seconds", label: "Seconds", step: "any", description: "Wall-clock time of one turn." },
   {
     key: "usd_per_day",
