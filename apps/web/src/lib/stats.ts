@@ -165,12 +165,16 @@ export function effectiveTrigger(
     : Math.min(compaction.trigger, window - WINDOW_RESERVE)
 }
 
-/** What the context bar fills toward: the effective compaction trigger, or else the model's window. */
+/**
+ * What the context bar fills toward: the effective compaction trigger, or else the model's window.
+ * A window no larger than the reserve leaves no trigger above zero, so the bar fills toward the window.
+ */
 export function contextLimit(
   compaction: ManifestCompaction | undefined,
   window: number | undefined,
 ): number | undefined {
-  return effectiveTrigger(compaction, window) ?? window
+  const trigger = effectiveTrigger(compaction, window)
+  return trigger !== undefined && trigger > 0 ? trigger : window
 }
 
 /** A context size against `limit`, as the panel states it: "41k of 100k, 41%". */

@@ -188,7 +188,11 @@ function ContextLimits({
           <TableRow>
             <TableCell>Compaction trigger</TableCell>
             <TableCell className="text-right">
-              {trigger === undefined ? "Off" : contextAgainst(contextSize, trigger)}
+              {trigger === undefined
+                ? "Off"
+                : trigger > 0
+                  ? contextAgainst(contextSize, trigger)
+                  : "Every turn"}
             </TableCell>
           </TableRow>
         )}

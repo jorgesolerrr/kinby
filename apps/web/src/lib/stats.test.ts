@@ -78,6 +78,11 @@ describe("what the bar fills toward", () => {
     expect(contextLimit(automatic, 64_000)).toBe(48_000)
   })
 
+  it("is the model's window when the window is no larger than the 16,000-token reserve", () => {
+    expect(contextLimit(automatic, 8_000)).toBe(8_000)
+    expect(contextLimit(automatic, 16_000)).toBe(16_000)
+  })
+
   it("is the trigger on a model with no known window", () => {
     expect(contextLimit(automatic, undefined)).toBe(100_000)
   })
