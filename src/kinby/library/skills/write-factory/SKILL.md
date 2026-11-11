@@ -9,7 +9,7 @@ A factory is a folder of files the hub runs as a line of steps. Its instances ar
 
 Read `factory.list`, then `factory.get` for the factory to change or the one closest to what the user wants. It returns every file of the folder and the folder's `hash`. The shipped software factory is a worked example of every step kind. Read `factory.run.list` to see how a factory's runs went before changing it.
 
-This skill's `references/factory.md` covers every `factory.yaml` field, the step kinds, send-back and needs human, the template rules, and what the gate does in each step. Read it with the `skill` tool, `file` set to that path. Never read kinby's installed source to learn these.
+This skill's `references/factory.md` covers every `factory.yaml` field, the step kinds, send-back and needs human, what the gate does in each step, the hook and tool decorators with their imports, the step endings, `hand_over`, the template rules and settings, and the image recipes. Read it with the `skill` tool, `file` set to that path. Never read kinby's installed source to learn these.
 
 ## The folder
 
