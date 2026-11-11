@@ -22,9 +22,10 @@ def context_rows(
     mcp_tools: Sequence[Tool],
     messages: Sequence[AnyMessage],
     compaction: ThreadCompacted | None,
+    cut: int | None,
 ) -> list[ContextRow]:
     """The rows of *context_size*: the system prompt's *sections*, the *tools* and the
-    *mcp_tools*, and *messages* as they are sent under *compaction*."""
+    *mcp_tools*, and *messages* as they are sent under *compaction* and *cut*."""
     characters = dict.fromkeys(ContextCategory, 0)
     for section in sections:
         characters[_section_category(section.name)] += len(section.text)
@@ -32,7 +33,7 @@ def context_rows(
         category = ContextCategory.AUTHORED_TOOLS if tool.authored else ContextCategory.CORE_TOOLS
         characters[category] += _tool_characters(tool)
     characters[ContextCategory.MCP_TOOLS] += sum(_tool_characters(tool) for tool in mcp_tools)
-    sent = sent_history(messages, compaction)
+    sent = sent_history(messages, compaction, cut)
     if compaction is None:
         del characters[ContextCategory.COMPACTION_SUMMARY]
     else:

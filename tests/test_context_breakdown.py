@@ -15,11 +15,15 @@ from kinby.instance.layout import MEMORY_DIR, PROFILE_NAME
 from tests.test_authored_tools import expose, offline_uv  # noqa: F401 - an autouse fixture
 from tests.test_compaction import (
     LONG,
+    LONG_RESULTS,
+    WINDOW,
     CompactingModel,
     Sized,
     compact,
     new_thread,
     turn,
+    turns,
+    with_manifest,
     with_skill,
 )
 from tests.test_mcp_servers import echo, pick, uvx  # noqa: F401 - an autouse fixture
@@ -119,6 +123,62 @@ def test_a_compacted_thread_counts_the_summary_and_not_the_messages_before_its_b
     # The kept turn's message alone: the one before the boundary would double the ratio.
     ratio = rows[ContextCategory.TEXT] / rows[ContextCategory.COMPACTION_SUMMARY]
     assert ratio == pytest.approx(LONG / len(SUMMARY), rel=0.05)
+
+
+def test_the_latest_calls_answer_is_not_part_of_what_it_was_sent(tmp_path: Path) -> None:
+    model = CompactingModel(Sized("z" * LONG, 12_345))
+    dispatcher, _ = signal_runtime(instance_at(tmp_path), model)
+
+    async def scenario() -> ThreadContextResult:
+        thread_id = await new_thread(dispatcher)
+        await turn(dispatcher, thread_id, "Go.")
+        return await breakdown(dispatcher, thread_id)
+
+    rows = tokens(asyncio.run(scenario()))
+
+    assert rows[ContextCategory.TEXT] < rows[ContextCategory.CORE_TOOLS]
+
+
+def test_a_compaction_that_cut_into_its_turn_counts_only_the_messages_after_the_cut(
+    tmp_path: Path,
+) -> None:
+    model = CompactingModel(
+        Sized("", 10_000, [("report", {"size": 30_000})]),
+        LONG_RESULTS,
+        SUMMARY,
+        Sized("Done.", 40_000),
+    )
+    dispatcher, _ = signal_runtime(with_manifest(instance_at(tmp_path), WINDOW), model)
+
+    async def scenario() -> ThreadContextResult:
+        thread_id = await new_thread(dispatcher)
+        await turn(dispatcher, thread_id, "Go.")
+        return await breakdown(dispatcher, thread_id)
+
+    rows = tokens(asyncio.run(scenario()))
+
+    # The three results after the cut: the one before it would add a third.
+    ratio = rows[ContextCategory.TOOL_RESULTS] / rows[ContextCategory.COMPACTION_SUMMARY]
+    assert ratio == pytest.approx(3 * 30_000 / len(SUMMARY), rel=0.05)
+
+
+def test_a_turn_that_failed_after_its_latest_call_gives_its_size_and_no_rows(
+    tmp_path: Path,
+) -> None:
+    instance = with_manifest(instance_at(tmp_path), "[budgets]\ntokens = 10000\n")
+    model = CompactingModel(
+        Sized("Done.", 1_000), Sized("", 50_000, [("report", {"size": 30_000})])
+    )
+    dispatcher, _ = signal_runtime(instance, model)
+
+    async def scenario() -> ThreadContextResult:
+        thread_id = await turns(dispatcher, "Go.", "Read the report.")
+        return await breakdown(dispatcher, thread_id)
+
+    result = asyncio.run(scenario())
+
+    # The failed turn kept no checkpoint, so nothing holds what its latest call was sent.
+    assert (result.context_size, result.rows) == (50_000, [])
 
 
 def test_a_thread_with_no_model_call_has_no_rows(tmp_path: Path) -> None:

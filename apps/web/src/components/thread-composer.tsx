@@ -229,7 +229,7 @@ function ContextBreakdown({
       <p className="text-muted-foreground">{reason(failure)}</p>
     )
   ) : value.rows.length === 0 ? (
-    <p className="text-muted-foreground">Nothing is measured until the next model call.</p>
+    <p className="text-muted-foreground">The breakdown shows once the next turn completes.</p>
   ) : (
     <Table>
       <TableBody>

@@ -815,7 +815,8 @@ class ThreadContextResult(ContractModel):
     #: a compaction until the next.
     context_size: int | None
     #: Each category measured in characters as the model is sent it, scaled to add up to
-    #: ``context_size``. Empty when there is none. A compaction summary row only for a compacted
+    #: ``context_size``. Empty when there is none, or when the latest model call's turn failed or
+    #: stopped and kept none of what it sent. A compaction summary row only for a compacted
     #: thread.
     rows: list[ContextRow]
 
