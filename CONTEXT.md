@@ -476,6 +476,10 @@ A hash of the **profile**'s text, recorded when a turn starts. The provider's to
 
 One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph.
 
+### Lesson case
+
+A memory **eval** case that gives the agent ordinary work, never a question about the past, while a **fact** in its memory warns against a mistake that work invites. It scores whether the agent followed the lesson and what its **memory tokens** were. The **eval arms** that compare how memory reaches the agent run on lesson cases.
+
 ### Turn runner
 
 The part of the runtime that produces the agent's response and the turn's events.
