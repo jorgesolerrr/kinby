@@ -22,6 +22,7 @@ from tests.test_compaction import (
     compact,
     new_thread,
     turn,
+    turns,
     with_manifest,
     with_skill,
 )
@@ -159,6 +160,25 @@ def test_a_compaction_that_cut_into_its_turn_counts_only_the_messages_after_the_
     # The three results after the cut: the one before it would add a third.
     ratio = rows[ContextCategory.TOOL_RESULTS] / rows[ContextCategory.COMPACTION_SUMMARY]
     assert ratio == pytest.approx(3 * 30_000 / len(SUMMARY), rel=0.05)
+
+
+def test_a_turn_that_failed_after_its_latest_call_gives_its_size_and_no_rows(
+    tmp_path: Path,
+) -> None:
+    instance = with_manifest(instance_at(tmp_path), "[budgets]\ntokens = 10000\n")
+    model = CompactingModel(
+        Sized("Done.", 1_000), Sized("", 50_000, [("report", {"size": 30_000})])
+    )
+    dispatcher, _ = signal_runtime(instance, model)
+
+    async def scenario() -> ThreadContextResult:
+        thread_id = await turns(dispatcher, "Go.", "Read the report.")
+        return await breakdown(dispatcher, thread_id)
+
+    result = asyncio.run(scenario())
+
+    # The failed turn kept no checkpoint, so nothing holds what its latest call was sent.
+    assert (result.context_size, result.rows) == (50_000, [])
 
 
 def test_a_thread_with_no_model_call_has_no_rows(tmp_path: Path) -> None:

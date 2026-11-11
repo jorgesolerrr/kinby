@@ -7,6 +7,7 @@ not fit the model's window compacts before it."""
 from collections.abc import Sequence
 from itertools import takewhile
 from typing import TypeGuard
+from uuid import UUID
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
@@ -59,9 +60,24 @@ def effective_trigger(trigger: int | None, window: int | None) -> int | None:
 
 
 def context_size(events: Sequence[Event]) -> int | None:
-    """The context size of the thread whose *events* these are: the input tokens of the latest
-    model call its turns made. A recap's call after its turn closed is not one. None when its
-    turns made none, or the thread compacted since."""
+    """The context size of the thread whose *events* these are: the input tokens of its latest
+    model call. None when its turns made none, or the thread compacted since."""
+    latest = latest_model_call(events)
+    return None if latest is None else latest[1].input_tokens
+
+
+def latest_compaction(events: Sequence[Event]) -> ThreadCompacted | None:
+    """The latest compaction of the thread whose *events* these are."""
+    return next(
+        (event.payload for event in reversed(events) if isinstance(event.payload, ThreadCompacted)),
+        None,
+    )
+
+
+def latest_model_call(events: Sequence[Event]) -> tuple[UUID, ModelCompleted] | None:
+    """The latest model call the turns of the thread whose *events* these are made, with the turn
+    it ran in. A recap's call after its turn closed is not one. None when its turns made none, or
+    the thread compacted since."""
     in_turn = False
     for event in reversed(events):
         payload = event.payload
@@ -72,7 +88,7 @@ def context_size(events: Sequence[Event]) -> int | None:
         elif is_turn_closing(payload):
             in_turn = True
         elif isinstance(payload, ModelCompleted) and in_turn:
-            return payload.input_tokens
+            return event.turn_id, payload
     return None
 
 

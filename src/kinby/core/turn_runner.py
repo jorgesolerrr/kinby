@@ -106,6 +106,8 @@ from kinby.core.sent_history import (
     context_size,
     effective_trigger,
     kept_from,
+    latest_compaction,
+    latest_model_call,
     passes_window,
     sent_history,
     summary_request,
@@ -714,7 +716,9 @@ class LangGraphRunner:
                                 content=render_wake(turn.origin, prepared.message, prepared.payload)
                             ),
                             budgets=budgets,
-                            compaction=self._latest_compaction(turn.thread_id),
+                            compaction=latest_compaction(
+                                self._event_log.thread_events(turn.thread_id)
+                            ),
                             window=window,
                         ),
                         # ADR 0011 keeps interrupted tool calls out of completed history.
@@ -1039,15 +1043,21 @@ class LangGraphRunner:
     async def context_breakdown(self, thread_id: UUID) -> ThreadContextResult:
         """What fills the thread's context size: the system prompt and the tool list a turn
         started now would send, and the thread's messages as its latest model call was sent
-        them."""
-        size = context_size(self._event_log.thread_events(thread_id))
-        if size is None:
+        them. Only the checkpoint of a turn that ran to its end holds those messages, so a
+        latest call in a turn that failed or stopped gives its size and no rows."""
+        events = self._event_log.thread_events(thread_id)
+        latest = latest_model_call(events)
+        if latest is None:
             return ThreadContextResult(context_size=None, rows=[])
+        turn_id, call = latest
+        size = call.input_tokens
+        compaction = latest_compaction(events)
         async with self._graph() as (graph, _):
             completed = await _newest_completed(graph, _thread_config(thread_id))
-        state = {} if completed is None else completed.values
+        if completed is None or completed.values["turn"].turn_id != turn_id:
+            return ThreadContextResult(context_size=size, rows=[])
         # The turn ends on the latest call's answer, which that call was not sent.
-        messages: list[AnyMessage] = state.get("messages", [])[:-1]
+        messages: list[AnyMessage] = completed.values["messages"][:-1]
         skills, _ = load_skills(self._instance)
         discovered, _ = self._tools.refresh()
         tools, _ = discovered.with_core(*core_tools(self._instance, skills, today=self._today))
@@ -1058,8 +1068,8 @@ class LangGraphRunner:
                 tools.tools,
                 picked,
                 messages,
-                self._latest_compaction(thread_id),
-                state.get("cut"),
+                compaction,
+                completed.values.get("cut"),
             )
         return ThreadContextResult(context_size=size, rows=rows)
 
@@ -1139,7 +1149,7 @@ class LangGraphRunner:
         async with self._graph() as (graph, _):
             completed = await _newest_completed(graph, _thread_config(thread_id))
         messages: list[AnyMessage] = [] if completed is None else completed.values["messages"]
-        previous = self._latest_compaction(thread_id)
+        previous = latest_compaction(self._event_log.thread_events(thread_id))
         start = 0 if previous is None else previous.boundary
         boundary = kept_from(messages, start)
         return await self._summarize(thread_id, model, previous, messages, start, boundary, focus)
@@ -1184,16 +1194,6 @@ class LangGraphRunner:
             cache_read_tokens=completed.cache_read_tokens,
             cache_creation_tokens=completed.cache_creation_tokens,
             model=model,
-        )
-
-    def _latest_compaction(self, thread_id: UUID) -> ThreadCompacted | None:
-        return next(
-            (
-                event.payload
-                for event in reversed(self._event_log.thread_events(thread_id))
-                if isinstance(event.payload, ThreadCompacted)
-            ),
-            None,
         )
 
     async def prune_checkpoints(self, thread_id: UUID) -> None:
