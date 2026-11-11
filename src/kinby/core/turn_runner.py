@@ -1038,13 +1038,16 @@ class LangGraphRunner:
 
     async def context_breakdown(self, thread_id: UUID) -> ThreadContextResult:
         """What fills the thread's context size: the system prompt and the tool list a turn
-        started now would send, and the thread's messages as its latest turn sent them."""
+        started now would send, and the thread's messages as its latest model call was sent
+        them."""
         size = context_size(self._event_log.thread_events(thread_id))
         if size is None:
             return ThreadContextResult(context_size=None, rows=[])
         async with self._graph() as (graph, _):
             completed = await _newest_completed(graph, _thread_config(thread_id))
-        messages: list[AnyMessage] = [] if completed is None else completed.values["messages"]
+        state = {} if completed is None else completed.values
+        # The turn ends on the latest call's answer, which that call was not sent.
+        messages: list[AnyMessage] = state.get("messages", [])[:-1]
         skills, _ = load_skills(self._instance)
         discovered, _ = self._tools.refresh()
         tools, _ = discovered.with_core(*core_tools(self._instance, skills, today=self._today))
@@ -1056,6 +1059,7 @@ class LangGraphRunner:
                 picked,
                 messages,
                 self._latest_compaction(thread_id),
+                state.get("cut"),
             )
         return ThreadContextResult(context_size=size, rows=rows)
 
