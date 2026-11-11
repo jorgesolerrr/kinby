@@ -60,6 +60,7 @@ from kinby.contracts import (
     SignalReceived,
     TakeoverRequested,
     ThreadCompacted,
+    ThreadContextResult,
     ToolCall,
     ToolGated,
     ToolResult,
@@ -71,6 +72,7 @@ from kinby.contracts import (
 )
 from kinby.core.budgets import DAILY_COST_EVENTS, DailyBudget, daily_cost
 from kinby.core.clock import utc_today
+from kinby.core.context_breakdown import context_rows
 from kinby.core.errors import (
     BudgetExceeded,
     CodeStepFailed,
@@ -1033,6 +1035,29 @@ class LangGraphRunner:
         )
         await self._event_log.append(thread_id, turn_id, completed)
         return await self._event_log.append(thread_id, turn_id, compaction)
+
+    async def context_breakdown(self, thread_id: UUID) -> ThreadContextResult:
+        """What fills the thread's context size: the system prompt and the tool list a turn
+        started now would send, and the thread's messages as its latest turn sent them."""
+        size = context_size(self._event_log.thread_events(thread_id))
+        if size is None:
+            return ThreadContextResult(context_size=None, rows=[])
+        async with self._graph() as (graph, _):
+            completed = await _newest_completed(graph, _thread_config(thread_id))
+        messages: list[AnyMessage] = [] if completed is None else completed.values["messages"]
+        skills, _ = load_skills(self._instance)
+        discovered, _ = self._tools.refresh()
+        tools, _ = discovered.with_core(*core_tools(self._instance, skills, today=self._today))
+        async with mcp_tools(self._instance) as picked:
+            rows = context_rows(
+                size,
+                assemble_system_prompt(self._instance, skills, self._today()),
+                tools.tools,
+                picked,
+                messages,
+                self._latest_compaction(thread_id),
+            )
+        return ThreadContextResult(context_size=size, rows=rows)
 
     async def _compact_over_trigger(
         self, turn: PreparedTurnRequest, window: int | None, emit: Emit

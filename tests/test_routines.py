@@ -362,6 +362,7 @@ def signal_runtime(
                 runner.permission_ceiling,
                 runner,
                 compact=runner.compact,
+                context=runner.context_breakdown,
             ),
             SchedulerConfig(instance),
         ),

@@ -375,7 +375,7 @@ class Turns:
     async def compacting(self, thread_id: UUID) -> AsyncIterator[None]:
         """Hold the idle thread while it compacts. A draining instance compacts nothing."""
         self.require_admitting()
-        self._require_thread(thread_id)
+        self.require_thread(thread_id)
         self._require_idle(thread_id)
         claim = CompactionClaim()
         self._claims[thread_id] = claim
@@ -452,7 +452,7 @@ class Turns:
                 await self._changed.wait()
 
     async def set_mode(self, command: ThreadModeSetCommand) -> AcceptedResult:
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         self._require_idle(command.thread_id)
         ceiling = self._permission_ceiling()
         if exceeds_ceiling(command.mode, ceiling):
@@ -470,7 +470,7 @@ class Turns:
         return started
 
     async def diff(self, command: ThreadTurnDiffCommand) -> ThreadTurnDiffResult:
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
         if self._snapshots is None or not isinstance(recorded, DiffableSnapshots):
             raise _snapshot_unavailable(command.turn_id)
@@ -490,7 +490,7 @@ class Turns:
         self,
         command: ThreadTurnRevertPreviewCommand,
     ) -> ThreadTurnRevertPreviewResult:
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         claim = self._claim_revert(command.thread_id)
         try:
             recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
@@ -510,7 +510,7 @@ class Turns:
     async def revert(self, command: ThreadTurnRevertCommand) -> AcceptedResult:
         # A revert writes the workspace, so a draining instance takes no more of them.
         self.require_admitting()
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         claim = self._claim_revert(command.thread_id)
         try:
             recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
@@ -590,7 +590,7 @@ class Turns:
 
     async def list_turns(self, command: ThreadTurnListCommand) -> ThreadTurnListResult:
         """Every turn on the thread, in order."""
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         return ThreadTurnListResult(
             turn_ids=list(
                 dict.fromkeys(
@@ -606,7 +606,7 @@ class Turns:
         command: ThreadTurnTargetListCommand,
     ) -> ThreadTurnTargetListResult:
         """Every turn target on the thread, in order, and whether each has closed."""
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         closed: dict[UUID, bool] = {}
         for event in self._log.thread_events(command.thread_id):
             if isinstance(event.payload, TurnStarted):
@@ -623,7 +623,7 @@ class Turns:
         message: str,
         origin: Origin,
     ) -> AcceptedResult:
-        self._require_thread(thread_id)
+        self.require_thread(thread_id)
         self.require_available(origin)
         self._require_idle(thread_id)
         return await self._wake(lambda: thread_id, message, origin, uuid4())
@@ -636,7 +636,7 @@ class Turns:
         origin: RoutineOrigin,
         delivery_body: str | None,
     ) -> AcceptedResult:
-        self._require_thread(thread_id)
+        self.require_thread(thread_id)
         self.require_available(origin)
         return await self._wake(lambda: thread_id, message, origin, turn_id, delivery_body)
 
@@ -706,7 +706,7 @@ class Turns:
         )
 
     async def interrupt(self, command: ThreadTurnInterruptCommand) -> AcceptedResult:
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         running = self._running.get(command.thread_id)
         claim: InterruptedTurnClaim
         pending = None
@@ -760,7 +760,7 @@ class Turns:
         return accepted(interrupted)
 
     async def respond(self, command: ThreadApprovalRespondCommand) -> AcceptedResult:
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         if not self._answering:
             raise InstanceDraining(
                 "The instance has drained. The approval waits for its next start."
@@ -802,7 +802,7 @@ class Turns:
             raise InstanceDraining(
                 "The instance has drained. The takeover waits for its next start."
             )
-        self._require_thread(command.thread_id)
+        self.require_thread(command.thread_id)
         events = self._log.thread_events(command.thread_id)
         pending = pending_takeover(events)
         if pending is None or pending.request.takeover_id != command.takeover_id:
@@ -893,7 +893,7 @@ class Turns:
         if thread is not None and thread.title is None and title:
             self._store.rename(thread_id, title)
 
-    def _require_thread(self, thread_id: UUID) -> None:
+    def require_thread(self, thread_id: UUID) -> None:
         if not self._store.exists(thread_id):
             raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
 

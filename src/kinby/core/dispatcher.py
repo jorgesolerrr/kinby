@@ -49,6 +49,7 @@ from kinby.contracts import (
     THREAD_ARCHIVE,
     THREAD_ASK,
     THREAD_COMPACT,
+    THREAD_CONTEXT_GET,
     THREAD_CREATE,
     THREAD_LIST,
     THREAD_MODE_SET,
@@ -88,6 +89,8 @@ from kinby.contracts import (
     Stream,
     ThreadArchiveCommand,
     ThreadCompactCommand,
+    ThreadContextGetCommand,
+    ThreadContextResult,
     ThreadCreateCommand,
     ThreadCreateResult,
     ThreadListCommand,
@@ -148,6 +151,8 @@ class TurnConfig:
     browser: BrowserService | None = None
     #: Compacts a thread with the focus given, and returns the compaction's event.
     compact: Callable[[UUID, str | None], Awaitable[Event]] | None = None
+    #: What fills a thread's context size.
+    context: Callable[[UUID], Awaitable[ThreadContextResult]] | None = None
 
 
 @dataclass(frozen=True)
@@ -468,6 +473,14 @@ def build_dispatcher(
                     return accepted(await compact(command.thread_id, command.focus))
 
             dispatcher.register(THREAD_COMPACT, compact_thread)
+        context = turn_settings.context if turn_settings is not None else None
+        if context is not None:
+
+            async def thread_context(command: ThreadContextGetCommand) -> ThreadContextResult:
+                turn_service.require_thread(command.thread_id)
+                return await context(command.thread_id)
+
+            dispatcher.register(THREAD_CONTEXT_GET, thread_context)
     return dispatcher
 
 
@@ -508,4 +521,5 @@ async def turn_config(
         snapshots,
         browser,
         runner.compact,
+        runner.context_breakdown,
     )

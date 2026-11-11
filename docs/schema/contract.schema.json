@@ -1709,6 +1709,41 @@
       "title": "ContainerOwner",
       "type": "string"
     },
+    "ContextCategory": {
+      "description": "What fills a thread's context size, one row of its breakdown each.",
+      "enum": [
+        "system_prompt",
+        "profile",
+        "skills_catalogue",
+        "core_tools",
+        "authored_tools",
+        "mcp_tools",
+        "text",
+        "tool_results",
+        "skill_bodies",
+        "compaction_summary"
+      ],
+      "title": "ContextCategory",
+      "type": "string"
+    },
+    "ContextRow": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ContextCategory"
+        },
+        "tokens": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "category",
+        "tokens"
+      ],
+      "title": "ContextRow",
+      "type": "object"
+    },
     "DeclaredSetup": {
       "additionalProperties": false,
       "description": "The setup fields an instance asks for, the built-in fields first, and its logins.",
@@ -9566,6 +9601,48 @@
       "title": "ThreadCompacted",
       "type": "object"
     },
+    "ThreadContextGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "title": "ThreadContextGetCommand",
+      "type": "object"
+    },
+    "ThreadContextResult": {
+      "additionalProperties": false,
+      "description": "What fills the thread's context size, computed when asked for and stored nowhere\n(ADR 0124).",
+      "properties": {
+        "context_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/ContextRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "context_size",
+        "rows"
+      ],
+      "title": "ThreadContextResult",
+      "type": "object"
+    },
     "ThreadCreateCommand": {
       "additionalProperties": false,
       "properties": {
@@ -14024,6 +14101,22 @@
           ],
           "type": "object"
         },
+        "thread.context.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ThreadContextGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ThreadContextResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "thread.create": {
           "additionalProperties": false,
           "properties": {
@@ -14383,6 +14476,7 @@
         "thread.rename",
         "thread.archive",
         "thread.compact",
+        "thread.context.get",
         "thread.unarchive",
         "thread.mode.set",
         "thread.turn.start",

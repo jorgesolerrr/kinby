@@ -779,6 +779,45 @@ class ThreadCompactCommand(ContractModel):
     focus: str | None = None
 
 
+class ThreadContextGetCommand(ContractModel):
+    thread_id: UUID
+
+
+class ContextCategory(StrEnum):
+    """What fills a thread's context size, one row of its breakdown each."""
+
+    #: The preamble, the behavior prompt, the workspace conventions and the environment.
+    SYSTEM_PROMPT = "system_prompt"
+    PROFILE = "profile"
+    SKILLS_CATALOGUE = "skills_catalogue"
+    CORE_TOOLS = "core_tools"
+    AUTHORED_TOOLS = "authored_tools"
+    MCP_TOOLS = "mcp_tools"
+    #: The user's messages and the model's answers and tool calls.
+    TEXT = "text"
+    TOOL_RESULTS = "tool_results"
+    SKILL_BODIES = "skill_bodies"
+    COMPACTION_SUMMARY = "compaction_summary"
+
+
+class ContextRow(ContractModel):
+    category: ContextCategory
+    tokens: Annotated[int, Field(ge=0)]
+
+
+class ThreadContextResult(ContractModel):
+    """What fills the thread's context size, computed when asked for and stored nowhere
+    (ADR 0124)."""
+
+    #: The input tokens of the thread's latest model call. None before its first one, and after
+    #: a compaction until the next.
+    context_size: int | None
+    #: Each category measured in characters as the model is sent it, scaled to add up to
+    #: ``context_size``. Empty when there is none. A compaction summary row only for a compacted
+    #: thread.
+    rows: list[ContextRow]
+
+
 class ThreadTurnRateCommand(ContractModel):
     thread_id: UUID
     turn_id: UUID

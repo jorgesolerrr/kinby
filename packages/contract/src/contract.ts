@@ -170,6 +170,20 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodingModel = string;
 export type ApprovalDecision = "approve" | "deny" | "allow_in_routine" | "mark_read_only";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_takeover" | "awaiting_reply" | "failed";
+/**
+ * What fills a thread's context size, one row of its breakdown each.
+ */
+export type ContextCategory =
+  | "system_prompt"
+  | "profile"
+  | "skills_catalogue"
+  | "core_tools"
+  | "authored_tools"
+  | "mcp_tools"
+  | "text"
+  | "tool_results"
+  | "skill_bodies"
+  | "compaction_summary";
 export type ThreadFilter = "sidebar" | "all" | "archived";
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 /**
@@ -692,6 +706,10 @@ export interface Contract {
     "thread.compact": {
       command: ThreadCompactCommand;
       result: AcceptedResult;
+    };
+    "thread.context.get": {
+      command: ThreadContextGetCommand;
+      result: ThreadContextResult;
     };
     "thread.create": {
       command: ThreadCreateCommand;
@@ -2857,6 +2875,21 @@ export interface ThreadAskCommand {
 export interface ThreadCompactCommand {
   focus?: string | null;
   thread_id: string;
+}
+export interface ThreadContextGetCommand {
+  thread_id: string;
+}
+/**
+ * What fills the thread's context size, computed when asked for and stored nowhere
+ * (ADR 0124).
+ */
+export interface ThreadContextResult {
+  context_size: number | null;
+  rows: ContextRow[];
+}
+export interface ContextRow {
+  category: ContextCategory;
+  tokens: number;
 }
 export interface ThreadCreateCommand {
   title?: string | null;
