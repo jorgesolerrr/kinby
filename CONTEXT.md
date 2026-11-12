@@ -823,6 +823,16 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, handing it between **instances** and deciding what happens when a step fails. Its instances are ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
 _Avoid_: workflow, package, pipeline (for the concept)
 
+### Workbench
+
+The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. A **factory run** works on exactly one workbench, in a folder of its own there.
+_Avoid_: environment, sandbox, site, station
+
+### Line
+
+A **factory** set up on one **workbench** under an owning **instance**. kinby checks at setup that the workbench meets what the factory requires. The line holds the **intake** and its **factory runs**. A workbench can carry several lines.
+_Avoid_: install, binding, assignment
+
 ### Step
 
 One stage of a **factory**: a task done by an **instance**'s turn, a **coding client** run inside an instance, or deterministic code, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no instance until the signal, a deadline or the user moves it on. It ends with a **step result**.
