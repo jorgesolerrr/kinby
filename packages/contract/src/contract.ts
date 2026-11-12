@@ -2420,6 +2420,7 @@ export interface StatsGetResult {
   buckets: StatsBucket[];
   limits: PlanLimit[];
   plan_use: PlanUse[];
+  recall?: WorkRecall | null;
   records: TurnMetrics[];
   runs?: RunTokens[] | null;
   total: StatsSummary;
@@ -2525,6 +2526,35 @@ export interface PlanUse {
   duration_seconds: number;
   runs: number;
   usage_source: UsageSource;
+}
+/**
+ * Whether work uses memory. Work is every turn and factory run but a dreaming stage's turns,
+ * and a factory run counts once, in the week of its first event in this instance.
+ */
+export interface WorkRecall {
+  facts: number;
+  never_recalled: LiveFact[];
+  recalled: number;
+  weeks: RecallWeek[];
+  work: number;
+}
+/**
+ * A fact no tombstone hides.
+ */
+export interface LiveFact {
+  date: string;
+  description: string;
+  node: string;
+}
+/**
+ * Work and facts in one UTC week, which starts on Monday.
+ */
+export interface RecallWeek {
+  facts: number;
+  never_recalled: number;
+  recalled: number;
+  start: string;
+  work: number;
 }
 export interface TurnMetrics {
   approvals_requested: number;

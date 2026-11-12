@@ -213,7 +213,13 @@ function RunSections({
         title="Quality"
         lead="What the range's turns called and asked, and how they were rated."
       >
-        <Quality stats={read.stats} by={by} starts={starts} runUsage={runUsage} />
+        <Quality
+          stats={read.stats}
+          by={by}
+          starts={starts}
+          runUsage={runUsage}
+          instanceId={read.instanceId}
+        />
       </SectionFrame>
       {factory && (
         <SectionFrame

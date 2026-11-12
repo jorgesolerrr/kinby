@@ -36,6 +36,7 @@ from kinby.contracts import (
     PermissionMode,
     ProfileCounted,
     ProfileVersion,
+    RecallWeek,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
@@ -1286,6 +1287,125 @@ def test_stats_get_marks_a_run_that_recalled_a_fact_in_a_step_turn_or_a_coding_s
         in_session: True,
         episode_only: False,
     }
+
+
+def _learned(graph: GraphStore, day: date, description: str) -> NodeId:
+    return graph.remember(
+        Fact(
+            node=new_node_id(day, description),
+            date=day,
+            description=description,
+            subjects=("deploys",),
+            body=f"{description}.",
+            thread=None,
+        )
+    )
+
+
+def _worked(at: datetime, origin: Origin, *recalled: NodeId) -> list[Event]:
+    return _turn_events(
+        uuid4(),
+        uuid4(),
+        at,
+        TurnStarted(message="work", model="openai:gpt-5", origin=origin),
+        *(MemoryRecalled(nodes=(node,)) for node in recalled),
+        TurnCompleted(input_tokens=10, output_tokens=1),
+    )
+
+
+def _client_step(at: datetime, run_id: UUID, *recalled: NodeId) -> list[Event]:
+    coded = DelegatedRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client="claude",
+        models=["claude-opus-4-1"],
+        input_tokens=100,
+        output_tokens=10,
+        duration_ms=1000,
+        client_turns=1,
+        outcome=DelegatedRunOutcome.COMPLETED,
+    )
+    return [
+        _event(1, run_id, uuid4(), at, RunDelegated(run=coded, step="implement", attempt=1)),
+        *(
+            _event(2, run_id, uuid4(), at, MemoryRecalled(nodes=(node,), step="implement"))
+            for node in recalled
+        ),
+    ]
+
+
+def test_stats_get_counts_the_work_that_recalled_a_fact_and_the_facts_no_work_recalled(
+    tmp_path: Path,
+) -> None:
+    graph = GraphStore(tmp_path)
+    lesson = _learned(graph, date(2026, 8, 1), "Deploys run from the hub")
+    dreamt = _learned(graph, date(2026, 8, 2), "Deploys need a tag")
+    unread = _learned(graph, date(2026, 8, 3), "Deploys page the user")
+    forgotten = _learned(graph, date(2026, 8, 4), "Deploys run from a laptop")
+    graph.forget(forgotten, date(2026, 8, 5))
+    at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    routine = RoutineOrigin(name=RoutineName("triage"), trigger=RoutineTrigger.SCHEDULED)
+    stage = routine.model_copy(
+        update={"name": RoutineName("consolidation"), "dreaming_stage": True}
+    )
+    step, coded = uuid4(), uuid4()
+    events = [
+        *_worked(at, UserOrigin()),
+        *_worked(at, routine, lesson),
+        *_worked(at, stage, dreamt, forgotten),
+        *_worked(at, FactoryRunOrigin(factory="software", run_id=step, step="review")),
+        *_client_step(at, step, lesson),
+        *_client_step(at, coded),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(
+            tmp_path,
+            event_log=historical_event_log(tmp_path, events),
+            facts=graph.fact_ids,
+            live_facts=graph.live_facts,
+        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.recall is not None
+    assert (result.recall.work, result.recall.recalled) == (4, 2)
+    assert result.recall.facts == 3
+    assert [fact.node for fact in result.recall.never_recalled] == [unread, dreamt]
+
+
+def test_stats_get_counts_recall_week_by_week_against_every_earlier_recall(
+    tmp_path: Path,
+) -> None:
+    graph = GraphStore(tmp_path)
+    older = _learned(graph, date(2026, 8, 1), "Deploys run from the hub")
+    old = _learned(graph, date(2026, 8, 20), "Deploys need a tag")
+    new = _learned(graph, date(2026, 9, 2), "Deploys page the user")
+    events = [
+        *_worked(datetime(2026, 8, 10, tzinfo=UTC), UserOrigin(), older),
+        *_worked(datetime(2026, 8, 25, tzinfo=UTC), UserOrigin()),
+        *_worked(datetime(2026, 9, 1, tzinfo=UTC), UserOrigin(), old),
+        *_worked(datetime(2026, 9, 8, tzinfo=UTC), UserOrigin()),
+    ]
+
+    result = asyncio.run(
+        build_dispatcher(
+            tmp_path,
+            event_log=historical_event_log(tmp_path, events),
+            facts=graph.fact_ids,
+            live_facts=graph.live_facts,
+            clock=lambda: datetime(2026, 9, 9, 12, tzinfo=UTC),
+        ).dispatch("stats.get", {"since": "2026-08-24T00:00:00Z"}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.recall is not None
+    assert (result.recall.work, result.recall.recalled, result.recall.facts) == (3, 1, 3)
+    assert [fact.node for fact in result.recall.never_recalled] == [new]
+    assert result.recall.weeks == [
+        RecallWeek(start=date(2026, 8, 24), work=1, recalled=0, facts=2, never_recalled=1),
+        RecallWeek(start=date(2026, 8, 31), work=1, recalled=1, facts=3, never_recalled=1),
+        RecallWeek(start=date(2026, 9, 7), work=1, recalled=0, facts=3, never_recalled=1),
+    ]
 
 
 def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recaps() -> None:

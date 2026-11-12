@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -77,9 +77,11 @@ from kinby.contracts import (
     EventType,
     InstanceProbeCommand,
     InstanceProbeResult,
+    LiveFact,
     ModelCompleted,
     NodeId,
     PermissionMode,
+    RunDelegated,
     RunStop,
     RunStopped,
     StatsGetCommand,
@@ -126,6 +128,7 @@ from kinby.core.stats import (
     run_tokens,
     stats_buckets,
     stats_summary,
+    work_recall,
 )
 from kinby.core.steps import run_step
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
@@ -138,6 +141,11 @@ from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
 from kinby.memory import GraphStore, RecapWriter
 from kinby.plugins.browser import BrowserService
 from kinby.plugins.hub_browser import HubBrowser
+
+#: What tells work and its recalls apart, from the log's start.
+_WORK_EVENTS = frozenset(
+    {EventType.TURN_STARTED, EventType.MEMORY_RECALLED, EventType.RUN_DELEGATED}
+)
 
 
 @dataclass(frozen=True)
@@ -181,6 +189,7 @@ def build_dispatcher(
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     windows: Callable[[], Mapping[str, int]] = lambda: SHIPPED_WINDOWS,
     facts: Callable[[], Collection[NodeId]] = frozenset,
+    live_facts: Callable[[], Sequence[LiveFact]] = list,
     clock: Callable[[], datetime] = utc_now,
 ) -> ScheduledDispatcher: ...
 
@@ -195,6 +204,7 @@ def build_dispatcher(
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     windows: Callable[[], Mapping[str, int]] = lambda: SHIPPED_WINDOWS,
     facts: Callable[[], Collection[NodeId]] = frozenset,
+    live_facts: Callable[[], Sequence[LiveFact]] = list,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher: ...
 
@@ -208,6 +218,7 @@ def build_dispatcher(
     prices: Callable[[], Mapping[str, ModelPrice]] = lambda: SHIPPED_PRICES,
     windows: Callable[[], Mapping[str, int]] = lambda: SHIPPED_WINDOWS,
     facts: Callable[[], Collection[NodeId]] = frozenset,
+    live_facts: Callable[[], Sequence[LiveFact]] = list,
     clock: Callable[[], datetime] = utc_now,
 ) -> Dispatcher:
     """The instance's contract methods."""
@@ -294,9 +305,11 @@ def build_dispatcher(
         def read() -> tuple[TurnMetricsResult, list[Event]]:
             with event_log.reader() as reader:
                 metrics = turn_metrics(metrics_events(reader, command.since), current_prices)
-                return metrics, [*reader.events_of({EventType.RUN_DELEGATED})]
+                return metrics, [*reader.events_of(_WORK_EVENTS)]
 
-        metrics, delegated = await asyncio.to_thread(read)
+        metrics, work = await asyncio.to_thread(read)
+        fact_ids = facts()
+        delegated = [event for event in work if isinstance(event.payload, RunDelegated)]
         records = [record for record in metrics.records if time_range.includes(record.closed_at)]
         runs = [
             TurnRun(record.origin, reported)
@@ -337,8 +350,9 @@ def build_dispatcher(
                 step_runs,
                 (recap for recap in metrics.run_recaps if time_range.includes(recap.timestamp)),
                 (recall for recall in metrics.run_recalls if time_range.includes(recall.timestamp)),
-                facts(),
+                fact_ids,
             ),
+            recall=work_recall(work, fact_ids, live_facts(), time_range, now),
         )
 
     async def rate_turn(command: ThreadTurnRateCommand) -> AcceptedResult:

@@ -1999,6 +1999,43 @@ class RunTotals(ContractModel):
     cost: float | None
 
 
+class LiveFact(ContractModel):
+    """A fact no tombstone hides."""
+
+    node: NodeId
+    #: The day it was learned.
+    date: date
+    description: str
+
+
+class RecallWeek(ContractModel):
+    """Work and facts in one UTC week, which starts on Monday."""
+
+    start: date
+    work: int
+    #: The week's work that recalled a fact.
+    recalled: int
+    #: Live facts learned by the week's end.
+    facts: int
+    #: Of those, the ones no work had recalled by the week's end.
+    never_recalled: int
+
+
+class WorkRecall(ContractModel):
+    """Whether work uses memory. Work is every turn and factory run but a dreaming stage's turns,
+    and a factory run counts once, in the week of its first event in this instance."""
+
+    work: int
+    #: The range's work that recalled a fact.
+    recalled: int
+    #: Live facts, whatever the range.
+    facts: int
+    #: The live facts no work had recalled by the range's end, newest first.
+    never_recalled: list[LiveFact]
+    #: Every week of the range, oldest first.
+    weeks: list[RecallWeek]
+
+
 class StatsGetResult(ContractModel):
     #: Each turn closed in the range, when the command asks for records. Empty otherwise.
     records: list[TurnMetrics]
@@ -2011,6 +2048,8 @@ class StatsGetResult(ContractModel):
     warnings: list[ModelCallMismatch] = Field(default_factory=list)
     #: Each factory run with tokens in the range. None from a core older than run usage.
     runs: list[RunTokens] | None = None
+    #: None from a core older than the recall share.
+    recall: WorkRecall | None = None
 
 
 class StatsSummaryResult(ContractModel):

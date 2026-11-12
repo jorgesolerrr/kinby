@@ -455,6 +455,10 @@ A **turn** whose recorded **model calls** do not sum to the **token usage** on i
 
 The record that a **turn**, or a **coding client**'s session inside a **factory run**, read given **facts** or **episodes** from memory. It ties work to the memory it used.
 
+### Recall share
+
+The **turns** and **factory runs** that **recalled** a **fact**, out of all of them. A **dreaming stage**'s turns are not work and are left out; a user's own **routine** counts. It is shown next to the live facts no work has recalled, both week by week, and is derived on read.
+
 ### Memory tokens
 
 What memory costs a **turn**, measured from the provider's own token counts. Two numbers: the size, the tokens memory added to the context once; and the carried tokens, that size re-read by every later **model call** in the turn. The **profile** counts by its size on every turn.

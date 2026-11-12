@@ -869,6 +869,51 @@ describe("the Quality section", () => {
     ).toBeTruthy()
     expect(within(memory).queryByRole("table")).toBeNull()
   })
+  it("shows the work that recalled a fact and the facts no work recalled, week by week", async () => {
+    window.history.replaceState(null, "", "/instances/hub-ada/stats")
+    openStats({
+      "stats.get": () =>
+        stats({
+          recall: {
+            work: 40,
+            recalled: 3,
+            facts: 12,
+            never_recalled: [
+              {
+                node: "2026-09-20-deploys-page-the-user",
+                date: "2026-09-20",
+                description: "Deploys page the user",
+              },
+              {
+                node: "2026-09-02-deploys-need-a-tag",
+                date: "2026-09-02",
+                description: "Deploys need a tag",
+              },
+            ],
+            weeks: [
+              { start: "2026-09-21", work: 30, recalled: 1, facts: 10, never_recalled: 8 },
+              { start: "2026-09-28", work: 10, recalled: 2, facts: 12, never_recalled: 2 },
+            ],
+          },
+        }),
+    })
+    const user = userEvent.setup()
+
+    await totals()
+
+    const memory = screen.getByRole("region", { name: "Memory" })
+    expect(counts(memory).slice(-2)).toEqual([
+      ["Work that recalled a fact", "3 of 40"],
+      ["Facts never recalled", "2 of 12"],
+    ])
+    expect(rows(within(memory).getByRole("table", { name: "Recall by week" }))).toEqual([
+      ["Sep 21", "1 of 30", "8 of 10"],
+      ["Sep 28", "2 of 10", "2 of 12"],
+    ])
+    await user.click(within(memory).getByRole("button", { name: "The facts never recalled" }))
+    await user.click(within(memory).getByRole("link", { name: "Deploys need a tag" }))
+    expect(window.location.pathname).toBe("/instances/hub-ada/memory/2026-09-02-deploys-need-a-tag")
+  })
   it("says so on the Memory card when no run started in the range", async () => {
     openStats()
 
