@@ -43,7 +43,8 @@ Inspect log: `logs/2026-09-03T22-47-32-00-00_memory_T9HLjtuttuTEnmEKt6DP27.eval`
 
 # Lesson cases
 
-Status: Not run yet.
+Status: Run on 2026-11-12. Pull ships alone: no arm beats it by 10 points at any fact count on
+either model.
 
 A lesson case gives the agent ordinary work while a fact in its memory warns against a mistake that
 work invites. The `lessons` task runs every case under one arm, each a way memory reaches the
@@ -99,5 +100,54 @@ fact and the work as the case's `work`.
 
 ## First run
 
-Record the run date, the active and judge models, the following rate and mean memory tokens per
-arm, model and fact count, and the Inspect logs here.
+Run date: 2026-11-12
+
+Active models: `anthropic/claude-opus-5-5`, `anthropic/claude-sonnet-5-5`
+
+Judge model: `openai/gpt-5-mini`. Embedding model: `openai:text-embedding-3-small`.
+
+Every arm ran twice on both models, so each cell holds 12 samples: 6 cases, two runs. The rate is
+the lesson-following rate over both runs. One sample moves a cell by about 8 points. The memory
+tokens come from the second run only: the first run counted none of an Anthropic turn's tool results,
+because the eval passed Anthropic's uncached input as the whole input.
+
+| Arm | Model | 10 facts | 100 facts | 500 facts |
+|---|---|---:|---:|---:|
+| `pull` | Opus 5.5 | 100% / 377 | 100% / 603 | 100% / 901 |
+| `pull` | Sonnet 5.5 | 83% / 499 | 92% / 538 | 100% / 678 |
+| `index` | Opus 5.5 | 100% / 598 | 83% / 1,261 | 100% / 1,484 |
+| `index` | Sonnet 5.5 | 92% / 574 | 83% / 1,245 | 75% / 1,259 |
+| `pre-search` | Opus 5.5 | 100% / 296 | 100% / 331 | 100% / 326 |
+| `pre-search` | Sonnet 5.5 | 83% / 289 | 92% / 297 | 92% / 292 |
+| `embedded-pre-search` | Opus 5.5 | 92% / 278 | 100% / 296 | 100% / 279 |
+| `embedded-pre-search` | Sonnet 5.5 | 92% / 260 | 92% / 262 | 92% / 262 |
+
+Each cell is the lesson-following rate / mean memory tokens.
+
+Verdict: pull ships alone. On Opus 5.5, pull follows every lesson at every fact count, and no arm
+beats it. On Sonnet 5.5, the largest lead over pull is 9 points, by `index` and
+`embedded-pre-search` at 10 facts, which is under the 10-point margin. No result splits by model or
+fact count. Each run alone shows a split in one Sonnet cell, a different cell each time. Pooled,
+the split goes away.
+
+Pull costs the most tokens of the three cheap arms as memory grows: its searches return more hits
+at 500 facts, about 900 tokens on Opus against about 300 for either pre-search. The win rule gives
+tokens weight only on a tie, so this does not change the verdict. `index` costs the most and
+follows the fewest lessons on Sonnet 5.5.
+
+Misses by case, over both runs: `release-branch-from-main` misses under every arm, and is the only
+case Opus 5.5 ever misses. On Sonnet 5.5, `invoicing-maintenance-window` misses under every arm but
+pull, `known-ci-flake` under pull and both pre-searches, and `staging-key-from-vault` once each under
+pull and `index`.
+
+Inspect logs:
+
+| Arm | First run | Second run |
+|---|---|---|
+| `pull` | `logs/2026-11-12T23-16-26-00-00_lessons_EdyueUNdxmGWCPK8LxEPff.eval`, `logs/2026-11-12T23-16-26-00-00_lessons_Yg5AsjmRVQ8nGJpabLAF4m.eval` | `logs/2026-11-12T23-32-34-00-00_lessons_B5ztVb5McyhhvGT753J79A.eval`, `logs/2026-11-12T23-32-34-00-00_lessons_WudJTkEpAp6uSChMLGRWDv.eval` |
+| `index` | `logs/2026-11-12T23-16-27-00-00_lessons_3479LUTWsSkGyJXyn7pSaK.eval`, `logs/2026-11-12T23-16-27-00-00_lessons_ixBZs9VFmZkCp35ScH6psH.eval` | `logs/2026-11-12T23-32-35-00-00_lessons_FFFP6nuv5aprJHp26QQteN.eval`, `logs/2026-11-12T23-32-35-00-00_lessons_bYAZy5Bi2DxF6qPnzs4ikx.eval` |
+| `pre-search` | `logs/2026-11-12T23-16-27-00-00_lessons_AwRE6zMzc2it6LcjVVxzDQ.eval`, `logs/2026-11-12T23-16-27-00-00_lessons_35P2CD2zUk6QXGpJ3aDuYJ.eval` | `logs/2026-11-12T23-32-34-00-00_lessons_AjfHamhXAYvKxkYb5Y4yZ7.eval`, `logs/2026-11-12T23-32-34-00-00_lessons_7yG7fPdYHTQciU66c55biL.eval` |
+| `embedded-pre-search` | `logs/2026-11-12T23-16-25-00-00_lessons_MmjzrHsAsYmbsVzMjJtZnL.eval`, `logs/2026-11-12T23-16-25-00-00_lessons_GqZXch7zGm7XvRJzFVVbgz.eval` | `logs/2026-11-12T23-32-34-00-00_lessons_R6vC2kZ5PVfma6Pwwp9fgx.eval`, `logs/2026-11-12T23-32-34-00-00_lessons_R69w6sZcVQzwvd8EReZhhS.eval` |
+
+The runs used this branch's adapter, which replays each assistant turn with its thinking and counts
+cached input, on a Linux container: the eval imports `fcntl`, so it does not run on Windows.

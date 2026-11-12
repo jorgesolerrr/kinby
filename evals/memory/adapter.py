@@ -40,6 +40,9 @@ from pydantic import ValidationError
 
 from kinby.memory.recap import RecapDraft
 
+# Where a LangChain message keeps the Inspect message it came from, reasoning included.
+_INSPECT_MESSAGE = "inspect_message"
+
 
 @dataclass(frozen=True)
 class InspectModelAdapter:
@@ -170,6 +173,9 @@ def _inspect_message(message: BaseMessage) -> ChatMessage:
                 function=message.name,
                 error=error,
             )
+        case AIMessage() if _INSPECT_MESSAGE in message.additional_kwargs:
+            # Replayed as generated: models that bind thinking reject a history without it.
+            return ChatMessageAssistant.model_validate(message.additional_kwargs[_INSPECT_MESSAGE])
         case AIMessage():
             return ChatMessageAssistant(
                 content=message.text,
@@ -204,6 +210,7 @@ def _langchain_chunk(output: ModelOutput) -> AIMessageChunk:
             for call in message.tool_calls or ()
         ],
         usage_metadata=_usage_metadata(output),
+        additional_kwargs={_INSPECT_MESSAGE: message.model_dump(mode="json")},
     )
 
 
@@ -211,8 +218,12 @@ def _usage_metadata(output: ModelOutput) -> UsageMetadata | None:
     usage = output.usage
     if usage is None:
         return None
+    # LangChain counts cached input inside input_tokens; Inspect counts it apart.
+    cache_read = usage.input_tokens_cache_read or 0
+    cache_creation = usage.input_tokens_cache_write or 0
     return UsageMetadata(
-        input_tokens=usage.input_tokens,
+        input_tokens=usage.input_tokens + cache_read + cache_creation,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
+        input_token_details={"cache_read": cache_read, "cache_creation": cache_creation},
     )
