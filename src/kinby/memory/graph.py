@@ -30,7 +30,7 @@ from kinby.memory.facade import (
 
 _logger = logging.getLogger(__name__)
 
-#: How many nodes recall returns, newest first. A model reads them all.
+#: How many nodes recall returns, best match first. A model reads them all.
 _RECALL_LIMIT = 20
 
 
@@ -113,11 +113,19 @@ class GraphStore:
         after: date | None = None,
         before: date | None = None,
     ) -> tuple[MemoryHit, ...]:
-        """Find matching graph nodes within inclusive date bounds.
+        """Find graph nodes holding any term of *query* within inclusive date bounds.
 
-        Without a date bound only facts match, and episodes only when no fact does (ADR 0074).
+        Nodes holding more distinct terms come first, then the newest, and a query with no terms
+        matches every node. Without a date bound only facts match, and episodes only when no fact
+        does (ADR 0074).
         """
-        matches = self.nodes(query, after=after, before=before)
+        terms = set(query.casefold().split())
+        scored = self._matched_terms(terms, after=after, before=before)
+        matches = [
+            memory
+            for memory, matched in sorted(scored, key=lambda pair: pair[1], reverse=True)
+            if matched or not terms
+        ]
         if after is None and before is None:
             matches = [memory for memory in matches if isinstance(memory, Fact)] or matches
         return tuple(
@@ -134,14 +142,31 @@ class GraphStore:
     ) -> list[MemoryNode]:
         """Every live node matching *query* within inclusive date bounds, newest first.
 
-        Each term of *query* must be a case-insensitive substring of the description or a subject.
-        A fact also matches on its source episodes' descriptions and subjects, since it takes
-        their place in recall (ADR 0100).
+        Each term of *query* must be a case-insensitive substring of the description or a subject,
+        or of a fact's source episodes'.
         """
-        terms = query.casefold().split()
+        terms = set(query.casefold().split())
+        return [
+            memory
+            for memory, matched in self._matched_terms(terms, after=after, before=before)
+            if matched == len(terms)
+        ]
+
+    def _matched_terms(
+        self,
+        terms: set[str],
+        *,
+        after: date | None,
+        before: date | None,
+    ) -> list[tuple[MemoryNode, int]]:
+        """Each live node within inclusive date bounds, newest first, with how many terms it holds.
+
+        A fact also holds its source episodes' terms, since it takes their place in recall
+        (ADR 0100).
+        """
         live = [memory for memory, frontmatter in self._read_all() if not frontmatter.tombstone]
         text = {memory.node: _searchable(memory) for memory in live}
-        matches: list[MemoryNode] = []
+        scored: list[tuple[MemoryNode, int]] = []
         for memory in live:
             if after is not None and memory.date < after:
                 continue
@@ -149,9 +174,8 @@ class GraphStore:
                 continue
             sources = memory.sources if isinstance(memory, Fact) else ()
             searchable = " ".join((text[memory.node], *(text.get(node, "") for node in sources)))
-            if all(term in searchable for term in terms):
-                matches.append(memory)
-        return sorted(matches, key=lambda memory: (memory.date, memory.node), reverse=True)
+            scored.append((memory, sum(term in searchable for term in terms)))
+        return sorted(scored, key=lambda pair: (pair[0].date, pair[0].node), reverse=True)
 
     def forgotten_facts(self) -> list[ForgottenFact]:
         """Every fact a forget left a tombstone on, which dreaming must not write back."""

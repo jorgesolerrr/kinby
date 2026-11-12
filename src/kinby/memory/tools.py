@@ -35,7 +35,7 @@ def memory_tools(
         *,
         context: ToolContext,
     ) -> str:
-        """Search your facts by description and subject, and with after or before, the episodes."""
+        """Search facts for any query word, best match first; after or before adds the episodes."""
         hits = memory.recall(query, after=after, before=before)
         if hits:
             await context.report_recall(tuple(hit.node for hit in hits))
