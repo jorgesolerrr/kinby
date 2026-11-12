@@ -5,13 +5,23 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 
 from kinby.contracts import Event, MemoryRecalled, Payload, PermissionMode
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import PreparedTurnRequest, TurnContext
 from kinby.instance import Instance, init_instance, load_instance
-from kinby.memory import Fact, GraphStore, MemoryDelivery, NodeId, memory_index
+from kinby.memory import (
+    Episode,
+    Fact,
+    GraphStore,
+    MemoryDelivery,
+    NodeId,
+    RecappedTurn,
+    embedded_pre_search,
+    memory_index,
+)
 from tests.test_memory_tools import ScriptedModel
 
 #: About 1k tokens, at four characters a token.
@@ -180,3 +190,75 @@ def test_without_a_delivery_a_turn_gets_no_memory_it_did_not_ask_for(tmp_path: P
     assert fact.node not in system.text
     assert human.text == "Cut the release branch"
     assert _recalls(payloads) == []
+
+
+#: What each word means to ConceptEmbeddings, so related words share an axis.
+_CONCEPTS = {
+    "deploy": 0,
+    "deploys": 0,
+    "ship": 0,
+    "staging": 0,
+    "key": 1,
+    "keys": 1,
+    "vault": 1,
+    "secret": 1,
+    "dog": 2,
+    "walks": 2,
+}
+
+
+class ConceptEmbeddings(Embeddings):
+    """Embed a text as how often it names each concept."""
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed_query(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        vector = [0.0, 0.0, 0.0]
+        for word in text.casefold().replace(".", " ").split():
+            if (axis := _CONCEPTS.get(word)) is not None:
+                vector[axis] += 1
+        return vector
+
+
+def test_an_embedded_pre_search_reads_the_three_facts_closest_to_the_task(
+    tmp_path: Path,
+) -> None:
+    secret = _fact(date(2026, 9, 1), "Staging deploys need the vault key", "Load it first.")
+    ship = _fact(date(2026, 9, 2), "Deploys ship on Tuesdays", "Never on a Friday.")
+    vault = _fact(date(2026, 9, 3), "The vault rotates keys monthly", "Ask for a new one.")
+    dog = _fact(date(2026, 9, 4), "Maya walks her dog", "Every morning.")
+    instance = _instance(tmp_path, secret, ship, vault, dog)
+    graph = GraphStore(instance.path)
+    graph.remember(
+        Episode(
+            node=NodeId("2026-09-05-shipped-the-staging-secret"),
+            date=date(2026, 9, 5),
+            recaps=RecappedTurn(thread=uuid4(), turn=uuid4()),
+            description="Shipped the staging secret from the vault",
+            subjects=(),
+            tools=(),
+            body="Deploy staging with the vault key.",
+        )
+    )
+    files = sorted(instance.path.rglob("*"))
+
+    found = asyncio.run(
+        embedded_pre_search(graph, "Ship staging with its secret", ConceptEmbeddings())
+    )
+
+    assert found is not None
+    assert found.recalled == (secret.node, ship.node, vault.node)
+    assert found.text.startswith("# From your memory\n")
+    assert all(fact.body in found.text for fact in (secret, ship, vault))
+    assert dog.body not in found.text
+    assert "Deploy staging with the vault key." not in found.text
+    assert sorted(instance.path.rglob("*")) == files
+
+
+def test_an_embedded_pre_search_without_facts_brings_nothing(tmp_path: Path) -> None:
+    found = asyncio.run(
+        embedded_pre_search(GraphStore(tmp_path / "empty"), "Deploy staging", ConceptEmbeddings())
+    )
+
+    assert found is None

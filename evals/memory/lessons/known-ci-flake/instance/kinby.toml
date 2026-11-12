@@ -3,6 +3,7 @@ id = "lesson-eval-known-ci-flake"
 [models]
 main = "inspect:active"
 recap = "inspect:active"
+embed = "openai:text-embedding-3-small"
 
 [memory]
 recap = "off"

@@ -30,6 +30,7 @@ from inspect_ai.scorer import (
     scorer,
 )
 from inspect_ai.solver import Generate, Solver, TaskState, solver
+from langchain.embeddings import init_embeddings
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
@@ -40,6 +41,7 @@ from kinby.contracts import (
     THREAD_TURN_START,
     ErrorEnvelope,
     Event,
+    MemoryRecalled,
     MemoryRecapped,
     MessageDelta,
     NodeId,
@@ -59,8 +61,23 @@ from kinby.core.events import EventLog
 from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import load_instance
-from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
-from kinby.memory import Fact, GraphStore, MemoryDelivery, RecapWriter, deliver_memory
+from kinby.instance.layout import (
+    GRAPH_DIR,
+    MANIFEST_NAME,
+    MEMORY_DIR,
+    PROFILE_NAME,
+    SYSTEM_NAME,
+)
+from kinby.instance.manifest import parse_manifest
+from kinby.memory import (
+    Fact,
+    GraphStore,
+    MemoryDelivery,
+    RecapWriter,
+    deliver_memory,
+    embedded_pre_search,
+)
+from kinby.memory.delivery import DeliveredMemory
 from kinby.memory.facade import new_node_id
 
 if TYPE_CHECKING or __package__ == "evals.memory":
@@ -173,13 +190,16 @@ class LessonArm(StrEnum):
     PULL = "pull"
     INDEX = "index"
     PRE_SEARCH = "pre-search"
+    EMBEDDED_PRE_SEARCH = "embedded-pre-search"
 
 
-#: How each lesson arm's runtime brings memory to the turn. Pull leaves it to the agent.
+#: How each lesson arm's runtime brings memory to the turn. Pull leaves it to the agent, and the
+#: runtime has no embeddings, so the eval runs the embedded pre-search itself.
 _DELIVERIES = {
     LessonArm.PULL: MemoryDelivery.NONE,
     LessonArm.INDEX: MemoryDelivery.INDEX,
     LessonArm.PRE_SEARCH: MemoryDelivery.PRE_SEARCH,
+    LessonArm.EMBEDDED_PRE_SEARCH: MemoryDelivery.NONE,
 }
 
 
@@ -251,14 +271,17 @@ def memory(arm: str = _BOTH_ARMS) -> Task:
 def lessons(arm: str = LessonArm.PULL) -> Task:
     """Return the lesson cases under one arm, each at every fact count."""
     selected_arm = LessonArm(arm)
+    case_paths = [path for path in sorted(_LESSONS_DIR.iterdir()) if path.is_dir()]
+    if selected_arm is LessonArm.EMBEDDED_PRE_SEARCH:
+        unset = [path.name for path in case_paths if _embed_model(path / "instance") is None]
+        if unset:
+            raise MemoryEvalError(
+                "Skipped the embedded-pre-search arm: models.embed is not set in the "
+                f"kinby.toml of {', '.join(unset)}. The other arms run without it."
+            )
     return Task(
         dataset=MemoryDataset(
-            [
-                _lesson_sample(path, facts)
-                for path in sorted(_LESSONS_DIR.iterdir())
-                if path.is_dir()
-                for facts in _FACT_COUNTS
-            ]
+            [_lesson_sample(path, facts) for path in case_paths for facts in _FACT_COUNTS]
         ),
         solver=run_lesson_case(selected_arm),
         scorer=(
@@ -350,11 +373,19 @@ def run_lesson_case(arm: LessonArm) -> Solver:
             instance_path = Path(temporary) / "instance"
             _prepare_lesson(_case_path(state), instance_path, _facts(state), arm)
             # Read before the turn, as the turn reads it when it starts.
-            delivered = deliver_memory(delivery, GraphStore(instance_path), state.input_text)
+            delivered = (
+                await _embedded_pre_search(instance_path, state.input_text)
+                if arm is LessonArm.EMBEDDED_PRE_SEARCH
+                else deliver_memory(delivery, GraphStore(instance_path), state.input_text)
+            )
+            message = state.input_text
+            recalled: tuple[NodeId, ...] = ()
+            if arm is LessonArm.EMBEDDED_PRE_SEARCH and delivered is not None:
+                # As a pre-search turn puts the facts after its message and recalls them.
+                message = f"{message}\n\n{delivered.text}"
+                recalled = delivered.recalled
             events, answer = await _run_turns(
-                instance_path,
-                (MemoryTurn(thread="work", message=state.input_text),),
-                delivery,
+                instance_path, (MemoryTurn(thread="work", message=message),), delivery, recalled
             )
             delivered_tokens = (
                 0 if delivered is None else len(delivered.text) / _CHARACTERS_PER_TOKEN
@@ -368,6 +399,18 @@ def run_lesson_case(arm: LessonArm) -> Solver:
         return state
 
     return solve
+
+
+async def _embedded_pre_search(instance_path: Path, task: str) -> DeliveredMemory | None:
+    model = _embed_model(instance_path)
+    if model is None:
+        raise MemoryEvalError("The embedded-pre-search arm needs models.embed.")
+    return await embedded_pre_search(GraphStore(instance_path), task, init_embeddings(model))
+
+
+def _embed_model(instance_path: Path) -> str | None:
+    manifest = (instance_path / MANIFEST_NAME).read_text(encoding="utf-8")
+    return parse_manifest(manifest).models.embed
 
 
 def _prepare_lesson(case_path: Path, instance_path: Path, facts: int, arm: LessonArm) -> None:
@@ -659,7 +702,9 @@ async def _run_turns(
     instance_path: Path,
     turns: Sequence[MemoryTurn],
     memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
+    recalled: tuple[NodeId, ...] = (),
 ) -> tuple[list[Event], str]:
+    """Run *turns* in order, each recalling the *recalled* facts its message brings."""
     instance = load_instance(instance_path)
     event_log = EventLog(instance.manifest.state_dir)
     factory = inspect_model_factory(get_model())
@@ -694,7 +739,7 @@ async def _run_turns(
                 raise MemoryEvalError(f"Could not create eval thread: {created}")
             thread_id = created.id
             threads[case_turn.thread] = thread_id
-        answer = await _run_turn(client, thread_id, case_turn.message)
+        answer = await _run_turn(client, event_log, thread_id, case_turn.message, recalled)
         await recap.drain()
     events = sorted(
         (event for thread_id in threads.values() for event in event_log.thread_events(thread_id)),
@@ -703,13 +748,21 @@ async def _run_turns(
     return events, answer
 
 
-async def _run_turn(client: ContractClient, thread_id: UUID, message: str) -> str:
+async def _run_turn(
+    client: ContractClient,
+    event_log: EventLog,
+    thread_id: UUID,
+    message: str,
+    recalled: tuple[NodeId, ...],
+) -> str:
     accepted = await client.call(
         THREAD_TURN_START,
         ThreadTurnStartCommand(thread_id=thread_id, message=message),
     )
     if isinstance(accepted, ErrorEnvelope):
         raise MemoryEvalError(f"Could not start eval turn: {accepted}")
+    if recalled:
+        await event_log.append(thread_id, accepted.turn_id, MemoryRecalled(nodes=recalled))
 
     stream = await client.subscribe(
         THREAD_SUBSCRIBE,

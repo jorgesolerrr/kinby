@@ -55,6 +55,10 @@ agent:
   and tells the agent to open a fact before acting on it.
 - `pre-search`: the runtime searches memory with the work's text and puts the top 3 fact bodies in
   the message, recording their recall.
+- `embedded-pre-search`: a pre-search that ranks facts by how close their embeddings lie to the
+  work's, with the model the fixture's `models.embed` names. The eval embeds the facts, never the
+  episodes, holds the vectors in memory for the run, and writes none to the instance. Without
+  `models.embed`, the task refuses to start this arm and says so; the other arms do not read it.
 
 Each case runs three times, with its memory filled to 10, 100 and 500 facts. The extra facts are
 the same unrelated errands on every run.
@@ -87,7 +91,8 @@ the `model_graded_qa` mean is the lesson-following rate.
 A lesson case is a directory under `lessons/` with a `case.toml` and an `instance/` fixture.
 `case.toml` holds the case's name, the `work` the agent is asked for, what the work does when it
 `followed` the lesson, and the `mistake` the lesson warns against. The fixture's `memory/graph/`
-holds the lesson. The task adds the unrelated facts and the pull arm's line itself.
+holds the lesson, and its `kinby.toml` names the embedding model in `models.embed`. The task adds
+the unrelated facts and the pull arm's line itself.
 
 When a turn or factory run misses a lesson it had in memory, rewrite the lesson as the fixture's
 fact and the work as the case's `work`.

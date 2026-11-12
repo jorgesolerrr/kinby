@@ -1,7 +1,12 @@
 """Short-term memory, long-term memory (profile + knowledge graph), and reasoning traces."""
 
 from kinby.contracts import NodeId
-from kinby.memory.delivery import MemoryDelivery, deliver_memory, memory_index
+from kinby.memory.delivery import (
+    MemoryDelivery,
+    deliver_memory,
+    embedded_pre_search,
+    memory_index,
+)
 from kinby.memory.facade import (
     Episode,
     Fact,
@@ -32,6 +37,7 @@ __all__ = [
     "RecappedRun",
     "RecappedTurn",
     "deliver_memory",
+    "embedded_pre_search",
     "hits_json",
     "memory_index",
     "memory_tools",

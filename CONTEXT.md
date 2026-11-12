@@ -474,7 +474,7 @@ A hash of the **profile**'s text, recorded when a turn starts. The provider's to
 
 ### Eval arm
 
-One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph. Its **lesson cases** have a pull arm, which tells the agent to search memory before it starts, and an index arm and a pre-search arm, named for the **memory delivery** each uses.
+One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph. Its **lesson cases** have a pull arm, which tells the agent to search memory before it starts, an index arm and a pre-search arm, named for the **memory delivery** each uses, and an embedded pre-search arm, a pre-search the eval itself ranks by how close the **facts**' embeddings lie to the task's, since the runtime has no embeddings.
 
 ### Lesson case
 

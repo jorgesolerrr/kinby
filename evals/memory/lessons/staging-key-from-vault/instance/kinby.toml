@@ -3,6 +3,7 @@ id = "lesson-eval-staging-key-from-vault"
 [models]
 main = "inspect:active"
 recap = "inspect:active"
+embed = "openai:text-embedding-3-small"
 
 [memory]
 recap = "off"
