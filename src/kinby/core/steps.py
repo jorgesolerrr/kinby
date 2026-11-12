@@ -140,7 +140,7 @@ async def _run_client_step(
     memory_delivery: MemoryDelivery,
 ) -> StepResult:
     """Run the coding client in *workspace*, and record its delegated run, the facts a pre-search
-    put in its message and its session's recalls.
+    put in its message once it started, and its session's recalls.
 
     What the client said last is only the summary. A run the plan refused ends the step limited,
     whatever the client exited with.
@@ -192,7 +192,7 @@ async def _run_client_step(
                 attempt=command.attempt,
             ),
         )
-    if delivered is not None and delivered.recalled:
+    if ran.reported is not None and delivered is not None and delivered.recalled:
         await log.append(
             command.origin.run_id,
             uuid4(),

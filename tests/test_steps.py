@@ -1754,6 +1754,22 @@ def test_a_client_step_with_pre_search_reads_the_facts_it_found_and_records_thei
     asyncio.run(scenario())
 
 
+def test_a_client_that_cannot_start_records_no_recall_of_the_facts_pre_searched_for_it(
+    tmp_path, monkeypatch
+):
+    _, dispatcher, log = remembering_runtime(tmp_path, MemoryDelivery.PRE_SEARCH)
+    monkeypatch.setenv("PATH", str(tmp_path / "no-clients"))
+
+    async def scenario() -> None:
+        result = await run_client_step(dispatcher, "claude", prompt="Fix the deployment.")
+
+        assert isinstance(result, StepResult)
+        assert result.summary.startswith("claude could not start: ")
+        assert recalls(log) == []
+
+    asyncio.run(scenario())
+
+
 def test_a_resumed_codex_thread_reports_its_own_tokens_not_the_threads_running_total(
     tmp_path, monkeypatch
 ):
