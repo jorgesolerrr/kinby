@@ -1,0 +1,4 @@
+name = "label-race"
+work = "In the software factory's assess step, before it adds the `needs-human` label to a pull request, create the label in the repository if the repository does not have it yet. Show the code change and the tests you add."
+followed = "Creates the label without `gh label create --force`, handles the create failing because another run created the label in the meantime by reading the labels again, and tests that race."
+mistake = "Uses `gh label create --force`, or checks for the label and then creates it without handling a create that fails because the label already exists."

@@ -1,10 +1,14 @@
 """Run memory cases through kinby's dispatcher under Inspect."""
 
+import random
 import shutil
 import tempfile
 import tomllib
 from collections.abc import Sequence
+from contextlib import aclosing
+from datetime import date, timedelta
 from enum import StrEnum
+from itertools import product
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -19,8 +23,10 @@ from inspect_ai.scorer import (
     Scorer,
     Target,
     accuracy,
+    grouped,
     mean,
     model_graded_fact,
+    model_graded_qa,
     scorer,
 )
 from inspect_ai.solver import Generate, Solver, TaskState, solver
@@ -53,8 +59,9 @@ from kinby.core.events import EventLog
 from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import load_instance
-from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR, PROFILE_NAME
-from kinby.memory import GraphStore, RecapWriter
+from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
+from kinby.memory import Fact, GraphStore, RecapWriter
+from kinby.memory.facade import new_node_id
 
 if TYPE_CHECKING or __package__ == "evals.memory":
     from evals.memory.adapter import inspect_model_factory
@@ -86,8 +93,71 @@ Does the submission contain the reference answer's facts without contradicting t
 
 {instructions}
 """
+_LESSON_GRADER_TEMPLATE = """
+You are grading whether a teammate's work followed a lesson from its memory.
+
+[BEGIN DATA]
+************
+[Work asked for]: {question}
+************
+[Following the lesson]: {criterion}
+************
+[The mistake the lesson warns against]: {mistake}
+************
+[Submission]: {answer}
+************
+[END DATA]
+
+The submission follows the lesson when its work does what "Following the lesson" describes.
+A submission that makes the mistake does not follow the lesson, even when it also mentions the
+lesson or does the right thing elsewhere. A submission that only asks a question or does no work
+does not follow it. Ignore style and anything the work does besides.
+
+Does the submission follow the lesson?
+
+{instructions}
+"""
 _SCOPES = tuple(Scope)
 _BOTH_ARMS = "both"
+_LESSONS_DIR = Path(__file__).parent / "lessons"
+#: Every lesson case runs with its memory holding about this many facts.
+_FACT_COUNTS = (10, 100, 500)
+_PULL_LINE = "Before you start a task, search your memory for it with `memory_search`."
+_UNRELATED_PEOPLE = (
+    "Maya",
+    "Sam",
+    "Elena",
+    "Tomás",
+    "Priya",
+    "Owen",
+    "Lucía",
+    "Kenji",
+    "Ruth",
+    "Ines",
+)
+_UNRELATED_ERRANDS = (
+    "waters the garden plot",
+    "returns the library books",
+    "collects the dry cleaning",
+    "walks the neighbour's dog",
+    "calls the plumber",
+    "takes a piano lesson",
+    "buys groceries at North Market",
+    "picks up the film prints",
+    "swims at the lido",
+    "visits the farmers market",
+)
+_UNRELATED_DAYS = (
+    "Mondays",
+    "Tuesdays",
+    "Wednesdays",
+    "Thursdays",
+    "Fridays",
+    "Saturdays",
+    "Sundays",
+)
+#: The unrelated facts were learned over the year up to this day.
+_UNRELATED_LAST_DATE = date(2026, 11, 1)
 
 
 class MemoryEvalError(RuntimeError):
@@ -126,7 +196,17 @@ class MemoryOpenResult:
     node: NodeId
 
 
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class LessonCase:
+    name: str
+    #: Ordinary work that invites the mistake the case's lesson warns against.
+    work: str
+    followed: str
+    mistake: str
+
+
 _MEMORY_CASE = TypeAdapter(MemoryCase)
+_LESSON_CASE = TypeAdapter(LessonCase)
 _MEMORY_OPEN_RESULT = TypeAdapter(MemoryOpenResult)
 
 
@@ -150,6 +230,28 @@ def memory(arm: str = _BOTH_ARMS) -> Task:
             memory_tokens(),
         ),
         metadata={"arms": [selected_arm.value for selected_arm in selected_arms]},
+    )
+
+
+@task
+def lessons() -> Task:
+    """Return the lesson cases under the pull arm, each at every fact count."""
+    return Task(
+        dataset=MemoryDataset(
+            [
+                _lesson_sample(path, facts)
+                for path in sorted(_LESSONS_DIR.iterdir())
+                if path.is_dir()
+                for facts in _FACT_COUNTS
+            ]
+        ),
+        solver=run_lesson_case(),
+        scorer=(
+            model_graded_qa(template=_LESSON_GRADER_TEMPLATE, model=_JUDGE_MODEL),
+            memory_tokens(),
+        ),
+        # The mean of a grade is the lesson-following rate.
+        metrics=[grouped(mean(), "facts")],
     )
 
 
@@ -221,6 +323,58 @@ def run_memory_case() -> Solver:
         return state
 
     return solve
+
+
+@solver
+def run_lesson_case() -> Solver:
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        del generate
+        with tempfile.TemporaryDirectory(prefix="kinby-lesson-eval-") as temporary:
+            instance_path = Path(temporary) / "instance"
+            _prepare_pull(_case_path(state), instance_path, _facts(state))
+            events, answer = await _run_turns(
+                instance_path,
+                (MemoryTurn(thread="work", message=state.input_text),),
+            )
+            state.metadata["memory_tokens"] = _memory_token_estimate(
+                instance_path,
+                events,
+                _last_turn(events),
+            )
+        state.output = ModelOutput.from_content(model=str(state.model), content=answer)
+        state.messages.append(ChatMessageAssistant(content=answer, source="generate"))
+        state.completed = True
+        return state
+
+    return solve
+
+
+def _prepare_pull(case_path: Path, instance_path: Path, facts: int) -> None:
+    shutil.copytree(case_path / "instance", instance_path)
+    _add_unrelated_facts(instance_path, facts)
+    system_path = instance_path / SYSTEM_NAME
+    system = system_path.read_text(encoding="utf-8").rstrip("\r\n")
+    system_path.write_text(f"{system}\n\n{_PULL_LINE}\n", encoding="utf-8")
+
+
+def _add_unrelated_facts(instance_path: Path, facts: int) -> None:
+    """Fill the graph up to *facts* facts with the same unrelated facts on every run."""
+    store = GraphStore(instance_path)
+    errands = list(product(_UNRELATED_PEOPLE, _UNRELATED_ERRANDS, _UNRELATED_DAYS))
+    random.Random(0).shuffle(errands)
+    for index, (person, errand, day) in enumerate(errands[: facts - len(store.fact_ids())]):
+        description = f"{person} {errand} on {day}"
+        learned_on = _UNRELATED_LAST_DATE - timedelta(days=index % 365)
+        store.remember(
+            Fact(
+                node=new_node_id(learned_on, description, UUID(int=index)),
+                date=learned_on,
+                description=description,
+                subjects=(person,),
+                body=f"{description}.",
+                thread=None,
+            )
+        )
 
 
 def _prepare_instance(case_path: Path, instance_path: Path, arm: MemoryArm) -> None:
@@ -439,6 +593,18 @@ def _sample(case_path: Path, arm: MemoryArm) -> Sample:
     )
 
 
+def _lesson_sample(case_path: Path, facts: int) -> Sample:
+    case = _LESSON_CASE.validate_python(
+        tomllib.loads((case_path / "case.toml").read_text(encoding="utf-8"))
+    )
+    return Sample(
+        id=f"{case.name}-{facts}",
+        input=case.work,
+        target=case.followed,
+        metadata={"case_path": str(case_path), "facts": facts, "mistake": case.mistake},
+    )
+
+
 def _load_case(case_path: Path) -> MemoryCase:
     return _MEMORY_CASE.validate_python(
         tomllib.loads((case_path / "case.toml").read_text(encoding="utf-8"))
@@ -450,6 +616,13 @@ def _case_path(state: TaskState) -> Path:
     if not isinstance(path, str):
         raise TypeError("The memory sample has no case path.")
     return Path(path)
+
+
+def _facts(state: TaskState) -> int:
+    value = state.metadata.get("facts")
+    if not isinstance(value, int):
+        raise TypeError("The lesson sample has no fact count.")
+    return value
 
 
 def _arm(state: TaskState) -> MemoryArm:
@@ -496,7 +669,11 @@ async def _run_turns(instance_path: Path, turns: Sequence[MemoryTurn]) -> tuple[
             threads[case_turn.thread] = thread_id
         answer = await _run_turn(client, thread_id, case_turn.message)
         await recap.drain()
-    return list(event_log.all_events()), answer
+    events = sorted(
+        (event for thread_id in threads.values() for event in event_log.thread_events(thread_id)),
+        key=lambda event: event.timestamp,
+    )
+    return events, answer
 
 
 async def _run_turn(client: ContractClient, thread_id: UUID, message: str) -> str:
@@ -507,22 +684,25 @@ async def _run_turn(client: ContractClient, thread_id: UUID, message: str) -> st
     if isinstance(accepted, ErrorEnvelope):
         raise MemoryEvalError(f"Could not start eval turn: {accepted}")
 
-    answer: list[str] = []
-    subscription = ThreadSubscribeCommand(
-        thread_id=thread_id,
-        after_sequence=accepted.sequence,
+    stream = await client.subscribe(
+        THREAD_SUBSCRIBE,
+        ThreadSubscribeCommand(thread_id=thread_id, after_sequence=accepted.sequence),
     )
-    async for item in client.subscribe(THREAD_SUBSCRIBE, subscription):
-        if isinstance(item, ErrorEnvelope):
-            raise MemoryEvalError(f"Could not subscribe to eval turn: {item.message}")
-        if item.turn_id != accepted.turn_id:
-            continue
-        if isinstance(item.payload, MessageDelta):
-            answer.append(item.payload.text)
-        elif isinstance(item.payload, TurnCompleted):
-            return "".join(answer)
-        elif isinstance(item.payload, TurnFailed):
-            raise MemoryEvalError(f"Eval turn failed: {item.payload.message}")
-        elif isinstance(item.payload, TurnInterrupted):
-            raise MemoryEvalError("Eval turn was interrupted.")
+    if isinstance(stream, ErrorEnvelope):
+        raise MemoryEvalError(f"Could not subscribe to eval turn: {stream.message}")
+    answer: list[str] = []
+    async with aclosing(stream.items) as items:
+        async for item in items:
+            if isinstance(item, ErrorEnvelope):
+                raise MemoryEvalError(f"Eval turn stream failed: {item.message}")
+            if item.turn_id != accepted.turn_id:
+                continue
+            if isinstance(item.payload, MessageDelta):
+                answer.append(item.payload.text)
+            elif isinstance(item.payload, TurnCompleted):
+                return "".join(answer)
+            elif isinstance(item.payload, TurnFailed):
+                raise MemoryEvalError(f"Eval turn failed: {item.payload.message}")
+            elif isinstance(item.payload, TurnInterrupted):
+                raise MemoryEvalError("Eval turn was interrupted.")
     raise MemoryEvalError("Eval turn subscription ended before the turn closed.")

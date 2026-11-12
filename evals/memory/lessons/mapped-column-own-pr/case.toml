@@ -1,0 +1,4 @@
+name = "mapped-column-own-pr"
+work = "In cec-backend, add course-start reminders: a daily job emails each enrolled student once, three days before their course starts. Record that the reminder went out in a new `reminder_sent_at` column on `Enrollment`. Plan the work as the pull requests you will open and what each one holds."
+followed = "Puts the `reminder_sent_at` column and its migration in a pull request of their own, merged and deployed before the pull request with the reminder job."
+mistake = "Ships the column or its migration in the same pull request as the reminder job or any other code that reads or writes it."

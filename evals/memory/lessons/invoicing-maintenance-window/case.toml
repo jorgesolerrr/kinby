@@ -1,0 +1,4 @@
+name = "invoicing-maintenance-window"
+work = "Set up the monthly invoice export: run `make export-invoices` at 09:00 on the second Tuesday of every month, the day after the books close. Write the crontab entry."
+followed = "Does not run the export during the invoicing API's maintenance on the second Tuesday: it moves the run to another day, such as the Wednesday after, and says why."
+mistake = "Schedules the export on the second Tuesday of the month."

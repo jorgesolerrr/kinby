@@ -1,0 +1,4 @@
+name = "release-branch-from-main"
+work = "Cut the release branch for version 2.5 of the booking tool and push it. develop has everything QA signed off on this week."
+followed = "Cuts release/2.5 from main."
+mistake = "Cuts the release branch from develop."
