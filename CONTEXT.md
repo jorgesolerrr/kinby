@@ -833,6 +833,16 @@ _Avoid_: environment, sandbox, site, station
 A **factory** set up on one **workbench** under an owning **instance**. kinby checks at setup that the workbench meets what the factory requires. The line holds the **intake** and its **factory runs**. A workbench can carry several lines.
 _Avoid_: install, binding, assignment
 
+### Agent step
+
+A **step** where a model does the work from a prompt, on the **workbench**, with the workbench's **picks**. It has no persona and no memory of its own. Its **engine** runs it.
+_Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
+
+### Engine
+
+What runs an **agent step**: a kinby **turn** or a **coding client**. A kinby turn goes through the **gate**. A coding client keeps a session a later step can resume.
+_Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
+
 ### Step
 
 One stage of a **factory**: a task done by an **instance**'s turn, a **coding client** run inside an instance, or deterministic code, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no instance until the signal, a deadline or the user moves it on. It ends with a **step result**.
