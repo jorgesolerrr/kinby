@@ -1,0 +1,11 @@
+id = "lesson-eval-staging-key-from-vault"
+
+[models]
+main = "inspect:active"
+recap = "inspect:active"
+
+[memory]
+recap = "off"
+
+[tools]
+defaults = false

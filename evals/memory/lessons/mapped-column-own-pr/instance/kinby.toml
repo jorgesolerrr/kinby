@@ -1,0 +1,11 @@
+id = "lesson-eval-mapped-column-own-pr"
+
+[models]
+main = "inspect:active"
+recap = "inspect:active"
+
+[memory]
+recap = "off"
+
+[tools]
+defaults = false

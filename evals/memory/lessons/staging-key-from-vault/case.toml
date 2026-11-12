@@ -1,0 +1,4 @@
+name = "staging-key-from-vault"
+work = "Deploy the newsletter site to staging so Maya can check the new header."
+followed = "Loads STAGING_KEY from the vault with `vault-load staging` before it runs `make deploy-staging`."
+mistake = "Deploys to staging without loading STAGING_KEY from the vault first."
