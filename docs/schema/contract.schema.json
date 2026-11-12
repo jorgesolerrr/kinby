@@ -4588,6 +4588,29 @@
       "title": "ListBinding",
       "type": "object"
     },
+    "LiveFact": {
+      "additionalProperties": false,
+      "description": "A fact no tombstone hides.",
+      "properties": {
+        "date": {
+          "format": "date",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "date",
+        "description"
+      ],
+      "title": "LiveFact",
+      "type": "object"
+    },
     "LoginPrompt": {
       "additionalProperties": false,
       "description": "Where the user finishes a subscription login, and the one-time code they enter there.",
@@ -6825,6 +6848,37 @@
       "title": "ReasoningEffort",
       "type": "string"
     },
+    "RecallWeek": {
+      "additionalProperties": false,
+      "description": "Work and facts in one UTC week, which starts on Monday.",
+      "properties": {
+        "facts": {
+          "type": "integer"
+        },
+        "never_recalled": {
+          "type": "integer"
+        },
+        "recalled": {
+          "type": "integer"
+        },
+        "start": {
+          "format": "date",
+          "type": "string"
+        },
+        "work": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "work",
+        "recalled",
+        "facts",
+        "never_recalled"
+      ],
+      "title": "RecallWeek",
+      "type": "object"
+    },
     "RecapPolicy": {
       "description": "When kinby writes a model-assisted recap.",
       "enum": [
@@ -8522,6 +8576,17 @@
             "$ref": "#/$defs/PlanUse"
           },
           "type": "array"
+        },
+        "recall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkRecall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "records": {
           "items": {
@@ -12151,6 +12216,42 @@
         "type"
       ],
       "title": "Warning",
+      "type": "object"
+    },
+    "WorkRecall": {
+      "additionalProperties": false,
+      "description": "Whether work uses memory. Work is every turn and factory run but a dreaming stage's turns,\nand a factory run counts once, in the week of its first event in this instance.",
+      "properties": {
+        "facts": {
+          "type": "integer"
+        },
+        "never_recalled": {
+          "items": {
+            "$ref": "#/$defs/LiveFact"
+          },
+          "type": "array"
+        },
+        "recalled": {
+          "type": "integer"
+        },
+        "weeks": {
+          "items": {
+            "$ref": "#/$defs/RecallWeek"
+          },
+          "type": "array"
+        },
+        "work": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "work",
+        "recalled",
+        "facts",
+        "never_recalled",
+        "weeks"
+      ],
+      "title": "WorkRecall",
       "type": "object"
     },
     "WorkspaceReverted": {

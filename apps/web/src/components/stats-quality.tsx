@@ -1,8 +1,17 @@
-import type { RunUsage, StatsBucketSize, StatsGetResult } from "@kinby/contract"
+import type {
+  LiveFact,
+  RecallWeek,
+  RunUsage,
+  StatsBucketSize,
+  StatsGetResult,
+} from "@kinby/contract"
+import { cn } from "cn"
+import { ChevronDownIcon } from "lucide-react"
 import type { ReactNode } from "react"
 import { Line, LineChart } from "recharts"
 
 import { BucketAxes } from "@/components/bucket-axes"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   type ChartConfig,
@@ -10,6 +19,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -21,8 +31,10 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { RunUsageState } from "@/hooks/use-run-usage"
+import { nodePath, openNode } from "@/lib/selection"
 import {
   bucketLabel,
+  dayLabel,
   median,
   type NavigationPoint,
   navigationTrend,
@@ -40,13 +52,15 @@ export function Quality({
   by,
   starts,
   runUsage,
+  instanceId,
 }: {
   stats: StatsGetResult
   by: StatsBucketSize
   starts: string[]
   runUsage: RunUsageState
+  instanceId: string
 }) {
-  const { total } = stats
+  const { total, recall } = stats
   const trend = navigationTrend(starts, stats.records, by)
   const tools = Object.entries(total.tool_calls)
     .sort(([a, aCalls], [b, bCalls]) => bCalls - aCalls || a.localeCompare(b))
@@ -54,6 +68,12 @@ export function Quality({
   const memory = total.memory_calls
   const turns = turnCount(total)
   const estimated = total.memory_estimated_turns ?? 0
+  const recallCounts: [string, string][] = recall
+    ? [
+        ["Work that recalled a fact", `${recall.recalled} of ${recall.work}`],
+        ["Facts never recalled", `${recall.never_recalled.length} of ${recall.facts}`],
+      ]
+    : []
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -71,6 +91,7 @@ export function Quality({
             ["Forgotten", memory.forget ?? 0],
             ["Turns without memory", total.turns_without_memory],
             ["Tokens per turn", tokens(turns ? Math.round((total.memory_tokens ?? 0) / turns) : 0)],
+            ...recallCounts,
           ]}
           note={
             estimated
@@ -78,6 +99,10 @@ export function Quality({
               : undefined
           }
         >
+          {recall && <RecallWeeks weeks={recall.weeks} />}
+          {recall && recall.never_recalled.length > 0 && (
+            <NeverRecalled facts={recall.never_recalled} instanceId={instanceId} />
+          )}
           <RecallSplit {...runUsage} />
         </Counts>
         <Counts
@@ -139,6 +164,69 @@ function Counts({
         )}
       </Card>
     </section>
+  )
+}
+
+/** Each week's work that recalled a fact, and the facts no work had recalled by its end. */
+function RecallWeeks({ weeks }: { weeks: RecallWeek[] }) {
+  return (
+    <div className="-mx-2 md:-mx-3">
+      <Table aria-label="Recall by week" size="fit">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Week of</TableHead>
+            <TableHead className="text-right">Work that recalled</TableHead>
+            <TableHead className="text-right">Never recalled</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {weeks.map((week) => (
+            <TableRow key={week.start}>
+              <TableCell>{dayLabel(week.start)}</TableCell>
+              <TableCell className="text-right">
+                {week.recalled} of {week.work}
+              </TableCell>
+              <TableCell className="text-right">
+                {week.never_recalled} of {week.facts}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+/** The live facts no work has recalled, each linking to it on the Memory tab. */
+function NeverRecalled({ facts, instanceId }: { facts: LiveFact[]; instanceId: string }) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
+        The facts never recalled
+        <ChevronDownIcon data-icon="inline-end" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ul className="flex flex-col">
+          {facts.map((fact) => (
+            <li key={fact.node}>
+              <a
+                className={cn(
+                  buttonVariants({ variant: "link", size: "sm" }),
+                  "h-auto min-h-8 wrap-anywhere whitespace-normal",
+                )}
+                href={nodePath(instanceId, fact.node)}
+                onClick={(event) => {
+                  event.preventDefault()
+                  openNode(instanceId, fact.node)
+                }}
+              >
+                {fact.description}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

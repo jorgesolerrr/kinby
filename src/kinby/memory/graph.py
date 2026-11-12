@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
-from kinby.contracts import NodeId
+from kinby.contracts import LiveFact, NodeId
 from kinby.frontmatter import (
     FrontmatterError,
     parse_frontmatter,
@@ -188,6 +188,14 @@ class GraphStore:
     def fact_ids(self) -> frozenset[NodeId]:
         """Every fact's id, a forgotten one's too, since it was a fact when it was recalled."""
         return frozenset(memory.node for memory, _ in self._read_all() if isinstance(memory, Fact))
+
+    def live_facts(self) -> list[LiveFact]:
+        """Every fact no tombstone hides, newest first."""
+        return [
+            LiveFact(node=memory.node, date=memory.date, description=memory.description)
+            for memory in self.nodes()
+            if isinstance(memory, Fact)
+        ]
 
     def _read_all(self) -> Iterator[tuple[MemoryNode, _Frontmatter]]:
         """Each readable node with its frontmatter, skipping invalid files."""

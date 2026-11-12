@@ -259,12 +259,14 @@ def _load_selected_instance(
 
 
 def _contract_client(instance: Instance, clock: Callable[[], datetime]) -> ContractClient:
+    graph = GraphStore(instance.path)
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
         windows=partial(instance_windows, instance),
-        facts=GraphStore(instance.path).fact_ids,
+        facts=graph.fact_ids,
+        live_facts=graph.live_facts,
         clock=clock,
     )
     return _contract_client_for(dispatcher)

@@ -102,6 +102,7 @@ async def boot_instance(
     turns = await turn_config(instance, event_log=event_log, model_override=model_override)
     if turns.recap is not None:
         await turns.recap.catch_up()
+    graph = GraphStore(instance.path)
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         event_log=event_log,
@@ -109,7 +110,8 @@ async def boot_instance(
         permissions=partial(load_permissions, instance),
         prices=partial(instance_prices, instance),
         windows=partial(instance_windows, instance),
-        facts=GraphStore(instance.path).fact_ids,
+        facts=graph.fact_ids,
+        live_facts=graph.live_facts,
         clock=clock,
     )
     runtime = InstanceRuntime(dispatcher, turns.recap)

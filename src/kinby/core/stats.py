@@ -1,12 +1,12 @@
-"""Aggregate per-turn metrics into UTC reporting buckets, read each plan's use and limits, and
-count each factory run's tokens."""
+"""Aggregate per-turn metrics into UTC reporting buckets, read each plan's use and limits,
+count each factory run's tokens, and count the work that recalled a fact."""
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 
 from kinby.contracts import (
@@ -16,13 +16,16 @@ from kinby.contracts import (
     DenyCounts,
     Event,
     FactoryRunOrigin,
+    LiveFact,
     MemoryCallCounts,
+    MemoryRecalled,
     NavigationMeans,
     NodeId,
     Origin,
     OriginUse,
     PlanLimit,
     PlanUse,
+    RecallWeek,
     ReportedRun,
     RoutineName,
     RoutineOrigin,
@@ -37,10 +40,13 @@ from kinby.contracts import (
     ToolTime,
     TurnClosingKind,
     TurnMetrics,
+    TurnStarted,
     TurnVerdict,
     UsageSource,
+    WorkRecall,
 )
-from kinby.core.turn_metrics import RunRecall, RunRecap, StepRun
+from kinby.core.turn_metrics import RunRecall, RunRecap, StepRun, TurnKey
+from kinby.core.usage import TimeRange
 
 #: Every usage source that is counted, never priced, in the order results list them.
 SUBSCRIPTION_SOURCES = tuple(source for source in UsageSource if source is not UsageSource.API)
@@ -245,6 +251,100 @@ def run_tokens(
         )
         for run_id, run in totals.items()
     ]
+
+
+@dataclass
+class _Work:
+    at: datetime
+    recalled_fact: bool = False
+
+
+def work_recall(
+    events: Iterable[Event],
+    facts: Collection[NodeId],
+    live_facts: Sequence[LiveFact],
+    time_range: TimeRange,
+    now: datetime,
+) -> WorkRecall:
+    """The range's work that recalled one of *facts*, and the live facts no work had recalled by
+    the end of the range and of each of its weeks. *events* run from the log's start, since a
+    recall before the range keeps a fact from counting as never recalled, and none after it
+    counts."""
+    end = now if time_range.until is None else min(time_range.until, now)
+    #: Each turn's work, None for a dreaming stage's turn. A factory run's step turns share one.
+    turn_work: dict[TurnKey, TurnKey | UUID | None] = {}
+    work: dict[TurnKey | UUID, _Work] = {}
+    first_recalls: dict[NodeId, datetime] = {}
+    for event in events:
+        if event.timestamp > end:
+            continue
+        key = TurnKey(event.thread_id, event.turn_id)
+        payload = event.payload
+        if isinstance(payload, TurnStarted):
+            unit = turn_work[key] = _turn_work(key, payload.origin)
+        elif key in turn_work:
+            unit = turn_work[key]
+        elif isinstance(payload, RunDelegated | MemoryRecalled) and payload.step is not None:
+            # A client step's run or coding session, on its run's thread.
+            unit = event.thread_id
+        else:
+            continue
+        if unit is None:
+            continue
+        done = work.setdefault(unit, _Work(event.timestamp))
+        if isinstance(payload, MemoryRecalled):
+            done.recalled_fact |= any(node in facts for node in payload.nodes)
+            for node in payload.nodes:
+                first_recalls.setdefault(node, event.timestamp)
+
+    in_range = [done for done in work.values() if time_range.includes(done.at)]
+
+    def never_recalled(before: datetime | None = None) -> list[LiveFact]:
+        return [
+            fact
+            for fact in live_facts
+            if (recalled := first_recalls.get(fact.node)) is None
+            or (before is not None and recalled >= before)
+        ]
+
+    weeks: list[RecallWeek] = []
+    first = time_range.since or min((done.at for done in in_range), default=None)
+    start = None if first is None else bucket_start(first, StatsBucketSize.WEEK)
+    while start is not None and start <= bucket_start(end, StatsBucketSize.WEEK):
+        following = start + timedelta(weeks=1)
+        week_work = [
+            done for done in in_range if bucket_start(done.at, StatsBucketSize.WEEK) == start
+        ]
+        weeks.append(
+            RecallWeek(
+                start=start,
+                work=len(week_work),
+                recalled=sum(done.recalled_fact for done in week_work),
+                facts=sum(fact.date < following for fact in live_facts),
+                never_recalled=sum(
+                    fact.date < following
+                    for fact in never_recalled(datetime.combine(following, time(), UTC))
+                ),
+            )
+        )
+        start = following
+    return WorkRecall(
+        work=len(in_range),
+        recalled=sum(done.recalled_fact for done in in_range),
+        facts=len(live_facts),
+        never_recalled=never_recalled(),
+        weeks=weeks,
+    )
+
+
+def _turn_work(key: TurnKey, origin: Origin | None) -> TurnKey | UUID | None:
+    match origin:
+        case RoutineOrigin(dreaming_stage=True):
+            return None
+        case FactoryRunOrigin(run_id=run_id):
+            return run_id
+        case _:
+            return key
 
 
 def plan_use(events: Iterable[Event], now: datetime) -> list[PlanUse]:
