@@ -3,6 +3,7 @@ id = "lesson-eval-invoicing-maintenance-window"
 [models]
 main = "inspect:active"
 recap = "inspect:active"
+embed = "openai:text-embedding-3-small"
 
 [memory]
 recap = "off"

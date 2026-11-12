@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+
+from langchain_core.embeddings import Embeddings
 
 from kinby.contracts import NodeId
 from kinby.memory.facade import Fact
@@ -47,17 +51,45 @@ def deliver_memory(
             return None if index is None else DeliveredMemory(index)
         case MemoryDelivery.PRE_SEARCH:
             hits = graph.recall(task)[:_PRE_SEARCH_FACTS]
-            facts = [fact for hit in hits if isinstance(fact := graph.open(hit.node), Fact)]
-            if not facts:
-                return None
-            found = "\n\n".join(
-                f"## {fact.description} ({fact.node})\n{fact.body.strip()}" for fact in facts
-            )
-            return DeliveredMemory(
-                f"{_PRE_SEARCH_HEADER}\n\n{found}", tuple(fact.node for fact in facts)
+            return _pre_searched(
+                [fact for hit in hits if isinstance(fact := graph.open(hit.node), Fact)]
             )
         case MemoryDelivery.NONE:
             return None
+
+
+async def embedded_pre_search(
+    graph: GraphStore, task: str, embeddings: Embeddings
+) -> DeliveredMemory | None:
+    """A pre-search that finds the facts whose *embeddings* lie closest to *task*'s.
+
+    Only facts are embedded, and their vectors are kept for this call alone.
+    """
+    facts = [node for node in graph.nodes() if isinstance(node, Fact)]
+    if not facts:
+        return None
+    vectors = await embeddings.aembed_documents(
+        [f"{fact.description}\n\n{fact.body}" for fact in facts]
+    )
+    query = await embeddings.aembed_query(task)
+    ranked = sorted(
+        zip(facts, vectors, strict=True), key=lambda pair: _cosine(query, pair[1]), reverse=True
+    )
+    return _pre_searched([fact for fact, _ in ranked[:_PRE_SEARCH_FACTS]])
+
+
+def _pre_searched(facts: Sequence[Fact]) -> DeliveredMemory | None:
+    if not facts:
+        return None
+    found = "\n\n".join(
+        f"## {fact.description} ({fact.node})\n{fact.body.strip()}" for fact in facts
+    )
+    return DeliveredMemory(f"{_PRE_SEARCH_HEADER}\n\n{found}", tuple(fact.node for fact in facts))
+
+
+def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
+    norms = math.hypot(*left) * math.hypot(*right)
+    return math.sumprod(left, right) / norms if norms else 0
 
 
 def memory_index(graph: GraphStore) -> str | None:
