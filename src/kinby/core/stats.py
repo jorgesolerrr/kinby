@@ -268,12 +268,16 @@ def work_recall(
 ) -> WorkRecall:
     """The range's work that recalled one of *facts*, and the live facts no work had recalled by
     the end of the range and of each of its weeks. *events* run from the log's start, since a
-    recall before the range keeps a fact from counting as never recalled."""
+    recall before the range keeps a fact from counting as never recalled, and none after it
+    counts."""
+    end = now if time_range.until is None else min(time_range.until, now)
     #: Each turn's work, None for a dreaming stage's turn. A factory run's step turns share one.
     turn_work: dict[TurnKey, TurnKey | UUID | None] = {}
     work: dict[TurnKey | UUID, _Work] = {}
     first_recalls: dict[NodeId, datetime] = {}
     for event in events:
+        if event.timestamp > end:
+            continue
         key = TurnKey(event.thread_id, event.turn_id)
         payload = event.payload
         if isinstance(payload, TurnStarted):
@@ -294,13 +298,13 @@ def work_recall(
                 first_recalls.setdefault(node, event.timestamp)
 
     in_range = [done for done in work.values() if time_range.includes(done.at)]
-    end = now if time_range.until is None else min(time_range.until, now)
 
-    def never_recalled(by: datetime) -> list[LiveFact]:
+    def never_recalled(before: datetime | None = None) -> list[LiveFact]:
         return [
             fact
             for fact in live_facts
-            if (recalled := first_recalls.get(fact.node)) is None or recalled >= by
+            if (recalled := first_recalls.get(fact.node)) is None
+            or (before is not None and recalled >= before)
         ]
 
     weeks: list[RecallWeek] = []
@@ -328,7 +332,7 @@ def work_recall(
         work=len(in_range),
         recalled=sum(done.recalled_fact for done in in_range),
         facts=len(live_facts),
-        never_recalled=never_recalled(end),
+        never_recalled=never_recalled(),
         weeks=weeks,
     )
 

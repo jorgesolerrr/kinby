@@ -1408,6 +1408,51 @@ def test_stats_get_counts_recall_week_by_week_against_every_earlier_recall(
     ]
 
 
+def test_stats_get_counts_no_recall_after_the_range_ends(tmp_path: Path) -> None:
+    graph = GraphStore(tmp_path)
+    late = _learned(graph, date(2026, 8, 1), "Deploys run from the hub")
+    on_time = _learned(graph, date(2026, 8, 2), "Deploys need a tag")
+    started = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    until = datetime(2026, 9, 2, 10, tzinfo=UTC)
+
+    def turn(recalled: NodeId, at: datetime) -> list[Event]:
+        thread_id, turn_id = uuid4(), uuid4()
+        return [
+            _event(
+                1, thread_id, turn_id, started, TurnStarted(message="work", model="openai:gpt-5")
+            ),
+            _event(2, thread_id, turn_id, at, MemoryRecalled(nodes=(recalled,))),
+            _event(3, thread_id, turn_id, at, TurnCompleted(input_tokens=10, output_tokens=1)),
+        ]
+
+    events = sorted(
+        [*turn(on_time, until), *turn(late, until + timedelta(days=1))],
+        key=lambda event: event.timestamp,
+    )
+
+    result = asyncio.run(
+        build_dispatcher(
+            tmp_path,
+            event_log=historical_event_log(tmp_path, events),
+            facts=graph.fact_ids,
+            live_facts=graph.live_facts,
+            clock=lambda: datetime(2026, 9, 9, 12, tzinfo=UTC),
+        ).dispatch(
+            "stats.get",
+            {"since": started.isoformat(), "until": until.isoformat()},
+            {Scope.INSTANCE_READ},
+        )
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert result.recall is not None
+    assert (result.recall.work, result.recall.recalled) == (2, 1)
+    assert [fact.node for fact in result.recall.never_recalled] == [late]
+    assert result.recall.weeks == [
+        RecallWeek(start=date(2026, 8, 31), work=2, recalled=1, facts=2, never_recalled=1)
+    ]
+
+
 def test_turn_metrics_prices_main_tokens_from_the_closing_totals_after_two_recaps() -> None:
     thread_id = uuid4()
     turn_id = uuid4()
