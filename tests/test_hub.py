@@ -334,7 +334,10 @@ async def finished_operation(
     client: ContractClient,
     accepted: LifecycleOperationResult | ImagePrepareResult | HubSecretSetResult,
 ) -> OperationGetResult:
-    for _ in range(100):
+    # A deadline, not a poll count: a busy CI runner can take over a second to finish one.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10
+    while loop.time() < deadline:
         result = await client.call(
             OPERATION_GET,
             OperationGetCommand(operation_id=accepted.operation_id),
