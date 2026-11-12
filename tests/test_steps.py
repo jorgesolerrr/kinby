@@ -58,7 +58,7 @@ from kinby.core.session_recalls import keep_recall
 from kinby.hub import ControlEndpoint, ControlUndelivered, HttpInstanceControl
 from kinby.instance import Instance
 from kinby.instance.layout import PERMISSIONS_NAME, STATE_DIR
-from kinby.memory import Fact, GraphStore, NodeId
+from kinby.memory import Fact, GraphStore, MemoryDelivery, NodeId
 from tests.helpers import every_event
 from tests.test_contract_server import TOKEN, served_dispatcher
 from tests.test_drain import WaitingRunner, booted, call, opened_thread
@@ -1205,11 +1205,12 @@ async def run_client_step(
     hook: str | None = None,
     attempt: int = 1,
     timeout_seconds: int = 1,
+    prompt: str = "Implement the issue.",
 ) -> ContractModel:
     command = StepRunCommand(
         step=ClientStepRun(
             client=CodingClient(client),
-            prompt="Implement the issue.",
+            prompt=prompt,
             resume=resume,
             timeout_seconds=timeout_seconds,
         ),
@@ -1627,12 +1628,14 @@ SEARCHING = (
 )
 
 
-def remembering_runtime(tmp_path: Path) -> tuple[Instance, ScheduledDispatcher, EventLog]:
+def remembering_runtime(
+    tmp_path: Path, memory_delivery: MemoryDelivery = MemoryDelivery.NONE
+) -> tuple[Instance, ScheduledDispatcher, EventLog]:
     """An instance that remembers DEPLOYS, and its dispatcher and event log."""
     instance = instance_at(tmp_path)
     instance.manifest.workspace.path.mkdir(parents=True)
     GraphStore(instance.path).remember(DEPLOYS)
-    return instance, *signal_runtime(instance, RoutineModel())
+    return instance, *signal_runtime(instance, RoutineModel(), memory_delivery=memory_delivery)
 
 
 def recalls(log: EventLog) -> list[tuple[UUID, MemoryRecalled]]:
@@ -1690,6 +1693,78 @@ def test_a_client_step_records_no_recall_an_abandoned_execution_kept(tmp_path, m
     async def scenario() -> None:
         await run_client_step(dispatcher, "claude")
 
+        assert recalls(log) == []
+
+    asyncio.run(scenario())
+
+
+def test_without_a_delivery_a_client_steps_prompt_holds_no_fact(tmp_path, monkeypatch):
+    _, dispatcher, _ = remembering_runtime(tmp_path)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude", prompt="Fix the deployment.")
+
+        [called] = recorded_calls(calls)
+        assert DEPLOYS.node not in called.stdin
+        assert DEPLOYS.body not in called.stdin
+
+    asyncio.run(scenario())
+
+
+def test_a_client_step_with_the_index_reads_it_in_its_prompt_and_records_no_recall(
+    tmp_path, monkeypatch
+):
+    _, dispatcher, log = remembering_runtime(tmp_path, MemoryDelivery.INDEX)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude")
+
+        [called] = recorded_calls(calls)
+        assert f"- {DEPLOYS.node}: {DEPLOYS.description}" in called.stdin
+        assert recalls(log) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_client_step_with_pre_search_reads_the_facts_it_found_and_records_their_recall(
+    tmp_path, monkeypatch
+):
+    _, dispatcher, log = remembering_runtime(tmp_path, MemoryDelivery.PRE_SEARCH)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    async def scenario() -> None:
+        await run_client_step(dispatcher, "claude", attempt=2, prompt="Fix the deployment.")
+
+        [called] = recorded_calls(calls)
+        assert DEPLOYS.body in called.stdin
+        assert recalls(log) == [
+            (
+                ORIGIN.run_id,
+                MemoryRecalled(
+                    nodes=(DEPLOYS.node,),
+                    step="test",
+                    attempt=2,
+                    session=CodingSessionId("claude-1"),
+                ),
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_client_that_cannot_start_records_no_recall_of_the_facts_pre_searched_for_it(
+    tmp_path, monkeypatch
+):
+    _, dispatcher, log = remembering_runtime(tmp_path, MemoryDelivery.PRE_SEARCH)
+    monkeypatch.setenv("PATH", str(tmp_path / "no-clients"))
+
+    async def scenario() -> None:
+        result = await run_client_step(dispatcher, "claude", prompt="Fix the deployment.")
+
+        assert isinstance(result, StepResult)
+        assert result.summary.startswith("claude could not start: ")
         assert recalls(log) == []
 
     asyncio.run(scenario())

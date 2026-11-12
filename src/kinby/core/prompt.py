@@ -45,6 +45,7 @@ class PromptSectionName(StrEnum):
     CONVENTIONS = "workspace conventions"
     SKILLS = "skills catalogue"
     PROFILE = "profile"
+    MEMORY_INDEX = "memory index"
     ENVIRONMENT = "environment"
 
 
@@ -101,6 +102,7 @@ def assemble_system_prompt(
     instance: Instance,
     skills: Sequence[Skill],
     today: date,
+    memory_index: str | None = None,
 ) -> tuple[PromptSection, ...]:
     """Return the existing prompt sections in their fixed cache-friendly order."""
     sections = [
@@ -144,6 +146,14 @@ def assemble_system_prompt(
     )
     if profile is not None:
         sections.append(profile)
+    if memory_index is not None:
+        sections.append(
+            PromptSection(
+                name=PromptSectionName.MEMORY_INDEX,
+                source=PromptSectionSource.RUNTIME,
+                text=memory_index,
+            )
+        )
     sections.append(_environment(instance, today))
     return tuple(sections)
 
@@ -155,7 +165,9 @@ def render_system_prompt(sections: Sequence[PromptSection]) -> SystemPrompt:
 def prompt_version(sections: Sequence[PromptSection]) -> PromptVersion:
     """Hash the stable system prompt sections into a short version."""
     stable_sections = tuple(
-        section for section in sections if section.name is not PromptSectionName.ENVIRONMENT
+        section
+        for section in sections
+        if section.name not in {PromptSectionName.MEMORY_INDEX, PromptSectionName.ENVIRONMENT}
     )
     return PromptVersion(_short_hash(render_system_prompt(stable_sections)))
 
@@ -233,15 +245,17 @@ def render_client_message(
     work_item: Mapping[ValueName, StepValue],
     results: Mapping[ValueName, StepValue],
     skills: Sequence[Skill],
+    memory: str | None = None,
 ) -> str:
-    """A client step's message, how to search memory, how to keep a command from holding the step,
-    then the skills catalogue with the path of each skill's file.
+    """A client step's message, how to search memory and the *memory* the step brings, how to keep
+    a command from holding the step, then the skills catalogue with the path of each skill's file.
 
     A coding client has no kinby tools, so it searches memory from its shell and reads a skill
     from its path.
     """
+    delivered = "" if memory is None else f"\n\n{memory}"
     message = (
-        f"{render_step_message(prompt, work_item, results)}\n\n{_CLIENT_MEMORY}\n\n"
+        f"{render_step_message(prompt, work_item, results)}\n\n{_CLIENT_MEMORY}{delivered}\n\n"
         f"{_CLIENT_COMMANDS}"
     )
     if not skills:

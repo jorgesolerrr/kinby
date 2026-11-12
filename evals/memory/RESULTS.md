@@ -46,22 +46,32 @@ Inspect log: `logs/2026-09-03T22-47-32-00-00_memory_T9HLjtuttuTEnmEKt6DP27.eval`
 Status: Not run yet.
 
 A lesson case gives the agent ordinary work while a fact in its memory warns against a mistake that
-work invites. The `lessons` task runs every case under the pull arm: the instance prompt gets a
-line telling the agent to search memory for the task before it starts. Each case runs three times,
-with its memory filled to 10, 100 and 500 facts. The extra facts are the same unrelated errands on
-every run.
+work invites. The `lessons` task runs every case under one arm, each a way memory reaches the
+agent:
 
-Run every case on both models in one command from the merged default branch:
+- `pull`, the default: the instance prompt gets a line telling the agent to search memory for the
+  task before it starts.
+- `index`: the system prompt lists the newest facts' ids and descriptions, up to about 1k tokens,
+  and tells the agent to open a fact before acting on it.
+- `pre-search`: the runtime searches memory with the work's text and puts the top 3 fact bodies in
+  the message, recording their recall.
+
+Each case runs three times, with its memory filled to 10, 100 and 500 facts. The extra facts are
+the same unrelated errands on every run.
+
+Run every case under one arm on both models in one command from the merged default branch, once
+per arm:
 
 ```bash
 uv run --env-file .env --group evals inspect eval evals/memory/task.py@lessons \
-  --model anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5
+  --model anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5 -T arm=pull
 ```
 
 Each sample scores two things. `model_graded_qa` is whether the work followed the lesson: the
 judge model compares the answer with the case's `followed` and `mistake`, and an answer that makes
-the mistake is graded I. `memory_tokens` is the turn's memory tokens. Both report their mean per
-fact count, so the `model_graded_qa` mean is the lesson-following rate.
+the mistake is graded I. `memory_tokens` is the turn's memory tokens, with the index or the
+pre-searched facts counted at four characters a token. Both report their mean per fact count, so
+the `model_graded_qa` mean is the lesson-following rate.
 
 | Case | The work | The lesson |
 |---|---|---|
@@ -77,7 +87,7 @@ fact count, so the `model_graded_qa` mean is the lesson-following rate.
 A lesson case is a directory under `lessons/` with a `case.toml` and an `instance/` fixture.
 `case.toml` holds the case's name, the `work` the agent is asked for, what the work does when it
 `followed` the lesson, and the `mistake` the lesson warns against. The fixture's `memory/graph/`
-holds the lesson. The task adds the unrelated facts and the pull line itself.
+holds the lesson. The task adds the unrelated facts and the pull arm's line itself.
 
 When a turn or factory run misses a lesson it had in memory, rewrite the lesson as the fixture's
 fact and the work as the case's `work`.
@@ -85,4 +95,4 @@ fact and the work as the case's `work`.
 ## First run
 
 Record the run date, the active and judge models, the following rate and mean memory tokens per
-fact count for each model, and the Inspect log here.
+arm, model and fact count, and the Inspect logs here.

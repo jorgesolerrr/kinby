@@ -60,7 +60,7 @@ from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.instance import load_instance
 from kinby.instance.layout import GRAPH_DIR, MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
-from kinby.memory import Fact, GraphStore, RecapWriter
+from kinby.memory import Fact, GraphStore, MemoryDelivery, RecapWriter, deliver_memory
 from kinby.memory.facade import new_node_id
 
 if TYPE_CHECKING or __package__ == "evals.memory":
@@ -71,7 +71,7 @@ else:
 
 _CASES_DIR = Path(__file__).parent / "cases"
 _JUDGE_MODEL = "openai/gpt-5-mini"
-_CHARACTERS_PER_PROFILE_TOKEN = 4
+_CHARACTERS_PER_TOKEN = 4
 _FACT_GRADER_TEMPLATE = """
 You are comparing a submitted answer to a reference answer for a personal memory question.
 
@@ -169,6 +169,20 @@ class MemoryArm(StrEnum):
     STUFFING = "stuffing"
 
 
+class LessonArm(StrEnum):
+    PULL = "pull"
+    INDEX = "index"
+    PRE_SEARCH = "pre-search"
+
+
+#: How each lesson arm's runtime brings memory to the turn. Pull leaves it to the agent.
+_DELIVERIES = {
+    LessonArm.PULL: MemoryDelivery.NONE,
+    LessonArm.INDEX: MemoryDelivery.INDEX,
+    LessonArm.PRE_SEARCH: MemoryDelivery.PRE_SEARCH,
+}
+
+
 class MemoryExpectation(StrEnum):
     OPEN_NODE = "open-node"
     REMEMBER_RECALL = "remember-recall"
@@ -234,8 +248,9 @@ def memory(arm: str = _BOTH_ARMS) -> Task:
 
 
 @task
-def lessons() -> Task:
-    """Return the lesson cases under the pull arm, each at every fact count."""
+def lessons(arm: str = LessonArm.PULL) -> Task:
+    """Return the lesson cases under one arm, each at every fact count."""
+    selected_arm = LessonArm(arm)
     return Task(
         dataset=MemoryDataset(
             [
@@ -245,13 +260,14 @@ def lessons() -> Task:
                 for facts in _FACT_COUNTS
             ]
         ),
-        solver=run_lesson_case(),
+        solver=run_lesson_case(selected_arm),
         scorer=(
             model_graded_qa(template=_LESSON_GRADER_TEMPLATE, model=_JUDGE_MODEL),
             memory_tokens(),
         ),
         # The mean of a grade is the lesson-following rate.
         metrics=[grouped(mean(), "facts")],
+        metadata={"arm": selected_arm.value},
     )
 
 
@@ -326,20 +342,25 @@ def run_memory_case() -> Solver:
 
 
 @solver
-def run_lesson_case() -> Solver:
+def run_lesson_case(arm: LessonArm) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         del generate
+        delivery = _DELIVERIES[arm]
         with tempfile.TemporaryDirectory(prefix="kinby-lesson-eval-") as temporary:
             instance_path = Path(temporary) / "instance"
-            _prepare_pull(_case_path(state), instance_path, _facts(state))
+            _prepare_lesson(_case_path(state), instance_path, _facts(state), arm)
+            # Read before the turn, as the turn reads it when it starts.
+            delivered = deliver_memory(delivery, GraphStore(instance_path), state.input_text)
             events, answer = await _run_turns(
                 instance_path,
                 (MemoryTurn(thread="work", message=state.input_text),),
+                delivery,
             )
-            state.metadata["memory_tokens"] = _memory_token_estimate(
-                instance_path,
-                events,
-                _last_turn(events),
+            delivered_tokens = (
+                0 if delivered is None else len(delivered.text) / _CHARACTERS_PER_TOKEN
+            )
+            state.metadata["memory_tokens"] = (
+                _memory_token_estimate(instance_path, events, _last_turn(events)) + delivered_tokens
             )
         state.output = ModelOutput.from_content(model=str(state.model), content=answer)
         state.messages.append(ChatMessageAssistant(content=answer, source="generate"))
@@ -349,9 +370,11 @@ def run_lesson_case() -> Solver:
     return solve
 
 
-def _prepare_pull(case_path: Path, instance_path: Path, facts: int) -> None:
+def _prepare_lesson(case_path: Path, instance_path: Path, facts: int, arm: LessonArm) -> None:
     shutil.copytree(case_path / "instance", instance_path)
     _add_unrelated_facts(instance_path, facts)
+    if arm is not LessonArm.PULL:
+        return
     system_path = instance_path / SYSTEM_NAME
     system = system_path.read_text(encoding="utf-8").rstrip("\r\n")
     system_path.write_text(f"{system}\n\n{_PULL_LINE}\n", encoding="utf-8")
@@ -574,7 +597,7 @@ def _memory_token_estimate(
         raise MemoryEvalError("The memory eval recorded no closed turn metrics.")
     profile_path = instance_path / MEMORY_DIR / PROFILE_NAME
     profile = profile_path.read_text(encoding="utf-8").strip("\r\n")
-    return record.memory_tokens + len(profile) / _CHARACTERS_PER_PROFILE_TOKEN
+    return record.memory_tokens + len(profile) / _CHARACTERS_PER_TOKEN
 
 
 def _sample(case_path: Path, arm: MemoryArm) -> Sample:
@@ -632,11 +655,15 @@ def _arm(state: TaskState) -> MemoryArm:
     return MemoryArm(value)
 
 
-async def _run_turns(instance_path: Path, turns: Sequence[MemoryTurn]) -> tuple[list[Event], str]:
+async def _run_turns(
+    instance_path: Path,
+    turns: Sequence[MemoryTurn],
+    memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
+) -> tuple[list[Event], str]:
     instance = load_instance(instance_path)
     event_log = EventLog(instance.manifest.state_dir)
     factory = inspect_model_factory(get_model())
-    runner = LangGraphRunner(instance, model_factory=factory)
+    runner = LangGraphRunner(instance, model_factory=factory, memory_delivery=memory_delivery)
     recap = RecapWriter(
         event_log,
         GraphStore(instance.path),

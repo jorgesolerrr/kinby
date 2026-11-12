@@ -135,7 +135,7 @@ from kinby.core.usage import TimeRange, usage_totals
 from kinby.core.views import InstanceViews
 from kinby.instance import Instance, ModelPrice
 from kinby.instance.permissions import SHIPPED_POLICY, GatePolicy
-from kinby.memory import GraphStore, RecapWriter
+from kinby.memory import GraphStore, MemoryDelivery, RecapWriter
 from kinby.plugins.browser import BrowserService
 from kinby.plugins.hub_browser import HubBrowser
 
@@ -153,6 +153,8 @@ class TurnConfig:
     compact: Callable[[UUID, str | None], Awaitable[Event]] | None = None
     #: What fills a thread's context size.
     context: Callable[[UUID], Awaitable[ThreadContextResult]] | None = None
+    #: How memory reaches a factory client step's coding client before it searches.
+    memory_delivery: MemoryDelivery = MemoryDelivery.NONE
 
 
 @dataclass(frozen=True)
@@ -428,12 +430,15 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_GRANT_REVOKE, config.revoke_routine_grant)
     if isinstance(turns, ScheduledTurnConfig) and turn_service is not None:
         step_instance = turns.scheduler.instance
+        memory_delivery = turns.turns.memory_delivery
         held_results = HeldResults(state_dir / "step-results")
 
         async def run_step_in_instance(command: StepRunCommand) -> StepResult:
             async def run() -> StepResult:
                 async with turn_service.step():
-                    return await run_step(command, step_instance, turn_service, event_log)
+                    return await run_step(
+                        command, step_instance, turn_service, event_log, memory_delivery
+                    )
 
             return await held_results.answer(command, run)
 

@@ -1,6 +1,7 @@
 """Short-term memory, long-term memory (profile + knowledge graph), and reasoning traces."""
 
 from kinby.contracts import NodeId
+from kinby.memory.delivery import MemoryDelivery, deliver_memory, memory_index
 from kinby.memory.facade import (
     Episode,
     Fact,
@@ -20,6 +21,7 @@ __all__ = [
     "GraphStore",
     "InvalidNodeId",
     "Memory",
+    "MemoryDelivery",
     "MemoryHit",
     "MemoryNode",
     "MemoryNodeError",
@@ -29,7 +31,9 @@ __all__ = [
     "RecapWriter",
     "RecappedRun",
     "RecappedTurn",
+    "deliver_memory",
     "hits_json",
+    "memory_index",
     "memory_tools",
     "open_memory",
 ]
