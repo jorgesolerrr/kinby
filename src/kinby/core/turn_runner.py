@@ -138,7 +138,7 @@ from kinby.instance.permissions import (
 )
 from kinby.instance.read_only_tools import read_only_tools, set_read_only
 from kinby.instance.routine_grants import RoutineGrants
-from kinby.memory import GraphStore
+from kinby.memory import GraphStore, MemoryDelivery, deliver_memory, memory_index
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
@@ -347,9 +347,11 @@ class LangGraphRunner:
         today: Callable[[], date] = utc_today,
         tokenizer: Tokenizer | None = None,
         browser: BrowserService | None = None,
+        memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
     ) -> None:
         """Count each profile version with *tokenizer*. Without one, the profile goes uncounted.
-        The browser tools reach *browser*, or else the hub's browser service."""
+        The browser tools reach *browser*, or else the hub's browser service. Each turn gets its
+        memory by *memory_delivery* before the agent searches."""
         self._instance = instance
         self._event_log = (
             event_log if event_log is not None else EventLog(instance.manifest.state_dir)
@@ -361,6 +363,7 @@ class LangGraphRunner:
         self._today = today
         self._tokenizer = tokenizer
         self._browser = browser if browser is not None else HubBrowser()
+        self._memory_delivery = memory_delivery
         #: The profile versions turns were prepared with and no count holds yet, by their text.
         self._uncounted_profiles: dict[ProfileVersion, str] = {}
         self._counting_profiles = asyncio.Lock()
@@ -616,7 +619,12 @@ class LangGraphRunner:
 
     def _prompt_sections(self) -> tuple[PromptSection, ...]:
         skills, _ = load_skills(self._instance)
-        return assemble_system_prompt(self._instance, skills, self._today())
+        index = (
+            memory_index(GraphStore(self._instance.path))
+            if self._memory_delivery is MemoryDelivery.INDEX
+            else None
+        )
+        return assemble_system_prompt(self._instance, skills, self._today(), index)
 
     async def _invoke(
         self,
@@ -674,6 +682,9 @@ class LangGraphRunner:
                 + asyncio.get_running_loop().time()
                 - compaction_started,
             )
+        wake = render_wake(turn.origin, prepared.message, prepared.payload)
+        if isinstance(graph_input, ModelState):
+            wake = await self._pre_searched(wake, prepared.message, emit)
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
         bound_model = model.bind_tools(runnables) if runnables else model
@@ -712,9 +723,7 @@ class LangGraphRunner:
                                 view_reporter=emit,
                                 browser=self._browser,
                             ),
-                            user_message=HumanMessage(
-                                content=render_wake(turn.origin, prepared.message, prepared.payload)
-                            ),
+                            user_message=HumanMessage(content=wake),
                             budgets=budgets,
                             compaction=latest_compaction(
                                 self._event_log.thread_events(turn.thread_id)
@@ -775,6 +784,17 @@ class LangGraphRunner:
             output_tokens=result.output_tokens,
             price=self._price(turn.model),
         )
+
+    async def _pre_searched(self, wake: str, task: str, emit: Emit) -> str:
+        """*wake*, followed under pre-search by the facts a memory search with *task* finds. The
+        agent reads their bodies, so their recall is recorded."""
+        if self._memory_delivery is not MemoryDelivery.PRE_SEARCH:
+            return wake
+        found = deliver_memory(self._memory_delivery, GraphStore(self._instance.path), task)
+        if found is None:
+            return wake
+        await emit(MemoryRecalled(nodes=found.recalled))
+        return f"{wake}\n\n{found.text}"
 
     async def _prepare_turn(
         self,
@@ -1067,7 +1087,7 @@ class LangGraphRunner:
         async with mcp_tools(self._instance) as picked:
             rows = context_rows(
                 size,
-                assemble_system_prompt(self._instance, skills, self._today()),
+                self._prompt_sections(),
                 tools.tools,
                 picked,
                 messages,

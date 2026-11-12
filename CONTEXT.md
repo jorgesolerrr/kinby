@@ -474,11 +474,16 @@ A hash of the **profile**'s text, recorded when a turn starts. The provider's to
 
 ### Eval arm
 
-One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph.
+One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph. Its **lesson cases** have a pull arm, which tells the agent to search memory before it starts, and an index arm and a pre-search arm, named for the **memory delivery** each uses.
 
 ### Lesson case
 
 A memory **eval** case that gives the agent ordinary work, never a question about the past, while a **fact** in its memory warns against a mistake that work invites. It scores whether the agent followed the lesson and what its **memory tokens** were. The **eval arms** that compare how memory reaches the agent run on lesson cases.
+
+### Memory delivery
+
+How the runtime brings memory to a **turn** or a **coding client**'s **step** before the agent searches it: none, the default; an index, the newest **facts**' ids and descriptions in the **system prompt** under a cap of about 1k tokens; or a pre-search, the bodies of the three facts a search with the task's text finds first, put in the message. Showing the index is not a **recall**, but a pre-search is, since the agent reads the bodies. It is turn configuration, not a manifest setting.
+_Avoid_: delivery, which is a **signal**'s inbound call; injection
 
 ### Turn runner
 

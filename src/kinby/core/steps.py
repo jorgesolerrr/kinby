@@ -18,6 +18,7 @@ from kinby.contracts import (
     Event,
     EventType,
     HookName,
+    MemoryRecalled,
     MessageDelta,
     RepositoryCommands,
     RunDelegated,
@@ -37,6 +38,7 @@ from kinby.core.session_recalls import take_recalls
 from kinby.core.turns import Turns
 from kinby.instance import Instance, ManifestError, repository_commands
 from kinby.instance.permissions import PermissionsError
+from kinby.memory import GraphStore, MemoryDelivery, deliver_memory
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
@@ -53,9 +55,14 @@ _RESULT_BYTES = 1024 * 1024
 
 
 async def run_step(
-    command: StepRunCommand, instance: Instance, turns: Turns, log: EventLog
+    command: StepRunCommand,
+    instance: Instance,
+    turns: Turns,
+    log: EventLog,
+    memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
 ) -> StepResult:
     """Run the step, then its hook however the step ended. The hook's values are the result's.
+    A client step gets its memory by *memory_delivery*.
 
     A step that names a branch runs in that branch's run worktree, and its hook reads it there.
     When the run worktree cannot be had, the step fails before it starts and runs no hook.
@@ -72,7 +79,9 @@ async def run_step(
         case AgentStepRun() as step:
             result = await _run_agent_step(step, command, turns)
         case ClientStepRun() as step:
-            result = await _run_client_step(step, command, instance, workspace, log)
+            result = await _run_client_step(
+                step, command, instance, workspace, log, memory_delivery
+            )
         case CommandStepRun() as step:
             result = await run_command_step(step, instance, workspace)
         case CodeStepRun() as step:
@@ -123,10 +132,15 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
 
 
 async def _run_client_step(
-    step: ClientStepRun, command: StepRunCommand, instance: Instance, workspace: Path, log: EventLog
+    step: ClientStepRun,
+    command: StepRunCommand,
+    instance: Instance,
+    workspace: Path,
+    log: EventLog,
+    memory_delivery: MemoryDelivery,
 ) -> StepResult:
-    """Run the coding client in *workspace*, and record its delegated run and its session's
-    recalls.
+    """Run the coding client in *workspace*, and record its delegated run, the facts a pre-search
+    put in its message and its session's recalls.
 
     What the client said last is only the summary. A run the plan refused ends the step limited,
     whatever the client exited with.
@@ -136,9 +150,16 @@ async def _run_client_step(
         await log.append(command.origin.run_id, uuid4(), warning)
     # What an execution the instance abandoned kept belongs to no recorded run.
     take_recalls(instance.manifest.state_dir, command.origin.run_id)
+    delivered = deliver_memory(memory_delivery, GraphStore(instance.path), step.prompt)
     ran = await run_coding_client(
         step.client,
-        render_client_message(step.prompt, command.work_item, command.results, skills),
+        render_client_message(
+            step.prompt,
+            command.work_item,
+            command.results,
+            skills,
+            None if delivered is None else delivered.text,
+        ),
         workspace,
         instance=instance.path,
         state_dir=instance.manifest.state_dir,
@@ -169,6 +190,17 @@ async def _run_client_step(
                 run=await asyncio.to_thread(own),
                 step=command.origin.step,
                 attempt=command.attempt,
+            ),
+        )
+    if delivered is not None and delivered.recalled:
+        await log.append(
+            command.origin.run_id,
+            uuid4(),
+            MemoryRecalled(
+                nodes=delivered.recalled,
+                step=command.origin.step,
+                attempt=command.attempt,
+                session=ran.transcript,
             ),
         )
     for recall in take_recalls(instance.manifest.state_dir, command.origin.run_id):
