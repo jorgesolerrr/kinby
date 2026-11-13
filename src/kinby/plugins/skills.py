@@ -72,7 +72,7 @@ def load_skill_tiers(instance: Instance) -> tuple[tuple[TieredSkill, ...], tuple
     tiered: list[TieredSkill] = []
     warnings: list[Warning] = []
     for tier, tier_roots in roots:
-        skills, tier_warnings = _load_skill_roots(tier_roots)
+        skills, tier_warnings = load_skill_roots(tier_roots)
         tiered.extend(TieredSkill(skill, tier) for skill in skills.values())
         warnings.extend(tier_warnings)
     return tuple(tiered), tuple(warnings)
@@ -99,9 +99,11 @@ def describe_skill_shadow(instance: Instance, name: SkillName) -> str | None:
     return f"{hidden.tier} skill at {hidden.skill.source}"
 
 
-def _load_skill_roots(
+def load_skill_roots(
     roots: Sequence[Path],
 ) -> tuple[dict[SkillName, Skill], tuple[Warning, ...]]:
+    """Each skill in a folder of its own under *roots*. A name the first root holds hides it in a
+    later one."""
     loaded: dict[SkillName, Skill] = {}
     warnings: list[Warning] = []
     for root in roots:

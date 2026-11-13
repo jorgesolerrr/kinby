@@ -32,8 +32,14 @@ A factory may declare `requires` in place of `instances` and `intake`. Its steps
   - `commands`: the names of the workbench's lists of repository commands the steps run. A `command` step's `{ commands: <name> }` names one of them.
   - `logins`: as under `instances`. See Logins.
   - `browser`: `true` when the steps need a browser.
-- Steps take no `in`, and a `command` step no `branch` or `hook`. Only `command`, `code`, `wait` and `approve` steps.
-- A `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended. See Hooks. kinby's default hooks are no check.
+- Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
+- An `agent` step runs a model on the workbench, in the run's folder:
+  - `engine`: `claude` or `codex`, a coding client, or `kinby`, which no workbench runs yet.
+  - `prompt`: a file of the factory's folder, as for an `agent` step in an instance.
+  - `model` and `effort`: as for `client`.
+  - `resume`: an earlier `agent` step on the same coding client whose session this one continues. The `kinby` engine keeps no session.
+  - The client is offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Its transcript is kept on the workbench, one per attempt.
+- An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended. See Hooks. kinby's default hooks are no check.
 - `needs_human` and `ended` take only `call`.
 - Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `needs_human` or `ended` calls one of them.
 

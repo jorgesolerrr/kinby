@@ -71,6 +71,7 @@ from kinby.contracts import (
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    FACTORY_RUN_TRANSCRIPT,
     HOME_SCOPES,
     HUB_SECRET_DELETE,
     HUB_SECRET_LIST,
@@ -170,6 +171,8 @@ from kinby.contracts import (
     FactoryResult,
     FactoryRole,
     FactoryRun,
+    FactoryRunTranscript,
+    FactoryRunTranscriptCommand,
     HubRouteMissing,
     HubSecret,
     HubSecretDeleteCommand,
@@ -298,6 +301,7 @@ from kinby.core.errors import (
     FactoryCheckFailed,
     FactoryInUse,
     FactoryNotFound,
+    FactoryRunNotFound,
     HomeInstanceKept,
     ImageNotPrepared,
     InstanceRefused,
@@ -834,6 +838,7 @@ class Hub:
         dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
         dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
         dispatcher.register(FACTORY_RUN_GET, self.runs.get)
+        dispatcher.register(FACTORY_RUN_TRANSCRIPT, self.run_transcript)
         dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
         dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
         dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
@@ -1176,6 +1181,22 @@ class Hub:
     ) -> RunFolderRemoveResult:
         endpoint = await self._endpoint(self._active_workbench(workbench_id))
         return await self._control.remove_run_folder(endpoint, command)
+
+    async def run_transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
+        """Read one page of the attempt's transcript from the workbench of the run's line."""
+        run = self.registry.run(command.run_id)
+        line_id = run.line_id if run is not None else None
+        line = next((line for line in self.registry.lines() if line.line_id == line_id), None)
+        if line is None or not any(
+            (attempt.step, attempt.attempt) == (command.step, command.attempt)
+            for attempt in self.registry.attempts(command.run_id)
+        ):
+            raise FactoryRunNotFound(
+                f'Factory run "{command.run_id}" has no attempt {command.attempt} at step '
+                f'"{command.step}" on a line.'
+            )
+        endpoint = await self._endpoint(self._active_workbench(line.workbench_id))
+        return await self._control.read_transcript(endpoint, command)
 
     async def _tell_stop(self, instance_id: UUID, stop: RunStop) -> Untold | None:
         try:

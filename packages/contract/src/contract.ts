@@ -388,6 +388,10 @@ export interface Contract {
       command: FactoryRunSendBackCommand;
       result: FactoryRun;
     };
+    "factory.run.transcript": {
+      command: FactoryRunTranscriptCommand;
+      result: FactoryRunTranscript;
+    };
     "hub.secret.delete": {
       command: HubSecretDeleteCommand;
       result: HubSecretDeleteResult;
@@ -683,6 +687,10 @@ export interface Contract {
     "run.stopped": {
       command: RunStop;
       result: AcceptedResult;
+    };
+    "run.transcript.read": {
+      command: FactoryRunTranscriptCommand;
+      result: FactoryRunTranscript;
     };
     "skill.customize": {
       command: SkillCustomizeCommand;
@@ -1472,6 +1480,27 @@ export interface FactoryRunRetryCommand {
 export interface FactoryRunSendBackCommand {
   run_id: string;
   step: StepId;
+}
+/**
+ * Read one page of the transcript of an attempt at an agent step of a line's run, from the
+ * run's workbench.
+ */
+export interface FactoryRunTranscriptCommand {
+  attempt: number;
+  cursor?: number;
+  run_id: string;
+  step: StepId;
+}
+/**
+ * The events a coding client streamed in one attempt, in order. An attempt that streamed
+ * none, or that ran no engine, has none. An event too large for a page reads as
+ * ``{"type": "cut", "bytes": <its size>}``.
+ */
+export interface FactoryRunTranscript {
+  cursor: number | null;
+  events: {
+    [k: string]: JsonValue;
+  }[];
 }
 export interface HubSecretDeleteCommand {
   name: HubSecretName;

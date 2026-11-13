@@ -816,7 +816,7 @@ A **routine**'s own deterministic code, a **tool** never offered to the model, t
 
 ### Coding client
 
-A command-line agent that implements or reviews repository changes for a coding **instance** under a separate model subscription.
+A command-line agent that implements or reviews repository changes under a separate model subscription: the **engine** of an **agent step**, or, in a **factory** written the older way, a step run inside a coding **instance**.
 _Avoid_: model, subagent
 
 ### Coding run
@@ -844,7 +844,7 @@ _Avoid_: install, binding, assignment
 
 ### Agent step
 
-A **step** where a model does the work from a prompt, on the **workbench**, with the workbench's **picks**. It has no persona and no memory of its own. Its **engine** runs it.
+A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it. Each attempt's transcript stays on the workbench, and the **hub** reads it from there.
 _Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
 
 ### Engine
@@ -854,7 +854,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. It ends with a **step result**.
+One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. It ends with a **step result**.
 
 ### Work item
 

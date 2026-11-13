@@ -610,6 +610,16 @@
       "title": "EndedCall",
       "type": "object"
     },
+    "Engine": {
+      "description": "What runs an agent step: a kinby turn, or a coding client, which keeps a session.",
+      "enum": [
+        "kinby",
+        "claude",
+        "codex"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
     "FactoryFile": {
       "additionalProperties": false,
       "description": "A factory: the instances its steps run in, its intake, and its line of steps.",
@@ -1381,6 +1391,142 @@
       "title": "WaitStep",
       "type": "object"
     },
+    "WorkbenchAgentStep": {
+      "additionalProperties": false,
+      "description": "A model doing the work from a prompt of the factory's folder, on the workbench in the run's\nfolder, run by its engine.",
+      "properties": {
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "engine": {
+          "$ref": "#/$defs/Engine"
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "$ref": "#/$defs/Retry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed"
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "kind": {
+          "const": "agent",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "prompt": {
+          "$ref": "#/$defs/FactoryPath"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "engine",
+        "prompt"
+      ],
+      "title": "WorkbenchAgentStep",
+      "type": "object"
+    },
     "WorkbenchCodeStep": {
       "additionalProperties": false,
       "description": "A tool of the factory's folder, run on the workbench. The model never sees it.\n\nA mapping the tool returns is the step's values. A HookResult also names its outcome.",
@@ -1665,6 +1811,7 @@
     "WorkbenchStep": {
       "discriminator": {
         "mapping": {
+          "agent": "#/$defs/WorkbenchAgentStep",
           "approve": "#/$defs/ApproveStep",
           "code": "#/$defs/WorkbenchCodeStep",
           "command": "#/$defs/WorkbenchCommandStep",
@@ -1673,6 +1820,9 @@
         "propertyName": "kind"
       },
       "oneOf": [
+        {
+          "$ref": "#/$defs/WorkbenchAgentStep"
+        },
         {
           "$ref": "#/$defs/WorkbenchCommandStep"
         },

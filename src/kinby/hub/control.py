@@ -12,6 +12,7 @@ from kinby.contracts import (
     INSTANCE_DRAIN,
     RUN_FOLDER_REMOVE,
     RUN_STOPPED,
+    RUN_TRANSCRIPT_READ,
     STATS_GET,
     STEP_RUN,
     AcceptedResult,
@@ -23,6 +24,8 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     ErrorFrame,
+    FactoryRunTranscript,
+    FactoryRunTranscriptCommand,
     FrameId,
     InstanceDrainCommand,
     InstanceProbeResult,
@@ -93,6 +96,10 @@ class InstanceControl(Protocol):
         self, endpoint: ControlEndpoint, command: RunFolderRemoveCommand
     ) -> RunFolderRemoveResult: ...
 
+    async def read_transcript(
+        self, endpoint: ControlEndpoint, command: FactoryRunTranscriptCommand
+    ) -> FactoryRunTranscript: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -136,6 +143,12 @@ class HttpInstanceControl:
     ) -> RunFolderRemoveResult:
         """Have the workbench remove the folder of a run that ended."""
         return await _call(endpoint, RUN_FOLDER_REMOVE, command, "the run folder's removal")
+
+    async def read_transcript(
+        self, endpoint: ControlEndpoint, command: FactoryRunTranscriptCommand
+    ) -> FactoryRunTranscript:
+        """Read one page of an attempt's transcript from the workbench that ran it."""
+        return await _call(endpoint, RUN_TRANSCRIPT_READ, command, "the transcript read")
 
 
 async def _call[Command: ContractModel, Result: ContractModel](

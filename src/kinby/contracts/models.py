@@ -4198,6 +4198,27 @@ class FactoryRunDetail(ContractModel):
     earlier_steps: list[StepId]
 
 
+class FactoryRunTranscriptCommand(ContractModel):
+    """Read one page of the transcript of an attempt at an agent step of a line's run, from the
+    run's workbench."""
+
+    run_id: UUID
+    step: StepId
+    attempt: Annotated[int, Field(ge=1)]
+    #: The line of the transcript the page starts at, counted from 0.
+    cursor: Annotated[int, Field(ge=0)] = 0
+
+
+class FactoryRunTranscript(ContractModel):
+    """The events a coding client streamed in one attempt, in order. An attempt that streamed
+    none, or that ran no engine, has none. An event too large for a page reads as
+    ``{"type": "cut", "bytes": <its size>}``."""
+
+    events: list[dict[str, JsonValue]]
+    #: Where the next page starts. None once the transcript ends.
+    cursor: int | None
+
+
 class FactoryRunSubscribeCommand(ContractModel):
     """Follow every factory run of the hub as its state changes. Nothing is replayed."""
 

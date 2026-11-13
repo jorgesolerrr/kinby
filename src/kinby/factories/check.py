@@ -34,6 +34,7 @@ from kinby.factories.file import (
     ClientStep,
     CodeStep,
     CommandStep,
+    Engine,
     FactoryFile,
     InstanceDeclaration,
     InstanceName,
@@ -41,6 +42,7 @@ from kinby.factories.file import (
     Retry,
     SendBack,
     WaitStep,
+    WorkbenchAgentStep,
     WorkbenchCodeStep,
     WorkbenchCommandStep,
     WorkbenchFactory,
@@ -122,9 +124,12 @@ def _workbench_factory(factory: WorkbenchFactory, folder: Path) -> tuple[str, ..
         *own.problems,
         # Only the factory's folder reaches a workbench, so a tool installed beside kinby is none,
         # and a check is never one of kinby's default hooks.
-        *_workbench_steps(factory, own.tools - own.installed, own.hooks - own.default_hooks),
+        *_workbench_steps(
+            factory, folder, own.tools - own.installed, own.hooks - own.default_hooks
+        ),
         *_inputs(factory),
         *_order(factory),
+        *_engine_resumes(factory),
     )
 
 
@@ -232,9 +237,11 @@ def _requirements(factory: WorkbenchFactory) -> Iterator[str]:
 
 
 def _workbench_steps(
-    factory: WorkbenchFactory, tools: frozenset[str], hooks: frozenset[str]
+    factory: WorkbenchFactory, folder: Path, tools: frozenset[str], hooks: frozenset[str]
 ) -> Iterator[str]:
     for step in factory.steps:
+        if isinstance(step, WorkbenchAgentStep):
+            yield from _prompt(folder, step)
         if isinstance(step, WorkbenchCommandStep):
             for entry in step.run:
                 if isinstance(entry, RepositoryCommands) and (
@@ -249,7 +256,7 @@ def _workbench_steps(
                 f'Step "{step.id}" calls tool "{step.call}", '
                 "which the factory's folder does not hold."
             )
-        check = step.check if isinstance(step, WorkbenchCommandStep | WorkbenchCodeStep) else None
+        check = step.check if not isinstance(step, WaitStep | ApproveStep) else None
         if check is not None and check not in hooks:
             yield (
                 f'Step "{step.id}" names check "{check}", '
@@ -386,12 +393,7 @@ def _steps(
         # A missing template is reported once, not again for each step it would serve.
         template = templates.get(step.instance)
         if isinstance(step, AgentStep | ClientStep):
-            prompt = (folder / step.prompt).resolve()
-            if not prompt.is_relative_to(folder.resolve()) or not prompt.is_file():
-                yield (
-                    f'Step "{step.id}" names prompt "{step.prompt}", '
-                    "which is not a file in the factory."
-                )
+            yield from _prompt(folder, step)
         hook = step.hook if isinstance(step, AgentStep | ClientStep | CommandStep) else None
         if template is not None and hook is not None and hook not in template.hooks:
             yield (
@@ -403,6 +405,12 @@ def _steps(
                 f'Step "{step.id}" calls tool "{step.call}", '
                 f'which instance "{step.instance}" does not have.'
             )
+
+
+def _prompt(folder: Path, step: AgentStep | ClientStep | WorkbenchAgentStep) -> Iterator[str]:
+    prompt = (folder / step.prompt).resolve()
+    if not prompt.is_relative_to(folder.resolve()) or not prompt.is_file():
+        yield f'Step "{step.id}" names prompt "{step.prompt}", which is not a file in the factory.'
 
 
 def _run_calls(factory: FactoryFile, templates: dict[InstanceName, _Template]) -> Iterator[str]:
@@ -500,4 +508,25 @@ def _resumes(factory: FactoryFile) -> Iterator[str]:
             yield (
                 f'Step "{step.id}" resumes "{step.resume}", which is not an earlier '
                 f'{step.client} step in instance "{step.instance}".'
+            )
+
+
+def _engine_resumes(factory: WorkbenchFactory) -> Iterator[str]:
+    """An agent step only resumes the session of an earlier agent step on its coding client, and
+    the kinby engine keeps none."""
+    for at, step in enumerate(factory.steps):
+        if not isinstance(step, WorkbenchAgentStep) or step.resume is None:
+            continue
+        if step.engine is Engine.KINBY:
+            yield (
+                f'Step "{step.id}" resumes "{step.resume}", but the kinby engine keeps no session.'
+            )
+        elif not any(
+            isinstance(earlier, WorkbenchAgentStep)
+            and (earlier.id, earlier.engine) == (step.resume, step.engine)
+            for earlier in factory.steps[:at]
+        ):
+            yield (
+                f'Step "{step.id}" resumes "{step.resume}", which is not an earlier '
+                f"{step.engine} step."
             )
