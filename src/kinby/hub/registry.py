@@ -37,6 +37,7 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     OperationStep,
+    RecipeName,
     ReplyStatus,
     RunStop,
     SetupValue,
@@ -51,7 +52,7 @@ from kinby.contracts import (
     ValueName,
     WaitingApproval,
 )
-from kinby.factories.file import InstanceName, RecipeName
+from kinby.factories.file import InstanceName
 from kinby.hub.models import ChannelNotification, ChannelUser, ImageArtifact, SentRef
 
 
@@ -81,6 +82,17 @@ class FactoryMember:
 
 
 @dataclass(frozen=True)
+class WorkbenchSetup:
+    """What a workbench holds beside its container, its directory and its secrets."""
+
+    #: None is kinby's base image.
+    recipe: RecipeName | None
+    #: None keeps a plain folder.
+    workspace_source: str | None
+    values: dict[str, SetupValue]
+
+
+@dataclass(frozen=True)
 class ManagedInstance:
     instance_id: UUID
     path: Path
@@ -97,6 +109,8 @@ class ManagedInstance:
     factory: FactoryMember | None = None
     #: The instance registry marks it the home instance (ADR 0096). Never its manifest.
     home: bool = False
+    #: Set for a workbench, whose container shares an instance's lifecycle and is no instance.
+    workbench: WorkbenchSetup | None = None
 
     @property
     def active(self) -> bool:
@@ -298,6 +312,12 @@ class HubRegistry:
                     recipe TEXT,
                     setup TEXT NOT NULL,
                     baseline TEXT
+                );
+                CREATE TABLE IF NOT EXISTS workbenches (
+                    instance_id TEXT PRIMARY KEY REFERENCES instances(id),
+                    recipe TEXT,
+                    workspace_source TEXT,
+                    named_values TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS factory_runs (
                     id TEXT PRIMARY KEY,
@@ -773,6 +793,20 @@ class HubRegistry:
                 connection.execute(
                     "INSERT OR REPLACE INTO hub_metadata (key, value) VALUES ('home_instance', ?)",
                     (str(instance.instance_id),),
+                )
+            workbench = instance.workbench
+            if workbench is not None:
+                connection.execute(
+                    """
+                    INSERT INTO workbenches (instance_id, recipe, workspace_source, named_values)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        str(instance.instance_id),
+                        workbench.recipe,
+                        workbench.workspace_source,
+                        json.dumps(workbench.values),
+                    ),
                 )
             self._insert_operation(
                 connection,
@@ -1616,18 +1650,29 @@ class HubRegistry:
         )
 
     def listed_instances(self, *, removed: bool = False) -> list[ManagedInstance]:
-        """The active instances, or the removed ones whose records and storage the hub retains."""
+        """The active instances, or the removed ones whose records and storage the hub retains.
+        A workbench is never one of them."""
         states = (
             (IntendedState.REMOVED,) if removed else (IntendedState.STOPPED, IntendedState.RUNNING)
         )
         return self._instances(
-            f"prepared = 1 AND intended_state IN ({_marks(states)})",
+            f"prepared = 1 AND intended_state IN ({_marks(states)}) "
+            "AND workbenches.instance_id IS NULL",
+            tuple(state.value for state in states),
+        )
+
+    def listed_workbenches(self) -> list[ManagedInstance]:
+        """The active workbenches, in creation order."""
+        states = (IntendedState.STOPPED, IntendedState.RUNNING)
+        return self._instances(
+            f"prepared = 1 AND intended_state IN ({_marks(states)}) "
+            "AND workbenches.instance_id IS NOT NULL",
             tuple(state.value for state in states),
         )
 
     def _instances(self, where: str, parameters: tuple[str, ...]) -> list[ManagedInstance]:
-        """The records *where* selects, each with its storage and factory role, in creation
-        order."""
+        """The records *where* selects, each with its storage, its factory role and what it holds
+        as a workbench, in creation order."""
         with self._transaction() as connection:
             rows = connection.execute(
                 f"""
@@ -1644,9 +1689,12 @@ class HubRegistry:
                         )
                         FROM storage WHERE storage.instance_id = instances.id
                     ),
-                    factory, name, recipe, setup, baseline
+                    factory, name, factory_members.recipe, setup, baseline,
+                    workbenches.instance_id IS NOT NULL, workbenches.recipe, workspace_source,
+                    named_values
                 FROM instances
                 LEFT JOIN factory_members ON factory_members.instance_id = instances.id
+                LEFT JOIN workbenches ON workbenches.instance_id = instances.id
                 WHERE {where}
                 ORDER BY instances.rowid
                 """,
@@ -2746,6 +2794,10 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
         recipe,
         setup,
         baseline,
+        workbench,
+        workbench_recipe,
+        workspace_source,
+        named_values,
     ) = row
     return ManagedInstance(
         instance_id=UUID(instance_id),
@@ -2785,6 +2837,15 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
             else None
         ),
         home=bool(home),
+        workbench=(
+            WorkbenchSetup(
+                recipe=workbench_recipe,
+                workspace_source=workspace_source,
+                values=json.loads(named_values),
+            )
+            if workbench
+            else None
+        ),
     )
 
 

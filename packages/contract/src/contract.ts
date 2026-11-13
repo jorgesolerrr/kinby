@@ -197,6 +197,7 @@ export type ViewComponentId = string;
 export type JsonPointer = string;
 export type TextProp = string | Binding;
 export type ChartKind = "line" | "bar" | "area";
+export type RecipeName = string;
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
 export type ErrorCode =
   | "NOT_FOUND"
@@ -798,6 +799,30 @@ export interface Contract {
     "view.list": {
       command: ViewListCommand;
       result: ViewListResult;
+    };
+    "workbench.create": {
+      command: WorkbenchCreateCommand;
+      result: WorkbenchCreateResult;
+    };
+    "workbench.delete": {
+      command: WorkbenchDeleteCommand;
+      result: WorkbenchOperationResult;
+    };
+    "workbench.get": {
+      command: WorkbenchGetCommand;
+      result: Workbench;
+    };
+    "workbench.list": {
+      command: WorkbenchListCommand;
+      result: WorkbenchListResult;
+    };
+    "workbench.start": {
+      command: WorkbenchStartCommand;
+      result: WorkbenchOperationResult;
+    };
+    "workbench.stop": {
+      command: WorkbenchStopCommand;
+      result: WorkbenchOperationResult;
     };
   };
   server_frame: ServerFrame;
@@ -3253,6 +3278,65 @@ export interface ViewChecklist {
   label: TextProp;
 }
 export interface ViewListCommand {}
+export interface WorkbenchCreateCommand {
+  name: string;
+  recipe?: RecipeName | null;
+  secrets?: {
+    [k: string]: string;
+  };
+  values?: {
+    [k: string]: SetupValue;
+  };
+  workspace_source?: string | null;
+}
+export interface WorkbenchCreateResult {
+  operation_id: string;
+  workbench: Workbench;
+  workbench_id: string;
+}
+/**
+ * A workbench's record. It names its secrets and never carries their values.
+ */
+export interface Workbench {
+  detail?: string;
+  intended_state: IntendedState;
+  name: string;
+  process: ProcessState;
+  recipe: RecipeName | null;
+  secrets: string[];
+  values: {
+    [k: string]: SetupValue;
+  };
+  workbench_id: string;
+  workspace_source: string | null;
+}
+/**
+ * Drain the workbench, remove its container, and delete its directory and named volumes.
+ */
+export interface WorkbenchDeleteCommand {
+  workbench_id: string;
+}
+/**
+ * The lifecycle operation a workbench method started, read through `operation.get`.
+ */
+export interface WorkbenchOperationResult {
+  operation_id: string;
+  workbench_id: string;
+}
+export interface WorkbenchGetCommand {
+  workbench_id: string;
+}
+export interface WorkbenchListCommand {}
+export interface WorkbenchListResult {
+  workbenches: Workbench[];
+}
+export interface WorkbenchStartCommand {
+  workbench_id: string;
+}
+export interface WorkbenchStopCommand {
+  force?: boolean;
+  workbench_id: string;
+}
 export interface ResultFrame {
   id: string;
   result: {

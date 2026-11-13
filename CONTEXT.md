@@ -141,11 +141,11 @@ One kinby deployment: a directory (and, when deployed, a container) that owns it
 
 ### Hub
 
-The single-user service that manages **instances** and provides their shared entry point for the user. An instance can keep running while its hub is stopped.
+The single-user service that manages **instances** and **workbenches** and provides the instances' shared entry point for the user. An instance can keep running while its hub is stopped.
 
 ### Instance registry
 
-The hub's record of the **instances** it manages, their identities, storage locations, selected versions, and intended running states. Each instance's **manifest** remains the source of its behavior configuration.
+The hub's record of the **instances** it manages, their identities, storage locations, selected versions, and intended running states. Each instance's **manifest** remains the source of its behavior configuration. It records each **workbench** the same way, marked as one, and the list of instances never includes a workbench.
 
 ### Home instance
 
@@ -187,7 +187,7 @@ _Avoid_: pick (a **pick** is a library choice), response
 
 ### Lifecycle operation
 
-One tracked attempt by the **hub** to change an **instance**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects. One the **home instance** asked for records it as the operation's requester.
+One tracked attempt by the **hub** to change an **instance** or a **workbench**, such as creating, starting, stopping, updating, or removing it. An **image preparation** is one too, and it belongs to no instance. A **subscription login** is one too, and it runs beside the instance's other operations. Its identity and outcome remain available after the requesting client disconnects. One the **home instance** asked for records it as the operation's requester.
 
 ### Operation step
 
@@ -834,7 +834,7 @@ _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
 
-The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. A **factory run** works on exactly one workbench, in a folder of its own there.
+The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops and deletes it with an instance's **lifecycle operations**. Its named values read back in its record, and its secrets never do. A **factory run** works on exactly one workbench, in a folder of its own there.
 _Avoid_: environment, sandbox, site, station
 
 ### Line

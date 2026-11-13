@@ -7,4 +7,10 @@ SHIPPED_FACTORIES = Path(__file__).parent / "shipped"
 #: The image recipes kinby ships, one ``<name>.Dockerfile`` each, appended to kinby's base image.
 RECIPES_DIRECTORY = Path(__file__).parent / "recipes"
 
-__all__ = ["RECIPES_DIRECTORY", "SHIPPED_FACTORIES"]
+
+def ships_recipe(name: str) -> bool:
+    """Whether kinby ships an image recipe by this name."""
+    return (RECIPES_DIRECTORY / f"{name}.Dockerfile").is_file()
+
+
+__all__ = ["RECIPES_DIRECTORY", "SHIPPED_FACTORIES", "ships_recipe"]

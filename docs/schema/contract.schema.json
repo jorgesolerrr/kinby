@@ -6888,6 +6888,10 @@
       "title": "RecapPolicy",
       "type": "string"
     },
+    "RecipeName": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
     "RecreateReason": {
       "description": "A change a running instance applies only once it is recreated.",
       "enum": [
@@ -12254,6 +12258,250 @@
       "title": "WorkRecall",
       "type": "object"
     },
+    "Workbench": {
+      "additionalProperties": false,
+      "description": "A workbench's record. It names its secrets and never carries their values.",
+      "properties": {
+        "detail": {
+          "default": "",
+          "type": "string"
+        },
+        "intended_state": {
+          "$ref": "#/$defs/IntendedState"
+        },
+        "name": {
+          "type": "string"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState"
+        },
+        "recipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipeName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secrets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "workspace_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "workbench_id",
+        "name",
+        "recipe",
+        "workspace_source",
+        "values",
+        "secrets",
+        "intended_state",
+        "process"
+      ],
+      "title": "Workbench",
+      "type": "object"
+    },
+    "WorkbenchCreateCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "recipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipeName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        },
+        "workspace_source": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "WorkbenchCreateCommand",
+      "type": "object"
+    },
+    "WorkbenchCreateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "workbench": {
+          "$ref": "#/$defs/Workbench"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "workbench_id",
+        "workbench"
+      ],
+      "title": "WorkbenchCreateResult",
+      "type": "object"
+    },
+    "WorkbenchDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Drain the workbench, remove its container, and delete its directory and named volumes.",
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchDeleteCommand",
+      "type": "object"
+    },
+    "WorkbenchGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchGetCommand",
+      "type": "object"
+    },
+    "WorkbenchListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "WorkbenchListCommand",
+      "type": "object"
+    },
+    "WorkbenchListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "workbenches": {
+          "items": {
+            "$ref": "#/$defs/Workbench"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "workbenches"
+      ],
+      "title": "WorkbenchListResult",
+      "type": "object"
+    },
+    "WorkbenchOperationResult": {
+      "additionalProperties": false,
+      "description": "The lifecycle operation a workbench method started, read through `operation.get`.",
+      "properties": {
+        "operation_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "workbench_id"
+      ],
+      "title": "WorkbenchOperationResult",
+      "type": "object"
+    },
+    "WorkbenchStartCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchStartCommand",
+      "type": "object"
+    },
+    "WorkbenchStopCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "force": {
+          "default": false,
+          "type": "boolean"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchStopCommand",
+      "type": "object"
+    },
     "WorkspaceReverted": {
       "additionalProperties": false,
       "description": "The workspace went from ``previous`` back to ``restored``, the target's before tree.",
@@ -14580,6 +14828,102 @@
             "result"
           ],
           "type": "object"
+        },
+        "workbench.create": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchCreateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchCreateResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Workbench"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchStartCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.stop": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchStopCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -14664,6 +15008,12 @@
         "instance.relay.read",
         "hub.write",
         "instance.login.start",
+        "workbench.create",
+        "workbench.list",
+        "workbench.get",
+        "workbench.start",
+        "workbench.stop",
+        "workbench.delete",
         "operation.get",
         "image.prepare",
         "image.describe",

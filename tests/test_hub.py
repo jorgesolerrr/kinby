@@ -78,6 +78,7 @@ from kinby.contracts import (
     StepRunCommand,
     StorageItem,
     StorageKind,
+    WorkbenchOperationResult,
 )
 from kinby.hub import (
     BuiltImage,
@@ -332,7 +333,10 @@ def _client(hub: Hub, scopes: set[Scope] | None = None) -> ContractClient:
 
 async def finished_operation(
     client: ContractClient,
-    accepted: LifecycleOperationResult | ImagePrepareResult | HubSecretSetResult,
+    accepted: LifecycleOperationResult
+    | ImagePrepareResult
+    | HubSecretSetResult
+    | WorkbenchOperationResult,
 ) -> OperationGetResult:
     # A deadline, not a poll count: a busy CI runner can take over a second to finish one.
     loop = asyncio.get_running_loop()

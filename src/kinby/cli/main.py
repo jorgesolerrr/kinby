@@ -65,7 +65,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.clock import utc_now, utc_today
-from kinby.core.contract_server import ContractServer
+from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE, ContractServer
 from kinby.core.dispatcher import build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.pricing import instance_prices, instance_windows
@@ -103,6 +103,7 @@ from kinby.memory import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
+from kinby.workbench import WorkbenchServer
 
 if TYPE_CHECKING:
     # The hub pulls in the Docker SDK; only the hub command imports it at runtime.
@@ -539,6 +540,24 @@ async def _serve_instance(instance: Instance) -> int:
             loop.remove_signal_handler(shutdown_signal)
 
 
+async def _serve_workbench(listen: Serve, token: ControlToken) -> int:
+    loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
+    shutdown_signals = (signal.SIGINT, signal.SIGTERM)
+    for shutdown_signal in shutdown_signals:
+        loop.add_signal_handler(shutdown_signal, stopping.set)
+    server = WorkbenchServer(listen, token)
+    try:
+        address = await server.start()
+        print(f"listen: {address.host}:{address.port}", flush=True)
+        await stopping.wait()
+        return 0
+    finally:
+        await server.stop()
+        for shutdown_signal in shutdown_signals:
+            loop.remove_signal_handler(shutdown_signal)
+
+
 async def _run_hub(
     directory: Path,
     source_directory: Path,
@@ -948,6 +967,15 @@ def main(
         action="store_true",
         help="show debug logs",
     )
+    workbench_parser = subparsers.add_parser(
+        "workbench",
+        help="run a workbench's runtime, which the hub starts in the workbench's container",
+    )
+    workbench_parser.add_argument(
+        "--listen",
+        required=True,
+        help="host:port the workbench's server listens on",
+    )
     thread_parser = subparsers.add_parser(
         "thread",
         help="create, list, show and archive threads",
@@ -1107,6 +1135,20 @@ def main(
                 args.browser_cap,
             )
         )
+    if args.command == "workbench":
+        try:
+            listen = parse_listen(args.listen)
+        except ValueError as exc:
+            print(f"--listen {exc}", file=sys.stderr)
+            return 1
+        token = os.environ.get(CONTROL_TOKEN_VARIABLE)
+        if not token:
+            print(
+                f"{CONTROL_TOKEN_VARIABLE} is not set, so no hub could reach the workbench.",
+                file=sys.stderr,
+            )
+            return 1
+        return asyncio.run(_serve_workbench(listen, ControlToken(token)))
     try:
         match args.command:
             case "instance" if args.instance_command == "show":
