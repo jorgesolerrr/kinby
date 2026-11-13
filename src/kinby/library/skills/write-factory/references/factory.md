@@ -110,9 +110,9 @@ Each kind adds its own:
   - `signal`: filters, at least one. A signal matches a filter when it carries every field of the filter with the same value and type. A field reads `routine`, the routine the signal came in on, `headers.<Name>` or `body.<key>.<key>`. A value `"{{name}}"` stands for that run value. A match moves on and records nothing.
   - `quiet`: a duration. With no signal for that long, the wait moves on by itself and records `quiet` as true.
   - `deadline`: a duration. With no signal for that long, the wait fails.
-- `approve`: parks the run until the user approves it or sends it back.
-  - `summary`: what the user is asked to approve.
-  - Approving moves on and records nothing. The user can send the run back to any earlier step.
+- `approve`: parks the run until the user approves it or sends it back, and notifies the user when it parks.
+  - `summary`: what the user is asked to approve, as the notification and the run show it. A `{{name}}` stands for that run value, which the work item or an earlier step must declare, so the summary can name the draft to read.
+  - Approving moves on and records nothing. The user can send the run back to any earlier step, with notes the steps from there read as the value `notes`, so no step saves them first.
 
 ## What happens next
 
@@ -144,7 +144,7 @@ Each kind adds its own:
 
 A run needs the user when a failure has no retry left, an attempt times out, a send-back reaches its `max`, a step's instance or `{ commands: <list> }` is missing, or the factory or the step no longer exists. A value a later step needs and no step recorded fails the step that should have recorded it.
 
-The hub then notifies the user, who can retry the step, send the run back to an earlier step, or cancel it. Handing the same work item in again also retries it.
+The hub then notifies the user, who can retry the step, send the run back to an earlier step, with notes read as `notes`, or cancel it. Handing the same work item in again also retries it.
 
 If `needs_human` is set, the hub calls it: `in`, the role whose instance holds the tool, and `call`, the tool. Its parameters named like a run value receive it, `run_id` the run's id, `step` the step the run stopped at, and `summary` that attempt's summary. A failed call is tried again until the run moves on.
 
