@@ -29,7 +29,7 @@ from kinby.contracts import (
 )
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
-from kinby.core.pricing import token_cost
+from kinby.core.pricing import price_map, token_cost
 from kinby.core.prompt import render_step_message
 from kinby.core.steps import last_message, step_failed
 from kinby.core.turn_runner import LangGraphRunner, ModelFactory, init_chat_model
@@ -133,20 +133,19 @@ async def run_turn(
         _logger.exception("The model turn failed.")
         code, reason = ErrorCode.INTERNAL, "The model turn failed unexpectedly."
     else:
-        usage = _usage(events)
-        cost = None if outcome.price is None else token_cost(usage, outcome.price)
+        usage, cost = _spent(events, model)
         await emit(TurnCompleted(outcome=outcome.outcome, cost=cost, **usage.model_dump()))
         return StepResult(
             ending=StepEnding.CLEAN,
             summary=last_message(events),
             usage=StepUsage(api=ApiUse(**usage.model_dump(), cost=cost)),
         )
-    usage = _usage(events)
+    usage, cost = _spent(events, model)
     await emit(TurnFailed(code=code, message=reason, **usage.model_dump()))
     said = StepResult(
         ending=StepEnding.FAILED,
         summary=last_message(events),
-        usage=StepUsage(api=ApiUse(**usage.model_dump())),
+        usage=StepUsage(api=ApiUse(**usage.model_dump(), cost=cost)),
     )
     return step_failed(f"The turn failed: {reason}", said)
 
@@ -161,15 +160,18 @@ async def _refusing_asks(
     return outcome
 
 
-def _usage(events: Sequence[Event]) -> TokenTotals:
-    """The tokens of the turn's model calls, added up."""
+def _spent(events: Sequence[Event], model: str) -> tuple[TokenTotals, float | None]:
+    """The tokens of the turn's model calls, added up, however the turn ended, and their cost at
+    *model*'s price. None when kinby knows no price for it."""
     calls = [event.payload for event in events if isinstance(event.payload, ModelCompleted)]
-    return TokenTotals(
+    usage = TokenTotals(
         input_tokens=sum(call.input_tokens for call in calls),
         output_tokens=sum(call.output_tokens for call in calls),
         cache_read_tokens=sum(call.cache_read_tokens for call in calls),
         cache_creation_tokens=sum(call.cache_creation_tokens for call in calls),
     )
+    price = price_map().get(model)
+    return usage, None if price is None else token_cost(usage, price)
 
 
 def _manifest(state: Path, folder: Path, model: str) -> Manifest:

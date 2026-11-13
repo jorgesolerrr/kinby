@@ -163,3 +163,31 @@ def test_a_kinby_turn_is_offered_the_factorys_skills_and_the_workbenchs_picks(tm
 
 def _skill(name: str) -> str:
     return f"---\nname: {name}\ndescription: Do {name}.\n---\nDo it.\n"
+
+
+class FailingModel(TurnModel):
+    """Answers its first call, and fails each one after it."""
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        if self.calls:
+            raise RuntimeError("The provider is down.")
+        async for chunk in super().astream(messages):
+            yield chunk
+
+
+def test_a_failed_kinby_turn_prices_the_model_calls_it_made(tmp_path):
+    spent = {"input_tokens": 1_000_000, "output_tokens": 0, "total_tokens": 1_000_000}
+    model = FailingModel(
+        AIMessageChunk(
+            content="",
+            tool_calls=[{"name": "glob", "args": {"pattern": "*"}, "id": "call-1"}],
+            usage_metadata=spent,
+        )
+    )
+
+    result = _run(tmp_path, model)
+
+    assert result.ending is StepEnding.FAILED
+    assert result.usage is not None and result.usage.api is not None
+    assert result.usage.api.input_tokens == 1_000_000
+    assert result.usage.api.cost == 4

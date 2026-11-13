@@ -170,7 +170,7 @@ def test_an_agent_step_on_the_kinby_engine_asks_its_workbench_for_a_turn_with_it
         assert implement.step == AgentStepRun(
             prompt="Implement the issue.\n", model="anthropic:claude-opus-5-5"
         )
-        assert implement.folder == RunFolder(branch="tickets/issue-12")
+        assert implement.folder == RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
 
     asyncio.run(scenario())
 
