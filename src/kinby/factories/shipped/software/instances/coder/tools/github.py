@@ -227,11 +227,13 @@ def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, s
     _exclude_scratch(workspace)
     _git(workspace, "fetch", "--prune", "origin")
     try:
-        sweep_run_worktrees(context.instance, lambda branch: _run_over(workspace, branch))
+        sweep_run_worktrees(
+            context.instance.path, context.workspace, lambda branch: _run_over(workspace, branch)
+        )
     except Exception:
         _logger.exception("The sweep of run worktrees whose issue is closed failed.")
     base = _base(workspace, found)
-    cut_run_worktree(context.instance, branch, f"origin/{base}", run_id)
+    cut_run_worktree(context.instance.path, context.workspace, branch, f"origin/{base}", run_id)
     return {"branch": branch, "base": base}
 
 
@@ -442,7 +444,7 @@ def report_ended(
     The issue stays open: closing it is the maintainer's call.
     """
     if branch is not None:
-        remove_run_worktree(context.instance, branch, run_id)
+        remove_run_worktree(context.instance.path, context.workspace, branch, run_id)
     workspace = context.workspace
     if READY_FOR_HUMAN_LABEL in _issue(workspace, issue).labels:
         _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
@@ -507,7 +509,7 @@ def _landed_base(context: ToolContext, branch: str, base: str, run_id: str) -> s
     if merged is None:
         return base
     head, landed = merged
-    worktree = run_worktree(context.instance, branch, run_id)
+    worktree = run_worktree(context.instance.path, context.workspace, branch, run_id)
     past = (branch, f"^{head}", f"^origin/{landed}")
     own = _git(worktree, "rev-list", "--reverse", "--no-merges", *past).split()
     start = _git(worktree, "rev-parse", "HEAD").strip()

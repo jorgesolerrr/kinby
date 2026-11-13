@@ -55,7 +55,7 @@ from kinby.contracts import (
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.hub import HttpInstanceControl, ImageSelection
 from kinby.instance import Serve
-from kinby.workbench import WorkbenchServer
+from kinby.workbench import WorkbenchServer, WorkbenchSteps
 from tests.test_drain import ServedRuntime
 from tests.test_hub import (
     FakeControl,
@@ -352,7 +352,7 @@ def test_the_hub_drains_and_stops_a_workbench_through_its_runtime(tmp_path):
         start = await client.call(WORKBENCH_START, WorkbenchStartCommand(workbench_id=workbench_id))
         assert (await finished(client, start)).state is OperationState.SUCCEEDED
         token = ControlToken(container.created[0].env[CONTROL_TOKEN_VARIABLE])
-        server = WorkbenchServer(Serve("127.0.0.1", 0), token)
+        server = WorkbenchServer(Serve("127.0.0.1", 0), token, WorkbenchSteps(tmp_path / "bench"))
         container.serving = await server.start()
         try:
             stop = await client.call(

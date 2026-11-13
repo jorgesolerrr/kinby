@@ -105,16 +105,10 @@ class FactoryStore:
         folder, _ = self._folder(command.name)
         return FactoryCheckResult(problems=list(await asyncio.to_thread(check_factory, folder)))
 
-    def file(self, name: FactoryName) -> FactoryFile:
-        """The factory's file as the hub keeps it: the last version that passed the check.
-
-        Only a factory whose steps run in instances has runs yet.
-        """
+    def file(self, name: FactoryName) -> FactoryFile | WorkbenchFactory:
+        """The factory's file as the hub keeps it: the last version that passed the check."""
         folder, _ = self._folder(name)
-        factory = read_factory_file(folder)
-        if isinstance(factory, WorkbenchFactory):
-            raise FactoryNotFound(f'Factory "{name}" runs on a workbench, not in instances.')
-        return factory
+        return read_factory_file(folder)
 
     def prompt(self, name: FactoryName, path: FactoryPath) -> str:
         """The text of a prompt file, from the last version of the factory that passed the check."""

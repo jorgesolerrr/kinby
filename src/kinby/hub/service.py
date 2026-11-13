@@ -112,6 +112,7 @@ from kinby.contracts import (
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
     LINE_GET,
+    LINE_HAND_IN,
     LINE_LIST,
     LINE_REMOVE,
     LINE_SETUP,
@@ -168,6 +169,7 @@ from kinby.contracts import (
     FactoryRemoveCommand,
     FactoryResult,
     FactoryRole,
+    FactoryRun,
     HubRouteMissing,
     HubSecret,
     HubSecretDeleteCommand,
@@ -223,6 +225,7 @@ from kinby.contracts import (
     LifecycleOperationResult,
     Line,
     LineGetCommand,
+    LineHandInCommand,
     LineListCommand,
     LineListResult,
     LineRemoveCommand,
@@ -239,6 +242,8 @@ from kinby.contracts import (
     RecreateReason,
     RepositoryCommandList,
     RevisionBehind,
+    RunFolderRemoveCommand,
+    RunFolderRemoveResult,
     RunStop,
     Scope,
     SearchSetup,
@@ -396,6 +401,7 @@ from kinby.plugins.hub import (
 )
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_search_key
+from kinby.workbench import FACTORIES_MOUNT
 
 _logger = logging.getLogger(__name__)
 
@@ -427,6 +433,7 @@ _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 _PREPARED_REVISION = "HEAD"
 #: What a workbench's container runs in place of an instance's serve mode.
 _WORKBENCH_COMMAND = ("workbench", "--listen", f"{_INSTANCE_HOST}:{_INSTANCE_PORT}")
+_FACTORIES_DIR = "factories"
 _HOME_NAME = "home"
 _HOME_PERSONA_NAME = "Kinby"
 #: How long a login waits for the user to sign in before its code counts as expired.
@@ -703,7 +710,7 @@ class Hub:
             self._private_url = private_url
             # Links and channel routes append a path that starts with a slash.
             public_url = public_url.rstrip("/") if public_url is not None else None
-            self.factories = FactoryStore(self.directory / "factories", shipped_factories)
+            self.factories = FactoryStore(self.directory / _FACTORIES_DIR, shipped_factories)
             self.library = Library(
                 self.directory / "skills",
                 self.directory / "mcp-servers",
@@ -725,7 +732,12 @@ class Hub:
             )
             self.outbox = Outbox(self.registry, self.channels, public_url, clock, sleep)
             self.runs = FactoryRuns(
-                self.registry, self.factories, self._run_step, self._tell_stop, self.outbox
+                self.registry,
+                self.factories,
+                self._run_step,
+                self._tell_stop,
+                self.outbox,
+                self._remove_run_folder,
             )
             self.replies = Replies(
                 self.registry,
@@ -803,6 +815,7 @@ class Hub:
         dispatcher.register(LINE_LIST, self.list_lines)
         dispatcher.register(LINE_GET, self.get_line)
         dispatcher.register(LINE_REMOVE, self.remove_line)
+        dispatcher.register(LINE_HAND_IN, self.hand_in)
         dispatcher.register(OPERATION_GET, self.operation)
         dispatcher.register(IMAGE_PREPARE, self.prepare_image)
         dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
@@ -1151,6 +1164,12 @@ class Hub:
         except Exception as exc:
             return StepResult(ending=StepEnding.FAILED, summary=str(exc) or type(exc).__name__)
 
+    async def _remove_run_folder(
+        self, workbench_id: UUID, command: RunFolderRemoveCommand
+    ) -> RunFolderRemoveResult:
+        endpoint = await self._endpoint(self._active_workbench(workbench_id))
+        return await self._control.remove_run_folder(endpoint, command)
+
     async def _tell_stop(self, instance_id: UUID, stop: RunStop) -> Untold | None:
         try:
             endpoint = await self._endpoint(self._active_instance(instance_id))
@@ -1342,7 +1361,9 @@ class Hub:
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )
-            storage = self._storage(record.instance_id, record.path, logins)
+            storage = self._storage(
+                record.instance_id, record.path, logins, workbench=record.workbench is not None
+            )
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
@@ -3512,6 +3533,12 @@ class Hub:
         self.registry.remove_line(command.line_id)
         return await self.list_lines(LineListCommand())
 
+    async def hand_in(self, command: LineHandInCommand) -> FactoryRun:
+        """Start a run on the line's workbench, or return the line's unfinished run of the same
+        work item."""
+        line = await self.get_line(LineGetCommand(line_id=command.line_id))
+        return await self.runs.hand_in(line, command.work_item)
+
     def _workbench_name(self, workbench_id: UUID) -> str:
         record = self.registry.instance(workbench_id)
         return str(workbench_id) if record is None else record.manifest_id
@@ -3606,9 +3633,12 @@ class Hub:
         instance_id: UUID,
         path: Path,
         logins: Collection[SubscriptionLogin],
+        *,
+        workbench: bool = False,
     ) -> tuple[StorageItem, ...]:
         """What a created instance owns: its directory on the Docker host, its workspace
-        volume, and one volume per declared login.
+        volume, and one volume per declared login. A workbench also mounts the hub's factory
+        folders read only, so each step runs its factory's tools as they are then.
 
         A login's volume is named after its id, so the factory's `codex` login keeps the name
         the hub gave the Codex volume before packages declared their logins.
@@ -3626,6 +3656,8 @@ class Hub:
             for login in logins
         ]
         return (
+            # First, as the inventory reads it back, ordered by destination.
+            *(self._factories_mount() if workbench else ()),
             StorageItem(
                 kind=StorageKind.BIND,
                 source=str(host_path),
@@ -3639,6 +3671,17 @@ class Hub:
                 writable=True,
             ),
             *login_volumes,
+        )
+
+    def _factories_mount(self) -> tuple[StorageItem]:
+        (self.directory / _FACTORIES_DIR).mkdir(exist_ok=True)
+        return (
+            StorageItem(
+                kind=StorageKind.BIND,
+                source=str(self._docker_host_directory / _FACTORIES_DIR),
+                destination=str(FACTORIES_MOUNT),
+                writable=False,
+            ),
         )
 
     @staticmethod

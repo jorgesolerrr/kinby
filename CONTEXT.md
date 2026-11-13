@@ -854,7 +854,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: a task done by an **instance**'s turn, a **coding client** run inside an instance, or deterministic code, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no instance until the signal, a deadline or the user moves it on. It ends with a **step result**.
+One stage of a **factory**: commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. It ends with a **step result**.
 
 ### Work item
 
@@ -862,11 +862,15 @@ The unit of work a **factory** carries, such as one issue.
 
 ### Factory run
 
-One **work item**'s trip through a **factory**'s **steps**. It belongs to the **instance** that handed the work item in. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run of a factory written the older way belongs to the **instance** that handed the work item in. A work item that matches an unfinished run of the same line, or of the same instance, returns that run, so two lines can each carry a work item with the same values. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+
+### Run folder
+
+The folder one **factory run** works in on its **workbench**: a **run worktree** when the workspace is a git clone, and a directory named for the run otherwise. kinby cuts it when the run's first step starts and passes it with every step. A **stop** for a human, a retry and a park leave it as it is, with its uncommitted files, and it goes when the run ends done or cancelled. Nothing copies the **factory** into it: a step runs the factory's **tools** from the factory's own folder, as they are then.
 
 ### Run worktree
 
-The checkout of the **workspace** that one **factory run** works in, on that run's branch. Its run's first step cuts it from the base, and it lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
+The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on a branch kinby names for the factory, the **work item** and the run. In an instance its run's first step cuts it from the base. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
 _Avoid_: workspace (the shared clone run worktrees are cut from), worktree (git's mechanism, not the concept)
 
 ### Run usage
@@ -897,7 +901,7 @@ _Avoid_: stopped run (a **stop** also ends a run as done or cancelled), restart
 
 ### Run stop
 
-A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the **instance** that handed the run in about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again. Once a run ends done or cancelled, the **factory** can act on it once, as the **software factory** says on the issue why a run made no change.
+A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the **instance** that handed the run in, or the owner of its **line**, about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again. Once a run ends done or cancelled, the **factory** can act on it once, as the **software factory** says on the issue why a run made no change.
 
 ### Factory check
 

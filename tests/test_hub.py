@@ -66,6 +66,8 @@ from kinby.contracts import (
     OperationKind,
     OperationState,
     Readiness,
+    RunFolderRemoveCommand,
+    RunFolderRemoveResult,
     RunStop,
     Scope,
     SetupField,
@@ -396,6 +398,8 @@ class FakeControl:
         self.stops: list[tuple[ControlEndpoint, RunStop]] = []
         #: What telling the next run stops raises, in order. A stop past them is taken.
         self.stop_failures: list[Exception] = []
+        #: Each run folder the hub had a workbench remove, and the endpoint it asked.
+        self.removed_folders: list[tuple[ControlEndpoint, RunFolderRemoveCommand]] = []
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -444,6 +448,12 @@ class FakeControl:
         if self.stop_failures:
             raise self.stop_failures.pop(0)
         return AcceptedResult(thread_id=stop.run_id, turn_id=uuid4(), sequence=1)
+
+    async def remove_run_folder(
+        self, endpoint: ControlEndpoint, command: RunFolderRemoveCommand
+    ) -> RunFolderRemoveResult:
+        self.removed_folders.append((endpoint, command))
+        return RunFolderRemoveResult()
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)
