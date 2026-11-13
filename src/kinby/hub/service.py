@@ -63,6 +63,7 @@ from kinby.contracts import (
     FACTORY_GET,
     FACTORY_LIST,
     FACTORY_REMOVE,
+    FACTORY_RUN_ANSWER,
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
@@ -778,6 +779,7 @@ class Hub:
                 self._start_turn,
                 self._answer_approval,
                 self.runs.answer_stop,
+                self.runs.answer_ask,
                 clock,
                 sleep,
             )
@@ -865,6 +867,7 @@ class Hub:
         dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
         dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
         dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
+        dispatcher.register(FACTORY_RUN_ANSWER, self.runs.answer)
         dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
         dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
         dispatcher.register(LIBRARY_LIST, self.library.list)

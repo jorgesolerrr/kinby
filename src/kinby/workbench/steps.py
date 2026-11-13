@@ -73,8 +73,7 @@ class WorkbenchSteps:
     folders in *factories*, over the ones kinby ships in *shipped*.
 
     Nothing copies a factory here, so a step runs its tool as the factory's folder holds it then.
-    An agent step on the kinby engine calls its model through *model_factory*, or else as an
-    instance's turn does.
+    An agent step on the kinby engine calls its model through *model_factory*.
     """
 
     def __init__(
@@ -154,25 +153,28 @@ class WorkbenchSteps:
                 result = await run_commands(commands, timeout, folder)
             case ClientStepRun() as step:
                 result = await self._agent(step, command, folder)
-            case AgentStepRun(model=str() as model, prompt=prompt):
-                # The hub imports this module, and loads no turn runner of its own.
+            case AgentStepRun(model=str() as model, prompt=prompt, answered=answered):
+                # LangGraph loads where a workbench runs a kinby turn, so `kinby hub` goes
+                # without it.
+                from kinby.core.turn_runner import init_chat_model
                 from kinby.workbench.turn import run_turn
 
                 result = await run_turn(
                     model,
                     prompt,
+                    answered,
                     command,
                     folder,
                     await self._skills(command.origin.factory),
                     self._directory / STATE_DIR / _TURNS_DIR,
                     self._attempt_transcript(command),
-                    self._model_factory,
+                    self._model_factory or init_chat_model,
                 )
             case CodeStepRun() as step:
                 result = await self._call(step, command, folder)
             case _:
                 return step_failed(f"A workbench runs no {command.step.kind} step.")
-        if command.hook is None:
+        if command.hook is None or result.ending is StepEnding.ASKED:
             return result
         return await self._checked(command.hook, result, command, folder)
 
