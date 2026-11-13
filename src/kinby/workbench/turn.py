@@ -32,7 +32,7 @@ from kinby.core.events import EventLog
 from kinby.core.pricing import token_cost
 from kinby.core.prompt import render_step_message
 from kinby.core.steps import last_message, step_failed
-from kinby.core.turn_runner import LangGraphRunner, ModelFactory
+from kinby.core.turn_runner import LangGraphRunner, ModelFactory, init_chat_model
 from kinby.core.turns import (
     ApprovalAnswer,
     ParkedTurn,
@@ -74,10 +74,11 @@ async def run_turn(
     skills: Sequence[Skill],
     state: Path,
     transcript: Path,
-    model_factory: ModelFactory,
+    model_factory: ModelFactory | None,
 ) -> StepResult:
     """Run the step's turn in *folder* with *model*, its events kept in *state* and appended to
-    *transcript*. The turn is on a thread of its own, which no instance holds.
+    *transcript*, calling it through *model_factory* or else as an instance's turn does. The turn
+    is on a thread of its own, which no instance holds.
 
     What the agent said last is only the summary, and its model calls are what the step spent.
     """
@@ -89,7 +90,7 @@ async def run_turn(
     runner = LangGraphRunner(
         instance,
         event_log=log,
-        model_factory=model_factory,
+        model_factory=model_factory or init_chat_model,
         gate_policy=SHIPPED_POLICY,
         workbench_skills=tuple(skills),
     )

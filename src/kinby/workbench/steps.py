@@ -8,6 +8,7 @@ import logging
 import shutil
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -40,7 +41,6 @@ from kinby.core.run_worktrees import (
     run_worktree,
 )
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
-from kinby.core.turn_runner import ModelFactory, init_chat_model
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
 from kinby.plugins.errors import exception_message
@@ -48,7 +48,9 @@ from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import load_tool_file
 from kinby.plugins.skills import Skill, load_skill_roots
 from kinby.plugins.tools import Tool
-from kinby.workbench.turn import run_turn
+
+if TYPE_CHECKING:
+    from kinby.core.turn_runner import ModelFactory
 
 #: Where the hub mounts its own factory folders in a workbench's container.
 FACTORIES_MOUNT = Path("/factories")
@@ -71,7 +73,8 @@ class WorkbenchSteps:
     folders in *factories*, over the ones kinby ships in *shipped*.
 
     Nothing copies a factory here, so a step runs its tool as the factory's folder holds it then.
-    An agent step on the kinby engine calls its model through *model_factory*.
+    An agent step on the kinby engine calls its model through *model_factory*, or else as an
+    instance's turn does.
     """
 
     def __init__(
@@ -80,7 +83,7 @@ class WorkbenchSteps:
         factories: Path = FACTORIES_MOUNT,
         shipped: Path = SHIPPED_FACTORIES,
         *,
-        model_factory: ModelFactory = init_chat_model,
+        model_factory: ModelFactory | None = None,
     ) -> None:
         self._directory = directory
         self._model_factory = model_factory
@@ -152,6 +155,9 @@ class WorkbenchSteps:
             case ClientStepRun() as step:
                 result = await self._agent(step, command, folder)
             case AgentStepRun(model=str() as model, prompt=prompt):
+                # The hub imports this module, and loads no turn runner of its own.
+                from kinby.workbench.turn import run_turn
+
                 result = await run_turn(
                     model,
                     prompt,
