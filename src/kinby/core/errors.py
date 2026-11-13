@@ -114,6 +114,12 @@ class RunAwaitsNoApproval(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class RunAwaitsNoAnswer(CoreError):
+    """Only the ask a run's kinby turn is parked on is answered."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class NotAnEarlierStep(CoreError):
     """A run is only ever sent back to a step before the one it stopped at."""
 

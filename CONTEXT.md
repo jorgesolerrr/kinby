@@ -373,7 +373,7 @@ One run of the agent loop against a thread, from start to exit (a process, a REP
 
 ### Turn
 
-One cycle of agent work within a **thread**, started by the user or a **wake**, ending when it completes, fails, or is interrupted. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
+One cycle of agent work within a **thread**, started by the user or a **wake**, ending when it completes, fails, or is interrupted. An **agent step** on the kinby **engine** is a turn too, on a **workbench**, in a thread of its own that no **instance** holds. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
 _Avoid_: task
 
 ### Budget
@@ -515,7 +515,7 @@ The turn runner's durable working state for a thread. It lets a parked approval 
 
 ### Approval
 
-A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted.
+A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted. A **workbench**'s turn is not kept live: the attempt ends asked, its **factory run** parks, and the request reaches the user as a **hub** notification that names the run. The user's answer goes to the hub, which resumes the turn from its **graph checkpoint** as the **step**'s next attempt.
 
 ### Approval decision
 
@@ -523,7 +523,7 @@ The user's answer to an **approval**: approve, or deny with an optional reason. 
 
 ### Gate
 
-The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it.
+The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it. A **workbench** has no policy of its own: its turns go through kinby's default.
 
 ### Gate rule
 
@@ -839,12 +839,12 @@ _Avoid_: environment, sandbox, site, station
 
 ### Line
 
-A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
+A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, or the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
 ### Agent step
 
-A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
+A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
 _Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
 
 ### Engine
@@ -854,7 +854,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. It ends with a **step result**.
+One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. So does an **approval** a kinby **agent step**'s turn requests, until the user answers it. It ends with a **step result**.
 
 ### Work item
 
@@ -883,7 +883,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. One whose kinby turn requested an **approval** ends asked: the run parks until the user answers, and the answer resumes the turn as the next attempt, without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
 
 ### Hook
 
