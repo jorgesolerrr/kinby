@@ -34,14 +34,14 @@ A factory may declare `requires` in place of `instances` and `intake`. Its steps
   - `browser`: `true` when the steps need a browser.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
 - An `agent` step runs a model on the workbench, in the run's folder:
-  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and goes through kinby's default gate policy. Until an ask reaches the user, the gate refuses each one, so the turn cannot write.
+  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. The step's `check` runs once the turn ends.
   - `prompt`: a file of the factory's folder, as for an `agent` step in an instance.
   - `model`: the client's model, such as `claude-opus-5-5`. Left out, the line's model when the engine runs its provider's models, `anthropic` for `claude` and `openai` for `codex`, and the client's default otherwise.
     For `kinby`, a `provider:model`, such as `anthropic:claude-opus-5-5`, and left out, the line's model. The workbench must hold that provider's `<PROVIDER>_API_KEY`, and setting up the line refuses one without it. List it under `requires.secrets`.
   - `effort`: as for `client`. The `kinby` engine ignores it, as it does `timeout`.
   - `resume`: an earlier `agent` step on the same coding client whose session this one continues. The `kinby` engine keeps no session.
   - The client is offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Its transcript is kept on the workbench, one per attempt.
-- An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended. See Hooks. kinby's default hooks are no check.
+- An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended, though not while its kinby turn waits on an ask. See Hooks. kinby's default hooks are no check.
 - `needs_human` and `ended` take only `call`.
 - Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `needs_human` or `ended` calls one of them.
 
@@ -110,9 +110,9 @@ Each kind adds its own:
   - `signal`: filters, at least one. A signal matches a filter when it carries every field of the filter with the same value and type. A field reads `routine`, the routine the signal came in on, `headers.<Name>` or `body.<key>.<key>`. A value `"{{name}}"` stands for that run value. A match moves on and records nothing.
   - `quiet`: a duration. With no signal for that long, the wait moves on by itself and records `quiet` as true.
   - `deadline`: a duration. With no signal for that long, the wait fails.
-- `approve`: parks the run until the user approves it or sends it back.
-  - `summary`: what the user is asked to approve.
-  - Approving moves on and records nothing. The user can send the run back to any earlier step.
+- `approve`: parks the run until the user approves it or sends it back, and notifies the user when it parks.
+  - `summary`: what the user is asked to approve, as the notification and the run show it. A `{{name}}` stands for that run value, which the work item or an earlier step must declare, so the summary can name the draft to read.
+  - Approving moves on and records nothing. The user can send the run back to any earlier step, with notes the steps from there read as the value `notes`, so no step saves them first.
 
 ## What happens next
 
@@ -144,7 +144,7 @@ Each kind adds its own:
 
 A run needs the user when a failure has no retry left, an attempt times out, a send-back reaches its `max`, a step's instance or `{ commands: <list> }` is missing, or the factory or the step no longer exists. A value a later step needs and no step recorded fails the step that should have recorded it.
 
-The hub then notifies the user, who can retry the step, send the run back to an earlier step, or cancel it. Handing the same work item in again also retries it.
+The hub then notifies the user, who can retry the step, send the run back to an earlier step, with notes read as `notes`, or cancel it. Handing the same work item in again also retries it.
 
 If `needs_human` is set, the hub calls it: `in`, the role whose instance holds the tool, and `call`, the tool. Its parameters named like a run value receive it, `run_id` the run's id, `step` the step the run stopped at, and `summary` that attempt's summary. A failed call is tried again until the run moves on.
 
@@ -187,7 +187,7 @@ def record_brief(end: StepEnd) -> HookResult | None:
   - `outcome`: the outcome it names, one of the step's `outcomes`. None takes the next step.
   - `summary`: only a `code` step's tool sets it. A hook's step keeps the summary it ended with.
 - Raising fails a step that ended `clean`, and keeps any other ending.
-- It runs for every ending of the step, a failed one included. It may be `async def`. A plain `def` runs in a thread.
+- It runs for every ending of the step but `asked`, a failed one included. It may be `async def`. A plain `def` runs in a thread.
 - kinby's default hooks need no file. `record_branch` records `branch`, the workspace's current branch. `find_pull_request` records `pr`, the number of the pull request of the run's `branch`.
 
 ### Step endings
@@ -200,6 +200,7 @@ def record_brief(end: StepEnd) -> HookResult | None:
 - `interrupted`: the hub stopped while the attempt ran. Only old runs hold it, and it counts as failed.
 - `needs-human`: the step cannot run until the user supplies what it lacks. The run stops for them.
 - `limited`: the subscription's limit stopped the step's coding client. The run waits for the reset and tries again without using a retry.
+- `asked`: the gate asked about a call of the step's kinby turn. The run parks until the user answers, and the answer resumes the turn without using a retry.
 
 ## Tools
 

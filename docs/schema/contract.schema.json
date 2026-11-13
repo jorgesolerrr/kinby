@@ -90,6 +90,17 @@
       "additionalProperties": false,
       "description": "Run a turn on a new thread of the instance, with the prompt and the run's values. On a\nworkbench the turn is in no thread, and runs in the run's folder.",
       "properties": {
+        "answered": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnsweredAsk"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "kind": {
           "const": "agent",
           "default": "agent",
@@ -115,6 +126,24 @@
         "kind"
       ],
       "title": "AgentStepRun",
+      "type": "object"
+    },
+    "AnsweredAsk": {
+      "additionalProperties": false,
+      "description": "The ask an earlier attempt's turn parked on, and the user's answer to it.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/StepAnswer"
+        },
+        "ask": {
+          "$ref": "#/$defs/WaitingApproval"
+        }
+      },
+      "required": [
+        "ask",
+        "answer"
+      ],
+      "title": "AnsweredAsk",
       "type": "object"
     },
     "ApiUse": {
@@ -2534,6 +2563,30 @@
       "title": "FactoryRun",
       "type": "object"
     },
+    "FactoryRunAnswerCommand": {
+      "additionalProperties": false,
+      "description": "Answer the ask a run's kinby turn parked on, which resumes the turn as the step's next\nattempt.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/StepAnswer"
+        },
+        "approval_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "approval_id",
+        "answer"
+      ],
+      "title": "FactoryRunAnswerCommand",
+      "type": "object"
+    },
     "FactoryRunApproveCommand": {
       "additionalProperties": false,
       "description": "Approve a run parked at an approve step, which moves it on as the step's next outcome.",
@@ -2777,6 +2830,18 @@
       "additionalProperties": false,
       "description": "Send a run that needs a human or awaits approval back to an earlier step.\n\nIts retries and send-backs count afresh.",
       "properties": {
+        "notes": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "run_id": {
           "format": "uuid",
           "type": "string"
@@ -9345,10 +9410,61 @@
       "title": "StatsSummaryResult",
       "type": "object"
     },
+    "StepAnswer": {
+      "additionalProperties": false,
+      "description": "The user's answer to the ask a kinby turn on a workbench parked on.",
+      "properties": {
+        "decision": {
+          "enum": [
+            "approve",
+            "deny"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "title": "StepAnswer",
+      "type": "object"
+    },
     "StepAttempt": {
       "additionalProperties": false,
       "description": "One attempt at one step of a factory run.",
       "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "attempt": {
           "type": "integer"
         },
@@ -9463,7 +9579,8 @@
         "timed-out",
         "interrupted",
         "needs-human",
-        "limited"
+        "limited",
+        "asked"
       ],
       "title": "StepEnding",
       "type": "string"
@@ -9476,6 +9593,17 @@
       "additionalProperties": false,
       "description": "What one attempt at a step hands back to the hub.",
       "properties": {
+        "ask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "ending": {
           "$ref": "#/$defs/StepEnding"
         },
@@ -13754,6 +13882,22 @@
           ],
           "type": "object"
         },
+        "factory.run.answer": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunAnswerCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.run.approve": {
           "additionalProperties": false,
           "properties": {
@@ -16019,6 +16163,7 @@
         "factory.run.retry",
         "factory.run.send_back",
         "factory.run.approve",
+        "factory.run.answer",
         "factory.run.cancel",
         "library.list",
         "library.skill.read",
