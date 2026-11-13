@@ -508,6 +508,8 @@ class HubRegistry:
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
             self._add_columns(connection, "workbenches", {"commands": "TEXT NOT NULL DEFAULT '{}'"})
+            # The owner's routine that runs the line's intake. Null when its factory declares none.
+            self._add_columns(connection, "lines", {"intake": "TEXT"})
             self._add_columns(
                 connection,
                 "operation_steps",
@@ -1606,7 +1608,10 @@ class HubRegistry:
     def add_line(self, line: Line) -> None:
         with self._transaction() as connection:
             connection.execute(
-                "INSERT INTO lines VALUES (?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO lines (id, factory, workbench_id, owner_id, model, usd_per_day, intake)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
                 (
                     str(line.line_id),
                     line.factory,
@@ -1614,6 +1619,7 @@ class HubRegistry:
                     str(line.owner_id),
                     line.model,
                     line.usd_per_day,
+                    line.intake,
                 ),
             )
 
@@ -1621,7 +1627,7 @@ class HubRegistry:
         """Every line, in the order it was set up."""
         with self._transaction() as connection:
             rows = connection.execute(
-                "SELECT id, factory, workbench_id, owner_id, model, usd_per_day FROM lines "
+                "SELECT id, factory, workbench_id, owner_id, model, usd_per_day, intake FROM lines "
                 "ORDER BY rowid"
             ).fetchall()
         return [
@@ -1632,8 +1638,9 @@ class HubRegistry:
                 owner_id=UUID(owner_id),
                 model=model,
                 usd_per_day=usd_per_day,
+                intake=intake,
             )
-            for line_id, factory, workbench_id, owner_id, model, usd_per_day in rows
+            for line_id, factory, workbench_id, owner_id, model, usd_per_day, intake in rows
         ]
 
     def update_line(self, line: Line) -> None:

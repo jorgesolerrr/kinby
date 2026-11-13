@@ -23,6 +23,7 @@ from kinby.contracts import (
     CodingClient,
     CodingModel,
     CommandListName,
+    CronSchedule,
     FactoryName,
     HookName,
     ReasoningEffort,
@@ -32,6 +33,7 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
     SetupValue,
+    SignalAuth,
     SkillName,
     StepId,
     StepValue,
@@ -127,6 +129,31 @@ class Intake:
 
     instance: InstanceName
     routine: RoutineName
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class IntakeDelivery:
+    """Deliveries that fire the intake, each authenticated as a routine's signal is."""
+
+    #: The environment variable of the line's owner that holds the deliveries' secret.
+    secret: Annotated[str, Field(min_length=1)]
+    auth: SignalAuth = SignalAuth.TOKEN
+    signature_header: str | None = None
+    delivery_header: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class WorkbenchIntake:
+    """What fires a line's intake routine in its owner, a schedule, deliveries or both, and the
+    tool of the factory's folder that finds the work items on the line's workbench.
+
+    The tool's ``signal`` parameter receives the delivery that fired it, or an empty mapping. Each
+    mapping in the list it returns is a work item for the line.
+    """
+
+    call: ToolName
+    schedule: CronSchedule | None = None
+    delivery: IntakeDelivery | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -434,6 +461,8 @@ class WorkbenchFactory:
 
     name: FactoryName
     requires: Requirements = Field(default_factory=Requirements)
+    #: None leaves the line with no intake routine, so only a hand-in starts its runs.
+    intake: WorkbenchIntake | None = None
     #: The values each work item carries, by name.
     work_item: dict[ValueName, ValueType]
     steps: tuple[WorkbenchStep, ...] = Field(min_length=1)

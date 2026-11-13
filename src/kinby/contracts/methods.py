@@ -111,6 +111,8 @@ from kinby.contracts.models import (
     InstanceToolsetGetCommand,
     InstanceToolsetResult,
     InstanceUpdateCommand,
+    IntakeRunCommand,
+    IntakeRunResult,
     LibraryGitAddCommand,
     LibraryGitAddResult,
     LibraryGitPreviewCommand,
@@ -131,6 +133,8 @@ from kinby.contracts.models import (
     Line,
     LineGetCommand,
     LineHandInCommand,
+    LineIntakeCommand,
+    LineIntakeResult,
     LineListCommand,
     LineListResult,
     LineRemoveCommand,
@@ -400,6 +404,8 @@ RUN_FOLDER_REMOVE = Method(
     RunFolderRemoveCommand,
     RunFolderRemoveResult,
 )
+#: The hub runs a line's intake tool on the line's workbench.
+INTAKE_RUN = Method("intake.run", Scope.INSTANCE_LIFECYCLE, IntakeRunCommand, IntakeRunResult)
 #: The hub reads an attempt's transcript from the workbench that ran it.
 RUN_TRANSCRIPT_READ = Method(
     "run.transcript.read",
@@ -571,6 +577,7 @@ LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
 LINE_UPDATE = Method("line.update", Scope.HUB_ADMIN, LineUpdateCommand, Line)
 LINE_REMOVE = Method("line.remove", Scope.HUB_ADMIN, LineRemoveCommand, LineListResult)
 LINE_HAND_IN = Method("line.hand_in", Scope.HUB_ADMIN, LineHandInCommand, FactoryRun)
+LINE_INTAKE = Method("line.intake", Scope.LINE_INTAKE, LineIntakeCommand, LineIntakeResult)
 OPERATION_GET = Method(
     "operation.get",
     Scope.HUB_READ,
@@ -775,6 +782,7 @@ METHODS = (
     STEP_RUN,
     RUN_STOPPED,
     RUN_FOLDER_REMOVE,
+    INTAKE_RUN,
     RUN_TRANSCRIPT_READ,
     THREAD_ASK,
     ROUTINE_LIST,
@@ -849,6 +857,7 @@ METHODS = (
     LINE_UPDATE,
     LINE_REMOVE,
     LINE_HAND_IN,
+    LINE_INTAKE,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,

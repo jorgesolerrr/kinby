@@ -65,7 +65,7 @@ from kinby.contracts import (
 from kinby.hub import ControlConnectionLost, ControlUndelivered, ControlUnreachable, Hub
 from kinby.hub.registry import HubRegistry
 from kinby.hub.runs import FactoryRuns, _QueuedReport
-from kinby.plugins.intake import hand_to_factory, intake_tools
+from kinby.plugins.intake import hand_to_factory, intake_tools, run_line_intake
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -1275,7 +1275,7 @@ def test_a_vanilla_instance_gets_a_hub_url_to_raise_notifications_only(tmp_path)
         assert (
             environment["KINBY_HUB_URL"] == f"http://hub:8080/instances/{created.instance_id}/hub"
         )
-        assert environment["KINBY_HUB_SCOPES"] == "notification:raise"
+        assert environment["KINBY_HUB_SCOPES"] == "line:intake,notification:raise"
 
     asyncio.run(scenario())
 
@@ -1307,12 +1307,13 @@ def test_a_factory_instance_created_before_its_hub_route_gets_it_on_recreation(t
     ("variable", "scopes", "tools"),
     [
         ("KINBY_HUB_URL", "factory:intake,notification:raise", (hand_to_factory,)),
+        ("KINBY_HUB_URL", "line:intake,notification:raise", (run_line_intake,)),
         ("KINBY_HUB_URL", "notification:raise", ()),
-        ("KINBY_INTAKE_URL", "factory:intake", ()),
+        ("KINBY_INTAKE_URL", "factory:intake,line:intake", ()),
     ],
-    ids=["intake-scope", "other-scope", "intake-url"],
+    ids=["intake-scope", "line-intake-scope", "other-scope", "intake-url"],
 )
-def test_only_an_instance_its_hub_grants_factory_intake_has_the_intake_tool(
+def test_only_an_instance_its_hub_grants_an_intake_scope_has_its_intake_tool(
     monkeypatch, variable, scopes, tools
 ):
     monkeypatch.setenv(variable, "http://hub:8080/instances/x/hub")

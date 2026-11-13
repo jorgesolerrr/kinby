@@ -80,6 +80,8 @@ class Scope(StrEnum):
     HUB_UPDATE = "hub:update"
     #: Hand a factory a work item. Only an instance holds it, on its own hub route.
     FACTORY_INTAKE = "factory:intake"
+    #: Run the intake of a line the instance owns. Every instance holds it, on its hub route.
+    LINE_INTAKE = "line:intake"
     #: Read another instance through the hub, and run the hub writes the user approved. Only the
     #: home instance holds it, on its hub route.
     HUB_HOME = "hub:home"
@@ -112,6 +114,8 @@ INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
 HOME_SCOPES = frozenset({Scope.HUB_READ, Scope.HUB_HOME})
 #: What every instance holds on its hub route (ADR 0103).
 NOTIFICATION_SCOPES = frozenset({Scope.NOTIFICATION_RAISE})
+#: What every instance holds on its hub route, since any instance can own a line (ADR 0125).
+LINE_INTAKE_SCOPES = frozenset({Scope.LINE_INTAKE})
 #: What an instance whose manifest turns the browser on holds on its hub route (ADR 0113).
 BROWSER_SCOPES = frozenset({Scope.BROWSER_OPEN})
 #: What a client authenticated against the hub holds: a hub has one user.
@@ -1798,6 +1802,9 @@ class Line(ContractModel):
     owner_id: UUID
     model: str | None
     usd_per_day: float | None
+    #: The owner's routine that runs the line's intake, which a delivery reaches at
+    #: ``/instances/<owner_id>/signals/<intake>``. None when the factory declares no intake.
+    intake: RoutineName | None
 
 
 class LineListCommand(ContractModel):
@@ -1837,6 +1844,20 @@ class LineHandInCommand(ContractModel):
 
     line_id: UUID
     work_item: dict[ValueName, StepValue]
+
+
+class LineIntakeCommand(ContractModel):
+    """Run the intake of the line whose intake is this instance's routine, on the line's
+    workbench, and hand the line each work item it finds."""
+
+    routine: RoutineName
+    #: The delivery the routine's code step received. Empty when a schedule or the user fired it.
+    signal: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class LineIntakeResult(ContractModel):
+    #: The run each work item started or returned, in the order the intake found them.
+    runs: list[FactoryRun]
 
 
 class ContainerOwner(StrEnum):
@@ -4075,6 +4096,21 @@ class RunFolderRemoveCommand(ContractModel):
 
 class RunFolderRemoveResult(ContractModel):
     pass
+
+
+class IntakeRunCommand(ContractModel):
+    """Run a factory's intake tool on this workbench, in its workspace, and return the work items
+    it finds."""
+
+    factory: FactoryName
+    call: ToolName
+    #: What the tool's ``signal`` parameter receives: the delivery that fired the intake, or empty.
+    signal: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class IntakeRunResult(ContractModel):
+    #: In the order the tool returned them.
+    work_items: list[dict[ValueName, StepValue]]
 
 
 class StepRunCommand(ContractModel):

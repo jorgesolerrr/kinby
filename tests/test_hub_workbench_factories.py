@@ -297,3 +297,37 @@ def test_an_agent_step_resumes_only_an_earlier_session_of_its_own_engine(
     tmp_path, old, new, refusal
 ):
     assert problems(tmp_path, _agents(old, new)) == [refusal]
+
+
+INTAKE = """\
+intake:
+  call: open_pull_request
+  schedule: 0 * * * *
+  delivery: { auth: hmac-sha256, secret: GITHUB_WEBHOOK_SECRET,
+              signature_header: X-Hub-Signature-256 }
+work_item:"""
+
+
+@pytest.mark.parametrize(
+    "intake",
+    [INTAKE, "intake: { call: open_pull_request, schedule: 0 * * * * }\nwork_item:"],
+    ids=["schedule-and-delivery", "schedule"],
+)
+def test_an_intake_calls_a_tool_of_the_factorys_folder_on_a_trigger(tmp_path, intake):
+    assert problems(tmp_path, _with("work_item:", intake)) == []
+
+
+def test_the_check_refuses_an_intake_whose_tool_the_factorys_folder_does_not_hold(tmp_path):
+    files = _with("work_item:", INTAKE.replace("call: open_pull_request", "call: scan_issues"))
+
+    assert problems(tmp_path, files) == [
+        'intake calls tool "scan_issues", which the factory\'s folder does not hold.'
+    ]
+
+
+def test_the_check_refuses_an_intake_with_no_trigger(tmp_path):
+    files = _with("work_item:", "intake: { call: open_pull_request }\nwork_item:")
+
+    assert problems(tmp_path, files) == [
+        "The intake declares no trigger: give it a schedule, a delivery or both."
+    ]
