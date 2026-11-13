@@ -1,6 +1,7 @@
 """A line is set up on a workbench under an owner, and removed, through the hub contract."""
 
 import asyncio
+from collections.abc import Awaitable
 from pathlib import Path
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_LIST,
     FACTORY_REMOVE,
+    INSTANCE_CREATE,
     LINE_GET,
     LINE_LIST,
     LINE_REMOVE,
@@ -17,6 +19,9 @@ from kinby.contracts import (
     FactoryListCommand,
     FactoryListResult,
     FactoryRemoveCommand,
+    FactoryRole,
+    InstanceCreateCommand,
+    LifecycleOperationResult,
     Line,
     LineGetCommand,
     LineListCommand,
@@ -330,5 +335,64 @@ def test_a_factory_kinby_ships_is_never_removed(tmp_path):
         assert isinstance(refused, ErrorEnvelope)
         assert refused.fields == {"name": 'kinby ships factory "reviews", so it stays.'}
         assert (shipped / "factory.yaml").exists()
+
+    asyncio.run(scenario())
+
+
+async def _racing(hub: Hub, dependent: Awaitable[object]) -> tuple[object, object]:
+    """Start *dependent*, then a removal of the tickets factory, while a factory edit holds the
+    store: each is past its own checks and waits on the store when the edit ends."""
+    client = hub_client(hub)
+    async with hub.factories._edit_lock:
+        added = asyncio.ensure_future(dependent)
+        await asyncio.sleep(0.2)
+        removal = asyncio.ensure_future(
+            client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
+        )
+        await asyncio.sleep(0.2)
+    return await added, await removal
+
+
+def test_a_removal_racing_a_line_setup_refuses_once_the_line_is_set_up(tmp_path):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        workbench_id = await _cec_backend(client)
+
+        line, refused = await _racing(
+            hub,
+            client.call(LINE_SETUP, LineSetupCommand(factory="tickets", workbench_id=workbench_id)),
+        )
+
+        assert isinstance(line, Line), line
+        assert isinstance(refused, ErrorEnvelope), refused
+        assert refused.message.startswith('Factory "tickets" has lines on workbench')
+
+    asyncio.run(scenario())
+
+
+def test_a_removal_racing_a_role_creation_refuses_once_the_instance_is_created(tmp_path):
+    hub = factory_hub(tmp_path, ROLE_FILES)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        accepted, refused = await _racing(
+            hub,
+            client.call(
+                INSTANCE_CREATE,
+                InstanceCreateCommand(
+                    factory_role=FactoryRole(factory="tickets", name="coder"),
+                    model="openai:gpt-5",
+                    secrets={"api_key": "sk-test"},
+                ),
+            ),
+        )
+
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert isinstance(refused, ErrorEnvelope), refused
+        assert refused.message.startswith('Factory "tickets" has instances tickets-coder')
+        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
 
     asyncio.run(scenario())

@@ -749,6 +749,9 @@ class Hub:
             )
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
+            #: Held while a line or a factory role's instance is added, and while a factory is
+            #: removed, so no removal misses a dependent added during it.
+            self._factory_dependents = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
             #: The drain each operation is waiting on, whichever operation it is.
             self._draining: dict[UUID, PendingStop] = {}
@@ -1023,27 +1026,28 @@ class Hub:
     async def remove_factory(self, command: FactoryRemoveCommand) -> FactoryListResult:
         """Refuse while a line runs the factory, or an instance holds one of its roles, and name
         each of them."""
-        workbenches = [
-            self._workbench_name(line.workbench_id)
-            for line in self.registry.lines()
-            if line.factory == command.name
-        ]
-        holders = [
-            record.manifest_id
-            for record in self.registry.factory_members(command.name)
-            if self._held(record)
-        ]
-        if workbenches:
-            raise FactoryInUse(
-                f'Factory "{command.name}" has lines on workbench {_quoted(workbenches)}. '
-                "Remove them before removing the factory."
-            )
-        if holders:
-            raise FactoryInUse(
-                f'Factory "{command.name}" has instances {", ".join(holders)}. '
-                "Remove them before removing the factory."
-            )
-        return await self.factories.remove(command)
+        async with self._factory_dependents:
+            workbenches = [
+                self._workbench_name(line.workbench_id)
+                for line in self.registry.lines()
+                if line.factory == command.name
+            ]
+            holders = [
+                record.manifest_id
+                for record in self.registry.factory_members(command.name)
+                if self._held(record)
+            ]
+            if workbenches:
+                raise FactoryInUse(
+                    f'Factory "{command.name}" has lines on workbench {_quoted(workbenches)}. '
+                    "Remove them before removing the factory."
+                )
+            if holders:
+                raise FactoryInUse(
+                    f'Factory "{command.name}" has instances {", ".join(holders)}. '
+                    "Remove them before removing the factory."
+                )
+            return await self.factories.remove(command)
 
     async def _move(self, move: LibraryMove) -> LibraryListResult:
         checked = await self.library.check(LibrarySkillCheckCommand(name=move.name))
@@ -1182,6 +1186,12 @@ class Hub:
         takes, and the library holds each pick. Typed values to save to the hub are saved first.
 
         *requester* is the instance that asked for it through the hub, if one did."""
+        async with self._factory_dependents:
+            return await self._create_instance(command, requester)
+
+    async def _create_instance(
+        self, command: InstanceCreateCommand, requester: UUID | None
+    ) -> LifecycleOperationResult:
         manifest_id = _instance_name(command)
         role = command.factory_role
         template: InstanceTemplate | None = None
@@ -3426,6 +3436,10 @@ class Hub:
         """Accept a line only once the factory passes its check and runs on a workbench, the
         workbench holds all it requires on its own image, and the owner is an instance. The
         home instance owns it unless the command names another."""
+        async with self._factory_dependents:
+            return await self._set_up_line(command)
+
+    async def _set_up_line(self, command: LineSetupCommand) -> Line:
         record = self._active_workbench(command.workbench_id)
         assert record.workbench is not None
         factory = await self.factories.checked(command.factory)
