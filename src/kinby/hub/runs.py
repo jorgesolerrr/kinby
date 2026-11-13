@@ -67,7 +67,9 @@ from kinby.contracts import (
     Stream,
     ValueName,
 )
+from kinby.core.coding_clients import own_tokens
 from kinby.core.errors import (
+    BudgetExceeded,
     FactoryNotFound,
     FactoryRunNotFound,
     InvalidWorkItem,
@@ -171,6 +173,8 @@ _CLIENT_TIMEOUT: Duration = "60m"
 _ENDS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED)
 #: What a run worktree's branch keeps of each work item value. The rest becomes a dash.
 _BRANCH_WORD = re.compile(r"[a-z0-9]+")
+#: The provider of the models each coding client runs, as a line's ``provider:model`` names it.
+_PROVIDERS = {CodingClient.CLAUDE: "anthropic", CodingClient.CODEX: "openai"}
 #: The options a needs-human notification offers, a send back naming the step it goes to.
 _RETRY = "Retry"
 _SEND_BACK = "Send back to "
@@ -708,16 +712,20 @@ class FactoryRuns:
 
         A command step's lists of repository commands are the workbench's lists now. The first
         step that works in the folder has it cut again once the run went back to it from a later
-        one, so the run starts over from the base. A retry of that step keeps the folder.
+        one, so the run starts over from the base. A retry of that step keeps the folder. An agent
+        step fails once what the line's runs cost today reached its daily budget.
         """
-        placed = self._workbench(run)
-        if placed is None:
+        line, placed = self._line(run), self._workbench(run)
+        if line is None or placed is None:
             return _Refused(step.id, f'The line of factory run "{run.run_id}" is gone.')
         workbench, folder = placed
         assert workbench.workbench is not None
         match step:
             case WorkbenchAgentStep():
-                agent_run = self._client_run(run, factory, step, held)
+                limit, today = line.usd_per_day, datetime.now(UTC).date()
+                if limit is not None and self._registry.line_cost(line.line_id, today) >= limit:
+                    return _Refused(step.id, str(BudgetExceeded("usd_per_day", limit)))
+                agent_run = self._client_run(run, factory, step, held, line.model)
                 if isinstance(agent_run, _Refused):
                     return agent_run
                 asked = agent_run
@@ -754,6 +762,9 @@ class FactoryRuns:
         attempts = [attempt.step for attempt in self._registry.attempts(run_id)]
         return step in attempts and attempts[-1] != step
 
+    def _line(self, run: FactoryRun) -> Line | None:
+        return next((line for line in self._registry.lines() if line.line_id == run.line_id), None)
+
     def _workbench(self, run: FactoryRun) -> tuple[ManagedInstance, RunFolder] | None:
         """The workbench of the run's line and the run's folder there, or None without either.
 
@@ -761,7 +772,7 @@ class FactoryRuns:
         named for the factory, the work item and the run, since two work items can read alike once
         lowercased. On any other it is a directory named for the run.
         """
-        line = next((line for line in self._registry.lines() if line.line_id == run.line_id), None)
+        line = self._line(run)
         workbench = self._registry.instance(line.workbench_id) if line is not None else None
         if workbench is None or workbench.workbench is None:
             return None
@@ -812,11 +823,14 @@ class FactoryRuns:
         factory: _Factory,
         step: ClientStep | WorkbenchAgentStep,
         held: Mapping[ValueName, StepValue],
+        line_model: str | None = None,
     ) -> ClientStepRun | _Refused:
         """What the client step asks its instance to run, or the agent step its workbench.
 
-        When the step it resumes recorded no session, that step fails an attempt, as it would for
-        a value it should have produced.
+        An agent step that names no model takes its line's, *line_model*, when its coding client
+        runs that model's provider, and the client's default otherwise. When the step it resumes
+        recorded no session, that step fails an attempt, as it would for a value it should have
+        produced.
         """
         if isinstance(step, WorkbenchAgentStep) and step.engine is Engine.KINBY:
             return _Refused(
@@ -834,12 +848,14 @@ class FactoryRuns:
                     f'Step "{step.id}" resumes the session of "{step.resume}", '
                     "which this step did not record.",
                 )
+        client = step.client if isinstance(step, ClientStep) else CodingClient(step.engine)
+        provider, _, name = (line_model or "").partition(":")
         return ClientStepRun(
-            client=step.client if isinstance(step, ClientStep) else CodingClient(step.engine),
+            client=client,
             prompt=prompt,
             resume=session,
             timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
-            model=step.model,
+            model=step.model or (name if provider == _PROVIDERS[client] else None),
             effort=step.effort,
             branch=_branch(step, held) if isinstance(step, ClientStep) else None,
         )
@@ -963,7 +979,7 @@ class FactoryRuns:
                 command = queued.command.model_copy(update={"attempt": attempt})
             answer = await self._run_step(instance_id, command)
             if isinstance(answer, StepResult):
-                self._advance(queued.run_id, answer)
+                self._advance(queued.run_id, self._own_usage(queued.run_id, answer))
                 return
             if isinstance(answer, UndeliveredCall):
                 self._publish(self._registry.drop_attempt(queued.run_id))
@@ -984,6 +1000,20 @@ class FactoryRuns:
                     self._publish(self._registry.drop_attempt(queued.run_id))
                 self._enqueue(self._existing(queued.run_id))
                 return
+
+    def _own_usage(self, run_id: UUID, result: StepResult) -> StepResult:
+        """*result* with its coding client's run counting only its own tokens: what the run's
+        earlier attempts in its session counted comes off."""
+        usage = result.usage
+        if usage is None or usage.delegated_run is None:
+            return result
+        earlier = (
+            attempt.usage.delegated_run
+            for attempt in self._registry.attempts(run_id)
+            if attempt.usage is not None and attempt.usage.delegated_run is not None
+        )
+        own = own_tokens(usage.delegated_run, earlier)
+        return result.model_copy(update={"usage": usage.model_copy(update={"delegated_run": own})})
 
     async def _send_report(self, instance_id: UUID, report: _QueuedReport) -> None:
         if self._stale(report):

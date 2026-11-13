@@ -117,6 +117,7 @@ from kinby.contracts import (
     LINE_LIST,
     LINE_REMOVE,
     LINE_SETUP,
+    LINE_UPDATE,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
     NOTIFICATION_REPLY,
@@ -233,6 +234,7 @@ from kinby.contracts import (
     LineListResult,
     LineRemoveCommand,
     LineSetupCommand,
+    LineUpdateCommand,
     LoginPrompt,
     McpServerFailed,
     NewerVersion,
@@ -825,6 +827,7 @@ class Hub:
         dispatcher.register(LINE_SETUP, self.set_up_line)
         dispatcher.register(LINE_LIST, self.list_lines)
         dispatcher.register(LINE_GET, self.get_line)
+        dispatcher.register(LINE_UPDATE, self.update_line)
         dispatcher.register(LINE_REMOVE, self.remove_line)
         dispatcher.register(LINE_HAND_IN, self.hand_in)
         dispatcher.register(OPERATION_GET, self.operation)
@@ -3572,6 +3575,15 @@ class Hub:
             raise LineNotFound(f'Line "{command.line_id}" was not found.')
         return line
 
+    async def update_line(self, command: LineUpdateCommand) -> Line:
+        """Replace the line's model and daily budget. A run's next step takes them."""
+        line = await self.get_line(LineGetCommand(line_id=command.line_id))
+        updated = line.model_copy(
+            update={"model": command.model, "usd_per_day": command.usd_per_day}
+        )
+        self.registry.update_line(updated)
+        return updated
+
     async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
         """Remove the line. Its workbench keeps its clone, its secrets and its command lists."""
         await self.get_line(LineGetCommand(line_id=command.line_id))
@@ -3620,14 +3632,26 @@ class Hub:
         return summed_usage(await self._answers(command))
 
     async def stats_runs(self, command: StatsRunsCommand) -> StatsRunsResult:
-        """Join the runs the instance handed in with their tokens in every instance, which are
-        asked at once, and keep none of the answers (ADR 0063)."""
-        self._active_instance(command.instance_id)
+        """Join the runs the instance handed in, or the line holds, with their tokens in every
+        instance, which are asked at once, and with what their attempts on a workbench spent.
+        Keep none of the instances' answers (ADR 0063)."""
+        if command.instance_id is not None:
+            self._active_instance(command.instance_id)
+        if command.line_id is not None:
+            await self.get_line(LineGetCommand(line_id=command.line_id))
         runs = self.registry.runs(
-            None, None, command.instance_id, since=command.since, until=command.until
+            None,
+            None,
+            command.instance_id,
+            line_id=command.line_id,
+            since=command.since,
+            until=command.until,
         )
         answers = await self._answers(StatsGetCommand(since=command.since, until=command.until))
-        return run_usage([(run, self.runs.rework(run)) for run in runs], answers)
+        return run_usage(
+            [(run, self.runs.rework(run), self.registry.attempts(run.run_id)) for run in runs],
+            answers,
+        )
 
     async def _answers(self, command: StatsGetCommand) -> dict[UUID, StatsGetResult | Uncounted]:
         records = [

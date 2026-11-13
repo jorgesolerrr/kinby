@@ -1813,6 +1813,16 @@ class LineGetCommand(ContractModel):
     line_id: UUID
 
 
+class LineUpdateCommand(ContractModel):
+    """Set one line's model and daily budget, replacing both. The result is the line."""
+
+    line_id: UUID
+    #: The model its agent steps take when a step names none, as ``provider:model``.
+    model: Annotated[str, Field(min_length=1)] | None = None
+    #: Its daily budget in US dollars. Off when absent.
+    usd_per_day: Annotated[float, Field(gt=0)] | None = None
+
+
 class LineRemoveCommand(ContractModel):
     """Remove one line. Its workbench stays as it is. The result lists the lines left."""
 
@@ -2274,11 +2284,19 @@ class StatsSummaryResult(ContractModel):
 
 
 class StatsRunsCommand(ContractModel):
-    """The run usage of the factory runs one instance handed in, created in the range."""
+    """The run usage of the factory runs one instance handed in, or one line holds, created in the
+    range."""
 
-    instance_id: UUID
+    instance_id: UUID | None = None
+    line_id: UUID | None = None
     since: AwareDatetime | None = None
     until: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _names_an_instance_or_a_line(self) -> Self:
+        if (self.instance_id is None) == (self.line_id is None):
+            raise ValueError("Name either an instance or a line.")
+        return self
 
 
 class StepAttempts(ContractModel):
@@ -4052,6 +4070,14 @@ class StepRunCommand(ContractModel):
     fresh_folder: bool = False
 
 
+class StepUsage(ContractModel):
+    """What one attempt at a step on a workbench spent: its model calls on the API, priced where
+    the model is known, and its coding client's run on a subscription."""
+
+    api: ApiUse | None = None
+    delegated_run: DelegatedRun | None = None
+
+
 class StepResult(ContractModel):
     """What one attempt at a step hands back to the hub."""
 
@@ -4065,6 +4091,8 @@ class StepResult(ContractModel):
     session: CodingSessionId | None = None
     #: When the plan window of a limited step resets. Only a limited step has one.
     resets_at: AwareDatetime | None = None
+    #: What a step on a workbench spent. None for a step that ran no model.
+    usage: StepUsage | None = None
 
     @model_validator(mode="after")
     def _resets_at_only_when_limited(self) -> Self:
@@ -4108,6 +4136,8 @@ class StepAttempt(ContractModel):
     summary: str
     #: The coding client session a client step ran in.
     session: CodingSessionId | None = None
+    #: What a step on a workbench spent, a coding client counting only its own tokens.
+    usage: StepUsage | None = None
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
 

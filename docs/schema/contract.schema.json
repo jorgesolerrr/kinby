@@ -4849,6 +4849,45 @@
       "title": "LineSetupCommand",
       "type": "object"
     },
+    "LineUpdateCommand": {
+      "additionalProperties": false,
+      "description": "Set one line's model and daily budget, replacing both. The result is the line.",
+      "properties": {
+        "line_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usd_per_day": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "line_id"
+      ],
+      "title": "LineUpdateCommand",
+      "type": "object"
+    },
     "ListBinding": {
       "additionalProperties": false,
       "description": "Children repeated from an array in the view's data: the template once per item, with its\npaths read in the item.",
@@ -8967,11 +9006,31 @@
     },
     "StatsRunsCommand": {
       "additionalProperties": false,
-      "description": "The run usage of the factory runs one instance handed in, created in the range.",
+      "description": "The run usage of the factory runs one instance handed in, or one line holds, created in the\nrange.",
       "properties": {
         "instance_id": {
-          "format": "uuid",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "line_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "since": {
           "anyOf": [
@@ -8998,9 +9057,6 @@
           "default": null
         }
       },
-      "required": [
-        "instance_id"
-      ],
       "title": "StatsRunsCommand",
       "type": "object"
     },
@@ -9337,6 +9393,17 @@
         "summary": {
           "type": "string"
         },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "values": {
           "additionalProperties": {
             "$ref": "#/$defs/StepValue"
@@ -9438,6 +9505,17 @@
         "summary": {
           "default": "",
           "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "values": {
           "additionalProperties": {
@@ -9549,6 +9627,36 @@
         "work_item"
       ],
       "title": "StepRunCommand",
+      "type": "object"
+    },
+    "StepUsage": {
+      "additionalProperties": false,
+      "description": "What one attempt at a step on a workbench spent: its model calls on the API, priced where\nthe model is known, and its coding client's run on a subscription.",
+      "properties": {
+        "api": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "delegated_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegatedRun"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "StepUsage",
       "type": "object"
     },
     "StepValue": {
@@ -14483,6 +14591,22 @@
           ],
           "type": "object"
         },
+        "line.update": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineUpdateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Line"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "manifest.get": {
           "additionalProperties": false,
           "properties": {
@@ -15865,6 +15989,7 @@
         "line.setup",
         "line.list",
         "line.get",
+        "line.update",
         "line.remove",
         "line.hand_in",
         "operation.get",

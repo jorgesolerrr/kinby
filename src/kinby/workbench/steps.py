@@ -27,6 +27,7 @@ from kinby.contracts import (
     StepId,
     StepResult,
     StepRunCommand,
+    StepUsage,
 )
 from kinby.core.coding_clients import run_coding_client
 from kinby.core.held_results import HeldResults
@@ -165,7 +166,8 @@ class WorkbenchSteps:
         """Run the agent step's coding client in the run's folder, offering it the factory's skills
         and the workbench's picks, and keep what it streams as the attempt's transcript.
 
-        What the client said last is only the summary. A run the plan refused ends limited.
+        What the client said last is only the summary, and its run is what the step spent. A run
+        the plan refused ends limited.
         """
         origin = command.origin
         skills, warnings = await asyncio.to_thread(
@@ -197,14 +199,16 @@ class WorkbenchSteps:
             transcript=transcript,
         )
         reported = ran.reported
+        usage = StepUsage(delegated_run=reported) if reported is not None else None
         if reported is not None and reported.outcome is DelegatedRunOutcome.LIMITED:
             return StepResult(
                 ending=StepEnding.LIMITED,
                 summary=ran.summary,
                 session=ran.session,
                 resets_at=reported.resets_at,
+                usage=usage,
             )
-        return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
+        return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session, usage=usage)
 
     def _transcript(self, run_id: UUID, step: StepId, attempt: int) -> Path:
         return self._directory / _TRANSCRIPTS_DIR / str(run_id) / step / f"{attempt}.jsonl"

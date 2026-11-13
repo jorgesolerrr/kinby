@@ -402,12 +402,13 @@ def step_failed(reason: str, ended: StepResult | None = None) -> StepResult:
     """A failed result that says why, after the summary of the step as it *ended*.
 
     A step that ended otherwise than clean keeps its ending, so a timeout is never tried again,
-    and a limited one keeps when its plan window resets.
+    and a limited one keeps when its plan window resets. What the step spent stays.
     """
     summary = reason if ended is None or not ended.summary else f"{ended.summary}\n{reason}"
+    usage = ended.usage if ended is not None else None
     if ended is None or ended.ending is StepEnding.CLEAN:
-        return StepResult(ending=StepEnding.FAILED, summary=summary)
-    return StepResult(ending=ended.ending, summary=summary, resets_at=ended.resets_at)
+        return StepResult(ending=StepEnding.FAILED, summary=summary, usage=usage)
+    return StepResult(ending=ended.ending, summary=summary, resets_at=ended.resets_at, usage=usage)
 
 
 async def _run_command(command: str, workspace: Path) -> StepResult | None:

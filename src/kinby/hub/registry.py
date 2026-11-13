@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -48,6 +48,7 @@ from kinby.contracts import (
     StepEnding,
     StepId,
     StepResult,
+    StepUsage,
     StepValue,
     StorageItem,
     StorageKind,
@@ -484,6 +485,8 @@ class HubRegistry:
                 """
             )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
+            # What an attempt on a workbench spent, as JSON. Null for any other.
+            self._add_columns(connection, "step_attempts", {"usage": "TEXT"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
@@ -1616,6 +1619,29 @@ class HubRegistry:
             for line_id, factory, workbench_id, owner_id, model, usd_per_day in rows
         ]
 
+    def update_line(self, line: Line) -> None:
+        """Replace the line's model and daily budget."""
+        with self._transaction() as connection:
+            connection.execute(
+                "UPDATE lines SET model = ?, usd_per_day = ? WHERE id = ?",
+                (line.model, line.usd_per_day, str(line.line_id)),
+            )
+
+    def line_cost(self, line_id: UUID, day: date) -> float:
+        """What the attempts of the line's runs that ended on the UTC *day* cost on the API."""
+        start = datetime.combine(day, time(), UTC)
+        with self._transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT TOTAL(json_extract(step_attempts.usage, '$.api.cost'))
+                FROM step_attempts
+                JOIN factory_runs ON factory_runs.id = step_attempts.run_id
+                WHERE factory_runs.line_id = ? AND ended_at >= ? AND ended_at < ?
+                """,
+                (str(line_id), _stored(start), _stored(start + timedelta(days=1))),
+            ).fetchone()
+        return row[0]
+
     def remove_line(self, line_id: UUID) -> None:
         with self._transaction() as connection:
             connection.execute("DELETE FROM lines WHERE id = ?", (str(line_id),))
@@ -2298,7 +2324,7 @@ class HubRegistry:
                 """
                 UPDATE step_attempts
                 SET ending = ?, outcome = ?, result_values = ?, summary = ?, session = ?,
-                    ended_at = ?
+                    usage = ?, ended_at = ?
                 WHERE run_id = ? AND ended_at IS NULL
                 """,
                 (
@@ -2307,6 +2333,7 @@ class HubRegistry:
                     json.dumps(result.values),
                     result.summary,
                     result.session,
+                    result.usage.model_dump_json() if result.usage is not None else None,
                     _now(),
                     str(run_id),
                 ),
@@ -2332,8 +2359,8 @@ class HubRegistry:
             rows = connection.execute(
                 """
                 SELECT
-                    step, attempt, ending, outcome, result_values, summary, session, started_at,
-                    ended_at
+                    step, attempt, ending, outcome, result_values, summary, session, usage,
+                    started_at, ended_at
                 FROM step_attempts
                 WHERE run_id = ? AND rowid > ? AND (? IS NULL OR rowid <= ?)
                 ORDER BY rowid
@@ -2349,6 +2376,7 @@ class HubRegistry:
                 values=json.loads(values),
                 summary=summary,
                 session=session,
+                usage=StepUsage.model_validate_json(usage) if usage is not None else None,
                 started_at=datetime.fromisoformat(started_at),
                 ended_at=datetime.fromisoformat(ended_at) if ended_at is not None else None,
             )
@@ -2360,6 +2388,7 @@ class HubRegistry:
                 values,
                 summary,
                 session,
+                usage,
                 started_at,
                 ended_at,
             ) in rows
