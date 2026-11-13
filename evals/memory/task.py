@@ -65,6 +65,7 @@ from kinby.instance.layout import (
     GRAPH_DIR,
     MANIFEST_NAME,
     MEMORY_DIR,
+    PERMISSIONS_NAME,
     PROFILE_NAME,
     SYSTEM_NAME,
 )
@@ -191,6 +192,8 @@ class LessonArm(StrEnum):
     INDEX = "index"
     PRE_SEARCH = "pre-search"
     EMBEDDED_PRE_SEARCH = "embedded-pre-search"
+    #: The lesson is removed from memory and nothing is delivered: the base rate to beat.
+    CONTROL = "control"
 
 
 #: How each lesson arm's runtime brings memory to the turn. Pull leaves it to the agent, and the
@@ -200,6 +203,7 @@ _DELIVERIES = {
     LessonArm.INDEX: MemoryDelivery.INDEX,
     LessonArm.PRE_SEARCH: MemoryDelivery.PRE_SEARCH,
     LessonArm.EMBEDDED_PRE_SEARCH: MemoryDelivery.NONE,
+    LessonArm.CONTROL: MemoryDelivery.NONE,
 }
 
 
@@ -286,9 +290,10 @@ def lessons(arm: str = LessonArm.PULL) -> Task:
         solver=run_lesson_case(selected_arm),
         scorer=(
             model_graded_qa(template=_LESSON_GRADER_TEMPLATE, model=_JUDGE_MODEL),
+            lesson_recalled(),
             memory_tokens(),
         ),
-        # The mean of a grade is the lesson-following rate.
+        # The mean of a grade is the lesson-following rate, or the lesson's recall rate.
         metrics=[grouped(mean(), "facts")],
         metadata={"arm": selected_arm.value},
     )
@@ -308,6 +313,24 @@ def memory_behavior() -> Scorer:
             value=CORRECT if passed else INCORRECT,
             explanation=explanation,
         )
+
+    return score
+
+
+@scorer(metrics=[mean()])
+def lesson_recalled() -> Scorer:
+    """Whether the turn recalled the lesson: opened it, or had it pre-searched into its message.
+
+    A search hit shows only the lesson's description and the index only lists it, so neither
+    counts.
+    """
+
+    async def score(state: TaskState, target: Target) -> Score:
+        del target
+        recalled = state.metadata.get("lesson_recalled")
+        if not isinstance(recalled, bool):
+            raise TypeError("The lesson sample has no lesson-recall result.")
+        return Score(value=CORRECT if recalled else INCORRECT)
 
     return score
 
@@ -369,9 +392,10 @@ def run_lesson_case(arm: LessonArm) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         del generate
         delivery = _DELIVERIES[arm]
+        case_path = _case_path(state)
         with tempfile.TemporaryDirectory(prefix="kinby-lesson-eval-") as temporary:
             instance_path = Path(temporary) / "instance"
-            _prepare_lesson(_case_path(state), instance_path, _facts(state), arm)
+            _prepare_lesson(case_path, instance_path, _facts(state), arm)
             # Read before the turn, as the turn reads it when it starts.
             delivered = (
                 await _embedded_pre_search(instance_path, state.input_text)
@@ -390,9 +414,18 @@ def run_lesson_case(arm: LessonArm) -> Solver:
             delivered_tokens = (
                 0 if delivered is None else len(delivered.text) / _CHARACTERS_PER_TOKEN
             )
+            last_turn = _last_turn(events)
             state.metadata["memory_tokens"] = (
-                _memory_token_estimate(instance_path, events, _last_turn(events)) + delivered_tokens
+                _memory_token_estimate(instance_path, events, last_turn) + delivered_tokens
             )
+        opened = {
+            _opened_node(result)
+            for _, result in _successful_tool_uses(events, last_turn, "memory_open")
+        }
+        pre_searched = () if delivered is None else delivered.recalled
+        state.metadata["lesson_recalled"] = not _lesson_nodes(case_path).isdisjoint(
+            {*opened, *pre_searched}
+        )
         state.output = ModelOutput.from_content(model=str(state.model), content=answer)
         state.messages.append(ChatMessageAssistant(content=answer, source="generate"))
         state.completed = True
@@ -415,12 +448,23 @@ def _embed_model(instance_path: Path) -> str | None:
 
 def _prepare_lesson(case_path: Path, instance_path: Path, facts: int, arm: LessonArm) -> None:
     shutil.copytree(case_path / "instance", instance_path)
+    # No one answers an approval in the eval, so a write is denied rather than left waiting.
+    (instance_path / PERMISSIONS_NAME).write_text('mode = "read-only"\n', encoding="utf-8")
     _add_unrelated_facts(instance_path, facts)
+    if arm is LessonArm.CONTROL:
+        # After the fill, so the unrelated facts are the ones every other arm gets.
+        for lesson in _lesson_nodes(case_path):
+            (instance_path / MEMORY_DIR / GRAPH_DIR / f"{lesson}.md").unlink()
     if arm is not LessonArm.PULL:
         return
     system_path = instance_path / SYSTEM_NAME
     system = system_path.read_text(encoding="utf-8").rstrip("\r\n")
     system_path.write_text(f"{system}\n\n{_PULL_LINE}\n", encoding="utf-8")
+
+
+def _lesson_nodes(case_path: Path) -> frozenset[NodeId]:
+    """The facts of the case's fixture: its lesson."""
+    return GraphStore(case_path / "instance").fact_ids()
 
 
 def _add_unrelated_facts(instance_path: Path, facts: int) -> None:
