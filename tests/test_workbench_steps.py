@@ -24,6 +24,7 @@ from kinby.contracts import (
     StepEnding,
     StepResult,
     StepRunCommand,
+    UsageSource,
 )
 from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_hub_factories import write_factory
@@ -321,7 +322,7 @@ def test_an_agent_step_runs_its_coding_client_in_the_run_folder_with_its_prompt(
     result = asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, BRANCH)))
 
     [called] = recorded_calls(calls)
-    assert result == StepResult(
+    assert result.model_copy(update={"usage": None}) == StepResult(
         ending=StepEnding.CLEAN, summary="Implemented issue 7.", session="claude-1"
     )
     assert called.cwd == str(tmp_path / "workbench" / "worktrees" / "tickets" / "issue-12")
@@ -330,6 +331,25 @@ def test_an_agent_step_runs_its_coding_client_in_the_run_folder_with_its_prompt(
     assert "kinby memory" not in called.stdin
     assert called.argv[-4:] == ["--model", "claude-opus-5-5", "--effort", "high"]
     assert called.config_dir == str(tmp_path / "workbench" / ".state" / "claude")
+
+
+def test_an_agent_steps_result_carries_what_its_coding_client_spent(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    result = asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN, check="refused")))
+
+    assert result.ending is StepEnding.FAILED
+    assert result.usage is not None and result.usage.delegated_run is not None
+    ran = result.usage.delegated_run
+    assert (ran.usage_source, ran.models, ran.session) == (
+        UsageSource.CLAUDE_SUBSCRIPTION,
+        ["claude-opus-5-5"],
+        "claude-1",
+    )
+    assert (ran.input_tokens, ran.output_tokens) == (160, 20)
+    assert result.usage.api is None
 
 
 def test_an_agent_step_that_resumes_continues_the_session_it_names(tmp_path, monkeypatch):

@@ -43,6 +43,8 @@ export type StepValue = boolean | number | string;
  * How one attempt at a step ended.
  */
 export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human" | "limited";
+export type DelegatedRunOutcome = "completed" | "failed" | "limited";
+export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -155,9 +157,7 @@ export type SignalAuth = "token" | "hmac-sha256";
  */
 export type SkillTier = "instance" | "kinby" | "workspace";
 export type StatsBucketSize = "day" | "week";
-export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type TurnClosingKind = "completed" | "failed" | "interrupted";
-export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
 export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
@@ -570,6 +570,10 @@ export interface Contract {
     };
     "line.setup": {
       command: LineSetupCommand;
+      result: Line;
+    };
+    "line.update": {
+      command: LineUpdateCommand;
       result: Line;
     };
     "manifest.get": {
@@ -1438,9 +1442,48 @@ export interface StepAttempt {
   started_at: string;
   step: StepId;
   summary: string;
+  usage?: StepUsage | null;
   values: {
     [k: string]: StepValue;
   };
+}
+/**
+ * What one attempt at a step on a workbench spent: its model calls on the API, priced where
+ * the model is known, and its coding client's run on a subscription.
+ */
+export interface StepUsage {
+  api?: ApiUse | null;
+  delegated_run?: DelegatedRun | null;
+}
+/**
+ * The model calls the API usage source paid for, priced where the model is known.
+ */
+export interface ApiUse {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  cost?: number | null;
+  input_tokens: number;
+  output_tokens: number;
+}
+/**
+ * One run of an outside agent that a tool or a client step started, with its own tokens.
+ *
+ * A client that reports a running total across resumes, like a Codex thread, needs its
+ * previous reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.
+ */
+export interface DelegatedRun {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  client: string;
+  client_turns: number;
+  duration_ms: number;
+  input_tokens: number;
+  models: string[];
+  outcome: DelegatedRunOutcome;
+  output_tokens: number;
+  resets_at?: string | null;
+  session?: string | null;
+  usage_source: UsageSource;
 }
 /**
  * Hand a work item to the factory whose intake is this instance and routine.
@@ -2138,6 +2181,14 @@ export interface LineSetupCommand {
   usd_per_day?: number | null;
   workbench_id: string;
 }
+/**
+ * Set one line's model and daily budget, replacing both. The result is the line.
+ */
+export interface LineUpdateCommand {
+  line_id: string;
+  model?: string | null;
+  usd_per_day?: number | null;
+}
 export interface ManifestGetCommand {}
 export interface ManifestResult {
   hash: string;
@@ -2783,26 +2834,6 @@ export interface ReportedRun {
   run: DelegatedRun;
   timestamp: string;
 }
-/**
- * One run of an outside agent that a tool or a client step started, with its own tokens.
- *
- * A client that reports a running total across resumes, like a Codex thread, needs its
- * previous reading subtracted. Only a limited run has ``resets_at``: when its plan window resets.
- */
-export interface DelegatedRun {
-  cache_creation_tokens?: number;
-  cache_read_tokens?: number;
-  client: string;
-  client_turns: number;
-  duration_ms: number;
-  input_tokens: number;
-  models: string[];
-  outcome: DelegatedRunOutcome;
-  output_tokens: number;
-  resets_at?: string | null;
-  session?: string | null;
-  usage_source: UsageSource;
-}
 export interface Navigation {
   distinct_paths?: number;
   duration_ms?: number;
@@ -2856,16 +2887,6 @@ export interface RunTokens {
   run_id: string;
   subscriptions: SubscriptionUse[];
 }
-/**
- * The model calls the API usage source paid for, priced where the model is known.
- */
-export interface ApiUse {
-  cache_creation_tokens?: number;
-  cache_read_tokens?: number;
-  cost?: number | null;
-  input_tokens: number;
-  output_tokens: number;
-}
 export interface StatsSummary {
   approvals_requested: number;
   bad_ratings: number;
@@ -2901,10 +2922,12 @@ export interface ModelCallMismatch {
   turn_id: string;
 }
 /**
- * The run usage of the factory runs one instance handed in, created in the range.
+ * The run usage of the factory runs one instance handed in, or one line holds, created in the
+ * range.
  */
 export interface StatsRunsCommand {
-  instance_id: string;
+  instance_id?: string | null;
+  line_id?: string | null;
   since?: string | null;
   until?: string | null;
 }
@@ -3055,6 +3078,7 @@ export interface StepResult {
   resets_at?: string | null;
   session?: string | null;
   summary?: string;
+  usage?: StepUsage | null;
   values?: {
     [k: string]: StepValue;
   };

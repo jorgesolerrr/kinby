@@ -378,7 +378,7 @@ _Avoid_: task
 
 ### Budget
 
-A ceiling an **instance** sets on one **turn** (steps, **token usage**, seconds) or on a UTC day (cost). The token budget limits token usage, never the **context size**. Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it.
+A ceiling an **instance** sets on one **turn** (steps, **token usage**, seconds) or on a UTC day (cost). The token budget limits token usage, never the **context size**. Reaching it closes the turn as failed. Absent means unlimited; a **routine** may lower a budget, never raise it. A **line** sets a daily cost budget of its own: once what its runs' attempts cost on the API that UTC day reaches it, its next **agent step** fails before it starts. Another line on the same **workbench** keeps running.
 
 ### Turn interruption
 
@@ -839,12 +839,12 @@ _Avoid_: environment, sandbox, site, station
 
 ### Line
 
-A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily budget. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
+A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
 ### Agent step
 
-A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it. Each attempt's transcript stays on the workbench, and the **hub** reads it from there.
+A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
 _Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
 
 ### Engine
@@ -875,7 +875,7 @@ _Avoid_: workspace (the shared clone run worktrees are cut from), worktree (git'
 
 ### Run usage
 
-The derived record of one **factory run**'s cost: its tokens and price across its **steps**' **turns**, **delegated runs** and recap, the **step attempts** per step, its retries and send-backs, and the time from start to done. Nothing stores it; it is read from the **hub** and the **instance**.
+The derived record of one **factory run**'s cost: its tokens and price across its **steps**' **turns**, **delegated runs** and recap, the **step attempts** per step, its retries and send-backs, and the time from start to done. Nothing stores it; it is read from the **instances** and from the **hub**, which holds what each attempt on a **workbench** spent. It is read for the runs one instance handed in, or for the runs of one **line**.
 
 ### Step result
 

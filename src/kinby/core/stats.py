@@ -245,7 +245,7 @@ def run_tokens(
                 cost=run.cost,
             ),
             subscriptions=[
-                _subscription_use(source, run.delegated_runs) for source in SUBSCRIPTION_SOURCES
+                subscription_use(source, run.delegated_runs) for source in SUBSCRIPTION_SOURCES
             ],
             recalled_fact=run.recalled_fact,
         )
@@ -428,7 +428,8 @@ def _navigation_means(totals: _BucketTotals) -> NavigationMeans:
     )
 
 
-def _subscription_use(source: UsageSource, runs: Iterable[DelegatedRun]) -> SubscriptionUse:
+def subscription_use(source: UsageSource, runs: Iterable[DelegatedRun]) -> SubscriptionUse:
+    """What the *runs* the subscription *source* paid for counted."""
     paid = [run for run in runs if run.usage_source is source]
     return SubscriptionUse(
         usage_source=source,
@@ -470,7 +471,7 @@ def _stats_summary(totals: _BucketTotals) -> StatsSummary:
         bad_ratings=totals.bad_ratings,
         navigation=_navigation_means(totals),
         subscriptions=[
-            _subscription_use(source, totals.delegated_runs) for source in SUBSCRIPTION_SOURCES
+            subscription_use(source, totals.delegated_runs) for source in SUBSCRIPTION_SOURCES
         ],
         origins=[
             _origin_use(routine, totals.origins[routine])

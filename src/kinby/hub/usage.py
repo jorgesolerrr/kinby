@@ -23,10 +23,11 @@ from kinby.contracts import (
     StatsRunsResult,
     StatsSummary,
     StatsSummaryResult,
+    StepAttempt,
     SubscriptionUse,
     UsageSource,
 )
-from kinby.core.stats import PLAN_WINDOWS, SUBSCRIPTION_SOURCES, bucket_start
+from kinby.core.stats import PLAN_WINDOWS, SUBSCRIPTION_SOURCES, bucket_start, subscription_use
 from kinby.hub.runs import Rework
 
 _ENDED = frozenset({FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED})
@@ -74,18 +75,22 @@ def _with_runs(answer: StatsGetResult | Uncounted) -> StatsGetResult | Uncounted
 
 
 def run_usage(
-    reworked: Iterable[tuple[FactoryRun, Rework]],
+    reworked: Iterable[tuple[FactoryRun, Rework, Sequence[StepAttempt]]],
     answers: Mapping[UUID, StatsGetResult | Uncounted],
 ) -> StatsRunsResult:
     """Join each run's rework with its tokens in every counted instance, since a step can run
-    in an instance other than the one that handed the run in."""
+    in an instance other than the one that handed the run in, and with what its attempts on a
+    workbench spent."""
     read = {instance_id: _run_tokens(answer) for instance_id, answer in answers.items()}
     tokens: dict[UUID, list[RunTokens]] = {}
     for runs in read.values():
         if not isinstance(runs, Uncounted):
             for run in runs:
                 tokens.setdefault(run.run_id, []).append(run)
-    usage = [_run_usage(run, rework, tokens.get(run.run_id, [])) for run, rework in reworked]
+    usage = [
+        _run_usage(run, rework, [*tokens.get(run.run_id, []), _spent(run.run_id, attempts)])
+        for run, rework, attempts in reworked
+    ]
     return StatsRunsResult(
         runs=usage,
         weeks=_weeks(usage),
@@ -100,6 +105,17 @@ def _run_tokens(answer: StatsGetResult | Uncounted) -> list[RunTokens] | Uncount
     if isinstance(answer, Uncounted):
         return answer
     return Uncounted.OUTDATED if answer.runs is None else answer.runs
+
+
+def _spent(run_id: UUID, attempts: Iterable[StepAttempt]) -> RunTokens:
+    """What the run's attempts on a workbench spent, which the hub holds."""
+    used = [attempt.usage for attempt in attempts if attempt.usage is not None]
+    delegated = [use.delegated_run for use in used if use.delegated_run is not None]
+    return RunTokens(
+        run_id=run_id,
+        api=_summed_api([use.api for use in used if use.api is not None]),
+        subscriptions=[subscription_use(source, delegated) for source in SUBSCRIPTION_SOURCES],
+    )
 
 
 def _run_usage(run: FactoryRun, rework: Rework, counted: list[RunTokens]) -> RunUsage:
