@@ -229,7 +229,8 @@ _CLIENT_MEMORY = (
     "each with its node id and date. "
     "A date bound adds the episodes of earlier work in that range, and a query no fact matches "
     "returns the matching episodes instead. `kinby memory open <node>` prints one node's body "
-    "as JSON."
+    "as JSON.\n"
+    "Before you start a task, search your memory for it with `kinby memory search <query>`."
 )
 _CLIENT_COMMANDS = (
     "# Commands\n"
