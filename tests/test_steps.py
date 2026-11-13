@@ -1299,7 +1299,7 @@ def test_a_client_steps_prompt_has_no_skills_catalogue_when_the_instance_has_no_
     asyncio.run(scenario())
 
 
-def test_a_client_steps_prompt_says_how_to_search_the_instances_memory(tmp_path, monkeypatch):
+def test_a_client_steps_prompt_says_to_search_the_instances_memory_first(tmp_path, monkeypatch):
     runtime, _ = step_instance(tmp_path)
     calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
     monkeypatch.setenv("KINBY_INSTANCE", str(tmp_path / "another"))
@@ -1308,7 +1308,7 @@ def test_a_client_steps_prompt_says_how_to_search_the_instances_memory(tmp_path,
         await run_client_step(runtime.dispatcher, "claude")
 
         [called] = recorded_calls(calls)
-        assert "kinby memory search" in called.stdin
+        assert "Before you start a task, search your memory for it" in called.stdin
         assert "kinby memory open" in called.stdin
         assert called.instance == str(tmp_path)
 
