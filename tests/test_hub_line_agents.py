@@ -1,12 +1,15 @@
-"""A line's agent step runs on a coding client engine on its workbench, and the hub reads each
-attempt's transcript from there, through the hub contract."""
+"""A line's agent step runs on its engine on its workbench, and the hub reads each attempt's
+transcript from there, through the hub contract."""
 
 import asyncio
 from datetime import timedelta
 from pathlib import Path
 
+from pydantic import SecretStr
+
 from kinby.contracts import (
     FACTORY_RUN_TRANSCRIPT,
+    AgentStepRun,
     ClientStepRun,
     CodingClient,
     ErrorCode,
@@ -26,6 +29,7 @@ from tests.test_hub import FakeControl, FakeRuntime, hub_at, hub_client
 from tests.test_hub_factories import write_factory
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
+from tests.test_hub_workbenches import CEC_BACKEND
 
 AGENTS = {
     "factory.yaml": """\
@@ -133,15 +137,48 @@ def test_a_limited_agent_step_parks_its_run_until_the_reset_and_spends_no_retry(
     asyncio.run(scenario())
 
 
-def test_an_agent_step_on_the_kinby_engine_fails_since_no_workbench_runs_it_yet(tmp_path):
-    files = AGENTS | {
+def _kinby(model: str) -> dict[str, str]:
+    """The tickets factory with its first step on the kinby engine, naming *model*."""
+    return AGENTS | {
         "factory.yaml": AGENTS["factory.yaml"]
         .replace("engine: claude", "engine: kinby", 1)
+        .replace("    model: claude-opus-5-5\n", model, 1)
         .replace("    resume: implement\n", "")
     }
+
+
+def test_an_agent_step_on_the_kinby_engine_asks_its_workbench_for_a_turn_with_its_model(
+    tmp_path,
+):
     control = FakeControl()
     runtime = FakeRuntime()
-    hub = _hub(tmp_path, control, runtime, files)
+    hub = _hub(tmp_path, control, runtime, _kinby("    model: anthropic:claude-opus-5-5\n"))
+    client = hub_client(hub)
+    keyed = CEC_BACKEND.model_copy(
+        update={"secrets": CEC_BACKEND.secrets | {"ANTHROPIC_API_KEY": SecretStr("sk-ant")}}
+    )
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime, keyed)
+
+        run = await _handed_in(client, line, 12)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        [(_, implement), _] = control.steps
+        assert implement.step == AgentStepRun(
+            prompt="Implement the issue.\n", model="anthropic:claude-opus-5-5"
+        )
+        assert implement.folder == RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_step_on_the_kinby_engine_fails_when_it_and_its_line_name_no_model(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime, _kinby(""))
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -153,7 +190,7 @@ def test_an_agent_step_on_the_kinby_engine_fails_since_no_workbench_runs_it_yet(
 
         assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "implement")
         assert stopped.attempts[-1].summary == (
-            'Step "implement" runs on the kinby engine, which no workbench runs yet.'
+            'Step "implement" runs on the kinby engine, and it and its line name no model.'
         )
         assert control.steps == []
 

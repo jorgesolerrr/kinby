@@ -88,12 +88,23 @@
     },
     "AgentStepRun": {
       "additionalProperties": false,
-      "description": "Run a turn on a new thread of the instance, with the prompt and the run's values.",
+      "description": "Run a turn on a new thread of the instance, with the prompt and the run's values. On a\nworkbench the turn is in no thread, and runs in the run's folder.",
       "properties": {
         "kind": {
           "const": "agent",
           "default": "agent",
           "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "prompt": {
           "type": "string"

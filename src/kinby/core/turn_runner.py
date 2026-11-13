@@ -91,7 +91,7 @@ from kinby.core.events import EventLog
 from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
-from kinby.core.pricing import instance_windows, price_map
+from kinby.core.pricing import SHIPPED_WINDOWS, price_map
 from kinby.core.prompt import (
     PromptSection,
     PromptSectionName,
@@ -127,7 +127,7 @@ from kinby.core.turns import (
     TurnRequest,
     TurnResult,
 )
-from kinby.instance import Budgets, Instance, ModelName, ModelPrice, reload_manifest
+from kinby.instance import Budgets, Instance, Manifest, ModelName, ModelPrice, reload_manifest
 from kinby.instance.config_changes import directory_hash
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
@@ -167,7 +167,7 @@ from kinby.plugins.routines import (
     load_routines,
     resolve_code_step,
 )
-from kinby.plugins.skills import load_skills
+from kinby.plugins.skills import Skill, load_skills, skill_tool
 from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
 
 logger = logging.getLogger(__name__)
@@ -298,7 +298,7 @@ class _PreparedTurn:
 _EPHEMERAL = {"type": "ephemeral"}
 
 
-def _init_model(model: ModelName) -> ChatModel:
+def init_chat_model(model: ModelName) -> ChatModel:
     return cast(ChatModel, init_model(model))
 
 
@@ -341,18 +341,25 @@ class LangGraphRunner:
         instance: Instance,
         *,
         event_log: EventLog | None = None,
-        model_factory: ModelFactory = _init_model,
+        model_factory: ModelFactory = init_chat_model,
         model_override: str | None = None,
         gate_policy: GatePolicy | None = None,
         today: Callable[[], date] = utc_today,
         tokenizer: Tokenizer | None = None,
         browser: BrowserService | None = None,
         memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
+        workbench_skills: tuple[Skill, ...] | None = None,
     ) -> None:
         """Count each profile version with *tokenizer*. Without one, the profile goes uncounted.
         The browser tools reach *browser*, or else the hub's browser service. Each turn gets its
-        memory by *memory_delivery* before the agent searches."""
+        memory by *memory_delivery* before the agent searches.
+
+        With *workbench_skills* the turn runs on a workbench, where no instance's files hold its
+        manifest or its skills: *instance* is never read again, its skills are those, and the
+        skill tool is its only core tool.
+        """
         self._instance = instance
+        self._workbench_skills = workbench_skills
         self._event_log = (
             event_log if event_log is not None else EventLog(instance.manifest.state_dir)
         )
@@ -384,7 +391,7 @@ class LangGraphRunner:
         self._graph_builder = graph_builder
 
     def prepare_for_turn(self) -> TurnPreparation:
-        manifest = reload_manifest(self._instance, model_override=self._model_override)
+        manifest = self._manifest()
         if manifest.tools != self._instance.manifest.tools:
             self._tools = ToolRegistry(self._instance.path, tools=manifest.tools)
         self._instance = replace(self._instance, manifest=manifest)
@@ -422,6 +429,21 @@ class LangGraphRunner:
             daily_budget=daily_budget,
             budgets=manifest.budgets,
         )
+
+    def _manifest(self) -> Manifest:
+        if self._workbench_skills is not None:
+            return self._instance.manifest
+        return reload_manifest(self._instance, model_override=self._model_override)
+
+    def _skills(self) -> tuple[tuple[Skill, ...], tuple[Warning, ...]]:
+        if self._workbench_skills is not None:
+            return self._workbench_skills, ()
+        return load_skills(self._instance)
+
+    def _core_tools(self, skills: tuple[Skill, ...]) -> tuple[Tool, ...]:
+        if self._workbench_skills is not None:
+            return (skill_tool(skills),)
+        return core_tools(self._instance, skills, today=self._today)
 
     def routine_mode(self, name: RoutineName) -> PermissionMode | None:
         routines, _ = load_routines(self._instance, policy=self._gate_policy)
@@ -618,7 +640,7 @@ class LangGraphRunner:
         return turn.prepare(render_system_prompt(self._prompt_sections()))
 
     def _prompt_sections(self) -> tuple[PromptSection, ...]:
-        skills, _ = load_skills(self._instance)
+        skills, _ = self._skills()
         index = (
             memory_index(GraphStore(self._instance.path))
             if self._memory_delivery is MemoryDelivery.INDEX
@@ -649,12 +671,10 @@ class LangGraphRunner:
         """Run the turn with the tools of the MCP servers the instance *picked*."""
         budgets = progress.budgets
         emit = context.emit
-        skills, skill_warnings = load_skills(self._instance)
+        skills, skill_warnings = self._skills()
         discovered_tools, tool_warnings = self._tools.refresh()
         discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked))
-        tools, core_tool_warnings = discovered_tools.with_core(
-            *core_tools(self._instance, skills, today=self._today)
-        )
+        tools, core_tool_warnings = discovered_tools.with_core(*self._core_tools(skills))
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         prepared = await self._prepare_turn(
@@ -665,7 +685,7 @@ class LangGraphRunner:
         tools = prepared.tools
         progress = prepared.progress
         budgets = progress.budgets
-        window = instance_windows(self._instance).get(turn.model)
+        window = {**SHIPPED_WINDOWS, **self._manifest().windows}.get(turn.model)
         if isinstance(graph_input, ModelState):
             compacting = asyncio.timeout(progress.seconds_remaining)
             compaction_started = asyncio.get_running_loop().time()
@@ -1053,7 +1073,7 @@ class LangGraphRunner:
     async def compact(self, thread_id: UUID, focus: str | None) -> Event:
         """Compact the thread with the main model's summary. The summary call and the compaction
         are recorded under the thread's latest turn."""
-        model = reload_manifest(self._instance, model_override=self._model_override).models.main
+        model = self._manifest().models.main
         completed, compaction = await self._summarize_thread(thread_id, model, focus)
         turn_id = next(
             event.turn_id
@@ -1081,9 +1101,9 @@ class LangGraphRunner:
             return ThreadContextResult(context_size=size, rows=[])
         # The turn ends on the latest call's answer, which that call was not sent.
         messages: list[AnyMessage] = completed.values["messages"][:-1]
-        skills, _ = load_skills(self._instance)
+        skills, _ = self._skills()
         discovered, _ = self._tools.refresh()
-        tools, _ = discovered.with_core(*core_tools(self._instance, skills, today=self._today))
+        tools, _ = discovered.with_core(*self._core_tools(skills))
         async with mcp_tools(self._instance) as picked:
             rows = context_rows(
                 size,

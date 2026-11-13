@@ -34,10 +34,11 @@ A factory may declare `requires` in place of `instances` and `intake`. Its steps
   - `browser`: `true` when the steps need a browser.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
 - An `agent` step runs a model on the workbench, in the run's folder:
-  - `engine`: `claude` or `codex`, a coding client, or `kinby`, which no workbench runs yet.
+  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and goes through kinby's default gate policy. Until an ask reaches the user, the gate refuses each one, so the turn cannot write.
   - `prompt`: a file of the factory's folder, as for an `agent` step in an instance.
   - `model`: the client's model, such as `claude-opus-5-5`. Left out, the line's model when the engine runs its provider's models, `anthropic` for `claude` and `openai` for `codex`, and the client's default otherwise.
-  - `effort`: as for `client`.
+    For `kinby`, a `provider:model`, such as `anthropic:claude-opus-5-5`, and left out, the line's model. The workbench must hold that provider's `<PROVIDER>_API_KEY`, and setting up the line refuses one without it. List it under `requires.secrets`.
+  - `effort`: as for `client`. The `kinby` engine ignores it, as it does `timeout`.
   - `resume`: an earlier `agent` step on the same coding client whose session this one continues. The `kinby` engine keeps no session.
   - The client is offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Its transcript is kept on the workbench, one per attempt.
 - An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended. See Hooks. kinby's default hooks are no check.
