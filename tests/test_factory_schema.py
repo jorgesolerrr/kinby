@@ -1,13 +1,15 @@
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import yaml
-from jsonschema import validate
+from jsonschema import Draft202012Validator, validate
 from jsonschema.exceptions import ValidationError
 
 from kinby.factories.schema import checkout_schema_path, factory_schema, main
 from tests.test_hub_factories import FACTORY
+from tests.test_hub_workbench_factories import FACTORY as REQUIRING_FACTORY
 
 
 def test_checked_in_factory_schema_is_current() -> None:
@@ -31,6 +33,18 @@ def test_the_schema_accepts_a_factory_file() -> None:
     validate(instance=yaml.safe_load(FACTORY), schema=factory_schema())
 
 
+def test_the_schema_accepts_a_factory_that_requires_a_workbench() -> None:
+    validate(instance=yaml.safe_load(REQUIRING_FACTORY), schema=factory_schema())
+
+
+def test_the_schema_refuses_a_step_that_names_an_instance_in_a_requiring_factory() -> None:
+    factory = yaml.safe_load(REQUIRING_FACTORY)
+    factory["steps"][0]["in"] = "coder"
+
+    with pytest.raises(ValidationError):
+        validate(instance=factory, schema=factory_schema())
+
+
 def test_the_schema_accepts_a_list_name_in_a_command_steps_run() -> None:
     factory = yaml.safe_load(FACTORY)
     [step] = [step for step in factory["steps"] if step["kind"] == "command"]
@@ -49,8 +63,17 @@ def test_the_schema_requires_a_hook_on_agent_and_client_steps(kind: str) -> None
     [step] = [step for step in factory["steps"] if step["kind"] == kind]
     del step["hook"]
 
-    with pytest.raises(ValidationError) as raised:
-        validate(instance=factory, schema=factory_schema())
+    errors = Draft202012Validator(factory_schema()).iter_errors(factory)
 
-    # A step is one of the step kinds, so the missing hook is what fails the kind it names.
-    assert "'hook' is a required property" in [error.message for error in raised.value.context]
+    # A file is one of the forms and a step one of the step kinds, so the missing hook is what
+    # fails the kind it names, in the form that has it.
+    assert "'hook' is a required property" in [
+        message for error in errors for message in _messages(error)
+    ]
+
+
+def _messages(error: ValidationError) -> Iterator[str]:
+    """The error's message and those of the errors under it, from each form and step kind."""
+    yield error.message
+    for cause in error.context or ():
+        yield from _messages(cause)

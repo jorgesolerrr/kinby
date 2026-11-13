@@ -10,7 +10,7 @@ import kinby.core  # noqa: F401  kinby.plugins.core needs kinby.core imported fi
 from kinby.contracts import HUB_READS, RELAYED_READS, Scope, StepEnding
 from kinby.contracts.methods import METHODS
 from kinby.factories import RECIPES_DIRECTORY
-from kinby.factories.file import FACTORY_FILE_ADAPTER
+from kinby.factories.schema import factory_schema
 from kinby.instance import init_instance, inspect_instance
 from kinby.instance.layout import SKILL_FILE
 from kinby.instance.manifest import RawManifest
@@ -149,7 +149,7 @@ def test_a_home_skill_names_no_other_skill_of_the_library(name):
 
 def test_the_factory_reference_names_every_factory_yaml_field():
     """A new field of factory.yaml fails this until the factory reference names it."""
-    fields = _schema_fields(FACTORY_FILE_ADAPTER.json_schema(by_alias=True))
+    fields = _schema_fields(factory_schema())
     reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
 
     assert fields <= set(_CITED.findall(reference.read_text(encoding="utf-8")))

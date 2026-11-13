@@ -590,6 +590,89 @@
       "title": "EndedCall",
       "type": "object"
     },
+    "FactoryFile": {
+      "additionalProperties": false,
+      "description": "A factory: the instances its steps run in, its intake, and its line of steps.",
+      "properties": {
+        "closing": {
+          "$ref": "#/$defs/Closing"
+        },
+        "done_requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Done Requires",
+          "type": "array"
+        },
+        "ended": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EndedCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "instances": {
+          "additionalProperties": {
+            "$ref": "#/$defs/InstanceDeclaration"
+          },
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/InstanceName"
+          },
+          "title": "Instances",
+          "type": "object"
+        },
+        "intake": {
+          "$ref": "#/$defs/Intake"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "needs_human": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NeedsHumanCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        },
+        "work_item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Work Item",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instances",
+        "steps",
+        "name",
+        "intake",
+        "work_item"
+      ],
+      "title": "FactoryFile",
+      "type": "object"
+    },
     "FactoryName": {
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "type": "string"
@@ -728,6 +811,122 @@
         "commands"
       ],
       "title": "RepositoryCommands",
+      "type": "object"
+    },
+    "RequiredField": {
+      "additionalProperties": false,
+      "description": "A secret or a named value a factory requires: a setup field with no kind and no target.",
+      "properties": {
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choices"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetupValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/SetupFieldType"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "description",
+        "type",
+        "required"
+      ],
+      "title": "RequiredField",
+      "type": "object"
+    },
+    "Requirements": {
+      "additionalProperties": false,
+      "description": "What a workbench must provide for the factory's steps to run on it.",
+      "properties": {
+        "browser": {
+          "default": false,
+          "title": "Browser",
+          "type": "boolean"
+        },
+        "commands": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CommandListName"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipeName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "logins": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SubscriptionLogin"
+          },
+          "title": "Logins",
+          "type": "array"
+        },
+        "secrets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RequiredField"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "values": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RequiredField"
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "title": "Requirements",
       "type": "object"
     },
     "RoutineName": {
@@ -1000,6 +1199,20 @@
       "title": "TargetFile",
       "type": "string"
     },
+    "ToolCall": {
+      "additionalProperties": false,
+      "description": "A tool of the factory's folder the hub calls on the workbench, as ``needs_human`` or\n``ended``. The tool's parameters named like a value of the run receive that value.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "call"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    },
     "ToolName": {
       "minLength": 1,
       "type": "string"
@@ -1127,88 +1340,291 @@
       ],
       "title": "WaitStep",
       "type": "object"
+    },
+    "WorkbenchCodeStep": {
+      "additionalProperties": false,
+      "description": "A tool of the factory's folder, run on the workbench. The model never sees it.\n\nA mapping the tool returns is the step's values. A HookResult also names its outcome.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "kind": {
+          "const": "code",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "call"
+      ],
+      "title": "WorkbenchCodeStep",
+      "type": "object"
+    },
+    "WorkbenchCommandStep": {
+      "additionalProperties": false,
+      "description": "Commands in the run's folder on the workbench, each run without a shell. Exit code zero\npasses.\n\nA ``{{name}}`` in a command stands for the run's value of that name, as one argument. An\nentry ``{ commands: <name> }`` runs the workbench's list of repository commands of that name.",
+      "properties": {
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/StepId"
+        },
+        "kind": {
+          "const": "command",
+          "title": "Kind",
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "title": "Outcomes",
+          "type": "object"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "results": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Results",
+          "type": "object"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry"
+        },
+        "run": {
+          "items": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/RepositoryCommands"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Run",
+          "type": "array"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "run",
+        "id",
+        "kind"
+      ],
+      "title": "WorkbenchCommandStep",
+      "type": "object"
+    },
+    "WorkbenchFactory": {
+      "additionalProperties": false,
+      "description": "A factory that runs on a workbench: what it requires of one, and its sequence of steps.\n\nIts tools live in its folder, as ``tools/``.",
+      "properties": {
+        "closing": {
+          "$ref": "#/$defs/Closing"
+        },
+        "done_requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Done Requires",
+          "type": "array"
+        },
+        "ended": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "needs_human": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "requires": {
+          "$ref": "#/$defs/Requirements"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/WorkbenchStep"
+          },
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        },
+        "work_item": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ValueType"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ValueName"
+          },
+          "title": "Work Item",
+          "type": "object"
+        }
+      },
+      "required": [
+        "steps",
+        "name",
+        "work_item"
+      ],
+      "title": "WorkbenchFactory",
+      "type": "object"
+    },
+    "WorkbenchStep": {
+      "discriminator": {
+        "mapping": {
+          "approve": "#/$defs/ApproveStep",
+          "code": "#/$defs/WorkbenchCodeStep",
+          "command": "#/$defs/WorkbenchCommandStep",
+          "wait": "#/$defs/WaitStep"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WorkbenchCommandStep"
+        },
+        {
+          "$ref": "#/$defs/WorkbenchCodeStep"
+        },
+        {
+          "$ref": "#/$defs/WaitStep"
+        },
+        {
+          "$ref": "#/$defs/ApproveStep"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "description": "A factory: the instances its steps run in, its intake, and its line of steps.",
-  "properties": {
-    "closing": {
-      "$ref": "#/$defs/Closing"
+  "anyOf": [
+    {
+      "$ref": "#/$defs/WorkbenchFactory"
     },
-    "done_requires": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ValueName"
-      },
-      "title": "Done Requires",
-      "type": "array"
-    },
-    "ended": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/EndedCall"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "instances": {
-      "additionalProperties": {
-        "$ref": "#/$defs/InstanceDeclaration"
-      },
-      "minProperties": 1,
-      "propertyNames": {
-        "$ref": "#/$defs/InstanceName"
-      },
-      "title": "Instances",
-      "type": "object"
-    },
-    "intake": {
-      "$ref": "#/$defs/Intake"
-    },
-    "name": {
-      "$ref": "#/$defs/FactoryName"
-    },
-    "needs_human": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/NeedsHumanCall"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "steps": {
-      "items": {
-        "$ref": "#/$defs/Step"
-      },
-      "minItems": 1,
-      "title": "Steps",
-      "type": "array"
-    },
-    "work_item": {
-      "additionalProperties": {
-        "$ref": "#/$defs/ValueType"
-      },
-      "propertyNames": {
-        "$ref": "#/$defs/ValueName"
-      },
-      "title": "Work Item",
-      "type": "object"
+    {
+      "$ref": "#/$defs/FactoryFile"
     }
-  },
-  "required": [
-    "instances",
-    "steps",
-    "name",
-    "intake",
-    "work_item"
-  ],
-  "title": "FactoryFile",
-  "type": "object"
+  ]
 }

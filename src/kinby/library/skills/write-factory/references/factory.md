@@ -21,6 +21,21 @@ Every `factory.yaml` field, what each step kind does, where a run goes next, and
 - `ended`: a tool the hub calls once when a run ends done or cancelled. See Ended.
 - `closing`: the signals that end a run that needs the user, once its work finished elsewhere. See Closing.
 
+### requires
+
+A factory may declare `requires` in place of `instances` and `intake`. Its steps then run on a workbench, and the file is read in that form:
+
+- `requires`: what a workbench must provide. Each field may be left out.
+  - `image`: one of the image recipes kinby ships, as under `instances`.
+  - `secrets`: setup fields, each without `kind` or `target`. A secret is text or multiline and has no default.
+  - `values`: named values that are not secrets, setup fields without `kind` or `target`.
+  - `commands`: the names of the workbench's lists of repository commands the steps run. A `command` step's `{ commands: <name> }` names one of them.
+  - `logins`: as under `instances`. See Logins.
+  - `browser`: `true` when the steps need a browser.
+- Steps take no `in`, and a `command` step no `branch` or `hook`. Only `command`, `code`, `wait` and `approve` steps.
+- `needs_human` and `ended` take only `call`.
+- Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `needs_human` or `ended` calls one of them.
+
 ### Setup fields
 
 Each entry of `setup_fields`:

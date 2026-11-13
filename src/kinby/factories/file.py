@@ -1,4 +1,5 @@
-"""The factory file: one YAML file that declares a factory's instances, intake and steps.
+"""The factory file: one YAML file that declares a factory's steps, and either what it requires
+of a workbench or the instances its steps run in, with its intake.
 
 These declarations are the factory file's JSON Schema, published as
 ``docs/schema/factory.schema.json``.
@@ -28,6 +29,9 @@ from kinby.contracts import (
     RecipeName,
     RepositoryCommands,
     SetupField,
+    SetupFieldKind,
+    SetupFieldType,
+    SetupValue,
     SkillName,
     StepId,
     StepValue,
@@ -74,6 +78,47 @@ class InstanceDeclaration:
     logins: tuple[SubscriptionLogin, ...] = ()
     #: Skills of the shipped library an instance that picks this role is offered, by name.
     suggested_picks: tuple[SkillName, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class RequiredField:
+    """A secret or a named value a factory requires: a setup field with no kind and no target."""
+
+    name: str
+    label: str
+    description: str
+    type: SetupFieldType
+    required: bool
+    default: SetupValue | None = None
+    choices: tuple[str, ...] | None = None
+
+    def setup_field(self, kind: SetupFieldKind) -> SetupField:
+        """The setup field a workbench asks for this as, a secret or a named value."""
+        return SetupField(
+            name=self.name,
+            label=self.label,
+            description=self.description,
+            kind=kind,
+            type=self.type,
+            required=self.required,
+            default=self.default,
+            choices=None if self.choices is None else list(self.choices),
+        )
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class Requirements:
+    """What a workbench must provide for the factory's steps to run on it."""
+
+    #: One of the image recipes kinby ships. None runs on kinby's base image.
+    image: RecipeName | None = None
+    secrets: tuple[RequiredField, ...] = ()
+    #: Values that are not secrets, which the workbench's record holds by name.
+    values: tuple[RequiredField, ...] = ()
+    #: The workbench's lists of repository commands the steps run, by name.
+    commands: tuple[CommandListName, ...] = ()
+    logins: tuple[SubscriptionLogin, ...] = ()
+    browser: bool = False
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -163,6 +208,19 @@ class CommandStep(_Step):
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class WorkbenchCommandStep(_Step):
+    """Commands in the run's folder on the workbench, each run without a shell. Exit code zero
+    passes.
+
+    A ``{{name}}`` in a command stands for the run's value of that name, as one argument. An
+    entry ``{ commands: <name> }`` runs the workbench's list of repository commands of that name.
+    """
+
+    kind: Literal["command"]
+    run: tuple[Annotated[str, Field(min_length=1)] | RepositoryCommands, ...] = Field(min_length=1)
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class CodeStep(_Step):
     """An instance tool the model never sees.
 
@@ -171,6 +229,17 @@ class CodeStep(_Step):
 
     kind: Literal["code"]
     instance: InstanceName = Field(alias="in")
+    call: ToolName
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class WorkbenchCodeStep(_Step):
+    """A tool of the factory's folder, run on the workbench. The model never sees it.
+
+    A mapping the tool returns is the step's values. A HookResult also names its outcome.
+    """
+
+    kind: Literal["code"]
     call: ToolName
 
 
@@ -207,12 +276,14 @@ def run_value_name(expected: str | int) -> ValueName | None:
     return named[1] if named is not None else None
 
 
-def run_value_names(step: Step) -> list[ValueName]:
+def run_value_names(step: Step | WorkbenchStep) -> list[ValueName]:
     """The run values a command step's own commands, or a client or command step's branch, name
     as ``{{name}}``. A list of repository commands takes none."""
     match step:
         case CommandStep(run=run, branch=branch):
             entries = [entry for entry in (*run, branch) if isinstance(entry, str)]
+        case WorkbenchCommandStep(run=run):
+            entries = [entry for entry in run if isinstance(entry, str)]
         case ClientStep(branch=str() as branch):
             entries = [branch]
         case _:
@@ -240,6 +311,12 @@ type Step = Annotated[
 ]
 
 
+type WorkbenchStep = Annotated[
+    WorkbenchCommandStep | WorkbenchCodeStep | WaitStep | ApproveStep,
+    Field(discriminator="kind"),
+]
+
+
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class NeedsHumanCall:
     """An instance tool the hub calls each time a run stops as needs human.
@@ -260,6 +337,14 @@ class EndedCall:
     """
 
     instance: InstanceName = Field(alias="in")
+    call: ToolName
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class ToolCall:
+    """A tool of the factory's folder the hub calls on the workbench, as ``needs_human`` or
+    ``ended``. The tool's parameters named like a value of the run receive that value."""
+
     call: ToolName
 
 
@@ -292,7 +377,29 @@ class FactoryFile:
     closing: Closing = Field(default_factory=Closing)
 
 
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class WorkbenchFactory:
+    """A factory that runs on a workbench: what it requires of one, and its sequence of steps.
+
+    Its tools live in its folder, as ``tools/``.
+    """
+
+    name: FactoryName
+    requires: Requirements = Field(default_factory=Requirements)
+    #: The values each work item carries, by name.
+    work_item: dict[ValueName, ValueType]
+    steps: tuple[WorkbenchStep, ...] = Field(min_length=1)
+    #: Values the run must hold once its last step has run.
+    done_requires: tuple[ValueName, ...] = ()
+    #: Called each time a run stops as needs human, with ``step`` and ``summary`` as well.
+    needs_human: ToolCall | None = None
+    #: Called once when a run ends done or cancelled.
+    ended: ToolCall | None = None
+    closing: Closing = Field(default_factory=Closing)
+
+
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)
+WORKBENCH_FACTORY_ADAPTER = TypeAdapter(WorkbenchFactory)
 
 
 def command_lists(factory: FactoryFile, role: InstanceName) -> list[CommandListName]:
@@ -321,8 +428,9 @@ class InvalidFactoryFile(ValueError):
         self.problems = problems
 
 
-def read_factory_file(folder: Path) -> FactoryFile:
-    """The factory file in *folder*, validated against its schema."""
+def read_factory_file(folder: Path) -> FactoryFile | WorkbenchFactory:
+    """The factory file in *folder*, validated against its schema. A file that declares
+    ``instances`` is a factory whose steps run in instances."""
     path = folder / FACTORY_FILE
     try:
         declared = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -339,8 +447,10 @@ def read_factory_file(folder: Path) -> FactoryFile:
     except ValueError as exc:
         # A YAML alias can make a structure that contains itself, which JSON cannot hold.
         raise InvalidFactoryFile((f"{FACTORY_FILE} is not a JSON document: {exc}",)) from exc
+    instances = isinstance(declared, dict) and "instances" in declared
+    adapter = FACTORY_FILE_ADAPTER if instances else WORKBENCH_FACTORY_ADAPTER
     try:
-        return FACTORY_FILE_ADAPTER.validate_json(as_json)
+        return adapter.validate_json(as_json)
     except ValidationError as exc:
         raise InvalidFactoryFile(
             tuple(
