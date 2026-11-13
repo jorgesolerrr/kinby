@@ -1,6 +1,7 @@
 """A workbench keeps its clone, its repository commands and its picks, through the hub contract."""
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from uuid import UUID
 
@@ -229,5 +230,25 @@ def test_two_workbenches_hold_their_own_command_lists_and_picks(tmp_path):
         ]
         assert (await _picks(client, backend)).picks == [TDD]
         assert (await _picks(client, landing)).picks == [UNSLOP]
+
+    asyncio.run(scenario())
+
+
+def test_a_workbench_from_before_command_lists_holds_none_and_takes_one(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    workbench_id = asyncio.run(created(hub_client(hub))).workbench_id
+    hub.close()
+    with sqlite3.connect(tmp_path / "hub" / "registry.sqlite") as connection:
+        connection.execute("ALTER TABLE workbenches DROP COLUMN commands")
+    client = hub_client(hub_at(tmp_path / "hub"))
+
+    async def scenario() -> None:
+        before = await got(client, workbench_id)
+        after = await _commands_set(client, workbench_id, "checks", ["uv run pytest"])
+
+        assert before.repository_commands == []
+        assert after.repository_commands == [
+            RepositoryCommandList(name="checks", commands=["uv run pytest"])
+        ]
 
     asyncio.run(scenario())

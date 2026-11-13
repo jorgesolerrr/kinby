@@ -474,6 +474,7 @@ class HubRegistry:
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
+            self._add_columns(connection, "workbenches", {"commands": "TEXT NOT NULL DEFAULT '{}'"})
             self._add_columns(
                 connection,
                 "operation_steps",
