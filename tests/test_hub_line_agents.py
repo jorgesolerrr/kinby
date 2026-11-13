@@ -83,7 +83,7 @@ def test_an_agent_step_runs_its_engine_on_the_workbench_and_a_later_one_resumes_
             model="claude-opus-5-5",
             effort=ReasoningEffort.HIGH,
         )
-        assert implement.folder == RunFolder(branch="tickets/issue-12")
+        assert implement.folder == RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
         assert fix.step == ClientStepRun(
             client=CodingClient.CLAUDE,
             prompt="Fix what the review found.\n",
