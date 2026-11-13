@@ -4039,7 +4039,8 @@ class StepRunCommand(ContractModel):
     #: The attempt at the step this is. None for the factory's needs_human and ended calls,
     #: which are none.
     attempt: int | None = None
-    #: The hook that records the step result once the step ends, however it ended.
+    #: The hook that records the step result once the step ends, however it ended: on a
+    #: workbench, the step's check, a hook of the factory's folder.
     hook: HookName | None = None
     work_item: dict[ValueName, StepValue]
     #: Every value the run's earlier steps recorded, by name.

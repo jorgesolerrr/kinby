@@ -42,7 +42,7 @@ from kinby.instance import Instance, ManifestError, repository_commands
 from kinby.instance.permissions import PermissionsError
 from kinby.memory import GraphStore, MemoryDelivery, deliver_memory
 from kinby.plugins.errors import exception_message
-from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
+from kinby.plugins.hooks import Hook, HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.routines import SharedCodeStep, resolve_code_step
 from kinby.plugins.skills import load_skills
@@ -80,7 +80,7 @@ async def run_step(
                 str(command.origin.run_id),
             )
         except RunWorktreeError as exc:
-            return _failed(str(exc))
+            return step_failed(str(exc))
     match command.step:
         case AgentStepRun() as step:
             result = await _run_agent_step(step, command, turns)
@@ -107,7 +107,7 @@ def _bounded(result: StepResult) -> StepResult:
         result = result.model_copy(update={"summary": summary})
     size = len(result.model_dump_json().encode())
     if size > _RESULT_BYTES:
-        return _failed(
+        return step_failed(
             f"The step's result is {size:,} bytes, over the {_RESULT_BYTES:,}-byte limit.", result
         )
     return result
@@ -126,15 +126,15 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
     try:
         events = await turns.step_turn(title, message, command.origin)
     except (CoreError, ManifestError, PermissionsError) as exc:
-        return _failed(f"The turn could not start: {exc}")
+        return step_failed(f"The turn could not start: {exc}")
     said = StepResult(ending=StepEnding.FAILED, summary=_last_message(events))
     match events[-1].payload:
         case TurnCompleted():
             return said.model_copy(update={"ending": StepEnding.CLEAN})
         case TurnFailed(message=reason):
-            return _failed(f"The turn failed: {reason}", said)
+            return step_failed(f"The turn failed: {reason}", said)
         case _:
-            return _failed("The turn was interrupted.", said)
+            return step_failed("The turn was interrupted.", said)
 
 
 async def _run_client_step(
@@ -279,7 +279,7 @@ def _commands(step: CommandStepRun, instance: Path) -> list[str] | StepResult:
         try:
             held = repository_commands(instance)
         except ManifestError as exc:
-            return _failed(f"The repository commands cannot be read: {exc}")
+            return step_failed(f"The repository commands cannot be read: {exc}")
     commands: list[str] = []
     for entry in step.run:
         match entry:
@@ -304,7 +304,7 @@ async def _run_code_step(
     try:
         tool = resolve_code_step(SharedCodeStep(step.call), tools)
     except ValueError:
-        return _failed(f'Tool "{step.call}" is not one of this instance\'s tools.')
+        return step_failed(f'Tool "{step.call}" is not one of this instance\'s tools.')
     # A code step runs on no thread, so its tool's context names one no turn opens.
     context = ToolContext(instance=instance, thread_id=uuid4())
     return await run_tool(
@@ -342,7 +342,7 @@ async def run_tool(
             return StepResult(ending=StepEnding.CLEAN, values=dict(returned))
     except Exception as exc:
         # Tools are user code. Whatever goes wrong fails the step, and says why.
-        return _failed(f'Tool "{step.call}" failed: {exception_message(exc)}')
+        return step_failed(f'Tool "{step.call}" failed: {exception_message(exc)}')
     return StepResult(ending=StepEnding.CLEAN, summary="" if returned is None else str(returned))
 
 
@@ -351,14 +351,31 @@ async def _recorded(
 ) -> StepResult:
     """The step's result with the values and outcome its hook records, reading *workspace*.
 
-    A hook that records nothing leaves the result as the step ended. One that fails, or that
-    the instance does not have, fails a step that ended clean and keeps any other ending.
+    A hook the instance does not have fails a step that ended clean and keeps any other ending.
     """
     hooks, warnings = load_hooks(instance.path)
     found = next((hook for hook in hooks if hook.name == name), None)
     if found is None:
         unloaded = "".join(f"\n{warning.sources[0]}: {warning.message}" for warning in warnings)
-        return _failed(f'Hook "{name}" is not one of this instance\'s hooks.{unloaded}', result)
+        return step_failed(f'Hook "{name}" is not one of this instance\'s hooks.{unloaded}', result)
+    return await recorded(found, "Hook", result, command, workspace, instance)
+
+
+async def recorded(
+    found: Hook,
+    called: str,
+    result: StepResult,
+    command: StepRunCommand,
+    workspace: Path,
+    instance: Instance | None = None,
+) -> StepResult:
+    """The step's result with what *found*, its hook or its check as *called* says, records
+    reading *workspace*.
+
+    A hook that records nothing leaves the result as the step ended. The values it records join
+    the step's, and an outcome it names replaces the step's. One that fails fails a step that
+    ended clean and keeps any other ending.
+    """
     end = StepEnd(
         instance=instance,
         workspace=workspace,
@@ -367,18 +384,21 @@ async def _recorded(
         results=command.results,
     )
     try:
-        recorded = await found.record(end)
-        if recorded is None:
-            return result
-        return result.model_copy(
-            update={"outcome": recorded.outcome, "values": dict(recorded.values)}
-        )
+        record = await found.record(end)
     except Exception as exc:
         # Hooks are user code. Whatever goes wrong fails the step, and says why.
-        return _failed(f'Hook "{name}" failed: {exception_message(exc)}', result)
+        return step_failed(f'{called} "{found.name}" failed: {exception_message(exc)}', result)
+    if record is None:
+        return result
+    return result.model_copy(
+        update={
+            "outcome": result.outcome if record.outcome is None else record.outcome,
+            "values": result.values | dict(record.values),
+        }
+    )
 
 
-def _failed(reason: str, ended: StepResult | None = None) -> StepResult:
+def step_failed(reason: str, ended: StepResult | None = None) -> StepResult:
     """A failed result that says why, after the summary of the step as it *ended*.
 
     A step that ended otherwise than clean keeps its ending, so a timeout is never tried again,

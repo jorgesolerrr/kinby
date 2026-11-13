@@ -879,16 +879,21 @@ The derived record of one **factory run**'s cost: its tokens and price across it
 
 ### Step result
 
-What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
+What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares where its failures go sends a failed attempt back there instead, with what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
 
 ### Hook
 
-Deterministic **instance** code, never offered to the model, that kinby runs when a **step** ends, however it ended, to record the **step result** from the world: the repository, an outside system, files the step wrote. kinby ships default hooks, and an instance can hold its own.
+Deterministic code, never offered to the model, that kinby runs when a **step** ends, however it ended, to record the **step result** from the world: the repository, an outside system, files the step wrote. kinby ships default hooks, and an **instance** can hold its own. A **factory** that runs on a **workbench** holds its own as its **checks**.
 _Avoid_: callback, evidence check
+
+### Check
+
+A **hook** of a **factory**'s own folder that one of its **steps** names, run on the **workbench** in the **run folder** however the step ended. It records the step's values and names its outcome, or fails the step by raising. A step that names no check runs none, and none of kinby's default hooks is a check.
+_Avoid_: factory check (validates the whole factory), repository check (a command the software factory runs)
 
 ### Intake
 

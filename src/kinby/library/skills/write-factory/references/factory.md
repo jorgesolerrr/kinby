@@ -33,6 +33,7 @@ A factory may declare `requires` in place of `instances` and `intake`. Its steps
   - `logins`: as under `instances`. See Logins.
   - `browser`: `true` when the steps need a browser.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `command`, `code`, `wait` and `approve` steps.
+- A `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended. See Hooks. kinby's default hooks are no check.
 - `needs_human` and `ended` take only `call`.
 - Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `needs_human` or `ended` calls one of them.
 
@@ -69,7 +70,7 @@ Every step has these fields:
 - `results`: the values the step hands on, by name and type, as in `work_item`.
 - `outcomes`: what each outcome a hook or code step names does next. See What happens next.
 - `retry`: how many times a failed attempt runs again.
-- `failed`: `{ back: <step>, max: <n> }`, where a failed attempt is sent instead of running again.
+- `failed`: `{ back: <step>, max: <n> }`, where a failed attempt is sent instead of running again, or `{ retry: <n> }`, how many times it runs again. Either way the next attempt reads what failed as `failure`.
 - `timeout`: a duration such as `90s`, `60m`, `2h` or `7d`.
 
 Each kind adds its own:
@@ -126,6 +127,7 @@ Each kind adds its own:
 ### Retries
 
 - Without `retry`, an `agent` or `client` step runs once more after a failure, and other kinds never do. `retry: 0` never runs again.
+- `failed: { retry: <n> }` runs the step again as `retry: <n>` does, and records what failed, the attempt's summary, as `failure`, so a redraft reads why its draft failed.
 - The count is per step over the whole run, until the user retries or sends the run back.
 - A timed-out attempt never runs again and is never sent back.
 - A coding client that hits its subscription limit waits for the reset and runs again without using a retry.
@@ -153,7 +155,7 @@ A filter reads as a `wait`'s does. The signal can come in on any of the factory'
 
 ## Hooks
 
-A hook is a function in the template's `hooks/`, decorated with `hook`. The hook's name is the function's. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`:
+A hook is a function in the template's `hooks/`, or a check in the factory's folder's `hooks/`, decorated with `hook`. The hook's name is the function's. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`:
 
 ```python
 from kinby.plugins.hooks import HookResult, StepEnd, hook
@@ -167,8 +169,8 @@ def record_brief(end: StepEnd) -> HookResult | None:
 ```
 
 - It takes a `StepEnd`, with these fields:
-  - `instance`: the instance the step ran in.
-  - `workspace`: the `Path` the step ran in, its run worktree when the step names a `branch`, else the instance's workspace.
+  - `instance`: the instance the step ran in. None for a check, on a workbench.
+  - `workspace`: the `Path` the step ran in: the run's folder on a workbench, its run worktree when the step names a `branch`, else the instance's workspace.
   - `ending`: how the step ended, a `StepEnding` from `kinby.contracts`. See Step endings.
   - `work_item`: the work item's values, by name.
   - `results`: every value the run's earlier steps recorded, by name.
@@ -185,7 +187,7 @@ def record_brief(end: StepEnd) -> HookResult | None:
 `StepEnding` is a string enum. A hook compares `end.ending` with its members or their values:
 
 - `clean`: the step did its work. The outcome says what the run does next.
-- `failed`: the step failed. The run tries it again under its `retry`.
+- `failed`: the step failed. The run tries it again under its `retry` or `failed`.
 - `timed-out`: the step ran past its `timeout`. The run never tries it again.
 - `interrupted`: the hub stopped while the attempt ran. Only old runs hold it, and it counts as failed.
 - `needs-human`: the step cannot run until the user supplies what it lacks. The run stops for them.

@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import pytest
+
 from kinby.contracts import (
     CodeStepRun,
     CommandStepRun,
@@ -31,6 +33,23 @@ def label_issue(issue: int) -> dict[str, str]:
     \"\"\"Label the issue.\"\"\"
     return {{"label": "{label} {{}}".format(issue)}}
 """
+CHECK = """\
+from kinby.plugins.hooks import HookResult, StepEnd, hook
+
+
+@hook
+def drafted(end: StepEnd) -> HookResult:
+    drafted = (end.workspace / "draft.md").is_file()
+    return HookResult(
+        values={"ending": end.ending.value, "drafted": drafted, "issue": end.work_item["issue"]},
+        outcome=None if drafted else "redraft",
+    )
+
+
+@hook
+def refused(end: StepEnd) -> None:
+    raise ValueError("the draft has no title")
+"""
 
 
 def _workbench(tmp_path: Path, source: str | None) -> WorkbenchSteps:
@@ -46,11 +65,13 @@ def _command(
     attempt: int = 1,
     *,
     fresh: bool = False,
+    check: str | None = None,
 ) -> StepRunCommand:
     return StepRunCommand(
         step=step,
         origin=FactoryRunOrigin(factory="tickets", run_id=run_id, step=step.kind),
         attempt=attempt,
+        hook=check,
         work_item={"issue": 12},
         folder=folder,
         fresh_folder=fresh,
@@ -187,4 +208,88 @@ def test_a_code_step_fails_when_the_factory_has_no_such_tool(tmp_path):
     assert result == StepResult(
         ending=StepEnding.FAILED,
         summary='Tool "close_issue" is not one of factory "tickets"\'s tools.',
+    )
+
+
+@pytest.mark.parametrize(
+    ("step", "ending"),
+    [
+        (CommandStepRun(run=["touch draft.md"]), StepEnding.CLEAN),
+        (CommandStepRun(run=["touch draft.md", "false"]), StepEnding.FAILED),
+        (
+            CommandStepRun(run=["touch draft.md", "sleep 5"], timeout_seconds=1),
+            StepEnding.TIMED_OUT,
+        ),
+    ],
+)
+def test_a_check_records_values_from_the_runs_folder_however_the_step_ended(tmp_path, step, ending):
+    workbench = _workbench(tmp_path, str(_seed(tmp_path)))
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, BRANCH, check="drafted")))
+
+    assert result.ending is ending
+    assert result.values == {"ending": ending.value, "drafted": True, "issue": 12}
+    assert result.outcome is None
+
+
+def test_a_check_names_the_outcome_the_run_takes(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    step = CommandStepRun(run=["true"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="drafted")))
+
+    assert result == StepResult(
+        ending=StepEnding.CLEAN,
+        summary="Every command exited with code 0.",
+        outcome="redraft",
+        values={"ending": "clean", "drafted": False, "issue": 12},
+    )
+
+
+def test_a_check_joins_its_values_to_a_code_steps(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(
+        tmp_path / "factories" / "tickets",
+        {"tools/label.py": LABEL.format(label="triaged"), "hooks/drafted.py": CHECK},
+    )
+    step = CodeStepRun(call="label_issue")
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="drafted")))
+
+    assert result.values == {
+        "label": "triaged 12",
+        "ending": "clean",
+        "drafted": False,
+        "issue": 12,
+    }
+
+
+def test_a_check_that_raises_fails_the_step_and_says_why(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    step = CommandStepRun(run=["true"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="refused")))
+
+    assert result == StepResult(
+        ending=StepEnding.FAILED,
+        summary='Every command exited with code 0.\nCheck "refused" failed: '
+        "ValueError: the draft has no title",
+    )
+
+
+@pytest.mark.parametrize("check", ["approved", "record_branch"])
+def test_a_check_the_factorys_folder_does_not_hold_fails_the_step(tmp_path, check):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    step = CommandStepRun(run=["true"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check=check)))
+
+    assert result == StepResult(
+        ending=StepEnding.FAILED,
+        summary=f'Every command exited with code 0.\nCheck "{check}" is not one of factory '
+        '"tickets"\'s hooks.',
     )

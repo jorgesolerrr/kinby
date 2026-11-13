@@ -38,6 +38,7 @@ from kinby.factories.file import (
     InstanceDeclaration,
     InstanceName,
     InvalidFactoryFile,
+    Retry,
     SendBack,
     WaitStep,
     WorkbenchCodeStep,
@@ -81,6 +82,8 @@ class _Template:
     #: Of its tools, those installed beside kinby rather than written in it.
     installed: frozenset[str]
     hooks: frozenset[str]
+    #: Of its hooks, kinby's defaults rather than written in it.
+    default_hooks: frozenset[str]
     #: Each tool or hook file of the template that does not load.
     problems: tuple[str, ...]
 
@@ -117,8 +120,9 @@ def _workbench_factory(factory: WorkbenchFactory, folder: Path) -> tuple[str, ..
         *_name(factory, folder),
         *_requirements(factory),
         *own.problems,
-        # Only the factory's folder reaches a workbench, so a tool installed beside kinby is none.
-        *_workbench_steps(factory, own.tools - own.installed),
+        # Only the factory's folder reaches a workbench, so a tool installed beside kinby is none,
+        # and a check is never one of kinby's default hooks.
+        *_workbench_steps(factory, own.tools - own.installed, own.hooks - own.default_hooks),
         *_inputs(factory),
         *_order(factory),
     )
@@ -135,6 +139,9 @@ def _template(folder: Path, template: Path) -> _Template:
             if not tool.source.is_relative_to(template.resolve())
         ),
         hooks=frozenset(hook.name for hook in hooks),
+        default_hooks=frozenset(
+            hook.name for hook in hooks if not hook.source.is_relative_to(template.resolve())
+        ),
         problems=tuple(
             f"{Path(warning.sources[0]).relative_to(folder).as_posix()}: {warning.message}"
             for warning in (*tool_warnings, *hook_warnings)
@@ -224,7 +231,9 @@ def _requirements(factory: WorkbenchFactory) -> Iterator[str]:
     yield from _login_declaration_problems(required.logins)
 
 
-def _workbench_steps(factory: WorkbenchFactory, tools: frozenset[str]) -> Iterator[str]:
+def _workbench_steps(
+    factory: WorkbenchFactory, tools: frozenset[str], hooks: frozenset[str]
+) -> Iterator[str]:
     for step in factory.steps:
         if isinstance(step, WorkbenchCommandStep):
             for entry in step.run:
@@ -238,6 +247,12 @@ def _workbench_steps(factory: WorkbenchFactory, tools: frozenset[str]) -> Iterat
         if isinstance(step, WorkbenchCodeStep) and step.call not in tools:
             yield (
                 f'Step "{step.id}" calls tool "{step.call}", '
+                "which the factory's folder does not hold."
+            )
+        check = step.check if isinstance(step, WorkbenchCommandStep | WorkbenchCodeStep) else None
+        if check is not None and check not in hooks:
+            yield (
+                f'Step "{step.id}" names check "{check}", '
                 "which the factory's folder does not hold."
             )
     for key, call in (("needs_human", factory.needs_human), ("ended", factory.ended)):
@@ -446,8 +461,8 @@ def _inputs(factory: FactoryFile | WorkbenchFactory) -> Iterator[str]:
 
 
 def _order(factory: FactoryFile | WorkbenchFactory) -> Iterator[str]:
-    """Step ids are unique, work is only ever sent back to an earlier step, and a step whose
-    failures are sent back declares no retry."""
+    """Step ids are unique, work is only ever sent back to an earlier step, and a step that
+    declares what its failures do declares no retry."""
     earlier: set[str] = set()
     for step in factory.steps:
         if step.id in earlier:
@@ -458,10 +473,15 @@ def _order(factory: FactoryFile | WorkbenchFactory) -> Iterator[str]:
                     f'Step "{step.id}" sends work back to "{outcome.back}", '
                     "which is not an earlier step."
                 )
-        if step.failed is not None and step.retry is not None:
+        if isinstance(step.failed, SendBack) and step.retry is not None:
             yield (
                 f'Step "{step.id}" declares both retry and failed, but a failed attempt is sent '
                 "back, never tried again."
+            )
+        if isinstance(step.failed, Retry) and step.retry is not None:
+            yield (
+                f'Step "{step.id}" declares both retry and failed, but a failed attempt runs '
+                "again only under failed."
             )
         earlier.add(step.id)
 

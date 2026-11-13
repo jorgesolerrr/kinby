@@ -10,10 +10,14 @@
               "$ref": "#/$defs/SendBack"
             },
             {
+              "$ref": "#/$defs/Retry"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Failed"
         },
         "hook": {
           "$ref": "#/$defs/HookName"
@@ -102,10 +106,14 @@
               "$ref": "#/$defs/SendBack"
             },
             {
+              "$ref": "#/$defs/Retry"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Failed"
         },
         "id": {
           "$ref": "#/$defs/StepId"
@@ -212,10 +220,14 @@
               "$ref": "#/$defs/SendBack"
             },
             {
+              "$ref": "#/$defs/Retry"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Failed"
         },
         "hook": {
           "$ref": "#/$defs/HookName"
@@ -354,10 +366,14 @@
               "$ref": "#/$defs/SendBack"
             },
             {
+              "$ref": "#/$defs/Retry"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Failed"
         },
         "id": {
           "$ref": "#/$defs/StepId"
@@ -466,10 +482,14 @@
               "$ref": "#/$defs/SendBack"
             },
             {
+              "$ref": "#/$defs/Retry"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Failed"
         },
         "hook": {
           "anyOf": [
@@ -929,6 +949,22 @@
       "title": "Requirements",
       "type": "object"
     },
+    "Retry": {
+      "additionalProperties": false,
+      "description": "Run the step again after a failed attempt, at most ``retry`` times.",
+      "properties": {
+        "retry": {
+          "minimum": 1,
+          "title": "Retry",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "retry"
+      ],
+      "title": "Retry",
+      "type": "object"
+    },
     "RoutineName": {
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
       "type": "string"
@@ -1251,10 +1287,14 @@
               "$ref": "#/$defs/SendBack"
             },
             {
+              "$ref": "#/$defs/Retry"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Failed"
         },
         "id": {
           "$ref": "#/$defs/StepId"
@@ -1348,16 +1388,31 @@
         "call": {
           "$ref": "#/$defs/ToolName"
         },
-        "failed": {
+        "check": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SendBack"
+              "$ref": "#/$defs/HookName"
             },
             {
               "type": "null"
             }
           ],
           "default": null
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "$ref": "#/$defs/Retry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed"
         },
         "id": {
           "$ref": "#/$defs/StepId"
@@ -1429,16 +1484,31 @@
       "additionalProperties": false,
       "description": "Commands in the run's folder on the workbench, each run without a shell. Exit code zero\npasses.\n\nA ``{{name}}`` in a command stands for the run's value of that name, as one argument. An\nentry ``{ commands: <name> }`` runs the workbench's list of repository commands of that name.",
       "properties": {
-        "failed": {
+        "check": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SendBack"
+              "$ref": "#/$defs/HookName"
             },
             {
               "type": "null"
             }
           ],
           "default": null
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SendBack"
+            },
+            {
+              "$ref": "#/$defs/Retry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed"
         },
         "id": {
           "$ref": "#/$defs/StepId"
