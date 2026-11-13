@@ -6932,7 +6932,7 @@
     },
     "RepositoryCommandList": {
       "additionalProperties": false,
-      "description": "One of an instance's lists of repository commands, its commands in the order they run.",
+      "description": "One of an instance's or a workbench's lists of repository commands, its commands in the\norder they run.",
       "properties": {
         "commands": {
           "items": {
@@ -12297,6 +12297,12 @@
           },
           "type": "array"
         },
+        "repository_commands": {
+          "items": {
+            "$ref": "#/$defs/RepositoryCommandList"
+          },
+          "type": "array"
+        },
         "secrets": {
           "items": {
             "type": "string"
@@ -12334,9 +12340,37 @@
         "hub_secrets",
         "intended_state",
         "process",
-        "recreate_reasons"
+        "recreate_reasons",
+        "repository_commands"
       ],
       "title": "Workbench",
+      "type": "object"
+    },
+    "WorkbenchCommandsSetCommand": {
+      "additionalProperties": false,
+      "description": "Set one workbench's list of repository commands *name* to *commands*, replacing the whole\nlist. The result is the workbench's record.",
+      "properties": {
+        "commands": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "$ref": "#/$defs/CommandListName"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id",
+        "name",
+        "commands"
+      ],
+      "title": "WorkbenchCommandsSetCommand",
       "type": "object"
     },
     "WorkbenchCreateCommand": {
@@ -12493,6 +12527,79 @@
         "workbench_id"
       ],
       "title": "WorkbenchOperationResult",
+      "type": "object"
+    },
+    "WorkbenchPicksGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchPicksGetCommand",
+      "type": "object"
+    },
+    "WorkbenchPicksResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "picks": {
+          "items": {
+            "$ref": "#/$defs/SkillPick"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "picks",
+        "hash"
+      ],
+      "title": "WorkbenchPicksResult",
+      "type": "object"
+    },
+    "WorkbenchPicksSetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id",
+        "skills",
+        "hash"
+      ],
+      "title": "WorkbenchPicksSetCommand",
       "type": "object"
     },
     "WorkbenchRecreateCommand": {
@@ -14947,6 +15054,22 @@
           ],
           "type": "object"
         },
+        "workbench.commands.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchCommandsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Workbench"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "workbench.create": {
           "additionalProperties": false,
           "properties": {
@@ -15003,6 +15126,38 @@
             },
             "result": {
               "$ref": "#/$defs/WorkbenchListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.picks.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchPicksGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchPicksResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.picks.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchPicksSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchPicksResult"
             }
           },
           "required": [
@@ -15217,6 +15372,9 @@
         "workbench.remove",
         "workbench.restore",
         "workbench.secrets.set",
+        "workbench.commands.set",
+        "workbench.picks.get",
+        "workbench.picks.set",
         "operation.get",
         "image.prepare",
         "image.describe",

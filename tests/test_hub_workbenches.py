@@ -9,10 +9,13 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     INSTANCE_LIST,
     STATS_SUMMARY,
+    WORKBENCH_COMMANDS_SET,
     WORKBENCH_CREATE,
     WORKBENCH_DELETE,
     WORKBENCH_GET,
     WORKBENCH_LIST,
+    WORKBENCH_PICKS_GET,
+    WORKBENCH_PICKS_SET,
     WORKBENCH_RECREATE,
     WORKBENCH_REMOVE,
     WORKBENCH_RESTORE,
@@ -31,6 +34,7 @@ from kinby.contracts import (
     ProcessState,
     StatsGetCommand,
     Workbench,
+    WorkbenchCommandsSetCommand,
     WorkbenchCreateCommand,
     WorkbenchCreateResult,
     WorkbenchDeleteCommand,
@@ -38,6 +42,8 @@ from kinby.contracts import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchOperationResult,
+    WorkbenchPicksGetCommand,
+    WorkbenchPicksSetCommand,
     WorkbenchRecreateCommand,
     WorkbenchRemoveCommand,
     WorkbenchRestoreCommand,
@@ -130,7 +136,13 @@ def test_a_created_workbench_is_listed_and_got_with_its_values_and_never_a_secre
             assert "ghp-secret" not in answer.model_dump_json()
         assert images.selections == [ImageSelection("HEAD", recipe="coder")]
         [container] = runtime.created
-        assert container.command == ("workbench", "--listen", "0.0.0.0:8787")
+        assert container.command == (
+            "workbench",
+            "--listen",
+            "0.0.0.0:8787",
+            "--workspace-source",
+            "https://github.com/owner/cec-backend.git",
+        )
         assert container.env["GH_TOKEN"] == "ghp-secret"
         assert container.env["KINBY_CONTROL_TOKEN"]
         assert "MOODLE_URL" not in container.env
@@ -277,6 +289,15 @@ def test_lifecycle_methods_find_no_workbench_under_an_unknown_id(tmp_path):
                 WORKBENCH_SECRETS_SET,
                 WorkbenchSecretsSetCommand(workbench_id=unknown, secrets={"GH_TOKEN": "x"}),
             ),
+            await client.call(
+                WORKBENCH_COMMANDS_SET,
+                WorkbenchCommandsSetCommand(workbench_id=unknown, name="setup", commands=[]),
+            ),
+            await client.call(WORKBENCH_PICKS_GET, WorkbenchPicksGetCommand(workbench_id=unknown)),
+            await client.call(
+                WORKBENCH_PICKS_SET,
+                WorkbenchPicksSetCommand(workbench_id=unknown, skills=[], hash=None),
+            ),
         ]
 
         for answer in answers:
@@ -413,7 +434,7 @@ def test_a_workbench_updates_onto_the_image_its_recipe_builds_at_the_revision(tm
 
         assert outcome.state is OperationState.SUCCEEDED, outcome.detail
         assert images.selections[-1] == ImageSelection("v2", recipe="coder")
-        assert runtime.created[1].command == ("workbench", "--listen", "0.0.0.0:8787")
+        assert runtime.created[1].command == runtime.created[0].command
         assert runtime.created[1].env["GH_TOKEN"] == "ghp-secret"
         assert runtime.started == [str(workbench_id)] * 2
 

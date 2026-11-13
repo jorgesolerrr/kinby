@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -19,6 +19,7 @@ from kinby.contracts import (
     AvatarShape,
     ChannelFailure,
     ChannelKindName,
+    CommandListName,
     DeclaredSetup,
     DeliveryStatus,
     FactoryName,
@@ -90,6 +91,8 @@ class WorkbenchSetup:
     #: None keeps a plain folder.
     workspace_source: str | None
     values: dict[str, SetupValue]
+    #: Its lists of repository commands, by name.
+    commands: dict[CommandListName, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -317,7 +320,8 @@ class HubRegistry:
                     instance_id TEXT PRIMARY KEY REFERENCES instances(id),
                     recipe TEXT,
                     workspace_source TEXT,
-                    named_values TEXT NOT NULL
+                    named_values TEXT NOT NULL,
+                    commands TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS factory_runs (
                     id TEXT PRIMARY KEY,
@@ -798,14 +802,16 @@ class HubRegistry:
             if workbench is not None:
                 connection.execute(
                     """
-                    INSERT INTO workbenches (instance_id, recipe, workspace_source, named_values)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO workbenches
+                        (instance_id, recipe, workspace_source, named_values, commands)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         str(instance.instance_id),
                         workbench.recipe,
                         workbench.workspace_source,
                         json.dumps(workbench.values),
+                        json.dumps(workbench.commands),
                     ),
                 )
             self._insert_operation(
@@ -1550,6 +1556,19 @@ class HubRegistry:
                 [(str(instance_id), item.destination) for item in items],
             )
 
+    def set_workbench_commands(
+        self, workbench_id: UUID, name: CommandListName, commands: list[str]
+    ) -> None:
+        """Replace the workbench's list of repository commands *name* with *commands*."""
+        with self._transaction() as connection:
+            (held,) = connection.execute(
+                "SELECT commands FROM workbenches WHERE instance_id = ?", (str(workbench_id),)
+            ).fetchone()
+            connection.execute(
+                "UPDATE workbenches SET commands = ? WHERE instance_id = ?",
+                (json.dumps({**json.loads(held), name: commands}), str(workbench_id)),
+            )
+
     def mark_deleted(self, instance_id: UUID) -> None:
         """Record that nothing owned is left. The read-only references it mounted go too.
 
@@ -1694,7 +1713,7 @@ class HubRegistry:
                     ),
                     factory, name, factory_members.recipe, setup, baseline,
                     workbenches.instance_id IS NOT NULL, workbenches.recipe, workspace_source,
-                    named_values
+                    named_values, commands
                 FROM instances
                 LEFT JOIN factory_members ON factory_members.instance_id = instances.id
                 LEFT JOIN workbenches ON workbenches.instance_id = instances.id
@@ -2801,6 +2820,7 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
         workbench_recipe,
         workspace_source,
         named_values,
+        commands,
     ) = row
     return ManagedInstance(
         instance_id=UUID(instance_id),
@@ -2845,6 +2865,7 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
                 recipe=workbench_recipe,
                 workspace_source=workspace_source,
                 values=json.loads(named_values),
+                commands=json.loads(commands),
             )
             if workbench
             else None

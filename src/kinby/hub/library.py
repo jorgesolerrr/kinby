@@ -6,6 +6,7 @@ import asyncio
 import shutil
 import threading
 from collections.abc import Collection, Iterable, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -385,12 +386,13 @@ class Library:
 
     def pick(
         self,
-        instance: Instance,
+        holder: Instance | Path,
         skills: Sequence[SkillName],
         read: FileHash | None,
         mcp_servers: Sequence[McpServerChoice] = (),
     ) -> InstancePicksResult:
-        """Make *skills* and *mcp_servers* the instance's picks, recorded as config changes.
+        """Make *skills* and *mcp_servers* the picks of *holder*: an instance, whose config changes
+        record them, or a workbench's directory, which keeps no config changes.
 
         Each new pick's folder is copied in from the library, and each dropped one's removed. A
         skill without a lock entry is the agent's own, and is never touched. Every copy and the
@@ -398,11 +400,12 @@ class Library:
         server's definition is copied into the lock, and a held one keeps its copy, so a library
         change reaches it only through an update.
         """
-        _refuse_links(instance.path)
-        if lock_hash(instance.path) != read:
+        path = holder if isinstance(holder, Path) else holder.path
+        _refuse_links(path)
+        if lock_hash(path) != read:
             raise StaleWrite(f"{SKILLS_LOCK_NAME} changed since it was read. Read the picks again.")
-        held = instance.path / SKILLS_DIR
-        lock = _present(read_lock(instance.path), held)
+        held = path / SKILLS_DIR
+        lock = _present(read_lock(path), held)
         folders = _skill_folders(self._directory)
         added = sorted(set(skills) - lock.skills.keys())
         dropped = sorted(lock.skills.keys() - set(skills))
@@ -416,9 +419,14 @@ class Library:
         for name in dropped:
             validate_name(name)
         if not added and not dropped and servers == lock.mcp_servers:
-            return self.picks(instance.path)
+            return self.picks(path)
         changed = [ConfigFile(f"{SKILLS_DIR}/{name}") for name in (*added, *dropped)]
-        with TemporaryDirectory(prefix=".pick-", dir=instance.path) as temporary:
+        recording = (
+            nullcontext()
+            if isinstance(holder, Path)
+            else recorded_changes(holder, (*changed, ConfigFile(SKILLS_LOCK_NAME)), ConfigActor.APP)
+        )
+        with TemporaryDirectory(prefix=".pick-", dir=path) as temporary:
             staged, removed = Path(temporary) / "added", Path(temporary) / "dropped"
             removed.mkdir()
             picked = {name: entry for name, entry in lock.skills.items() if name not in dropped}
@@ -426,17 +434,15 @@ class Library:
                 shutil.copytree(folders[name], staged / name)
                 picked[name] = LockedSkill.of(staged / name, self._origin(name))
             write_lock(Path(temporary), SkillsLock(skills=picked, mcp_servers=servers))
-            with recorded_changes(
-                instance, (*changed, ConfigFile(SKILLS_LOCK_NAME)), ConfigActor.APP
-            ):
+            with recording:
                 held.mkdir(exist_ok=True)
                 for name in dropped:
                     if (held / name).exists(follow_symlinks=False):
                         (held / name).rename(removed / name)
                 for name in added:
                     (staged / name).rename(held / name)
-                (Path(temporary) / SKILLS_LOCK_NAME).replace(instance.path / SKILLS_LOCK_NAME)
-        return self.picks(instance.path)
+                (Path(temporary) / SKILLS_LOCK_NAME).replace(path / SKILLS_LOCK_NAME)
+        return self.picks(path)
 
     def sync(self, instance_path: Path) -> PickSync:
         """Bring each pick of the instance in *instance_path* up to the library's (ADR 0091).

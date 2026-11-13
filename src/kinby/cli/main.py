@@ -9,6 +9,7 @@ import logging
 import os
 import shlex
 import signal
+import subprocess
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -89,6 +90,7 @@ from kinby.instance import (
     load_instance,
     parse_listen,
 )
+from kinby.instance.layout import WORKSPACE_DIR
 from kinby.instance.permissions import load_permissions
 from kinby.instance.recap import load_recap_lens
 from kinby.memory import (
@@ -103,7 +105,7 @@ from kinby.memory import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
-from kinby.workbench import WorkbenchServer
+from kinby.workbench import WorkbenchServer, prepare_workspace
 
 if TYPE_CHECKING:
     # The hub pulls in the Docker SDK; only the hub command imports it at runtime.
@@ -976,6 +978,10 @@ def main(
         required=True,
         help="host:port the workbench's server listens on",
     )
+    workbench_parser.add_argument(
+        "--workspace-source",
+        help="the git URL its workspace is cloned from at its first start",
+    )
     thread_parser = subparsers.add_parser(
         "thread",
         help="create, list, show and archive threads",
@@ -1147,6 +1153,12 @@ def main(
                 f"{CONTROL_TOKEN_VARIABLE} is not set, so no hub could reach the workbench.",
                 file=sys.stderr,
             )
+            return 1
+        workspace = Path(os.environ.get("KINBY_INSTANCE", "/instance")) / WORKSPACE_DIR
+        try:
+            prepare_workspace(workspace, args.workspace_source)
+        except subprocess.CalledProcessError:
+            print(f"Could not clone {args.workspace_source} into {workspace}.", file=sys.stderr)
             return 1
         return asyncio.run(_serve_workbench(listen, ControlToken(token)))
     try:

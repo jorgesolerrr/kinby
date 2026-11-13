@@ -235,6 +235,7 @@ from kinby.contracts.models import (
     ViewListResult,
     ViewSubscribeCommand,
     Workbench,
+    WorkbenchCommandsSetCommand,
     WorkbenchCreateCommand,
     WorkbenchCreateResult,
     WorkbenchDeleteCommand,
@@ -242,6 +243,9 @@ from kinby.contracts.models import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchOperationResult,
+    WorkbenchPicksGetCommand,
+    WorkbenchPicksResult,
+    WorkbenchPicksSetCommand,
     WorkbenchRecreateCommand,
     WorkbenchRemoveCommand,
     WorkbenchRestoreCommand,
@@ -524,6 +528,15 @@ WORKBENCH_RESTORE = Method(
 WORKBENCH_SECRETS_SET = Method(
     "workbench.secrets.set", Scope.HUB_ADMIN, WorkbenchSecretsSetCommand, WorkbenchOperationResult
 )
+WORKBENCH_COMMANDS_SET = Method(
+    "workbench.commands.set", Scope.HUB_ADMIN, WorkbenchCommandsSetCommand, Workbench
+)
+WORKBENCH_PICKS_GET = Method(
+    "workbench.picks.get", Scope.HUB_READ, WorkbenchPicksGetCommand, WorkbenchPicksResult
+)
+WORKBENCH_PICKS_SET = Method(
+    "workbench.picks.set", Scope.HUB_ADMIN, WorkbenchPicksSetCommand, WorkbenchPicksResult
+)
 OPERATION_GET = Method(
     "operation.get",
     Scope.HUB_READ,
@@ -781,6 +794,9 @@ METHODS = (
     WORKBENCH_REMOVE,
     WORKBENCH_RESTORE,
     WORKBENCH_SECRETS_SET,
+    WORKBENCH_COMMANDS_SET,
+    WORKBENCH_PICKS_GET,
+    WORKBENCH_PICKS_SET,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,

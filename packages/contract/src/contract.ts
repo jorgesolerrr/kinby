@@ -800,6 +800,10 @@ export interface Contract {
       command: ViewListCommand;
       result: ViewListResult;
     };
+    "workbench.commands.set": {
+      command: WorkbenchCommandsSetCommand;
+      result: Workbench;
+    };
     "workbench.create": {
       command: WorkbenchCreateCommand;
       result: WorkbenchCreateResult;
@@ -815,6 +819,14 @@ export interface Contract {
     "workbench.list": {
       command: WorkbenchListCommand;
       result: WorkbenchListResult;
+    };
+    "workbench.picks.get": {
+      command: WorkbenchPicksGetCommand;
+      result: WorkbenchPicksResult;
+    };
+    "workbench.picks.set": {
+      command: WorkbenchPicksSetCommand;
+      result: WorkbenchPicksResult;
     };
     "workbench.recreate": {
       command: WorkbenchRecreateCommand;
@@ -1783,7 +1795,8 @@ export interface InstanceStatusResult {
   setup: InstanceSetup;
 }
 /**
- * One of an instance's lists of repository commands, its commands in the order they run.
+ * One of an instance's or a workbench's lists of repository commands, its commands in the
+ * order they run.
  */
 export interface RepositoryCommandList {
   commands: string[];
@@ -3298,6 +3311,36 @@ export interface ViewChecklist {
   label: TextProp;
 }
 export interface ViewListCommand {}
+/**
+ * Set one workbench's list of repository commands *name* to *commands*, replacing the whole
+ * list. The result is the workbench's record.
+ */
+export interface WorkbenchCommandsSetCommand {
+  commands: string[];
+  name: CommandListName;
+  workbench_id: string;
+}
+/**
+ * A workbench's record. It names its secrets and never carries their values.
+ */
+export interface Workbench {
+  detail?: string;
+  hub_secrets: {
+    [k: string]: HubSecretName;
+  };
+  intended_state: IntendedState;
+  name: string;
+  process: ProcessState;
+  recipe: RecipeName | null;
+  recreate_reasons: RecreateReason[];
+  repository_commands: RepositoryCommandList[];
+  secrets: string[];
+  values: {
+    [k: string]: SetupValue;
+  };
+  workbench_id: string;
+  workspace_source: string | null;
+}
 export interface WorkbenchCreateCommand {
   hub_secrets?: {
     [k: string]: HubSecretName;
@@ -3316,26 +3359,6 @@ export interface WorkbenchCreateResult {
   operation_id: string;
   workbench: Workbench;
   workbench_id: string;
-}
-/**
- * A workbench's record. It names its secrets and never carries their values.
- */
-export interface Workbench {
-  detail?: string;
-  hub_secrets: {
-    [k: string]: HubSecretName;
-  };
-  intended_state: IntendedState;
-  name: string;
-  process: ProcessState;
-  recipe: RecipeName | null;
-  recreate_reasons: RecreateReason[];
-  secrets: string[];
-  values: {
-    [k: string]: SetupValue;
-  };
-  workbench_id: string;
-  workspace_source: string | null;
 }
 /**
  * Drain the workbench, remove its container, and delete its directory and named volumes. A
@@ -3359,6 +3382,18 @@ export interface WorkbenchListCommand {
 }
 export interface WorkbenchListResult {
   workbenches: Workbench[];
+}
+export interface WorkbenchPicksGetCommand {
+  workbench_id: string;
+}
+export interface WorkbenchPicksResult {
+  hash: string | null;
+  picks: SkillPick[];
+}
+export interface WorkbenchPicksSetCommand {
+  hash: string | null;
+  skills: string[];
+  workbench_id: string;
 }
 export interface WorkbenchRecreateCommand {
   workbench_id: string;
