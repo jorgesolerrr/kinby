@@ -1661,9 +1661,12 @@ class HubRegistry:
             tuple(state.value for state in states),
         )
 
-    def listed_workbenches(self) -> list[ManagedInstance]:
-        """The active workbenches, in creation order."""
-        states = (IntendedState.STOPPED, IntendedState.RUNNING)
+    def listed_workbenches(self, *, removed: bool = False) -> list[ManagedInstance]:
+        """The active workbenches, or the removed ones whose records and storage the hub retains,
+        in creation order."""
+        states = (
+            (IntendedState.REMOVED,) if removed else (IntendedState.STOPPED, IntendedState.RUNNING)
+        )
         return self._instances(
             f"prepared = 1 AND intended_state IN ({_marks(states)}) "
             "AND workbenches.instance_id IS NOT NULL",

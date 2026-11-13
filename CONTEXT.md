@@ -163,7 +163,7 @@ _Avoid_: credentials, env vars
 
 ### Hub secret
 
-A named value the **hub** keeps so that several **instances** can take it for a secret **setup field** instead of the user typing it again. The hub keeps it in a protected file of its own, never in the **instance registry** or its own environment, and never shows it back. An instance that takes one stays linked to it: the value is written into that instance's **instance secrets**, and replacing the hub secret rewrites them, which reaches the instance as a **recreate reason**.
+A named value the **hub** keeps so that several **instances** and **workbenches** can take it for a secret instead of the user typing it again. The hub keeps it in a protected file of its own, never in the **instance registry** or its own environment, and never shows it back. An instance or workbench that takes one stays linked to it: the value is written into its secrets, and replacing the hub secret rewrites them, which reaches it as a **recreate reason**.
 _Avoid_: secret repository, vault, credentials
 
 ### Channel
@@ -834,7 +834,7 @@ _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
 
-The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops and deletes it with an instance's **lifecycle operations**. Its named values read back in its record, and its secrets never do. A **factory run** works on exactly one workbench, in a folder of its own there.
+The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops, recreates, updates, removes, restores and deletes it with an instance's **lifecycle operations**. Its named values read back in its record, and its secrets never do. Its secrets behave as **instance secrets** do: a secret may take a **hub secret**, and a replaced one reaches the container through a **container recreation**, which its record shows as a **recreate reason** until then. A **factory run** works on exactly one workbench, in a folder of its own there.
 _Avoid_: environment, sandbox, site, station
 
 ### Line

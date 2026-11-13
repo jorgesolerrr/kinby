@@ -12266,6 +12266,12 @@
           "default": "",
           "type": "string"
         },
+        "hub_secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
+        },
         "intended_state": {
           "$ref": "#/$defs/IntendedState"
         },
@@ -12284,6 +12290,12 @@
               "type": "null"
             }
           ]
+        },
+        "recreate_reasons": {
+          "items": {
+            "$ref": "#/$defs/RecreateReason"
+          },
+          "type": "array"
         },
         "secrets": {
           "items": {
@@ -12319,8 +12331,10 @@
         "workspace_source",
         "values",
         "secrets",
+        "hub_secrets",
         "intended_state",
-        "process"
+        "process",
+        "recreate_reasons"
       ],
       "title": "Workbench",
       "type": "object"
@@ -12328,6 +12342,12 @@
     "WorkbenchCreateCommand": {
       "additionalProperties": false,
       "properties": {
+        "hub_secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
+        },
         "name": {
           "minLength": 1,
           "type": "string"
@@ -12401,7 +12421,7 @@
     },
     "WorkbenchDeleteCommand": {
       "additionalProperties": false,
-      "description": "Drain the workbench, remove its container, and delete its directory and named volumes.",
+      "description": "Drain the workbench, remove its container, and delete its directory and named volumes. A\nremoved workbench has no container left to drain.",
       "properties": {
         "workbench_id": {
           "format": "uuid",
@@ -12430,7 +12450,12 @@
     },
     "WorkbenchListCommand": {
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "removed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
       "title": "WorkbenchListCommand",
       "type": "object"
     },
@@ -12470,6 +12495,79 @@
       "title": "WorkbenchOperationResult",
       "type": "object"
     },
+    "WorkbenchRecreateCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchRecreateCommand",
+      "type": "object"
+    },
+    "WorkbenchRemoveCommand": {
+      "additionalProperties": false,
+      "description": "Drain and remove one workbench's container. Its data and its record stay behind.",
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchRemoveCommand",
+      "type": "object"
+    },
+    "WorkbenchRestoreCommand": {
+      "additionalProperties": false,
+      "description": "Bring a removed workbench back from its retained record, stopped.",
+      "properties": {
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchRestoreCommand",
+      "type": "object"
+    },
+    "WorkbenchSecretsSetCommand": {
+      "additionalProperties": false,
+      "description": "Replace the named values in one workbench's secrets. The result carries none of them back.",
+      "properties": {
+        "hub_secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchSecretsSetCommand",
+      "type": "object"
+    },
     "WorkbenchStartCommand": {
       "additionalProperties": false,
       "properties": {
@@ -12500,6 +12598,26 @@
         "workbench_id"
       ],
       "title": "WorkbenchStopCommand",
+      "type": "object"
+    },
+    "WorkbenchUpdateCommand": {
+      "additionalProperties": false,
+      "description": "Move one workbench to the image its recipe builds at a revision.",
+      "properties": {
+        "revision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id",
+        "revision"
+      ],
+      "title": "WorkbenchUpdateCommand",
       "type": "object"
     },
     "WorkspaceReverted": {
@@ -14893,6 +15011,70 @@
           ],
           "type": "object"
         },
+        "workbench.recreate": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchRecreateCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.remove": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchRemoveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.restore": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchRestoreCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.secrets.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchSecretsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "workbench.start": {
           "additionalProperties": false,
           "properties": {
@@ -14914,6 +15096,22 @@
           "properties": {
             "command": {
               "$ref": "#/$defs/WorkbenchStopCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.update": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchUpdateCommand"
             },
             "result": {
               "$ref": "#/$defs/WorkbenchOperationResult"
@@ -15014,6 +15212,11 @@
         "workbench.start",
         "workbench.stop",
         "workbench.delete",
+        "workbench.recreate",
+        "workbench.update",
+        "workbench.remove",
+        "workbench.restore",
+        "workbench.secrets.set",
         "operation.get",
         "image.prepare",
         "image.describe",
