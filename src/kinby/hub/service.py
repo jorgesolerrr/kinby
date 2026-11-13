@@ -3147,8 +3147,8 @@ class Hub:
 
     async def delete_workbench(self, command: WorkbenchDeleteCommand) -> WorkbenchOperationResult:
         """Drain the workbench and remove its container, then delete its directory and named
-        volumes, in one operation."""
-        record = self._claimed(self._active_workbench(command.workbench_id))
+        volumes, in one operation. A deletion that failed part way resumes where it stopped."""
+        record = self._claimed(self._active_workbench(command.workbench_id, removed=True))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id, record.instance_id, OperationKind.DELETE, "Deletion queued."
@@ -3164,9 +3164,10 @@ class Hub:
         try:
             try:
                 async with self._locks.setdefault(workbench_id, asyncio.Lock()):
-                    record = self._active_workbench(workbench_id)
+                    record = self._active_workbench(workbench_id, removed=True)
                     try:
-                        await self._take_away(record, pending)
+                        if record.active:
+                            await self._take_away(record, pending)
                         await self._delete_storage(
                             operation_id, record, self._deletion_targets(record)
                         )
@@ -3184,9 +3185,14 @@ class Hub:
         finally:
             self._stopping.pop(workbench_id, None)
 
-    def _active_workbench(self, workbench_id: UUID) -> ManagedInstance:
+    def _active_workbench(self, workbench_id: UUID, *, removed: bool = False) -> ManagedInstance:
+        """The active workbench, or with *removed* also one whose deletion failed part way."""
         record = self.registry.instance(workbench_id)
-        if record is None or not record.active or record.workbench is None:
+        if (
+            record is None
+            or record.workbench is None
+            or not (record.active or (removed and record.intended_state is IntendedState.REMOVED))
+        ):
             raise WorkbenchNotFound(f'Workbench "{workbench_id}" was not found.')
         return record
 

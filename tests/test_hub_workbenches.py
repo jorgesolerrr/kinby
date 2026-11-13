@@ -50,6 +50,7 @@ from tests.test_hub import (
     hub_at,
     hub_client,
 )
+from tests.test_hub_deletion import RefusingVolume
 
 CEC_BACKEND = WorkbenchCreateCommand(
     name="cec-backend",
@@ -327,3 +328,28 @@ def test_the_hub_drains_and_stops_a_workbench_through_its_runtime(tmp_path):
     assert ("drain", "Draining accepted work.") in [
         (step.name, step.detail) for step in stopped.steps
     ]
+
+
+def test_a_workbench_deletion_that_failed_part_way_is_retried_to_the_end(tmp_path):
+    runtime = RefusingVolume("")
+    hub = hub_at(tmp_path / "hub", runtime=runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = (await created(client)).workbench_id
+        runtime.refused = f"kinby-{workbench_id}-workspace"
+        first = await client.call(
+            WORKBENCH_DELETE, WorkbenchDeleteCommand(workbench_id=workbench_id)
+        )
+        failed = await finished(client, first)
+        runtime.refused = ""
+
+        retry = await client.call(
+            WORKBENCH_DELETE, WorkbenchDeleteCommand(workbench_id=workbench_id)
+        )
+
+        assert failed.state is OperationState.FAILED
+        assert (await finished(client, retry)).state is OperationState.SUCCEEDED
+        assert runtime.deleted_volumes == [f"kinby-{workbench_id}-workspace"]
+
+    asyncio.run(scenario())
