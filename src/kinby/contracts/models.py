@@ -4000,11 +4000,15 @@ class CodeStepRun(ContractModel):
 
 
 class AgentStepRun(ContractModel):
-    """Run a turn on a new thread of the instance, with the prompt and the run's values."""
+    """Run a turn on a new thread of the instance, with the prompt and the run's values. On a
+    workbench the turn is in no thread, and runs in the run's folder."""
 
     kind: Literal["agent"] = "agent"
     #: The text of the step's prompt file.
     prompt: str
+    #: The model a workbench's turn runs with, as provider:model. None in an instance, whose
+    #: manifest names it.
+    model: CodingModel | None = None
 
 
 class ClientStepRun(ContractModel):
