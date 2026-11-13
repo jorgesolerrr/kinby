@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import SetupField, SetupFieldKind, SetupFieldType, SubscriptionLogin
-from kinby.factories import RECIPES_DIRECTORY
+from kinby.factories import ships_recipe
 from kinby.factories.file import (
     TEMPLATES_DIR,
     AgentStep,
@@ -127,7 +127,7 @@ def _instances(
         if name not in templates:
             yield f'Instance "{name}" has no template: {TEMPLATES_DIR}/{name}/ is not a folder.'
         recipe = declared.image
-        if recipe is not None and not (RECIPES_DIRECTORY / f"{recipe}.Dockerfile").is_file():
+        if recipe is not None and not ships_recipe(recipe):
             yield f'Instance "{name}" names image recipe "{recipe}", which kinby does not ship.'
         for skill in declared.suggested_picks:
             if skill not in shipped_skills:

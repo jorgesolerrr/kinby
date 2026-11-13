@@ -179,6 +179,10 @@ class ManagedInstanceNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class WorkbenchNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class InstanceUnavailable(CoreError):
     """The hub cannot reach the instance: it is not running, or did not answer."""
 

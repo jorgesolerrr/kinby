@@ -234,6 +234,16 @@ from kinby.contracts.models import (
     ViewListCommand,
     ViewListResult,
     ViewSubscribeCommand,
+    Workbench,
+    WorkbenchCreateCommand,
+    WorkbenchCreateResult,
+    WorkbenchDeleteCommand,
+    WorkbenchGetCommand,
+    WorkbenchListCommand,
+    WorkbenchListResult,
+    WorkbenchOperationResult,
+    WorkbenchStartCommand,
+    WorkbenchStopCommand,
 )
 
 
@@ -479,6 +489,20 @@ INSTANCE_RELAY_READ = Method(
 HUB_WRITE = Method("hub.write", Scope.HUB_HOME, HubWriteCommand, HubWriteResult)
 INSTANCE_LOGIN_START = Method(
     "instance.login.start", Scope.HUB_ADMIN, InstanceLoginStartCommand, LifecycleOperationResult
+)
+WORKBENCH_CREATE = Method(
+    "workbench.create", Scope.HUB_ADMIN, WorkbenchCreateCommand, WorkbenchCreateResult
+)
+WORKBENCH_LIST = Method("workbench.list", Scope.HUB_READ, WorkbenchListCommand, WorkbenchListResult)
+WORKBENCH_GET = Method("workbench.get", Scope.HUB_READ, WorkbenchGetCommand, Workbench)
+WORKBENCH_START = Method(
+    "workbench.start", Scope.HUB_ADMIN, WorkbenchStartCommand, WorkbenchOperationResult
+)
+WORKBENCH_STOP = Method(
+    "workbench.stop", Scope.HUB_ADMIN, WorkbenchStopCommand, WorkbenchOperationResult
+)
+WORKBENCH_DELETE = Method(
+    "workbench.delete", Scope.HUB_ADMIN, WorkbenchDeleteCommand, WorkbenchOperationResult
 )
 OPERATION_GET = Method(
     "operation.get",
@@ -726,6 +750,12 @@ METHODS = (
     INSTANCE_RELAY_READ,
     HUB_WRITE,
     INSTANCE_LOGIN_START,
+    WORKBENCH_CREATE,
+    WORKBENCH_LIST,
+    WORKBENCH_GET,
+    WORKBENCH_START,
+    WORKBENCH_STOP,
+    WORKBENCH_DELETE,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,

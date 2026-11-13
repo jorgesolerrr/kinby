@@ -8,7 +8,15 @@ import json
 import logging
 import re
 import shutil
-from collections.abc import Callable, Collection, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Collection,
+    Coroutine,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
@@ -117,6 +125,12 @@ from kinby.contracts import (
     THREAD_TAKEOVER_RESUME,
     THREAD_TAKEOVER_START,
     THREAD_TURN_START,
+    WORKBENCH_CREATE,
+    WORKBENCH_DELETE,
+    WORKBENCH_GET,
+    WORKBENCH_LIST,
+    WORKBENCH_START,
+    WORKBENCH_STOP,
     AcceptedResult,
     ApprovalDecision,
     AuthoredTool,
@@ -230,6 +244,16 @@ from kinby.contracts import (
     VaultEntryListCommand,
     VaultEntryListResult,
     WaitingApproval,
+    Workbench,
+    WorkbenchCreateCommand,
+    WorkbenchCreateResult,
+    WorkbenchDeleteCommand,
+    WorkbenchGetCommand,
+    WorkbenchListCommand,
+    WorkbenchListResult,
+    WorkbenchOperationResult,
+    WorkbenchStartCommand,
+    WorkbenchStopCommand,
 )
 from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
@@ -248,9 +272,10 @@ from kinby.core.errors import (
     ManagedInstanceNotFound,
     NameTaken,
     PermissionDenied,
+    WorkbenchNotFound,
 )
 from kinby.core.routing import Dispatcher
-from kinby.factories import SHIPPED_FACTORIES
+from kinby.factories import SHIPPED_FACTORIES, ships_recipe
 from kinby.factories.file import FactoryFile, InstanceName
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
@@ -287,7 +312,7 @@ from kinby.hub.models import (
 from kinby.hub.outbox import Outbox, Sleep
 from kinby.hub.playwright_browser import PlaywrightBrowser
 from kinby.hub.recovery import recover_lifecycle
-from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance
+from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance, WorkbenchSetup
 from kinby.hub.relay import relayed_call
 from kinby.hub.replies import Replies
 from kinby.hub.runs import FactoryRuns, LostAnswer, UndeliveredCall, Untold
@@ -341,6 +366,9 @@ from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_
 
 _logger = logging.getLogger(__name__)
 
+#: Fills a record's directory as its creation writes it, and names the logins it declares.
+type _Write = Callable[[UUID, Path, ImageArtifact], Awaitable[Sequence[SubscriptionLogin]]]
+
 _INSTANCE_HOST = "0.0.0.0"
 _INSTANCE_PORT = 8787
 _SERVE_HEADER = re.compile(r"\s*\[\s*serve\s*\]\s*(#.*)?$")
@@ -364,6 +392,8 @@ _ALREADY_STOPPED = frozenset({"absent", "created", "stopped"})
 _INTERRUPTED_OPERATION = "The hub stopped before this operation finished."
 #: What an image preparation builds on: the hub's own checkout, as `instance.create` defaults to.
 _PREPARED_REVISION = "HEAD"
+#: What a workbench's container runs in place of an instance's serve mode.
+_WORKBENCH_COMMAND = ("workbench", "--listen", f"{_INSTANCE_HOST}:{_INSTANCE_PORT}")
 _HOME_NAME = "home"
 _HOME_PERSONA_NAME = "Kinby"
 #: How long a login waits for the user to sign in before its code counts as expired.
@@ -464,7 +494,10 @@ def _notices(
 
 
 def _selection(record: ManagedInstance, revision: str) -> ImageSelection:
-    """The image an instance runs on: the revision, and its template's recipe."""
+    """The image a record's container runs: the revision, and the recipe of the instance's
+    template or of the workbench."""
+    if record.workbench is not None:
+        return ImageSelection(revision, record.workbench.recipe)
     recipe = record.factory.recipe if record.factory is not None else None
     return ImageSelection(revision, recipe)
 
@@ -688,6 +721,12 @@ class Hub:
         dispatcher.register(INSTANCE_STATUS, self.status)
         dispatcher.register(INSTANCE_LOGS, self.logs)
         dispatcher.register(INSTANCE_LOGIN_START, self.start_login)
+        dispatcher.register(WORKBENCH_CREATE, self.create_workbench)
+        dispatcher.register(WORKBENCH_LIST, self.list_workbenches)
+        dispatcher.register(WORKBENCH_GET, self.get_workbench)
+        dispatcher.register(WORKBENCH_START, self.start_workbench)
+        dispatcher.register(WORKBENCH_STOP, self.stop_workbench)
+        dispatcher.register(WORKBENCH_DELETE, self.delete_workbench)
         dispatcher.register(OPERATION_GET, self.operation)
         dispatcher.register(IMAGE_PREPARE, self.prepare_image)
         dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
@@ -756,6 +795,8 @@ class Hub:
         return self._scopes(record, self._manifest(record))
 
     def _scopes(self, record: ManagedInstance, manifest: Manifest | None) -> frozenset[Scope]:
+        if record.workbench is not None:
+            return frozenset()
         return (
             NOTIFICATION_SCOPES
             | (INTAKE_SCOPES if record.factory is not None else frozenset())
@@ -1081,7 +1122,7 @@ class Hub:
             avatar=command.avatar,
             factory=member,
         )
-        accepted = self._begin_create(
+        accepted = self._begin_instance_create(
             record, command.model, command.config, secrets | linked, template, picks, requester
         )
         self.registry.link_secrets(
@@ -1094,9 +1135,13 @@ class Hub:
         """Whether the hub lists the instance, or an operation is still at work on it."""
         return record.active or self.registry.active_operation(record.instance_id) is not None
 
-    def _name_taken(self, manifest_id: str) -> bool:
+    def _name_taken(self, manifest_id: str, *, workbench: bool = False) -> bool:
+        """Whether an instance holds the name, or a workbench for *workbench*. Instances and
+        workbenches name themselves apart."""
         return any(
-            record.manifest_id == manifest_id and self._held(record)
+            record.manifest_id == manifest_id
+            and (record.workbench is not None) == workbench
+            and self._held(record)
             for record in self.registry.managed_instances()
         )
 
@@ -1109,6 +1154,7 @@ class Hub:
         avatar: Avatar = DEFAULT_AVATAR,
         factory: FactoryMember | None = None,
         home: bool = False,
+        workbench: WorkbenchSetup | None = None,
     ) -> ManagedInstance:
         instance_id = uuid4()
         return ManagedInstance(
@@ -1126,9 +1172,10 @@ class Hub:
             avatar=avatar,
             factory=factory,
             home=home,
+            workbench=workbench,
         )
 
-    def _begin_create(
+    def _begin_instance_create(
         self,
         record: ManagedInstance,
         model: str,
@@ -1138,34 +1185,10 @@ class Hub:
         picks: Sequence[SkillName] = (),
         requester: UUID | None = None,
     ) -> LifecycleOperationResult:
-        operation_id = uuid4()
-        self.registry.begin_create(record, operation_id, requester)
-        self._schedule(
-            self._collecting_after(
-                self._create(operation_id, record, model, config, secrets, template, picks)
-            )
-        )
-        return LifecycleOperationResult(operation_id=operation_id, instance_id=record.instance_id)
-
-    async def _create(
-        self,
-        operation_id: UUID,
-        record: ManagedInstance,
-        model: str,
-        config: Mapping[str, SetupValue],
-        secrets: dict[str, str],
-        template: InstanceTemplate | None,
-        picks: Sequence[SkillName],
-    ) -> None:
-        """Prepare the image, write the instance from its template or its image, copy in its
-        picks, and publish it."""
-        staging = record.path.with_name(f"{record.path.name}.creating")
-        unmounted: tuple[StorageItem, ...] = ()
-        try:
-            self._record(operation_id, "image", "Preparing the selected image.")
-            artifact = (
-                await self._images.build(_selection(record, record.requested_revision))
-            ).artifact
+        async def write(
+            operation_id: UUID, staging: Path, artifact: ImageArtifact
+        ) -> Sequence[SubscriptionLogin]:
+            """Write the instance from its template or its image, and copy in its picks."""
             if template is None:
                 declared = await self._initialize_from_image(
                     operation_id, record, staging, artifact, model, config, secrets
@@ -1177,27 +1200,49 @@ class Hub:
             if picks:
                 self._record(operation_id, "picks", f"Copying {', '.join(picks)} from the library.")
                 self.library.pick(inspect_instance(staging), picks, lock_hash(staging))
+            return declared.logins
+
+        operation_id = self._begin_create(record, write, secrets.values(), requester)
+        return LifecycleOperationResult(operation_id=operation_id, instance_id=record.instance_id)
+
+    def _begin_create(
+        self,
+        record: ManagedInstance,
+        write: _Write,
+        secrets: Collection[str],
+        requester: UUID | None = None,
+    ) -> UUID:
+        operation_id = uuid4()
+        self.registry.begin_create(record, operation_id, requester)
+        self._schedule(self._collecting_after(self._create(operation_id, record, write, secrets)))
+        return operation_id
+
+    async def _create(
+        self, operation_id: UUID, record: ManagedInstance, write: _Write, secrets: Collection[str]
+    ) -> None:
+        """Prepare the image, have *write* fill the record's directory, and publish it, with a
+        volume for each login *write* names. A failure says none of the *secrets*."""
+        staging = record.path.with_name(f"{record.path.name}.creating")
+        unmounted: tuple[StorageItem, ...] = ()
+        try:
+            self._record(operation_id, "image", "Preparing the selected image.")
+            artifact = (
+                await self._images.build(_selection(record, record.requested_revision))
+            ).artifact
+            logins = await write(operation_id, staging, artifact)
             self._record(
                 operation_id, "publish", "Creating the container and listing the instance."
             )
-            storage = self._storage(record.instance_id, record.path, declared.logins)
+            storage = self._storage(record.instance_id, record.path, logins)
             if record.path.exists():
                 raise FileExistsError(f"Instance directory already exists: {record.path}")
             staging.replace(record.path)
             unmounted = storage
             self._write_hub_url(record)
             self.registry.record_preparation(record.instance_id, artifact, storage)
-            await self._runtime.create(
-                InstanceSpec(
-                    instance_id=record.runtime_id,
-                    image=artifact.image_id,
-                    storage=storage,
-                    env=self._environment(record.path),
-                    port=_INSTANCE_PORT,
-                )
-            )
+            await self._runtime.create(self._container(record, artifact.image_id, storage))
             unmounted = ()
-            self.registry.seed_logins(record.instance_id, [login.id for login in declared.logins])
+            self.registry.seed_logins(record.instance_id, [login.id for login in logins])
             self.registry.mark_prepared(record.instance_id)
             self.registry.finish_operation(
                 operation_id,
@@ -1212,8 +1257,22 @@ class Hub:
             self.registry.finish_operation(
                 operation_id,
                 OperationState.FAILED,
-                self._redact(str(exc) or type(exc).__name__, secrets.values()),
+                self._redact(str(exc) or type(exc).__name__, secrets),
             )
+
+    def _container(
+        self, record: ManagedInstance, image: str, storage: tuple[StorageItem, ...]
+    ) -> InstanceSpec:
+        """The container the hub runs for a record: an instance serves, a workbench runs the
+        workbench runtime."""
+        return InstanceSpec(
+            instance_id=record.runtime_id,
+            image=image,
+            storage=storage,
+            command=_WORKBENCH_COMMAND if record.workbench is not None else ("serve",),
+            env=self._environment(record.path),
+            port=_INSTANCE_PORT,
+        )
 
     async def _discard_failed_create(
         self,
@@ -2106,15 +2165,7 @@ class Hub:
     ) -> None:
         self._record(operation_id, "create", f"Creating the container from image {image}.")
         self._write_hub_url(record)
-        await self._runtime.create(
-            InstanceSpec(
-                instance_id=record.runtime_id,
-                image=image,
-                storage=record.storage,
-                env=self._environment(record.path),
-                port=_INSTANCE_PORT,
-            )
-        )
+        await self._runtime.create(self._container(record, image, record.storage))
 
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
         """Move this instance onto the image a selected revision prepares, and a factory's
@@ -2413,12 +2464,7 @@ class Hub:
         record: ManagedInstance,
         command: InstanceDeleteCommand,
     ) -> InstanceDeletePreviewResult:
-        """Revalidate the preview, then delete each target and release it from the inventory.
-
-        A target leaves the inventory only once it is gone. A retry therefore picks up
-        a target that failed, and never reaches for one that was already deleted, even
-        when something unrelated appears in its place later.
-        """
+        """Revalidate the preview, then delete each target."""
         self._record(
             operation_id,
             "validate",
@@ -2430,6 +2476,18 @@ class Hub:
                 "The deletion targets changed since the preview, so nothing was deleted. "
                 "Preview the deletion again."
             )
+        await self._delete_storage(operation_id, record, targets)
+        return targets
+
+    async def _delete_storage(
+        self, operation_id: UUID, record: ManagedInstance, targets: InstanceDeletePreviewResult
+    ) -> None:
+        """Delete each target and release it from the inventory, then mark the record deleted.
+
+        A target leaves the inventory only once it is gone. A retry therefore picks up
+        a target that failed, and never reaches for one that was already deleted, even
+        when something unrelated appears in its place later.
+        """
         shared = self.registry.shared_storage(record.instance_id, record.storage)
         if shared is not None:
             raise ValueError(
@@ -2466,7 +2524,6 @@ class Hub:
             await self._runtime.delete_volume(volume)
             self.registry.release_storage(record.instance_id, entries)
         self.registry.mark_deleted(record.instance_id)
-        return targets
 
     def _deletion_targets(self, record: ManagedInstance) -> InstanceDeletePreviewResult:
         """The writable storage the retained inventory records, and nothing it does not.
@@ -2795,7 +2852,7 @@ class Hub:
         each home skill the library still holds."""
         record = self._new_record(_HOME_NAME, persona_name=_HOME_PERSONA_NAME, home=True)
         picks = [name for name in HOME_SKILLS if self.library.refusal([name], ()) is None]
-        return self._begin_create(record, PLACEHOLDER_MODEL, {}, {}, picks=picks)
+        return self._begin_instance_create(record, PLACEHOLDER_MODEL, {}, {}, picks=picks)
 
     async def _restore_start(self, instance_id: UUID) -> OperationState:
         """Start one instance again under its own lifecycle operation, so the attempt is visible."""
@@ -3020,6 +3077,135 @@ class Hub:
             text=self._redact(text, self._environment(record.path).values()),
         )
 
+    async def create_workbench(self, command: WorkbenchCreateCommand) -> WorkbenchCreateResult:
+        """Accept a workbench only once its name is free, kinby ships its recipe and each secret
+        names a variable. Its image builds and its container is created in the background."""
+        secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
+        errors: dict[str, str] = {}
+        if self._name_taken(command.name, workbench=True):
+            errors["name"] = f'A workbench named "{command.name}" exists already.'
+        if command.recipe is not None and not ships_recipe(command.recipe):
+            errors["recipe"] = f'kinby does not ship image recipe "{command.recipe}".'
+        invalid = [name for name in secrets if ENVIRONMENT_NAME.fullmatch(name) is None]
+        if invalid:
+            errors["secrets"] = f'Invalid environment variable name: "{invalid[0]}".'
+        if errors:
+            raise InvalidSetup(errors)
+        record = self._new_record(
+            command.name,
+            workbench=WorkbenchSetup(
+                recipe=command.recipe,
+                workspace_source=command.workspace_source,
+                values=command.values,
+            ),
+        )
+
+        async def write(
+            operation_id: UUID, staging: Path, artifact: ImageArtifact
+        ) -> Sequence[SubscriptionLogin]:
+            self._record(operation_id, "initialize", "Writing the workbench's secrets.")
+            staging.mkdir()
+            self._write_secrets(
+                staging / ".env", secrets | {CONTROL_TOKEN_VARIABLE: new_control_token()}
+            )
+            return ()
+
+        operation_id = self._begin_create(record, write, secrets.values())
+        return WorkbenchCreateResult(
+            operation_id=operation_id,
+            workbench_id=record.instance_id,
+            workbench=await self._workbench(record, secrets),
+        )
+
+    async def list_workbenches(self, command: WorkbenchListCommand) -> WorkbenchListResult:
+        return WorkbenchListResult(
+            workbenches=[
+                await self._workbench(record, self._environment(record.path))
+                for record in self.registry.listed_workbenches()
+            ]
+        )
+
+    async def get_workbench(self, command: WorkbenchGetCommand) -> Workbench:
+        record = self._active_workbench(command.workbench_id)
+        return await self._workbench(record, self._environment(record.path))
+
+    async def start_workbench(self, command: WorkbenchStartCommand) -> WorkbenchOperationResult:
+        self._active_workbench(command.workbench_id)
+        started = await self.start(InstanceStartCommand(instance_id=command.workbench_id))
+        return WorkbenchOperationResult(
+            operation_id=started.operation_id, workbench_id=command.workbench_id
+        )
+
+    async def stop_workbench(self, command: WorkbenchStopCommand) -> WorkbenchOperationResult:
+        self._active_workbench(command.workbench_id)
+        stopping = await self.stop(
+            InstanceStopCommand(instance_id=command.workbench_id, force=command.force)
+        )
+        return WorkbenchOperationResult(
+            operation_id=stopping.operation_id, workbench_id=command.workbench_id
+        )
+
+    async def delete_workbench(self, command: WorkbenchDeleteCommand) -> WorkbenchOperationResult:
+        """Drain the workbench and remove its container, then delete its directory and named
+        volumes, in one operation."""
+        record = self._claimed(self._active_workbench(command.workbench_id))
+        operation_id = uuid4()
+        self.registry.record_operation(
+            operation_id, record.instance_id, OperationKind.DELETE, "Deletion queued."
+        )
+        # A force stop escalates this drain the way it escalates a stop's.
+        pending = PendingStop(operation_id, asyncio.Event())
+        self._stopping[record.instance_id] = pending
+        self._schedule(self._collecting_after(self._delete_workbench(record.instance_id, pending)))
+        return WorkbenchOperationResult(operation_id=operation_id, workbench_id=record.instance_id)
+
+    async def _delete_workbench(self, workbench_id: UUID, pending: PendingStop) -> None:
+        operation_id = pending.operation_id
+        try:
+            try:
+                async with self._locks.setdefault(workbench_id, asyncio.Lock()):
+                    record = self._active_workbench(workbench_id)
+                    try:
+                        await self._take_away(record, pending)
+                        await self._delete_storage(
+                            operation_id, record, self._deletion_targets(record)
+                        )
+                    except Exception as exc:
+                        self._fail(operation_id, record, str(exc) or type(exc).__name__)
+                        return
+                    self.registry.finish_operation(
+                        operation_id,
+                        OperationState.SUCCEEDED,
+                        "Workbench deleted. Its directory and named volumes are gone.",
+                    )
+            except asyncio.CancelledError:
+                self._fail_if_unfinished(operation_id)
+                raise
+        finally:
+            self._stopping.pop(workbench_id, None)
+
+    def _active_workbench(self, workbench_id: UUID) -> ManagedInstance:
+        record = self.registry.instance(workbench_id)
+        if record is None or not record.active or record.workbench is None:
+            raise WorkbenchNotFound(f'Workbench "{workbench_id}" was not found.')
+        return record
+
+    async def _workbench(self, record: ManagedInstance, environment: dict[str, str]) -> Workbench:
+        """The workbench's record, with the names of the secrets *environment* holds."""
+        assert record.workbench is not None
+        observed = await self._observed(record, _InstanceFiles(environment, None))
+        return Workbench(
+            workbench_id=record.instance_id,
+            name=record.manifest_id,
+            recipe=record.workbench.recipe,
+            workspace_source=record.workbench.workspace_source,
+            values=record.workbench.values,
+            secrets=sorted(name for name in environment if name != CONTROL_TOKEN_VARIABLE),
+            intended_state=record.intended_state,
+            process=observed.process,
+            detail=observed.detail,
+        )
+
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
         """Answer where a public route may reach one instance, and with which control token."""
         record = self.registry.instance(instance_id)
@@ -3062,7 +3248,11 @@ class Hub:
         return run_usage([(run, self.runs.rework(run)) for run in runs], answers)
 
     async def _answers(self, command: StatsGetCommand) -> dict[UUID, StatsGetResult | Uncounted]:
-        records = [record for record in self.registry.managed_instances() if record.active]
+        records = [
+            record
+            for record in self.registry.managed_instances()
+            if record.active and record.workbench is None
+        ]
         answers = await asyncio.gather(*(self._usage(record, command) for record in records))
         return dict(zip((record.instance_id for record in records), answers, strict=True))
 

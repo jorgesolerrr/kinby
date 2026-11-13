@@ -1135,6 +1135,9 @@ class StorageItem(ContractModel):
 #: A factory's name, which is also its folder's name on the hub.
 type FactoryName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 
+#: One of the image recipes kinby ships, by its file's name.
+type RecipeName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+
 
 #: A hub secret's name: free text, unique on the hub.
 type HubSecretName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -1632,6 +1635,80 @@ class InstanceStatusResult(ContractModel):
 class InstanceLogsResult(ContractModel):
     instance_id: UUID
     text: str
+
+
+class WorkbenchCreateCommand(ContractModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    name: Annotated[str, Field(min_length=1)]
+    #: The recipe its one image is built from. None builds kinby's base image.
+    recipe: RecipeName | None = None
+    #: The git URL its workspace is cloned from. None keeps a plain folder.
+    workspace_source: Annotated[str, Field(min_length=1)] | None = None
+    #: Values that are not secrets, by name. They read back in the workbench's record.
+    values: dict[str, SetupValue] = Field(default_factory=dict)
+    #: Secrets, by the variable each lands in. They never read back.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
+class Workbench(ContractModel):
+    """A workbench's record. It names its secrets and never carries their values."""
+
+    workbench_id: UUID
+    name: str
+    recipe: RecipeName | None
+    workspace_source: str | None
+    values: dict[str, SetupValue]
+    #: The variables its secrets land in.
+    secrets: list[str]
+    intended_state: IntendedState
+    #: What the runtime saw when the record was read.
+    process: ProcessState
+    #: The runtime's word for the process, such as "restarting" beside `starting`.
+    detail: str = ""
+
+
+class WorkbenchListCommand(ContractModel):
+    pass
+
+
+class WorkbenchListResult(ContractModel):
+    workbenches: list[Workbench]
+
+
+class WorkbenchGetCommand(ContractModel):
+    workbench_id: UUID
+
+
+class WorkbenchStartCommand(ContractModel):
+    workbench_id: UUID
+
+
+class WorkbenchStopCommand(ContractModel):
+    workbench_id: UUID
+    force: bool = False
+
+
+class WorkbenchDeleteCommand(ContractModel):
+    """Drain the workbench, remove its container, and delete its directory and named volumes."""
+
+    workbench_id: UUID
+
+
+class WorkbenchOperationResult(ContractModel):
+    """The lifecycle operation a workbench method started, read through `operation.get`."""
+
+    operation_id: UUID
+    workbench_id: UUID
+
+
+class WorkbenchCreateResult(WorkbenchOperationResult):
+    #: The record as the hub accepted it, before its creation finished.
+    workbench: Workbench
 
 
 class ContainerOwner(StrEnum):

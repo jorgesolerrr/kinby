@@ -25,6 +25,7 @@ from kinby.contracts import (
     FactoryName,
     HookName,
     ReasoningEffort,
+    RecipeName,
     RepositoryCommands,
     SetupField,
     SkillName,
@@ -45,7 +46,6 @@ _FOLDER_NAME = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
 
 type InstanceName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 type RoutineName = Annotated[str, Field(pattern=_FOLDER_NAME)]
-type RecipeName = Annotated[str, Field(pattern=_FOLDER_NAME)]
 #: A whole number of seconds, minutes, hours or days, such as ``60m`` or ``7d``.
 type Duration = Annotated[str, Field(pattern=r"^[1-9][0-9]*[smhd]$")]
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3_600, "d": 86_400}
