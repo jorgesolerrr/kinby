@@ -115,6 +115,8 @@ from kinby.contracts import (
     LIBRARY_SKILL_WRITE,
     LINE_GET,
     LINE_HAND_IN,
+    LINE_INTAKE,
+    LINE_INTAKE_SCOPES,
     LINE_LIST,
     LINE_REMOVE,
     LINE_SETUP,
@@ -125,6 +127,9 @@ from kinby.contracts import (
     NOTIFICATION_SCOPES,
     OPERATION_GET,
     RELAYED_READS,
+    ROUTINE_DELETE,
+    ROUTINE_READ,
+    ROUTINE_WRITE,
     STATS_RUNS,
     STATS_SUMMARY,
     THREAD_APPROVAL_RESPOND,
@@ -221,6 +226,7 @@ from kinby.contracts import (
     InstanceToolsetGetCommand,
     InstanceToolsetResult,
     InstanceUpdateCommand,
+    IntakeRunCommand,
     IntendedState,
     LibraryGitAddCommand,
     LibraryListResult,
@@ -231,6 +237,8 @@ from kinby.contracts import (
     Line,
     LineGetCommand,
     LineHandInCommand,
+    LineIntakeCommand,
+    LineIntakeResult,
     LineListCommand,
     LineListResult,
     LineRemoveCommand,
@@ -243,11 +251,17 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    PermissionMode,
     ProcessState,
     Readiness,
     RecreateReason,
     RepositoryCommandList,
     RevisionBehind,
+    RoutineDeleteCommand,
+    RoutineFile,
+    RoutineName,
+    RoutineReadCommand,
+    RoutineWriteCommand,
     RunFolderRemoveCommand,
     RunFolderRemoveResult,
     RunStop,
@@ -309,6 +323,7 @@ from kinby.core.errors import (
     ImageNotPrepared,
     InstanceRefused,
     InstanceUnavailable,
+    IntakeFailed,
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
@@ -316,6 +331,7 @@ from kinby.core.errors import (
     LoginNotFound,
     ManagedInstanceNotFound,
     NameTaken,
+    NotAnIntake,
     PermissionDenied,
     WorkbenchInUse,
     WorkbenchNotFound,
@@ -330,7 +346,9 @@ from kinby.factories.file import (
     Requirements,
     WorkbenchAgentStep,
     WorkbenchFactory,
+    WorkbenchIntake,
 )
+from kinby.frontmatter import render_frontmatter_value
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
@@ -422,6 +440,7 @@ from kinby.plugins.hub import (
     hub_write,
     requested_write,
 )
+from kinby.plugins.intake import run_line_intake
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_search_key
 from kinby.workbench import FACTORIES_MOUNT
@@ -600,6 +619,43 @@ def _lacking(
         ),
         *(f'command list "{name}"' for name in requires.commands if name not in workbench.commands),
     ]
+
+
+#: What a line's intake routine says to its model, which never runs: its code step returns nothing.
+_INTAKE_PROMPT = (
+    "The intake hands the line its work itself, so there is nothing for you to do. Stop."
+)
+
+
+def _intake_routine(factory: FactoryName, workbench: str, intake: WorkbenchIntake) -> str:
+    """The ROUTINE.md of the line's intake routine, fired as the factory's intake declares. Its
+    code step has the hub run the intake on the workbench."""
+    fields = {
+        "description": f'Hand line "{factory}" on workbench "{workbench}" the work items its '
+        "intake finds.",
+        "mode": PermissionMode.FULL_ACCESS.value,
+        "run": run_line_intake.name,
+    }
+    if intake.schedule is not None:
+        fields["schedule"] = intake.schedule
+    lines = [f"{key}: {render_frontmatter_value(value)}" for key, value in fields.items()]
+    delivery = intake.delivery
+    if delivery is not None:
+        signal = {
+            "auth": delivery.auth.value,
+            "secret": delivery.secret,
+            "signature_header": delivery.signature_header,
+            "delivery_header": delivery.delivery_header,
+        }
+        lines += [
+            "signal:",
+            *(
+                f"  {key}: {render_frontmatter_value(value)}"
+                for key, value in signal.items()
+                if value
+            ),
+        ]
+    return "\n".join(["---", *lines, "---", _INTAKE_PROMPT, ""])
 
 
 def _model_keys(factory: WorkbenchFactory, line_model: str | None) -> list[str]:
@@ -927,6 +983,7 @@ class Hub:
             return frozenset()
         return (
             NOTIFICATION_SCOPES
+            | LINE_INTAKE_SCOPES
             | (INTAKE_SCOPES if record.factory is not None else frozenset())
             | (HOME_SCOPES if record.home else frozenset())
             | (BROWSER_SCOPES if self._browser_on(manifest) else frozenset())
@@ -957,6 +1014,8 @@ class Hub:
             )
         if Scope.FACTORY_INTAKE in scopes:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
+        if Scope.LINE_INTAKE in scopes:
+            dispatcher.register(LINE_INTAKE, partial(self.line_intake, instance_id))
         if Scope.BROWSER_OPEN in scopes:
             browsers = self._browsers
             assert browsers is not None
@@ -3584,17 +3643,58 @@ class Hub:
             errors["owner_id"] = f'Instance "{owner_id}" was not found.'
         if errors:
             raise InvalidSetup(errors)
-        assert owner_id is not None
+        assert owner is not None
+        intake = None
+        if factory.intake is not None:
+            intake = RoutineName(f"{command.factory}-{record.manifest_id}")
+            routine = _intake_routine(command.factory, record.manifest_id, factory.intake)
+            await self._write_intake(owner, intake, routine)
         line = Line(
             line_id=uuid4(),
             factory=command.factory,
             workbench_id=command.workbench_id,
-            owner_id=owner_id,
+            owner_id=owner.instance_id,
             model=command.model,
             usd_per_day=command.usd_per_day,
+            intake=intake,
         )
         self.registry.add_line(line)
         return line
+
+    async def _write_intake(self, owner: ManagedInstance, name: RoutineName, content: str) -> None:
+        """Create the line's intake routine in its owner, or refuse the setup with why the owner
+        did not take it."""
+        command = RoutineWriteCommand(name=name, content=content, hash=None)
+        try:
+            await self._relayed(
+                owner.instance_id, ROUTINE_WRITE.name, command.model_dump(mode="json")
+            )
+        except (InstanceRefused, InstanceUnavailable) as exc:
+            why = exc.error.explained if isinstance(exc, InstanceRefused) else str(exc)
+            raise InvalidSetup(
+                {
+                    "owner_id": f'Instance "{owner.manifest_id}" did not take the intake routine '
+                    f'"{name}": {why}'
+                }
+            ) from exc
+
+    async def _remove_intake(self, line: Line) -> None:
+        """Delete the line's intake routine from its owner. One already gone, or gone with its
+        owner, needs nothing."""
+        if line.intake is None:
+            return
+        read = RoutineReadCommand(name=line.intake)
+        try:
+            held = RoutineFile.model_validate(
+                await self._relayed(line.owner_id, ROUTINE_READ.name, read.model_dump(mode="json"))
+            )
+            delete = RoutineDeleteCommand(name=line.intake, hash=held.hash)
+            await self._relayed(line.owner_id, ROUTINE_DELETE.name, delete.model_dump(mode="json"))
+        except ManagedInstanceNotFound:
+            return
+        except InstanceRefused as exc:
+            if exc.error.code is not ErrorCode.NOT_FOUND:
+                raise
 
     async def list_lines(self, command: LineListCommand) -> LineListResult:
         return LineListResult(lines=self.registry.lines())
@@ -3617,8 +3717,10 @@ class Hub:
         return updated
 
     async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
-        """Remove the line. Its workbench keeps its clone, its secrets and its command lists."""
-        await self.get_line(LineGetCommand(line_id=command.line_id))
+        """Remove the line and its intake routine. Its workbench keeps its clone, its secrets and
+        its command lists. An owner that cannot delete the routine keeps the line."""
+        line = await self.get_line(LineGetCommand(line_id=command.line_id))
+        await self._remove_intake(line)
         self.registry.remove_line(command.line_id)
         return await self.list_lines(LineListCommand())
 
@@ -3627,6 +3729,35 @@ class Hub:
         work item."""
         line = await self.get_line(LineGetCommand(line_id=command.line_id))
         return await self.runs.hand_in(line, command.work_item)
+
+    async def line_intake(self, instance_id: UUID, command: LineIntakeCommand) -> LineIntakeResult:
+        """Run the intake of the instance's line whose intake is this routine on the line's
+        workbench, where its secrets are, and hand the line each work item it finds."""
+        line = next(
+            (
+                line
+                for line in self.registry.lines()
+                if (line.owner_id, line.intake) == (instance_id, command.routine)
+            ),
+            None,
+        )
+        factory = None if line is None else self.factories.file(line.factory)
+        if line is None or not isinstance(factory, WorkbenchFactory) or factory.intake is None:
+            raise NotAnIntake(f'Routine "{command.routine}" of this instance is no line\'s intake.')
+        intake = IntakeRunCommand(
+            factory=line.factory, call=factory.intake.call, signal=command.signal
+        )
+        try:
+            endpoint = await self._endpoint(self._active_workbench(line.workbench_id))
+            found = await self._control.run_intake(endpoint, intake)
+        except (ControlUnreachable, IncompatibleLifecycleEndpoint) as exc:
+            raise IntakeFailed(
+                f'The intake of line "{line.factory}" did not run on workbench '
+                f'"{self._workbench_name(line.workbench_id)}": {exc}'
+            ) from exc
+        return LineIntakeResult(
+            runs=[await self.runs.hand_in(line, work_item) for work_item in found.work_items]
+        )
 
     def _workbench_name(self, workbench_id: UUID) -> str:
         record = self.registry.instance(workbench_id)

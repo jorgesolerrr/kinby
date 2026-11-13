@@ -262,7 +262,14 @@ def _workbench_steps(
                 f'Step "{step.id}" names check "{check}", '
                 "which the factory's folder does not hold."
             )
-    for key, call in (("needs_human", factory.needs_human), ("ended", factory.ended)):
+    intake = factory.intake
+    if intake is not None and intake.schedule is None and intake.delivery is None:
+        yield "The intake declares no trigger: give it a schedule, a delivery or both."
+    for key, call in (
+        ("intake", intake),
+        ("needs_human", factory.needs_human),
+        ("ended", factory.ended),
+    ):
         if call is not None and call.call not in tools:
             yield f'{key} calls tool "{call.call}", which the factory\'s folder does not hold.'
 

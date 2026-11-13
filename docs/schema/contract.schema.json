@@ -4296,6 +4296,52 @@
       "title": "InstanceUpdateCommand",
       "type": "object"
     },
+    "IntakeRunCommand": {
+      "additionalProperties": false,
+      "description": "Run a factory's intake tool on this workbench, in its workspace, and return the work items\nit finds.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "signal": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "factory",
+        "call"
+      ],
+      "title": "IntakeRunCommand",
+      "type": "object"
+    },
+    "IntakeRunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "work_items": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/$defs/StepValue"
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/ValueName"
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "work_items"
+      ],
+      "title": "IntakeRunResult",
+      "type": "object"
+    },
     "IntendedState": {
       "enum": [
         "stopped",
@@ -4750,6 +4796,16 @@
         "factory": {
           "$ref": "#/$defs/FactoryName"
         },
+        "intake": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "line_id": {
           "format": "uuid",
           "type": "string"
@@ -4789,7 +4845,8 @@
         "workbench_id",
         "owner_id",
         "model",
-        "usd_per_day"
+        "usd_per_day",
+        "intake"
       ],
       "title": "Line",
       "type": "object"
@@ -4831,6 +4888,42 @@
         "work_item"
       ],
       "title": "LineHandInCommand",
+      "type": "object"
+    },
+    "LineIntakeCommand": {
+      "additionalProperties": false,
+      "description": "Run the intake of the line whose intake is this instance's routine, on the line's\nworkbench, and hand the line each work item it finds.",
+      "properties": {
+        "routine": {
+          "type": "string"
+        },
+        "signal": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "routine"
+      ],
+      "title": "LineIntakeCommand",
+      "type": "object"
+    },
+    "LineIntakeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/FactoryRun"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "runs"
+      ],
+      "title": "LineIntakeResult",
       "type": "object"
     },
     "LineListCommand": {
@@ -14474,6 +14567,22 @@
           ],
           "type": "object"
         },
+        "intake.run": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/IntakeRunCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/IntakeRunResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "library.git.add": {
           "additionalProperties": false,
           "properties": {
@@ -14690,6 +14799,22 @@
             },
             "result": {
               "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.intake": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineIntakeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LineIntakeResult"
             }
           },
           "required": [
@@ -16073,6 +16198,7 @@
         "step.run",
         "run.stopped",
         "run.folder.remove",
+        "intake.run",
         "run.transcript.read",
         "thread.ask",
         "routine.list",
@@ -16147,6 +16273,7 @@
         "line.update",
         "line.remove",
         "line.hand_in",
+        "line.intake",
         "operation.get",
         "image.prepare",
         "image.describe",
