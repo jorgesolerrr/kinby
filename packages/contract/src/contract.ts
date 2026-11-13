@@ -356,6 +356,10 @@ export interface Contract {
       command: FactoryListCommand;
       result: FactoryListResult;
     };
+    "factory.remove": {
+      command: FactoryRemoveCommand;
+      result: FactoryListResult;
+    };
     "factory.run.approve": {
       command: FactoryRunApproveCommand;
       result: FactoryRun;
@@ -543,6 +547,22 @@ export interface Contract {
     "library.skill.write": {
       command: LibrarySkillWriteCommand;
       result: SkillResult;
+    };
+    "line.get": {
+      command: LineGetCommand;
+      result: Line;
+    };
+    "line.list": {
+      command: LineListCommand;
+      result: LineListResult;
+    };
+    "line.remove": {
+      command: LineRemoveCommand;
+      result: LineListResult;
+    };
+    "line.setup": {
+      command: LineSetupCommand;
+      result: Line;
     };
     "manifest.get": {
       command: ManifestGetCommand;
@@ -1348,6 +1368,12 @@ export interface FactorySummary {
   source: FactorySource;
 }
 /**
+ * Delete one of the hub's own factories. The result lists the factories left.
+ */
+export interface FactoryRemoveCommand {
+  name: FactoryName;
+}
+/**
  * Approve a run parked at an approve step, which moves it on as the step's next outcome.
  */
 export interface FactoryRunApproveCommand {
@@ -2027,6 +2053,40 @@ export interface LibrarySkillWriteCommand {
   content: string;
   hash: string | null;
   name: string;
+}
+export interface LineGetCommand {
+  line_id: string;
+}
+/**
+ * A factory set up on one workbench under an owning instance.
+ */
+export interface Line {
+  factory: FactoryName;
+  line_id: string;
+  model: string | null;
+  owner_id: string;
+  usd_per_day: number | null;
+  workbench_id: string;
+}
+export interface LineListCommand {}
+export interface LineListResult {
+  lines: Line[];
+}
+/**
+ * Remove one line. Its workbench stays as it is. The result lists the lines left.
+ */
+export interface LineRemoveCommand {
+  line_id: string;
+}
+/**
+ * Set a factory up on a workbench under an owning instance. The result is the line.
+ */
+export interface LineSetupCommand {
+  factory: FactoryName;
+  model?: string | null;
+  owner_id?: string | null;
+  usd_per_day?: number | null;
+  workbench_id: string;
 }
 export interface ManifestGetCommand {}
 export interface ManifestResult {

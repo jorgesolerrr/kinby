@@ -29,6 +29,7 @@ from kinby.contracts import (
     GitSource,
     HubSecretName,
     IntendedState,
+    Line,
     LoginPrompt,
     LoginState,
     Notification,
@@ -322,6 +323,15 @@ class HubRegistry:
                     workspace_source TEXT,
                     named_values TEXT NOT NULL,
                     commands TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE IF NOT EXISTS lines (
+                    id TEXT PRIMARY KEY,
+                    factory TEXT NOT NULL,
+                    workbench_id TEXT NOT NULL REFERENCES instances(id),
+                    owner_id TEXT NOT NULL REFERENCES instances(id),
+                    model TEXT,
+                    usd_per_day REAL,
+                    UNIQUE (factory, workbench_id)
                 );
                 CREATE TABLE IF NOT EXISTS factory_runs (
                     id TEXT PRIMARY KEY,
@@ -1569,6 +1579,43 @@ class HubRegistry:
                 "UPDATE workbenches SET commands = ? WHERE instance_id = ?",
                 (json.dumps({**json.loads(held), name: commands}), str(workbench_id)),
             )
+
+    def add_line(self, line: Line) -> None:
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT INTO lines VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    str(line.line_id),
+                    line.factory,
+                    str(line.workbench_id),
+                    str(line.owner_id),
+                    line.model,
+                    line.usd_per_day,
+                ),
+            )
+
+    def lines(self) -> list[Line]:
+        """Every line, in the order it was set up."""
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT id, factory, workbench_id, owner_id, model, usd_per_day FROM lines "
+                "ORDER BY rowid"
+            ).fetchall()
+        return [
+            Line(
+                line_id=UUID(line_id),
+                factory=factory,
+                workbench_id=UUID(workbench_id),
+                owner_id=UUID(owner_id),
+                model=model,
+                usd_per_day=usd_per_day,
+            )
+            for line_id, factory, workbench_id, owner_id, model, usd_per_day in rows
+        ]
+
+    def remove_line(self, line_id: UUID) -> None:
+        with self._transaction() as connection:
+            connection.execute("DELETE FROM lines WHERE id = ?", (str(line_id),))
 
     def mark_deleted(self, instance_id: UUID) -> None:
         """Record that nothing owned is left. The read-only references it mounted go too.

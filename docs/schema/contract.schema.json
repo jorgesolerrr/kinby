@@ -2380,6 +2380,20 @@
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "type": "string"
     },
+    "FactoryRemoveCommand": {
+      "additionalProperties": false,
+      "description": "Delete one of the hub's own factories. The result lists the factories left.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryRemoveCommand",
+      "type": "object"
+    },
     "FactoryResult": {
       "additionalProperties": false,
       "properties": {
@@ -4568,6 +4582,163 @@
         "instance_id"
       ],
       "title": "LifecycleOperationResult",
+      "type": "object"
+    },
+    "Line": {
+      "additionalProperties": false,
+      "description": "A factory set up on one workbench under an owning instance.",
+      "properties": {
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "line_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "usd_per_day": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id",
+        "factory",
+        "workbench_id",
+        "owner_id",
+        "model",
+        "usd_per_day"
+      ],
+      "title": "Line",
+      "type": "object"
+    },
+    "LineGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "line_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id"
+      ],
+      "title": "LineGetCommand",
+      "type": "object"
+    },
+    "LineListCommand": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "LineListCommand",
+      "type": "object"
+    },
+    "LineListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/Line"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "lines"
+      ],
+      "title": "LineListResult",
+      "type": "object"
+    },
+    "LineRemoveCommand": {
+      "additionalProperties": false,
+      "description": "Remove one line. Its workbench stays as it is. The result lists the lines left.",
+      "properties": {
+        "line_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id"
+      ],
+      "title": "LineRemoveCommand",
+      "type": "object"
+    },
+    "LineSetupCommand": {
+      "additionalProperties": false,
+      "description": "Set a factory up on a workbench under an owning instance. The result is the line.",
+      "properties": {
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "owner_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usd_per_day": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "factory",
+        "workbench_id"
+      ],
+      "title": "LineSetupCommand",
       "type": "object"
     },
     "ListBinding": {
@@ -13278,6 +13449,22 @@
           ],
           "type": "object"
         },
+        "factory.remove": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRemoveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.run.approve": {
           "additionalProperties": false,
           "properties": {
@@ -14022,6 +14209,70 @@
             },
             "result": {
               "$ref": "#/$defs/SkillResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Line"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LineListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.remove": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineRemoveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LineListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.setup": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineSetupCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Line"
             }
           },
           "required": [
@@ -15375,6 +15626,10 @@
         "workbench.commands.set",
         "workbench.picks.get",
         "workbench.picks.set",
+        "line.setup",
+        "line.list",
+        "line.get",
+        "line.remove",
         "operation.get",
         "image.prepare",
         "image.describe",
@@ -15382,6 +15637,7 @@
         "factory.get",
         "factory.check",
         "factory.edit",
+        "factory.remove",
         "factory.describe",
         "factory.run.intake",
         "factory.run.list",

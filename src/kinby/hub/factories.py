@@ -19,6 +19,7 @@ from kinby.contracts import (
     FactoryListCommand,
     FactoryListResult,
     FactoryName,
+    FactoryRemoveCommand,
     FactoryResult,
     FactorySource,
     FactorySummary,
@@ -135,6 +136,18 @@ class FactoryStore:
             },
         )
 
+    async def checked(self, name: FactoryName) -> FactoryFile | WorkbenchFactory:
+        """The factory's file, read in the same pass as the check passes it."""
+        async with self._edit_lock:
+            return await asyncio.to_thread(self._checked, name)
+
+    def _checked(self, name: FactoryName) -> FactoryFile | WorkbenchFactory:
+        folder, _ = self._folder(name)
+        problems = check_factory(folder)
+        if problems:
+            raise FactoryCheckFailed(problems)
+        return read_factory_file(folder)
+
     async def templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
         """Each instance template of the factory, read in the same pass as the check passes it."""
         async with self._edit_lock:
@@ -147,13 +160,10 @@ class FactoryStore:
         )
 
     def _templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
-        folder, _ = self._folder(name)
-        problems = check_factory(folder)
-        if problems:
-            raise FactoryCheckFailed(problems)
-        factory = read_factory_file(folder)
+        factory = self._checked(name)
         if isinstance(factory, WorkbenchFactory):
             return ()
+        folder, _ = self._folder(name)
         return tuple(
             _template(
                 instance, declared, readable_template_files(folder / TEMPLATES_DIR / instance)
@@ -201,6 +211,15 @@ class FactoryStore:
                 if replaced.exists():
                     replaced.rename(destination)
                 raise
+
+    async def remove(self, command: FactoryRemoveCommand) -> FactoryListResult:
+        """Delete the hub's own folder of the factory. A factory kinby ships stays."""
+        self._folder(command.name)
+        if self.ships(command.name):
+            raise InvalidConfig({"name": f'kinby ships factory "{command.name}", so it stays.'})
+        async with self._edit_lock:
+            await asyncio.to_thread(shutil.rmtree, self._directory / command.name)
+        return await self.list(FactoryListCommand())
 
     def ships(self, name: FactoryName) -> bool:
         """Whether kinby ships a factory by this name, served as it is or as the hub's copy."""

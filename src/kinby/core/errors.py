@@ -68,6 +68,12 @@ class FactoryNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class FactoryInUse(CoreError):
+    """Lines or instances depend on the factory, so it stays."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class FactoryCheckFailed(CoreError):
     """An edit failed the factory check, so the hub kept the factory it had."""
 
@@ -180,6 +186,10 @@ class ManagedInstanceNotFound(CoreError):
 
 
 class WorkbenchNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
+class LineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
