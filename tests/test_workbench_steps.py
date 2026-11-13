@@ -2,6 +2,7 @@
 removes that folder when the hub asks."""
 
 import asyncio
+import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -410,3 +411,17 @@ def test_a_long_transcript_is_read_a_page_at_a_time(tmp_path, monkeypatch):
 
     assert len(pages) > 1
     assert [event for page in pages for event in page.events] == padded
+
+
+def test_an_event_too_large_for_a_page_reads_as_cut_with_its_size(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    huge = {"type": "user", "text": "x" * 5_000_000}
+    stub_client(tmp_path, monkeypatch, "claude", streaming([huge, *CLAUDE_STREAM]))
+    run_id = uuid4()
+    asyncio.run(workbench.run(_command(run_id, IMPLEMENT, PLAIN)))
+
+    first = _transcript(workbench, run_id)
+
+    assert first.events[0] == {"type": "cut", "bytes": len(json.dumps(huge))}
+    assert len(first.model_dump_json()) < 1024 * 1024
+    assert first.events[1:] == CLAUDE_STREAM

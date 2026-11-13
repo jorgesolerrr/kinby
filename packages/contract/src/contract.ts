@@ -1493,7 +1493,8 @@ export interface FactoryRunTranscriptCommand {
 }
 /**
  * The events a coding client streamed in one attempt, in order. An attempt that streamed
- * none, or that ran no engine, has none.
+ * none, or that ran no engine, has none. An event too large for a page reads as
+ * ``{"type": "cut", "bytes": <its size>}``.
  */
 export interface FactoryRunTranscript {
   cursor: number | null;

@@ -4211,7 +4211,8 @@ class FactoryRunTranscriptCommand(ContractModel):
 
 class FactoryRunTranscript(ContractModel):
     """The events a coding client streamed in one attempt, in order. An attempt that streamed
-    none, or that ran no engine, has none."""
+    none, or that ran no engine, has none. An event too large for a page reads as
+    ``{"type": "cut", "bytes": <its size>}``."""
 
     events: list[dict[str, JsonValue]]
     #: Where the next page starts. None once the transcript ends.

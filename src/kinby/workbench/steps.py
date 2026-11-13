@@ -94,25 +94,29 @@ class WorkbenchSteps:
         return RunFolderRemoveResult()
 
     async def transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
-        """One page of the attempt's transcript, from its *cursor*-th line. A page holds at least
-        one line, and no more than fit in its size after that. A line that is no JSON object, such
-        as one a killed client left half written, is skipped."""
+        """One page of the attempt's transcript, from its *cursor*-th line, no larger than its
+        size. A line that is no JSON object, such as one a killed client left half written, is
+        skipped. One too large for any page reads as a ``cut`` event that gives its size."""
         path = self._transcript(command.run_id, command.step, command.attempt)
         try:
             text = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
             lines = text.splitlines()
         except FileNotFoundError:
             lines = []
-        page: list[str] = []
+        page: list[dict[str, JsonValue] | None] = []
         size = 0
         for line in lines[command.cursor :]:
-            size += len(line.encode())
-            if page and size > _PAGE_BYTES:
+            length = len(line.encode())
+            if length > _PAGE_BYTES:
+                page.append({"type": "cut", "bytes": length})
+                continue
+            size += length
+            if size > _PAGE_BYTES:
                 break
-            page.append(line)
+            page.append(_event(line))
         end = command.cursor + len(page)
         return FactoryRunTranscript(
-            events=[event for line in page if (event := _event(line)) is not None],
+            events=[event for event in page if event is not None],
             cursor=end if end < len(lines) else None,
         )
 

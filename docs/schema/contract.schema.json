@@ -2803,7 +2803,7 @@
     },
     "FactoryRunTranscript": {
       "additionalProperties": false,
-      "description": "The events a coding client streamed in one attempt, in order. An attempt that streamed\nnone, or that ran no engine, has none.",
+      "description": "The events a coding client streamed in one attempt, in order. An attempt that streamed\nnone, or that ran no engine, has none. An event too large for a page reads as\n``{\"type\": \"cut\", \"bytes\": <its size>}``.",
       "properties": {
         "cursor": {
           "anyOf": [
