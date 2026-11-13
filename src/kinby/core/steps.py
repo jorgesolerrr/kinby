@@ -127,7 +127,7 @@ async def _run_agent_step(step: AgentStepRun, command: StepRunCommand, turns: Tu
         events = await turns.step_turn(title, message, command.origin)
     except (CoreError, ManifestError, PermissionsError) as exc:
         return step_failed(f"The turn could not start: {exc}")
-    said = StepResult(ending=StepEnding.FAILED, summary=_last_message(events))
+    said = StepResult(ending=StepEnding.FAILED, summary=last_message(events))
     match events[-1].payload:
         case TurnCompleted():
             return said.model_copy(update={"ending": StepEnding.CLEAN})
@@ -223,7 +223,7 @@ async def _run_client_step(
     return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
 
 
-def _last_message(events: Sequence[Event]) -> str:
+def last_message(events: Sequence[Event]) -> str:
     """What the agent said after its last tool call."""
     text = ""
     for event in events:

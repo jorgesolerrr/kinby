@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    AgentStepRun,
     ClientStepRun,
     CodeStepRun,
     CommandStepRun,
@@ -39,13 +40,15 @@ from kinby.core.run_worktrees import (
     run_worktree,
 )
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
+from kinby.core.turn_runner import ModelFactory, init_chat_model
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import load_tool_file
-from kinby.plugins.skills import load_skill_roots
+from kinby.plugins.skills import Skill, load_skill_roots
 from kinby.plugins.tools import Tool
+from kinby.workbench.turn import run_turn
 
 #: Where the hub mounts its own factory folders in a workbench's container.
 FACTORIES_MOUNT = Path("/factories")
@@ -57,6 +60,8 @@ _BASE = "origin/HEAD"
 _TRANSCRIPTS_DIR = "transcripts"
 #: The most of a transcript one read returns, far under the control socket's frame limit.
 _PAGE_BYTES = 1024 * 1024
+#: Where the kinby turns of agent steps keep their events and checkpoints, under the state.
+_TURNS_DIR = "turns"
 
 _logger = logging.getLogger(__name__)
 
@@ -66,12 +71,19 @@ class WorkbenchSteps:
     folders in *factories*, over the ones kinby ships in *shipped*.
 
     Nothing copies a factory here, so a step runs its tool as the factory's folder holds it then.
+    An agent step on the kinby engine calls its model through *model_factory*.
     """
 
     def __init__(
-        self, directory: Path, factories: Path = FACTORIES_MOUNT, shipped: Path = SHIPPED_FACTORIES
+        self,
+        directory: Path,
+        factories: Path = FACTORIES_MOUNT,
+        shipped: Path = SHIPPED_FACTORIES,
+        *,
+        model_factory: ModelFactory = init_chat_model,
     ) -> None:
         self._directory = directory
+        self._model_factory = model_factory
         self._workspace = directory / WORKSPACE_DIR
         self._factories = factories
         self._shipped = shipped
@@ -139,6 +151,17 @@ class WorkbenchSteps:
                 result = await run_commands(commands, timeout, folder)
             case ClientStepRun() as step:
                 result = await self._agent(step, command, folder)
+            case AgentStepRun(model=str() as model, prompt=prompt):
+                result = await run_turn(
+                    model,
+                    prompt,
+                    command,
+                    folder,
+                    await self._skills(command.origin.factory),
+                    self._directory / STATE_DIR / _TURNS_DIR,
+                    self._attempt_transcript(command),
+                    self._model_factory,
+                )
             case CodeStepRun() as step:
                 result = await self._call(step, command, folder)
             case _:
@@ -170,21 +193,15 @@ class WorkbenchSteps:
         the plan refused ends limited.
         """
         origin = command.origin
-        skills, warnings = await asyncio.to_thread(
-            load_skill_roots,
-            (self._factory(origin.factory) / SKILLS_DIR, self._directory / SKILLS_DIR),
-        )
-        for warning in warnings:
-            _logger.warning("%s: %s", ", ".join(warning.sources), warning.message)
-        transcript = self._transcript(origin.run_id, origin.step, command.attempt or 0)
-        transcript.parent.mkdir(parents=True, exist_ok=True)
+        skills = await self._skills(origin.factory)
+        transcript = self._attempt_transcript(command)
         ran = await run_coding_client(
             step.client,
             render_client_message(
                 step.prompt,
                 command.work_item,
                 command.results,
-                tuple(skills.values()),
+                skills,
                 remembers=False,
             ),
             folder,
@@ -209,6 +226,22 @@ class WorkbenchSteps:
                 usage=usage,
             )
         return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session, usage=usage)
+
+    async def _skills(self, factory: str) -> tuple[Skill, ...]:
+        """The skills of the factory's folder, and the workbench's picks it does not hide."""
+        skills, warnings = await asyncio.to_thread(
+            load_skill_roots, (self._factory(factory) / SKILLS_DIR, self._directory / SKILLS_DIR)
+        )
+        for warning in warnings:
+            _logger.warning("%s: %s", ", ".join(warning.sources), warning.message)
+        return tuple(skills.values())
+
+    def _attempt_transcript(self, command: StepRunCommand) -> Path:
+        """Where the attempt's transcript goes, its directory made."""
+        origin = command.origin
+        transcript = self._transcript(origin.run_id, origin.step, command.attempt or 0)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        return transcript
 
     def _transcript(self, run_id: UUID, step: StepId, attempt: int) -> Path:
         return self._directory / _TRANSCRIPTS_DIR / str(run_id) / step / f"{attempt}.jsonl"

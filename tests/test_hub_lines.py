@@ -172,6 +172,43 @@ def test_setup_names_each_secret_value_and_command_list_the_workbench_lacks(tmp_
     asyncio.run(scenario())
 
 
+def test_setup_names_the_key_of_each_kinby_agent_steps_model_the_workbench_lacks(tmp_path):
+    hub = _hub(tmp_path)
+    write_factory(
+        tmp_path / "hub" / "factories" / "drafts",
+        {
+            "factory.yaml": """\
+name: drafts
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - { id: plan, kind: agent, engine: kinby, prompt: prompts/plan.md,
+      model: "anthropic:claude-opus-5-5" }
+  - { id: draft, kind: agent, engine: kinby, prompt: prompts/plan.md }
+  - { id: review, kind: agent, engine: codex, prompt: prompts/plan.md }
+""",
+            "prompts/plan.md": "Plan the issue.\n",
+        },
+    )
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        workbench_id = await _cec_backend(client)
+
+        fields = await _refused(
+            client,
+            LineSetupCommand(factory="drafts", workbench_id=workbench_id, model="openai:gpt-5"),
+        )
+
+        assert fields == {
+            "workbench_id": 'Workbench "cec-backend" lacks what factory "drafts" requires: '
+            'secret "ANTHROPIC_API_KEY", secret "OPENAI_API_KEY".'
+        }
+
+    asyncio.run(scenario())
+
+
 def test_setup_refuses_a_factory_whose_image_recipe_is_not_the_workbenchs(tmp_path):
     hub = _hub(tmp_path)
     client = hub_client(hub)

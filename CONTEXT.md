@@ -373,7 +373,7 @@ One run of the agent loop against a thread, from start to exit (a process, a REP
 
 ### Turn
 
-One cycle of agent work within a **thread**, started by the user or a **wake**, ending when it completes, fails, or is interrupted. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
+One cycle of agent work within a **thread**, started by the user or a **wake**, ending when it completes, fails, or is interrupted. An **agent step** on the kinby **engine** is a turn too, on a **workbench**, in a thread of its own that no **instance** holds. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
 _Avoid_: task
 
 ### Budget
@@ -515,7 +515,7 @@ The turn runner's durable working state for a thread. It lets a parked approval 
 
 ### Approval
 
-A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted.
+A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted. A **workbench**'s turn has no one to ask yet, so each approval it requests is refused at once and the turn goes on.
 
 ### Approval decision
 
@@ -523,7 +523,7 @@ The user's answer to an **approval**: approve, or deny with an optional reason. 
 
 ### Gate
 
-The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it.
+The check every **tool** call passes through before it runs. It reads the tool's write flag and the instance's permission policy, and answers allow, ask (raise an **approval**), or deny. The policy is the instance's ceiling; a **thread** may narrow it, never widen it. A **workbench** has no policy of its own: its turns go through kinby's default.
 
 ### Gate rule
 
@@ -839,12 +839,12 @@ _Avoid_: environment, sandbox, site, station
 
 ### Line
 
-A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
+A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, or the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
 ### Agent step
 
-A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
+A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
 _Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
 
 ### Engine

@@ -725,7 +725,11 @@ class FactoryRuns:
                 limit, today = line.usd_per_day, datetime.now(UTC).date()
                 if limit is not None and self._registry.line_cost(line.line_id, today) >= limit:
                     return _Refused(step.id, str(BudgetExceeded("usd_per_day", limit)))
-                agent_run = self._client_run(run, factory, step, held, line.model)
+                agent_run = (
+                    self._kinby_run(run, step, line.model)
+                    if step.engine is Engine.KINBY
+                    else self._client_run(run, factory, step, held, line.model)
+                )
                 if isinstance(agent_run, _Refused):
                     return agent_run
                 asked = agent_run
@@ -832,10 +836,6 @@ class FactoryRuns:
         recorded no session, that step fails an attempt, as it would for a value it should have
         produced.
         """
-        if isinstance(step, WorkbenchAgentStep) and step.engine is Engine.KINBY:
-            return _Refused(
-                step.id, f'Step "{step.id}" runs on the kinby engine, which no workbench runs yet.'
-            )
         prompt = self._prompt(run, step)
         if isinstance(prompt, _Refused):
             return prompt
@@ -859,6 +859,22 @@ class FactoryRuns:
             effort=step.effort,
             branch=_branch(step, held) if isinstance(step, ClientStep) else None,
         )
+
+    def _kinby_run(
+        self, run: FactoryRun, step: WorkbenchAgentStep, line_model: str | None
+    ) -> AgentStepRun | _Refused:
+        """The turn the agent step asks its workbench to run, with its model or else its line's.
+        The kinby engine runs any provider's model, and keeps no timeout."""
+        model = step.model or line_model
+        if model is None:
+            return _Refused(
+                step.id,
+                f'Step "{step.id}" runs on the kinby engine, and it and its line name no model.',
+            )
+        prompt = self._prompt(run, step)
+        if isinstance(prompt, _Refused):
+            return prompt
+        return AgentStepRun(prompt=prompt, model=model)
 
     def _session(self, run_id: UUID, factory: _Factory, step: StepId) -> CodingSessionId | None:
         """The newest coding client session recorded by any step that shares the step's session.

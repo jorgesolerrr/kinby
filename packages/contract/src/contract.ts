@@ -162,12 +162,12 @@ export type RoutineTrigger = "scheduled" | "manual" | "catch-up" | "signal";
 export type CompletionOutcome = "work" | "no-work";
 export type TurnVerdict = "good" | "bad";
 export type HookName = string;
+export type CodingModel = string;
 export type CodingClient = "claude" | "codex";
 /**
  * How hard a coding client reasons. Codex has no ``max``.
  */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
-export type CodingModel = string;
 export type ApprovalDecision = "approve" | "deny" | "allow_in_routine" | "mark_read_only";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_takeover" | "awaiting_reply" | "failed";
 /**
@@ -3017,10 +3017,12 @@ export interface StepRunCommand {
   };
 }
 /**
- * Run a turn on a new thread of the instance, with the prompt and the run's values.
+ * Run a turn on a new thread of the instance, with the prompt and the run's values. On a
+ * workbench the turn is in no thread, and runs in the run's folder.
  */
 export interface AgentStepRun {
   kind: "agent";
+  model?: CodingModel | null;
   prompt: string;
 }
 /**
