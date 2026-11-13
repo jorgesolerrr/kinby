@@ -13,8 +13,13 @@ from kinby.contracts import (
     WORKBENCH_DELETE,
     WORKBENCH_GET,
     WORKBENCH_LIST,
+    WORKBENCH_RECREATE,
+    WORKBENCH_REMOVE,
+    WORKBENCH_RESTORE,
+    WORKBENCH_SECRETS_SET,
     WORKBENCH_START,
     WORKBENCH_STOP,
+    WORKBENCH_UPDATE,
     ControlToken,
     ErrorCode,
     ErrorEnvelope,
@@ -33,8 +38,13 @@ from kinby.contracts import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchOperationResult,
+    WorkbenchRecreateCommand,
+    WorkbenchRemoveCommand,
+    WorkbenchRestoreCommand,
+    WorkbenchSecretsSetCommand,
     WorkbenchStartCommand,
     WorkbenchStopCommand,
+    WorkbenchUpdateCommand,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.hub import HttpInstanceControl, ImageSelection
@@ -258,6 +268,15 @@ def test_lifecycle_methods_find_no_workbench_under_an_unknown_id(tmp_path):
             await client.call(WORKBENCH_START, WorkbenchStartCommand(workbench_id=unknown)),
             await client.call(WORKBENCH_STOP, WorkbenchStopCommand(workbench_id=unknown)),
             await client.call(WORKBENCH_DELETE, WorkbenchDeleteCommand(workbench_id=unknown)),
+            await client.call(WORKBENCH_RECREATE, WorkbenchRecreateCommand(workbench_id=unknown)),
+            await client.call(
+                WORKBENCH_UPDATE, WorkbenchUpdateCommand(workbench_id=unknown, revision="v2")
+            ),
+            await client.call(WORKBENCH_REMOVE, WorkbenchRemoveCommand(workbench_id=unknown)),
+            await client.call(
+                WORKBENCH_SECRETS_SET,
+                WorkbenchSecretsSetCommand(workbench_id=unknown, secrets={"GH_TOKEN": "x"}),
+            ),
         ]
 
         for answer in answers:
@@ -328,6 +347,185 @@ def test_the_hub_drains_and_stops_a_workbench_through_its_runtime(tmp_path):
     assert ("drain", "Draining accepted work.") in [
         (step.name, step.detail) for step in stopped.steps
     ]
+
+
+async def listed(client: ContractClient, *, removed: bool = False) -> list[Workbench]:
+    answer = await client.call(WORKBENCH_LIST, WorkbenchListCommand(removed=removed))
+    assert isinstance(answer, WorkbenchListResult), answer
+    return answer.workbenches
+
+
+async def removed(client: ContractClient, workbench_id: UUID) -> None:
+    remove = await client.call(WORKBENCH_REMOVE, WorkbenchRemoveCommand(workbench_id=workbench_id))
+    assert (await finished(client, remove)).state is OperationState.SUCCEEDED
+
+
+def test_a_removed_workbench_is_restored_stopped_with_its_container_and_secrets(tmp_path):
+    runtime = FakeRuntime()
+    control = FakeControl()
+    hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = await started(client, runtime)
+
+        await removed(client, workbench_id)
+        active, retained = await listed(client), await listed(client, removed=True)
+        gone = await client.call(WORKBENCH_GET, WorkbenchGetCommand(workbench_id=workbench_id))
+        restore = await client.call(
+            WORKBENCH_RESTORE, WorkbenchRestoreCommand(workbench_id=workbench_id)
+        )
+        restoration = await finished(client, restore)
+        workbench = await got(client, workbench_id)
+
+        assert control.forces == [False]
+        assert runtime.removed == [str(workbench_id)]
+        assert active == []
+        assert [(each.workbench_id, each.intended_state) for each in retained] == [
+            (workbench_id, IntendedState.REMOVED)
+        ]
+        assert isinstance(gone, ErrorEnvelope)
+        assert gone.code is ErrorCode.NOT_FOUND
+        assert restoration.state is OperationState.SUCCEEDED, restoration.detail
+        assert runtime.created[1] == runtime.created[0]
+        assert (workbench.intended_state, workbench.secrets) == (
+            IntendedState.STOPPED,
+            ["GH_TOKEN"],
+        )
+        assert await listed(client, removed=True) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_workbench_updates_onto_the_image_its_recipe_builds_at_the_revision(tmp_path):
+    images = FakeImages()
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", images=images, runtime=runtime, control=FakeControl())
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = await started(client, runtime)
+
+        update = await client.call(
+            WORKBENCH_UPDATE, WorkbenchUpdateCommand(workbench_id=workbench_id, revision="v2")
+        )
+        outcome = await finished(client, update)
+
+        assert outcome.state is OperationState.SUCCEEDED, outcome.detail
+        assert images.selections[-1] == ImageSelection("v2", recipe="coder")
+        assert runtime.created[1].command == ("workbench", "--listen", "0.0.0.0:8787")
+        assert runtime.created[1].env["GH_TOKEN"] == "ghp-secret"
+        assert runtime.started == [str(workbench_id)] * 2
+
+    asyncio.run(scenario())
+
+
+def test_lifecycle_methods_are_refused_while_another_operation_owns_the_workbench(tmp_path):
+    runtime = FakeRuntime()
+    control = FakeControl(holds=True)
+    hub = hub_at(tmp_path / "hub", runtime=runtime, control=control)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = await started(client, runtime)
+        stop = await client.call(WORKBENCH_STOP, WorkbenchStopCommand(workbench_id=workbench_id))
+        await asyncio.wait_for(control.asked.wait(), timeout=5)
+
+        refusals = [
+            await client.call(
+                WORKBENCH_RECREATE, WorkbenchRecreateCommand(workbench_id=workbench_id)
+            ),
+            await client.call(
+                WORKBENCH_UPDATE, WorkbenchUpdateCommand(workbench_id=workbench_id, revision="v2")
+            ),
+            await client.call(WORKBENCH_REMOVE, WorkbenchRemoveCommand(workbench_id=workbench_id)),
+        ]
+        control.release.set()
+        await finished(client, stop)
+
+        for refused in refusals:
+            assert isinstance(refused, ErrorEnvelope)
+            assert refused.code is ErrorCode.INSTANCE_BUSY
+        assert len(runtime.created) == 1
+        assert runtime.removed == []
+
+    asyncio.run(scenario())
+
+
+def test_only_a_removed_workbench_is_restored_and_never_over_one_of_its_name(tmp_path):
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", runtime=runtime, control=FakeControl())
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = (await created(client)).workbench_id
+        active = await client.call(
+            WORKBENCH_RESTORE, WorkbenchRestoreCommand(workbench_id=workbench_id)
+        )
+        await removed(client, workbench_id)
+        await created(client)
+        taken = await client.call(
+            WORKBENCH_RESTORE, WorkbenchRestoreCommand(workbench_id=workbench_id)
+        )
+
+        assert isinstance(active, ErrorEnvelope)
+        assert (active.code, active.message) == (
+            ErrorCode.NOT_FOUND,
+            f'Removed workbench "{workbench_id}" was not found.',
+        )
+        assert isinstance(taken, ErrorEnvelope)
+        assert taken.message == (
+            'A workbench named "cec-backend" exists already. Remove it before restoring this one.'
+        )
+        assert len(runtime.created) == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_removed_workbench_is_deleted_with_its_directory_and_volumes(tmp_path):
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", runtime=runtime, control=FakeControl())
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = (await created(client)).workbench_id
+        await removed(client, workbench_id)
+
+        delete = await client.call(
+            WORKBENCH_DELETE, WorkbenchDeleteCommand(workbench_id=workbench_id)
+        )
+        deletion = await finished(client, delete)
+
+        assert deletion.state is OperationState.SUCCEEDED, deletion.detail
+        assert not (hub.instances_directory / str(workbench_id)).exists()
+        assert runtime.deleted_volumes == [f"kinby-{workbench_id}-workspace"]
+        assert await listed(client, removed=True) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_restoration_reports_a_missing_workbench_directory(tmp_path):
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", runtime=runtime, control=FakeControl())
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = (await created(client)).workbench_id
+        await removed(client, workbench_id)
+        directory = hub.instances_directory / str(workbench_id)
+        (directory / ".env").unlink()
+        directory.rmdir()
+
+        restore = await client.call(
+            WORKBENCH_RESTORE, WorkbenchRestoreCommand(workbench_id=workbench_id)
+        )
+        outcome = await finished(client, restore)
+
+        assert outcome.state is OperationState.FAILED
+        assert outcome.detail == f"The workbench directory {directory} is missing."
+        assert len(runtime.created) == 1
+
+    asyncio.run(scenario())
 
 
 def test_a_workbench_deletion_that_failed_part_way_is_retried_to_the_end(tmp_path):

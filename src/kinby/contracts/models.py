@@ -1649,6 +1649,8 @@ class WorkbenchCreateCommand(ContractModel):
     values: dict[str, SetupValue] = Field(default_factory=dict)
     #: Secrets, by the variable each lands in. They never read back.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    #: The hub secret each variable takes and stays linked to, by variable.
+    hub_secrets: dict[str, HubSecretName] = Field(default_factory=dict)
 
     @field_serializer("secrets", when_used="json")
     def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
@@ -1665,15 +1667,20 @@ class Workbench(ContractModel):
     values: dict[str, SetupValue]
     #: The variables its secrets land in.
     secrets: list[str]
+    #: The hub secret each linked variable takes, by variable.
+    hub_secrets: dict[str, HubSecretName]
     intended_state: IntendedState
     #: What the runtime saw when the record was read.
     process: ProcessState
     #: The runtime's word for the process, such as "restarting" beside `starting`.
     detail: str = ""
+    #: What its container applies only once it is recreated.
+    recreate_reasons: list[RecreateReason]
 
 
 class WorkbenchListCommand(ContractModel):
-    pass
+    #: List the removed workbenches whose records and storage the hub retains, not the active ones.
+    removed: bool = False
 
 
 class WorkbenchListResult(ContractModel):
@@ -1693,8 +1700,54 @@ class WorkbenchStopCommand(ContractModel):
     force: bool = False
 
 
+class WorkbenchRecreateCommand(ContractModel):
+    workbench_id: UUID
+
+
+class WorkbenchUpdateCommand(ContractModel):
+    """Move one workbench to the image its recipe builds at a revision."""
+
+    workbench_id: UUID
+    revision: Annotated[str, Field(min_length=1)]
+
+
+class WorkbenchRemoveCommand(ContractModel):
+    """Drain and remove one workbench's container. Its data and its record stay behind."""
+
+    workbench_id: UUID
+
+
+class WorkbenchRestoreCommand(ContractModel):
+    """Bring a removed workbench back from its retained record, stopped."""
+
+    workbench_id: UUID
+
+
+class WorkbenchSecretsSetCommand(ContractModel):
+    """Replace the named values in one workbench's secrets. The result carries none of them back."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    workbench_id: UUID
+    #: Typed values, by variable. A typed value for a linked variable removes its link.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    #: The hub secret each variable takes and stays linked to, by variable.
+    hub_secrets: dict[str, HubSecretName] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _names_a_variable(self) -> Self:
+        if not self.secrets and not self.hub_secrets:
+            raise ValueError("Name at least one secret to set or link.")
+        return self
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
 class WorkbenchDeleteCommand(ContractModel):
-    """Drain the workbench, remove its container, and delete its directory and named volumes."""
+    """Drain the workbench, remove its container, and delete its directory and named volumes. A
+    removed workbench has no container left to drain."""
 
     workbench_id: UUID
 

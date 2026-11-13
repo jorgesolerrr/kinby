@@ -816,12 +816,32 @@ export interface Contract {
       command: WorkbenchListCommand;
       result: WorkbenchListResult;
     };
+    "workbench.recreate": {
+      command: WorkbenchRecreateCommand;
+      result: WorkbenchOperationResult;
+    };
+    "workbench.remove": {
+      command: WorkbenchRemoveCommand;
+      result: WorkbenchOperationResult;
+    };
+    "workbench.restore": {
+      command: WorkbenchRestoreCommand;
+      result: WorkbenchOperationResult;
+    };
+    "workbench.secrets.set": {
+      command: WorkbenchSecretsSetCommand;
+      result: WorkbenchOperationResult;
+    };
     "workbench.start": {
       command: WorkbenchStartCommand;
       result: WorkbenchOperationResult;
     };
     "workbench.stop": {
       command: WorkbenchStopCommand;
+      result: WorkbenchOperationResult;
+    };
+    "workbench.update": {
+      command: WorkbenchUpdateCommand;
       result: WorkbenchOperationResult;
     };
   };
@@ -3279,6 +3299,9 @@ export interface ViewChecklist {
 }
 export interface ViewListCommand {}
 export interface WorkbenchCreateCommand {
+  hub_secrets?: {
+    [k: string]: HubSecretName;
+  };
   name: string;
   recipe?: RecipeName | null;
   secrets?: {
@@ -3299,10 +3322,14 @@ export interface WorkbenchCreateResult {
  */
 export interface Workbench {
   detail?: string;
+  hub_secrets: {
+    [k: string]: HubSecretName;
+  };
   intended_state: IntendedState;
   name: string;
   process: ProcessState;
   recipe: RecipeName | null;
+  recreate_reasons: RecreateReason[];
   secrets: string[];
   values: {
     [k: string]: SetupValue;
@@ -3311,7 +3338,8 @@ export interface Workbench {
   workspace_source: string | null;
 }
 /**
- * Drain the workbench, remove its container, and delete its directory and named volumes.
+ * Drain the workbench, remove its container, and delete its directory and named volumes. A
+ * removed workbench has no container left to drain.
  */
 export interface WorkbenchDeleteCommand {
   workbench_id: string;
@@ -3326,15 +3354,51 @@ export interface WorkbenchOperationResult {
 export interface WorkbenchGetCommand {
   workbench_id: string;
 }
-export interface WorkbenchListCommand {}
+export interface WorkbenchListCommand {
+  removed?: boolean;
+}
 export interface WorkbenchListResult {
   workbenches: Workbench[];
+}
+export interface WorkbenchRecreateCommand {
+  workbench_id: string;
+}
+/**
+ * Drain and remove one workbench's container. Its data and its record stay behind.
+ */
+export interface WorkbenchRemoveCommand {
+  workbench_id: string;
+}
+/**
+ * Bring a removed workbench back from its retained record, stopped.
+ */
+export interface WorkbenchRestoreCommand {
+  workbench_id: string;
+}
+/**
+ * Replace the named values in one workbench's secrets. The result carries none of them back.
+ */
+export interface WorkbenchSecretsSetCommand {
+  hub_secrets?: {
+    [k: string]: HubSecretName;
+  };
+  secrets?: {
+    [k: string]: string;
+  };
+  workbench_id: string;
 }
 export interface WorkbenchStartCommand {
   workbench_id: string;
 }
 export interface WorkbenchStopCommand {
   force?: boolean;
+  workbench_id: string;
+}
+/**
+ * Move one workbench to the image its recipe builds at a revision.
+ */
+export interface WorkbenchUpdateCommand {
+  revision: string;
   workbench_id: string;
 }
 export interface ResultFrame {

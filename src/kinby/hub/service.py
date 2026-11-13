@@ -129,8 +129,13 @@ from kinby.contracts import (
     WORKBENCH_DELETE,
     WORKBENCH_GET,
     WORKBENCH_LIST,
+    WORKBENCH_RECREATE,
+    WORKBENCH_REMOVE,
+    WORKBENCH_RESTORE,
+    WORKBENCH_SECRETS_SET,
     WORKBENCH_START,
     WORKBENCH_STOP,
+    WORKBENCH_UPDATE,
     AcceptedResult,
     ApprovalDecision,
     AuthoredTool,
@@ -252,8 +257,13 @@ from kinby.contracts import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchOperationResult,
+    WorkbenchRecreateCommand,
+    WorkbenchRemoveCommand,
+    WorkbenchRestoreCommand,
+    WorkbenchSecretsSetCommand,
     WorkbenchStartCommand,
     WorkbenchStopCommand,
+    WorkbenchUpdateCommand,
 )
 from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
@@ -727,6 +737,11 @@ class Hub:
         dispatcher.register(WORKBENCH_START, self.start_workbench)
         dispatcher.register(WORKBENCH_STOP, self.stop_workbench)
         dispatcher.register(WORKBENCH_DELETE, self.delete_workbench)
+        dispatcher.register(WORKBENCH_RECREATE, self.recreate_workbench)
+        dispatcher.register(WORKBENCH_UPDATE, self.update_workbench)
+        dispatcher.register(WORKBENCH_REMOVE, self.remove_workbench)
+        dispatcher.register(WORKBENCH_RESTORE, self.restore_workbench)
+        dispatcher.register(WORKBENCH_SECRETS_SET, self.set_workbench_secrets)
         dispatcher.register(OPERATION_GET, self.operation)
         dispatcher.register(IMAGE_PREPARE, self.prepare_image)
         dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
@@ -2132,14 +2147,20 @@ class Hub:
             self._record(operation_id, "start", "Restoring the intended running state.")
             await self._runtime.start(record.runtime_id)
 
-    def _revalidate(self, operation_id: UUID, record: ManagedInstance) -> Instance:
-        """Revalidate what a container is built on. No revision is resolved here."""
+    def _revalidate(self, operation_id: UUID, record: ManagedInstance) -> Instance | None:
+        """Revalidate what a container is built on. No revision is resolved here. A workbench has
+        no instance to read."""
         self._record(
             operation_id,
             "validate",
             f"Revalidating the retained configuration of instance {record.instance_id}.",
         )
-        instance = inspect_instance(record.path)
+        if record.workbench is None:
+            instance = inspect_instance(record.path)
+        elif record.path.is_dir():
+            instance = None
+        else:
+            raise ValueError(f"The workbench directory {record.path} is missing.")
         conflict = self.registry.conflicting_storage(record.instance_id, record.storage)
         if conflict is not None:
             raise ValueError(
@@ -2346,10 +2367,11 @@ class Hub:
     async def restore(self, command: InstanceRestoreCommand) -> LifecycleOperationResult:
         """Bring a removed instance back from its retained record, and leave it stopped."""
         record = self._claimed(self._removed_instance(command.instance_id))
-        if self._name_taken(record.manifest_id):
+        workbench = record.workbench is not None
+        if self._name_taken(record.manifest_id, workbench=workbench):
             raise NameTaken(
-                f'An instance named "{record.manifest_id}" exists already. '
-                "Remove it before restoring this one."
+                f'{"A workbench" if workbench else "An instance"} named "{record.manifest_id}" '
+                "exists already. Remove it before restoring this one."
             )
         operation_id = uuid4()
         self.registry.record_operation(
@@ -2388,10 +2410,11 @@ class Hub:
         Nothing missing is replaced. Docker would mount a new, empty volume under a
         retained volume's name, and another image would be an update.
         """
-        manifest_id = self._revalidate(operation_id, record).manifest.id
-        if manifest_id != record.manifest_id:
+        instance = self._revalidate(operation_id, record)
+        if instance is not None and instance.manifest.id != record.manifest_id:
             raise ValueError(
-                f'{record.path} now holds instance "{manifest_id}", not "{record.manifest_id}".'
+                f'{record.path} now holds instance "{instance.manifest.id}", '
+                f'not "{record.manifest_id}".'
             )
         image = record.image_id
         if not image or not await self._runtime.has_image(image):
@@ -3078,15 +3101,21 @@ class Hub:
         )
 
     async def create_workbench(self, command: WorkbenchCreateCommand) -> WorkbenchCreateResult:
-        """Accept a workbench only once its name is free, kinby ships its recipe and each secret
-        names a variable. Its image builds and its container is created in the background."""
+        """Accept a workbench only once its name is free, kinby ships its recipe, each secret
+        names a variable and the hub keeps each hub secret it links. Its image builds and its
+        container is created in the background."""
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
-        errors: dict[str, str] = {}
+        kept = self.secrets.values()
+        errors = link_errors(secrets, command.hub_secrets, {}, kept)
         if self._name_taken(command.name, workbench=True):
             errors["name"] = f'A workbench named "{command.name}" exists already.'
         if command.recipe is not None and not ships_recipe(command.recipe):
             errors["recipe"] = f'kinby does not ship image recipe "{command.recipe}".'
-        invalid = [name for name in secrets if ENVIRONMENT_NAME.fullmatch(name) is None]
+        invalid = [
+            name
+            for name in secrets | command.hub_secrets
+            if ENVIRONMENT_NAME.fullmatch(name) is None
+        ]
         if invalid:
             errors["secrets"] = f'Invalid environment variable name: "{invalid[0]}".'
         if errors:
@@ -3099,6 +3128,7 @@ class Hub:
                 values=command.values,
             ),
         )
+        secrets |= {variable: kept[name] for variable, name in command.hub_secrets.items()}
 
         async def write(
             operation_id: UUID, staging: Path, artifact: ImageArtifact
@@ -3111,6 +3141,7 @@ class Hub:
             return ()
 
         operation_id = self._begin_create(record, write, secrets.values())
+        self.registry.link_secrets(record.instance_id, command.hub_secrets)
         return WorkbenchCreateResult(
             operation_id=operation_id,
             workbench_id=record.instance_id,
@@ -3121,7 +3152,7 @@ class Hub:
         return WorkbenchListResult(
             workbenches=[
                 await self._workbench(record, self._environment(record.path))
-                for record in self.registry.listed_workbenches()
+                for record in self.registry.listed_workbenches(removed=command.removed)
             ]
         )
 
@@ -3145,10 +3176,61 @@ class Hub:
             operation_id=stopping.operation_id, workbench_id=command.workbench_id
         )
 
+    async def recreate_workbench(
+        self, command: WorkbenchRecreateCommand
+    ) -> WorkbenchOperationResult:
+        self._active_workbench(command.workbench_id)
+        recreating = await self.recreate(InstanceRecreateCommand(instance_id=command.workbench_id))
+        return WorkbenchOperationResult(
+            operation_id=recreating.operation_id, workbench_id=command.workbench_id
+        )
+
+    async def update_workbench(self, command: WorkbenchUpdateCommand) -> WorkbenchOperationResult:
+        """Move the workbench onto the image its recipe builds at the revision."""
+        self._active_workbench(command.workbench_id)
+        updating = await self.update(
+            InstanceUpdateCommand(instance_id=command.workbench_id, revision=command.revision)
+        )
+        return WorkbenchOperationResult(
+            operation_id=updating.operation_id, workbench_id=command.workbench_id
+        )
+
+    async def remove_workbench(self, command: WorkbenchRemoveCommand) -> WorkbenchOperationResult:
+        self._active_workbench(command.workbench_id)
+        removing = await self.remove(InstanceRemoveCommand(instance_id=command.workbench_id))
+        return WorkbenchOperationResult(
+            operation_id=removing.operation_id, workbench_id=command.workbench_id
+        )
+
+    async def restore_workbench(self, command: WorkbenchRestoreCommand) -> WorkbenchOperationResult:
+        self._removed_workbench(command.workbench_id)
+        restoring = await self.restore(InstanceRestoreCommand(instance_id=command.workbench_id))
+        return WorkbenchOperationResult(
+            operation_id=restoring.operation_id, workbench_id=command.workbench_id
+        )
+
+    async def set_workbench_secrets(
+        self, command: WorkbenchSecretsSetCommand
+    ) -> WorkbenchOperationResult:
+        """Replace or link the workbench's secrets. A running workbench applies them once it is
+        recreated."""
+        self._active_workbench(command.workbench_id)
+        replacing = await self.set_secrets(
+            InstanceSecretsSetCommand(
+                instance_id=command.workbench_id,
+                secrets=command.secrets,
+                hub_secrets=command.hub_secrets,
+            )
+        )
+        return WorkbenchOperationResult(
+            operation_id=replacing.operation_id, workbench_id=command.workbench_id
+        )
+
     async def delete_workbench(self, command: WorkbenchDeleteCommand) -> WorkbenchOperationResult:
         """Drain the workbench and remove its container, then delete its directory and named
-        volumes, in one operation. A deletion that failed part way resumes where it stopped."""
-        record = self._claimed(self._active_workbench(command.workbench_id, removed=True))
+        volumes, in one operation. A removed workbench has only its storage left, and a deletion
+        that failed part way resumes where it stopped."""
+        record = self._claimed(self._kept_workbench(command.workbench_id))
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id, record.instance_id, OperationKind.DELETE, "Deletion queued."
@@ -3164,7 +3246,7 @@ class Hub:
         try:
             try:
                 async with self._locks.setdefault(workbench_id, asyncio.Lock()):
-                    record = self._active_workbench(workbench_id, removed=True)
+                    record = self._kept_workbench(workbench_id)
                     try:
                         if record.active:
                             await self._take_away(record, pending)
@@ -3185,13 +3267,29 @@ class Hub:
         finally:
             self._stopping.pop(workbench_id, None)
 
-    def _active_workbench(self, workbench_id: UUID, *, removed: bool = False) -> ManagedInstance:
-        """The active workbench, or with *removed* also one whose deletion failed part way."""
+    def _active_workbench(self, workbench_id: UUID) -> ManagedInstance:
+        record = self.registry.instance(workbench_id)
+        if record is None or not record.active or record.workbench is None:
+            raise WorkbenchNotFound(f'Workbench "{workbench_id}" was not found.')
+        return record
+
+    def _removed_workbench(self, workbench_id: UUID) -> ManagedInstance:
+        record = self.registry.instance(workbench_id)
+        if (
+            record is None
+            or record.intended_state is not IntendedState.REMOVED
+            or record.workbench is None
+        ):
+            raise WorkbenchNotFound(f'Removed workbench "{workbench_id}" was not found.')
+        return record
+
+    def _kept_workbench(self, workbench_id: UUID) -> ManagedInstance:
+        """An active workbench, or a removed one whose storage the hub retains."""
         record = self.registry.instance(workbench_id)
         if (
             record is None
             or record.workbench is None
-            or not (record.active or (removed and record.intended_state is IntendedState.REMOVED))
+            or not (record.active or record.intended_state is IntendedState.REMOVED)
         ):
             raise WorkbenchNotFound(f'Workbench "{workbench_id}" was not found.')
         return record
@@ -3207,9 +3305,11 @@ class Hub:
             workspace_source=record.workbench.workspace_source,
             values=record.workbench.values,
             secrets=sorted(name for name in environment if name != CONTROL_TOKEN_VARIABLE),
+            hub_secrets=self.registry.secret_links(record.instance_id),
             intended_state=record.intended_state,
             process=observed.process,
             detail=observed.detail,
+            recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
         )
 
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
