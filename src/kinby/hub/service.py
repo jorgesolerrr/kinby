@@ -1720,8 +1720,9 @@ class Hub:
         record: ManagedInstance, fields: Mapping[str, str]
     ) -> Callable[[Mapping[str, str]], dict[str, str]]:
         """Renames a map by field name to the variables the instance holds them under. Only the
-        API key needs the instance's model, so only then is its manifest read."""
-        if API_KEY_FIELD.name not in fields:
+        API key needs the instance's model, so only then is its manifest read. A workbench names
+        its secrets by variable already."""
+        if record.workbench is not None or API_KEY_FIELD.name not in fields:
             return dict
         model = inspect_instance(record.path).manifest.models.main
         return partial(held_secrets, model)

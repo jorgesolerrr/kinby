@@ -28,7 +28,14 @@ from kinby.contracts import (
     WorkbenchStartCommand,
 )
 from kinby.hub import Hub
-from tests.test_hub import FakeControl, FakeRuntime, finished_operation, hub_at, hub_client
+from tests.test_hub import (
+    FakeControl,
+    FakeRuntime,
+    finished_operation,
+    hub_at,
+    hub_client,
+    instance_environment,
+)
 from tests.test_hub_secret_methods import set_hub_secret
 from tests.test_hub_workbenches import created, finished, got
 
@@ -205,5 +212,33 @@ def test_a_replaced_workbench_secret_reaches_its_container_through_a_recreation(
             "ghp-typed",
             "npm-first",
         )
+
+    asyncio.run(scenario())
+
+
+def test_a_workbench_secret_named_api_key_is_replaced_as_its_own_variable(tmp_path):
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        workbench_id = (
+            await created(
+                client,
+                WorkbenchCreateCommand(name="cec-backend", secrets={"api_key": SecretStr("first")}),
+            )
+        ).workbench_id
+
+        replace = await client.call(
+            WORKBENCH_SECRETS_SET,
+            WorkbenchSecretsSetCommand(
+                workbench_id=workbench_id, secrets={"api_key": SecretStr("second")}
+            ),
+        )
+        replacement = await finished(client, replace)
+
+        assert replacement.state is OperationState.SUCCEEDED, replacement.detail
+        assert (await got(client, workbench_id)).secrets == ["api_key"]
+        assert instance_environment(hub, workbench_id)["api_key"] == "second"
 
     asyncio.run(scenario())
