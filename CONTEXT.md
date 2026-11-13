@@ -515,7 +515,7 @@ The turn runner's durable working state for a thread. It lets a parked approval 
 
 ### Approval
 
-A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted. A **workbench**'s turn has no one to ask yet, so each approval it requests is refused at once and the turn goes on.
+A user decision a live turn waits on before it continues. Requested as an event; answered through the contract. A parked turn stays live until the user answers or the turn is interrupted. A **workbench**'s turn is not kept live: the attempt ends asked, its **factory run** parks, and the request reaches the user as a **hub** notification that names the run. The user's answer goes to the hub, which resumes the turn from its **graph checkpoint** as the **step**'s next attempt.
 
 ### Approval decision
 
@@ -854,7 +854,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. It ends with a **step result**.
+One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. So does an **approval** a kinby **agent step**'s turn requests, until the user answers it. It ends with a **step result**.
 
 ### Work item
 
@@ -883,7 +883,7 @@ What a **step** hands on: a short summary plus the named values the **factory** 
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. One whose kinby turn requested an **approval** ends asked: the run parks until the user answers, and the answer resumes the turn as the next attempt, without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
 
 ### Hook
 

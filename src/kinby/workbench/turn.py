@@ -7,11 +7,12 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from kinby.contracts import (
+    AnsweredAsk,
     ApiUse,
-    ApprovalDecision,
+    ApprovalRequested,
     ErrorCode,
     Event,
     FeedbackPolicy,
@@ -26,20 +27,15 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnStarted,
+    WaitingApproval,
 )
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
-from kinby.core.pricing import token_cost
+from kinby.core.pricing import price_map, token_cost
 from kinby.core.prompt import render_step_message
 from kinby.core.steps import last_message, step_failed
 from kinby.core.turn_runner import LangGraphRunner, ModelFactory
-from kinby.core.turns import (
-    ApprovalAnswer,
-    ParkedTurn,
-    PreparedTurnRequest,
-    TurnContext,
-    TurnOutcome,
-)
+from kinby.core.turns import ApprovalAnswer, ParkedTurn, PreparedTurnRequest, TurnContext
 from kinby.instance import (
     Budgets,
     Conventions,
@@ -55,11 +51,6 @@ from kinby.instance.dataclasses import Compaction
 from kinby.instance.permissions import SHIPPED_POLICY
 from kinby.plugins.skills import Skill
 
-#: The answer every ask of a workbench's turn gets, until an ask reaches the user (#1352).
-_REFUSED = ApprovalAnswer(
-    ApprovalDecision.DENY,
-    "no one can answer an ask on a workbench yet, so every ask is refused. Go on without it.",
-)
 #: The default tools a workbench's turn is offered: bash and the file tools.
 _TOOLS = Tools(off=frozenset({"web_search", "web_fetch"}))
 
@@ -69,6 +60,7 @@ _logger = logging.getLogger(__name__)
 async def run_turn(
     model: str,
     prompt: str,
+    answered: AnsweredAsk | None,
     command: StepRunCommand,
     folder: Path,
     skills: Sequence[Skill],
@@ -77,9 +69,11 @@ async def run_turn(
     model_factory: ModelFactory,
 ) -> StepResult:
     """Run the step's turn in *folder* with *model*, its events kept in *state* and appended to
-    *transcript*. The turn is on a thread of its own, which no instance holds.
+    *transcript*. The turn is on a thread of its own, which no instance holds. An *answered* ask
+    resumes the turn that parked on it, from its checkpoint.
 
-    What the agent said last is only the summary, and its model calls are what the step spent.
+    A turn the gate parks on an ask ends the attempt asked. What the agent said last is only the
+    summary, and the model calls of the attempt are what it spent.
     """
     instance = Instance(
         path=state, manifest=_manifest(state, folder, model), matching_rule="explicit directory"
@@ -94,38 +88,49 @@ async def run_turn(
         workbench_skills=tuple(skills),
     )
     preparation = runner.prepare_for_turn()
-    thread_id, turn_id = uuid4(), uuid4()
+    if answered is None:
+        # The thread holds this turn alone, so the turn's id is all an answer needs to resume it.
+        turn_id = uuid4()
+        turn = PreparedTurnRequest(
+            thread_id=turn_id,
+            turn_id=turn_id,
+            message=render_step_message(prompt, command.work_item, command.results),
+            model=preparation.model,
+            permission_mode=preparation.default_mode,
+            origin=command.origin,
+            system_prompt=preparation.system_prompt,
+        )
+    else:
+        turn_id = answered.ask.turn_id
+        restored = await runner.restore(turn_id, turn_id)
+        if restored is None:
+            return step_failed("The turn this answer resumes is parked on no ask any more.")
+        turn = restored
     events: list[Event] = []
 
     async def emit(payload: Payload) -> Event:
-        event = await log.append(thread_id, turn_id, payload)
+        event = await log.append(turn.thread_id, turn.turn_id, payload)
         events.append(event)
         line = event.model_dump_json() + "\n"
         await asyncio.to_thread(_append, transcript, line)
         return event
 
-    message = render_step_message(prompt, command.work_item, command.results)
-    turn = PreparedTurnRequest(
-        thread_id=thread_id,
-        turn_id=turn_id,
-        message=message,
-        model=preparation.model,
-        permission_mode=preparation.default_mode,
-        origin=command.origin,
-        system_prompt=preparation.system_prompt,
-    )
-    await emit(
-        TurnStarted(
-            message=message,
-            model=turn.model,
-            permission_mode=turn.permission_mode,
-            origin=turn.origin,
-            prompt_version=preparation.prompt_version,
-        )
-    )
     context = TurnContext(preparation.budgets, emit)
     try:
-        outcome = await _refusing_asks(runner, turn, context)
+        if answered is None:
+            await emit(
+                TurnStarted(
+                    message=turn.message,
+                    model=turn.model,
+                    permission_mode=turn.permission_mode,
+                    origin=turn.origin,
+                    prompt_version=preparation.prompt_version,
+                )
+            )
+            outcome = await runner.run(turn, context)
+        else:
+            answer = ApprovalAnswer(answered.answer.decision, answered.answer.reason)
+            outcome = await runner.resume(turn, answer, context)
     except CoreError as exc:
         code, reason = exc.code, str(exc)
     except Exception:
@@ -133,13 +138,13 @@ async def run_turn(
         code, reason = ErrorCode.INTERNAL, "The model turn failed unexpectedly."
     else:
         usage = _usage(events)
-        cost = None if outcome.price is None else token_cost(usage, outcome.price)
+        price = price_map(instance.manifest.prices).get(turn.model)
+        cost = None if price is None else token_cost(usage, price)
+        spent = StepUsage(api=ApiUse(**usage.model_dump(), cost=cost))
+        if isinstance(outcome, ParkedTurn):
+            return _asked(turn_id, events, spent)
         await emit(TurnCompleted(outcome=outcome.outcome, cost=cost, **usage.model_dump()))
-        return StepResult(
-            ending=StepEnding.CLEAN,
-            summary=last_message(events),
-            usage=StepUsage(api=ApiUse(**usage.model_dump(), cost=cost)),
-        )
+        return StepResult(ending=StepEnding.CLEAN, summary=last_message(events), usage=spent)
     usage = _usage(events)
     await emit(TurnFailed(code=code, message=reason, **usage.model_dump()))
     said = StepResult(
@@ -150,14 +155,24 @@ async def run_turn(
     return step_failed(f"The turn failed: {reason}", said)
 
 
-async def _refusing_asks(
-    runner: LangGraphRunner, turn: PreparedTurnRequest, context: TurnContext
-) -> TurnOutcome:
-    """Run the turn to its end, resuming it with a refusal each time it parks on an ask."""
-    outcome = await runner.run(turn, context)
-    while isinstance(outcome, ParkedTurn):
-        outcome = await runner.resume(turn, _REFUSED, context)
-    return outcome
+def _asked(turn_id: UUID, events: Sequence[Event], usage: StepUsage) -> StepResult:
+    """The attempt of a turn that parked on the gate's ask, which the user answers."""
+    request = next(
+        (
+            event.payload
+            for event in reversed(events)
+            if isinstance(event.payload, ApprovalRequested)
+        ),
+        None,
+    )
+    if request is None:
+        return step_failed("The turn parked on something other than an ask of the gate.")
+    return StepResult(
+        ending=StepEnding.ASKED,
+        summary=f"The turn asks to call {request.name}.",
+        usage=usage,
+        ask=WaitingApproval(turn_id=turn_id, request=request),
+    )
 
 
 def _usage(events: Sequence[Event]) -> TokenTotals:

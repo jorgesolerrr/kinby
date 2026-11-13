@@ -3953,6 +3953,10 @@ class StepEnding(StrEnum):
     #: The subscription's limit stopped the step's coding client. The run parks until the plan
     #: window resets, then tries the step again without spending a retry.
     LIMITED = "limited"
+    #: The gate asked the user about a call of a kinby turn on a workbench. The run parks until
+    #: they answer, and the answer resumes the turn as the step's next attempt, spending no
+    #: retry.
+    ASKED = "asked"
 
 
 #: One of an instance's lists of repository commands, by name.
@@ -3999,6 +4003,27 @@ class CodeStepRun(ContractModel):
     summary: str | None = None
 
 
+class StepAnswer(ContractModel):
+    """The user's answer to the ask a kinby turn on a workbench parked on."""
+
+    decision: Literal[ApprovalDecision.APPROVE, ApprovalDecision.DENY]
+    #: What the model should do instead. Only a denial carries one.
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _reason_only_on_deny(self) -> Self:
+        if self.decision is not ApprovalDecision.DENY and self.reason is not None:
+            raise ValueError("An approval takes no reason; only a denial does.")
+        return self
+
+
+class AnsweredAsk(ContractModel):
+    """The ask an earlier attempt's turn parked on, and the user's answer to it."""
+
+    ask: WaitingApproval
+    answer: StepAnswer
+
+
 class AgentStepRun(ContractModel):
     """Run a turn on a new thread of the instance, with the prompt and the run's values. On a
     workbench the turn is in no thread, and runs in the run's folder."""
@@ -4009,6 +4034,8 @@ class AgentStepRun(ContractModel):
     #: The model a workbench's turn runs with, as provider:model. None in an instance, whose
     #: manifest names it.
     model: CodingModel | None = None
+    #: The answered ask whose turn this attempt resumes on a workbench. None starts a new turn.
+    answered: AnsweredAsk | None = None
 
 
 class ClientStepRun(ContractModel):
@@ -4097,6 +4124,8 @@ class StepResult(ContractModel):
     resets_at: AwareDatetime | None = None
     #: What a step on a workbench spent. None for a step that ran no model.
     usage: StepUsage | None = None
+    #: The approval an asked step's turn parked on. Only an asked step has one.
+    ask: WaitingApproval | None = None
 
     @model_validator(mode="after")
     def _resets_at_only_when_limited(self) -> Self:
@@ -4105,6 +4134,15 @@ class StepResult(ContractModel):
             raise ValueError("A limited step needs resets_at, the time its plan window resets.")
         if not limited and self.resets_at is not None:
             raise ValueError(f"A {self.ending} step has no resets_at; only a limited step has one.")
+        return self
+
+    @model_validator(mode="after")
+    def _ask_only_when_asked(self) -> Self:
+        asked = self.ending is StepEnding.ASKED
+        if asked and self.ask is None:
+            raise ValueError("An asked step needs ask, the approval its turn parked on.")
+        if not asked and self.ask is not None:
+            raise ValueError(f"A {self.ending} step has no ask; only an asked step has one.")
         return self
 
 
@@ -4142,6 +4180,10 @@ class StepAttempt(ContractModel):
     session: CodingSessionId | None = None
     #: What a step on a workbench spent, a coding client counting only its own tokens.
     usage: StepUsage | None = None
+    #: The approval an asked attempt's turn parked on.
+    ask: WaitingApproval | None = None
+    #: The user's answer to that ask, once they gave it.
+    answer: StepAnswer | None = None
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
 
@@ -4216,6 +4258,15 @@ class FactoryRunApproveCommand(ContractModel):
     """Approve a run parked at an approve step, which moves it on as the step's next outcome."""
 
     run_id: UUID
+
+
+class FactoryRunAnswerCommand(ContractModel):
+    """Answer the ask a run's kinby turn parked on, which resumes the turn as the step's next
+    attempt."""
+
+    run_id: UUID
+    approval_id: UUID
+    answer: StepAnswer
 
 
 class FactoryRunCancelCommand(ContractModel):

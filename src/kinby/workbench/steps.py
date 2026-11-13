@@ -8,6 +8,7 @@ import logging
 import shutil
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -40,7 +41,6 @@ from kinby.core.run_worktrees import (
     run_worktree,
 )
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
-from kinby.core.turn_runner import ModelFactory, init_chat_model
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
 from kinby.plugins.errors import exception_message
@@ -48,7 +48,9 @@ from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import load_tool_file
 from kinby.plugins.skills import Skill, load_skill_roots
 from kinby.plugins.tools import Tool
-from kinby.workbench.turn import run_turn
+
+if TYPE_CHECKING:
+    from kinby.core.turn_runner import ModelFactory
 
 #: Where the hub mounts its own factory folders in a workbench's container.
 FACTORIES_MOUNT = Path("/factories")
@@ -80,7 +82,7 @@ class WorkbenchSteps:
         factories: Path = FACTORIES_MOUNT,
         shipped: Path = SHIPPED_FACTORIES,
         *,
-        model_factory: ModelFactory = init_chat_model,
+        model_factory: ModelFactory | None = None,
     ) -> None:
         self._directory = directory
         self._model_factory = model_factory
@@ -151,22 +153,28 @@ class WorkbenchSteps:
                 result = await run_commands(commands, timeout, folder)
             case ClientStepRun() as step:
                 result = await self._agent(step, command, folder)
-            case AgentStepRun(model=str() as model, prompt=prompt):
+            case AgentStepRun(model=str() as model, prompt=prompt, answered=answered):
+                # LangGraph loads where a workbench runs a kinby turn, so `kinby hub` goes
+                # without it.
+                from kinby.core.turn_runner import init_chat_model
+                from kinby.workbench.turn import run_turn
+
                 result = await run_turn(
                     model,
                     prompt,
+                    answered,
                     command,
                     folder,
                     await self._skills(command.origin.factory),
                     self._directory / STATE_DIR / _TURNS_DIR,
                     self._attempt_transcript(command),
-                    self._model_factory,
+                    self._model_factory or init_chat_model,
                 )
             case CodeStepRun() as step:
                 result = await self._call(step, command, folder)
             case _:
                 return step_failed(f"A workbench runs no {command.step.kind} step.")
-        if command.hook is None:
+        if command.hook is None or result.ending is StepEnding.ASKED:
             return result
         return await self._checked(command.hook, result, command, folder)
 

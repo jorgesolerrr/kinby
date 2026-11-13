@@ -42,7 +42,7 @@ export type StepValue = boolean | number | string;
 /**
  * How one attempt at a step ended.
  */
-export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human" | "limited";
+export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human" | "limited" | "asked";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type HubSecretName = string;
@@ -359,6 +359,10 @@ export interface Contract {
     "factory.remove": {
       command: FactoryRemoveCommand;
       result: FactoryListResult;
+    };
+    "factory.run.answer": {
+      command: FactoryRunAnswerCommand;
+      result: FactoryRun;
     };
     "factory.run.approve": {
       command: FactoryRunApproveCommand;
@@ -1394,10 +1398,20 @@ export interface FactoryRemoveCommand {
   name: FactoryName;
 }
 /**
- * Approve a run parked at an approve step, which moves it on as the step's next outcome.
+ * Answer the ask a run's kinby turn parked on, which resumes the turn as the step's next
+ * attempt.
  */
-export interface FactoryRunApproveCommand {
+export interface FactoryRunAnswerCommand {
+  answer: StepAnswer;
+  approval_id: string;
   run_id: string;
+}
+/**
+ * The user's answer to the ask a kinby turn on a workbench parked on.
+ */
+export interface StepAnswer {
+  decision: "approve" | "deny";
+  reason?: string | null;
 }
 /**
  * One work item's trip through a factory's steps.
@@ -1417,6 +1431,12 @@ export interface FactoryRun {
   };
 }
 /**
+ * Approve a run parked at an approve step, which moves it on as the step's next outcome.
+ */
+export interface FactoryRunApproveCommand {
+  run_id: string;
+}
+/**
  * End a run that needs a human or is parked, where it is, keeping everything it did.
  */
 export interface FactoryRunCancelCommand {
@@ -1434,6 +1454,8 @@ export interface FactoryRunDetail {
  * One attempt at one step of a factory run.
  */
 export interface StepAttempt {
+  answer?: StepAnswer | null;
+  ask?: WaitingApproval | null;
   attempt: number;
   ended_at: string | null;
   ending: StepEnding | null;
@@ -1446,6 +1468,23 @@ export interface StepAttempt {
   values: {
     [k: string]: StepValue;
   };
+}
+/**
+ * An approval a turn parked on, which a notification asks the user to answer.
+ */
+export interface WaitingApproval {
+  request: ApprovalRequested;
+  turn_id: string;
+}
+export interface ApprovalRequested {
+  approval_id: string;
+  arguments: {
+    [k: string]: JsonValue;
+  };
+  name: string;
+  preview?: string | null;
+  rule: string;
+  type: "approval.requested";
 }
 /**
  * What one attempt at a step on a workbench spent: its model calls on the API, priced where
@@ -2365,23 +2404,6 @@ export interface NotificationRaiseCommand {
   thread_id: string;
   title: string;
 }
-/**
- * An approval a turn parked on, which a notification asks the user to answer.
- */
-export interface WaitingApproval {
-  request: ApprovalRequested;
-  turn_id: string;
-}
-export interface ApprovalRequested {
-  approval_id: string;
-  arguments: {
-    [k: string]: JsonValue;
-  };
-  name: string;
-  preview?: string | null;
-  rule: string;
-  type: "approval.requested";
-}
 export interface NotificationRaiseResult {
   notification_id: string;
 }
@@ -3021,9 +3043,17 @@ export interface StepRunCommand {
  * workbench the turn is in no thread, and runs in the run's folder.
  */
 export interface AgentStepRun {
+  answered?: AnsweredAsk | null;
   kind: "agent";
   model?: CodingModel | null;
   prompt: string;
+}
+/**
+ * The ask an earlier attempt's turn parked on, and the user's answer to it.
+ */
+export interface AnsweredAsk {
+  answer: StepAnswer;
+  ask: WaitingApproval;
 }
 /**
  * Run a coding client in the instance's workspace, with the prompt and the run's values.
@@ -3075,6 +3105,7 @@ export interface CodeStepRun {
  * What one attempt at a step hands back to the hub.
  */
 export interface StepResult {
+  ask?: WaitingApproval | null;
   ending: StepEnding;
   outcome?: string | null;
   resets_at?: string | null;
