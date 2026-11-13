@@ -4046,6 +4046,9 @@ class StepRunCommand(ContractModel):
     results: dict[ValueName, StepValue] = Field(default_factory=dict)
     #: Where a step on a workbench runs. None for a step in an instance.
     folder: RunFolder | None = None
+    #: Cut the folder again from the base before the step, dropping all it held: the run went
+    #: back to its first step to start over.
+    fresh_folder: bool = False
 
 
 class StepResult(ContractModel):

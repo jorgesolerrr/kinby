@@ -193,6 +193,12 @@ class LineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class WorkbenchInUse(CoreError):
+    """A line on the workbench has unfinished runs, so the workbench stays."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class InstanceUnavailable(CoreError):
     """The hub cannot reach the instance: it is not running, or did not answer."""
 

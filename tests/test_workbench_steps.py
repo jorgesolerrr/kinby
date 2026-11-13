@@ -40,7 +40,12 @@ def _workbench(tmp_path: Path, source: str | None) -> WorkbenchSteps:
 
 
 def _command(
-    run_id: UUID, step: CommandStepRun | CodeStepRun, folder: RunFolder, attempt: int = 1
+    run_id: UUID,
+    step: CommandStepRun | CodeStepRun,
+    folder: RunFolder,
+    attempt: int = 1,
+    *,
+    fresh: bool = False,
 ) -> StepRunCommand:
     return StepRunCommand(
         step=step,
@@ -48,6 +53,7 @@ def _command(
         attempt=attempt,
         work_item={"issue": 12},
         folder=folder,
+        fresh_folder=fresh,
     )
 
 
@@ -83,6 +89,42 @@ def test_a_failed_step_leaves_its_uncommitted_files_for_the_retry_to_find(tmp_pa
 
     assert failed.ending is StepEnding.FAILED
     assert retried.ending is StepEnding.CLEAN
+
+
+def test_a_fresh_folder_is_a_run_worktree_cut_again_from_the_base(tmp_path):
+    workbench = _workbench(tmp_path, str(_seed(tmp_path)))
+    run_id = uuid4()
+    draft = CommandStepRun(
+        run=[
+            "touch draft.md",
+            "git add draft.md",
+            "git -c user.name=kinby -c user.email=kinby@example.com commit --quiet -m draft",
+            "git push --quiet origin tickets/issue-12",
+            "touch notes.md",
+        ]
+    )
+    drafted = asyncio.run(workbench.run(_command(run_id, draft, BRANCH)))
+
+    again = asyncio.run(
+        workbench.run(_command(run_id, CommandStepRun(run=["true"]), BRANCH, 2, fresh=True))
+    )
+
+    worktree = tmp_path / "workbench" / "worktrees" / "tickets" / "issue-12"
+    workspace = tmp_path / "workbench" / "workspace"
+    assert (drafted.ending, again.ending) == (StepEnding.CLEAN, StepEnding.CLEAN)
+    assert sorted(path.name for path in worktree.iterdir()) == [".git", "NOTES.md"]
+    assert _git(worktree, "rev-parse", "HEAD") == _git(workspace, "rev-parse", "origin/HEAD")
+    assert _git(worktree, "branch", "--show-current") == "tickets/issue-12"
+
+
+def test_a_fresh_folder_is_a_directory_named_for_the_run_emptied_again(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    asyncio.run(workbench.run(_command(run_id, CommandStepRun(run=["touch draft.md"]), PLAIN)))
+
+    asyncio.run(workbench.run(_command(run_id, CommandStepRun(run=["true"]), PLAIN, 2, fresh=True)))
+
+    assert list((tmp_path / "workbench" / "runs" / str(run_id)).iterdir()) == []
 
 
 def test_removing_a_run_worktree_removes_it_and_its_branch(tmp_path):

@@ -2953,6 +2953,7 @@ export interface RunTotals {
 export interface StepRunCommand {
   attempt?: number | null;
   folder?: RunFolder | null;
+  fresh_folder?: boolean;
   hook?: HookName | null;
   origin: FactoryRunOrigin;
   results?: {
