@@ -235,11 +235,13 @@ def test_work_items_that_differ_only_in_case_and_punctuation_work_in_folders_of_
             while len(control.steps) < 2:
                 await asyncio.sleep(0.01)
 
-        folders = [command.folder for _, command in control.steps]
-        assert folders[0] != folders[1]
+        branches = [
+            command.folder.branch if command.folder is not None else None
+            for _, command in control.steps
+        ]
+        assert branches[0] != branches[1]
         assert all(
-            folder.branch is not None and folder.branch.startswith("tasks/task-fix-a-")
-            for folder in folders
+            branch is not None and branch.startswith("tasks/task-fix-a-") for branch in branches
         )
 
     asyncio.run(scenario())
