@@ -478,11 +478,11 @@ A hash of the **profile**'s text, recorded when a turn starts. The provider's to
 
 ### Eval arm
 
-One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph. Its **lesson cases** have a pull arm, which tells the agent to search memory before it starts, an index arm and a pre-search arm, named for the **memory delivery** each uses, and an embedded pre-search arm, a pre-search the eval itself ranks by how close the **facts**' embeddings lie to the task's, since the runtime has no embeddings.
+One way of preparing the same **eval** case for comparison. The memory eval has a graph arm, which uses the case's **knowledge graph**, and a stuffing arm, which puts the case's raw transcript in the **profile** and removes the graph. Its **lesson cases** have a pull arm, which tells the agent to search memory before it starts, an index arm and a pre-search arm, named for the **memory delivery** each uses, and an embedded pre-search arm, a pre-search the eval itself ranks by how close the **facts**' embeddings lie to the task's, since the runtime has no embeddings. A control arm removes the lesson from memory and delivers nothing, so its lesson-following rate is the base rate the other arms must beat.
 
 ### Lesson case
 
-A memory **eval** case that gives the agent ordinary work, never a question about the past, while a **fact** in its memory warns against a mistake that work invites. It scores whether the agent followed the lesson and what its **memory tokens** were. The **eval arms** that compare how memory reaches the agent run on lesson cases.
+A memory **eval** case that gives the agent ordinary work, never a question about the past, while a **fact** in its memory warns against a mistake that work invites. It scores whether the agent followed the lesson, whether it **recalled** the lesson by opening it or having it pre-searched, and what its **memory tokens** were. The **eval arms** that compare how memory reaches the agent run on lesson cases.
 
 ### Memory delivery
 
