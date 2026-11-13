@@ -137,20 +137,18 @@ async def run_turn(
         _logger.exception("The model turn failed.")
         code, reason = ErrorCode.INTERNAL, "The model turn failed unexpectedly."
     else:
-        usage = _usage(events)
-        price = price_map(instance.manifest.prices).get(turn.model)
-        cost = None if price is None else token_cost(usage, price)
+        usage, cost = _spent(events, instance, turn.model)
         spent = StepUsage(api=ApiUse(**usage.model_dump(), cost=cost))
         if isinstance(outcome, ParkedTurn):
             return _asked(turn_id, events, spent)
         await emit(TurnCompleted(outcome=outcome.outcome, cost=cost, **usage.model_dump()))
         return StepResult(ending=StepEnding.CLEAN, summary=last_message(events), usage=spent)
-    usage = _usage(events)
+    usage, cost = _spent(events, instance, turn.model)
     await emit(TurnFailed(code=code, message=reason, **usage.model_dump()))
     said = StepResult(
         ending=StepEnding.FAILED,
         summary=last_message(events),
-        usage=StepUsage(api=ApiUse(**usage.model_dump())),
+        usage=StepUsage(api=ApiUse(**usage.model_dump(), cost=cost)),
     )
     return step_failed(f"The turn failed: {reason}", said)
 
@@ -173,6 +171,15 @@ def _asked(turn_id: UUID, events: Sequence[Event], usage: StepUsage) -> StepResu
         usage=usage,
         ask=WaitingApproval(turn_id=turn_id, request=request),
     )
+
+
+def _spent(
+    events: Sequence[Event], instance: Instance, model: str
+) -> tuple[TokenTotals, float | None]:
+    """The tokens of the turn's model calls and what they cost, None for a model with no price."""
+    usage = _usage(events)
+    price = price_map(instance.manifest.prices).get(model)
+    return usage, None if price is None else token_cost(usage, price)
 
 
 def _usage(events: Sequence[Event]) -> TokenTotals:

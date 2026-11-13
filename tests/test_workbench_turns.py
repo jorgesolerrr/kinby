@@ -35,9 +35,10 @@ STEP = AgentStepRun(prompt="Summarize the notes.\n", model="anthropic:claude-opu
 
 
 class TurnModel:
-    """Answers each call with the next of *responses*, and keeps the messages of each call."""
+    """Answers each call with the next of *responses*, raising one that is an exception, and
+    keeps the messages of each call."""
 
-    def __init__(self, *responses: AIMessageChunk) -> None:
+    def __init__(self, *responses: AIMessageChunk | Exception) -> None:
         self._responses = iter(responses)
         self.calls: list[list[BaseMessage]] = []
 
@@ -46,7 +47,10 @@ class TurnModel:
 
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
         self.calls.append(list(messages))
-        yield next(self._responses)
+        response = next(self._responses)
+        if isinstance(response, Exception):
+            raise response
+        yield response
 
 
 def _calling(name: str, **arguments: str) -> AIMessageChunk:
@@ -194,6 +198,18 @@ def test_a_kinby_turns_tools_reach_nothing_outside_the_runs_folder(tmp_path):
     assert "outside the workspace" in _tool_output(read)
     assert asked.ending is StepEnding.ASKED
     assert len(cat.calls) == 1
+
+
+def test_a_failed_kinby_turns_attempt_spends_what_its_model_calls_cost(tmp_path):
+    billed = _calling("read", path="NOTES.md")
+    billed.usage_metadata = {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100}
+    model = TurnModel(billed, RuntimeError("The provider went away."))
+
+    result = _run(tmp_path, model)
+
+    assert result.ending is StepEnding.FAILED
+    assert result.usage is not None and result.usage.api is not None
+    assert result.usage.api.cost == 0.006
 
 
 def test_a_kinby_agent_steps_check_runs_when_its_turn_ends(tmp_path):
