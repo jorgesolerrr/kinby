@@ -62,6 +62,7 @@ from kinby.contracts import (
     FACTORY_EDIT,
     FACTORY_GET,
     FACTORY_LIST,
+    FACTORY_REMOVE,
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
@@ -110,6 +111,10 @@ from kinby.contracts import (
     LIBRARY_SKILL_MOVE,
     LIBRARY_SKILL_READ,
     LIBRARY_SKILL_WRITE,
+    LINE_GET,
+    LINE_LIST,
+    LINE_REMOVE,
+    LINE_SETUP,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
     NOTIFICATION_REPLY,
@@ -158,7 +163,9 @@ from kinby.contracts import (
     DrainState,
     ErrorCode,
     FactoryEditCommand,
+    FactoryListResult,
     FactoryName,
+    FactoryRemoveCommand,
     FactoryResult,
     FactoryRole,
     HubRouteMissing,
@@ -214,6 +221,12 @@ from kinby.contracts import (
     LibrarySkillCheckCommand,
     LibrarySkillWriteCommand,
     LifecycleOperationResult,
+    Line,
+    LineGetCommand,
+    LineListCommand,
+    LineListResult,
+    LineRemoveCommand,
+    LineSetupCommand,
     LoginPrompt,
     McpServerFailed,
     NewerVersion,
@@ -278,6 +291,7 @@ from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.errors import (
     AdoptionBlocked,
     FactoryCheckFailed,
+    FactoryInUse,
     FactoryNotFound,
     HomeInstanceKept,
     ImageNotPrepared,
@@ -286,6 +300,7 @@ from kinby.core.errors import (
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
+    LineNotFound,
     LoginNotFound,
     ManagedInstanceNotFound,
     NameTaken,
@@ -294,7 +309,7 @@ from kinby.core.errors import (
 )
 from kinby.core.routing import Dispatcher
 from kinby.factories import SHIPPED_FACTORIES, ships_recipe
-from kinby.factories.file import FactoryFile, InstanceName
+from kinby.factories.file import FactoryFile, InstanceName, RecipeName, Requirements
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
@@ -529,6 +544,34 @@ def _instance_name(command: InstanceCreateCommand) -> str:
     return f"{command.factory_role.factory}-{command.factory_role.name}"
 
 
+def _quoted(names: Iterable[str]) -> str:
+    return ", ".join(f'"{name}"' for name in names)
+
+
+def _image(recipe: RecipeName | None) -> str:
+    return "kinby's base image" if recipe is None else f'image recipe "{recipe}"'
+
+
+def _lacking(
+    requires: Requirements, workbench: WorkbenchSetup, secrets: Collection[str]
+) -> list[str]:
+    """Each secret, named value and list of repository commands the factory requires and the
+    workbench does not hold. A field with a default is held."""
+    return [
+        *(
+            f'secret "{field.name}"'
+            for field in requires.secrets
+            if field.required and field.name not in secrets
+        ),
+        *(
+            f'value "{field.name}"'
+            for field in requires.values
+            if field.required and field.default is None and field.name not in workbench.values
+        ),
+        *(f'command list "{name}"' for name in requires.commands if name not in workbench.commands),
+    ]
+
+
 def _member(factory: FactoryName, template: InstanceTemplate) -> FactoryMember:
     """The role an instance written from *template* holds, with what the template supplied."""
     return FactoryMember(
@@ -706,6 +749,9 @@ class Hub:
             )
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
+            #: Held while a line or a factory role's instance is added, and while a factory is
+            #: removed, so no removal misses a dependent added during it.
+            self._factory_dependents = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
             #: The drain each operation is waiting on, whichever operation it is.
             self._draining: dict[UUID, PendingStop] = {}
@@ -753,6 +799,10 @@ class Hub:
         dispatcher.register(WORKBENCH_COMMANDS_SET, self.set_workbench_commands)
         dispatcher.register(WORKBENCH_PICKS_GET, self.workbench_picks)
         dispatcher.register(WORKBENCH_PICKS_SET, self.set_workbench_picks)
+        dispatcher.register(LINE_SETUP, self.set_up_line)
+        dispatcher.register(LINE_LIST, self.list_lines)
+        dispatcher.register(LINE_GET, self.get_line)
+        dispatcher.register(LINE_REMOVE, self.remove_line)
         dispatcher.register(OPERATION_GET, self.operation)
         dispatcher.register(IMAGE_PREPARE, self.prepare_image)
         dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
@@ -760,6 +810,7 @@ class Hub:
         dispatcher.register(FACTORY_GET, self.factories.get)
         dispatcher.register(FACTORY_CHECK, self.factories.check)
         dispatcher.register(FACTORY_EDIT, self.edit_factory)
+        dispatcher.register(FACTORY_REMOVE, self.remove_factory)
         dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
         dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
         dispatcher.register(FACTORY_RUN_GET, self.runs.get)
@@ -972,6 +1023,32 @@ class Hub:
         await self._raise_notices()
         return edited
 
+    async def remove_factory(self, command: FactoryRemoveCommand) -> FactoryListResult:
+        """Refuse while a line runs the factory, or an instance holds one of its roles, and name
+        each of them."""
+        async with self._factory_dependents:
+            workbenches = [
+                self._workbench_name(line.workbench_id)
+                for line in self.registry.lines()
+                if line.factory == command.name
+            ]
+            holders = [
+                record.manifest_id
+                for record in self.registry.factory_members(command.name)
+                if self._held(record)
+            ]
+            if workbenches:
+                raise FactoryInUse(
+                    f'Factory "{command.name}" has lines on workbench {_quoted(workbenches)}. '
+                    "Remove them before removing the factory."
+                )
+            if holders:
+                raise FactoryInUse(
+                    f'Factory "{command.name}" has instances {", ".join(holders)}. '
+                    "Remove them before removing the factory."
+                )
+            return await self.factories.remove(command)
+
     async def _move(self, move: LibraryMove) -> LibraryListResult:
         checked = await self.library.check(LibrarySkillCheckCommand(name=move.name))
         if checked.newer != NewerVersion(commit=move.commit, hash=move.hash, diff=move.diff):
@@ -1109,6 +1186,12 @@ class Hub:
         takes, and the library holds each pick. Typed values to save to the hub are saved first.
 
         *requester* is the instance that asked for it through the hub, if one did."""
+        async with self._factory_dependents:
+            return await self._create_instance(command, requester)
+
+    async def _create_instance(
+        self, command: InstanceCreateCommand, requester: UUID | None
+    ) -> LifecycleOperationResult:
         manifest_id = _instance_name(command)
         role = command.factory_role
         template: InstanceTemplate | None = None
@@ -3348,6 +3431,90 @@ class Hub:
                 for name, commands in sorted(record.workbench.commands.items())
             ],
         )
+
+    async def set_up_line(self, command: LineSetupCommand) -> Line:
+        """Accept a line only once the factory passes its check and runs on a workbench, the
+        workbench holds all it requires on its own image, and the owner is an instance. The
+        home instance owns it unless the command names another."""
+        async with self._factory_dependents:
+            return await self._set_up_line(command)
+
+    async def _set_up_line(self, command: LineSetupCommand) -> Line:
+        record = self._active_workbench(command.workbench_id)
+        assert record.workbench is not None
+        factory = await self.factories.checked(command.factory)
+        if isinstance(factory, FactoryFile):
+            raise InvalidSetup(
+                {
+                    "factory": f'Factory "{command.factory}" declares instances, so its steps '
+                    "run in them. Only a factory that runs on a workbench is set up on one."
+                }
+            )
+        errors: dict[str, str] = {}
+        if any(
+            line.factory == command.factory and line.workbench_id == command.workbench_id
+            for line in self.registry.lines()
+        ):
+            errors["factory"] = (
+                f'Factory "{command.factory}" is set up on workbench "{record.manifest_id}" '
+                "already."
+            )
+        elif factory.requires.image != record.workbench.recipe:
+            errors["factory"] = (
+                f'Factory "{command.factory}" requires {_image(factory.requires.image)}, '
+                f'and workbench "{record.manifest_id}" runs {_image(record.workbench.recipe)}.'
+            )
+        lacking = _lacking(factory.requires, record.workbench, self._environment(record.path))
+        if lacking:
+            errors["workbench_id"] = (
+                f'Workbench "{record.manifest_id}" lacks what factory "{command.factory}" '
+                f"requires: {', '.join(lacking)}."
+            )
+        owner_id = command.owner_id or next(
+            (
+                instance.instance_id
+                for instance in self.registry.managed_instances()
+                if instance.home
+            ),
+            None,
+        )
+        owner = None if owner_id is None else self.registry.instance(owner_id)
+        if owner is None or not owner.active or owner.workbench is not None:
+            errors["owner_id"] = f'Instance "{owner_id}" was not found.'
+        if errors:
+            raise InvalidSetup(errors)
+        assert owner_id is not None
+        line = Line(
+            line_id=uuid4(),
+            factory=command.factory,
+            workbench_id=command.workbench_id,
+            owner_id=owner_id,
+            model=command.model,
+            usd_per_day=command.usd_per_day,
+        )
+        self.registry.add_line(line)
+        return line
+
+    async def list_lines(self, command: LineListCommand) -> LineListResult:
+        return LineListResult(lines=self.registry.lines())
+
+    async def get_line(self, command: LineGetCommand) -> Line:
+        line = next(
+            (line for line in self.registry.lines() if line.line_id == command.line_id), None
+        )
+        if line is None:
+            raise LineNotFound(f'Line "{command.line_id}" was not found.')
+        return line
+
+    async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
+        """Remove the line. Its workbench keeps its clone, its secrets and its command lists."""
+        await self.get_line(LineGetCommand(line_id=command.line_id))
+        self.registry.remove_line(command.line_id)
+        return await self.list_lines(LineListCommand())
+
+    def _workbench_name(self, workbench_id: UUID) -> str:
+        record = self.registry.instance(workbench_id)
+        return str(workbench_id) if record is None else record.manifest_id
 
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
         """Answer where a public route may reach one instance, and with which control token."""

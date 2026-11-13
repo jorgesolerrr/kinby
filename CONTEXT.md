@@ -839,7 +839,7 @@ _Avoid_: environment, sandbox, site, station
 
 ### Line
 
-A **factory** set up on one **workbench** under an owning **instance**. kinby checks at setup that the workbench meets what the factory requires. The line holds the **intake** and its **factory runs**. A workbench can carry several lines.
+A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily budget. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
 ### Agent step
@@ -905,7 +905,7 @@ kinby's validation of a **factory** as a whole before anything changes: its file
 
 ### Software factory
 
-The **factory** kinby ships that turns **eligible issues** into **agent PRs**. A starting point the user may edit or delete.
+The **factory** kinby ships that turns **eligible issues** into **agent PRs**. A starting point the user may edit, and never removes.
 
 ### Scan
 

@@ -52,6 +52,7 @@ from kinby.contracts.models import (
     FactoryGetCommand,
     FactoryListCommand,
     FactoryListResult,
+    FactoryRemoveCommand,
     FactoryResult,
     FactoryRun,
     FactoryRunApproveCommand,
@@ -124,6 +125,12 @@ from kinby.contracts.models import (
     LibrarySkillReadCommand,
     LibrarySkillWriteCommand,
     LifecycleOperationResult,
+    Line,
+    LineGetCommand,
+    LineListCommand,
+    LineListResult,
+    LineRemoveCommand,
+    LineSetupCommand,
     ManifestGetCommand,
     ManifestResult,
     ManifestSetCommand,
@@ -537,6 +544,10 @@ WORKBENCH_PICKS_GET = Method(
 WORKBENCH_PICKS_SET = Method(
     "workbench.picks.set", Scope.HUB_ADMIN, WorkbenchPicksSetCommand, WorkbenchPicksResult
 )
+LINE_SETUP = Method("line.setup", Scope.HUB_ADMIN, LineSetupCommand, Line)
+LINE_LIST = Method("line.list", Scope.HUB_READ, LineListCommand, LineListResult)
+LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
+LINE_REMOVE = Method("line.remove", Scope.HUB_ADMIN, LineRemoveCommand, LineListResult)
 OPERATION_GET = Method(
     "operation.get",
     Scope.HUB_READ,
@@ -550,6 +561,7 @@ IMAGE_DESCRIBE = Method("image.describe", Scope.HUB_READ, ImageDescribeCommand, 
 FACTORY_LIST = Method("factory.list", Scope.HUB_READ, FactoryListCommand, FactoryListResult)
 FACTORY_GET = Method("factory.get", Scope.HUB_READ, FactoryGetCommand, FactoryResult)
 FACTORY_EDIT = Method("factory.edit", Scope.HUB_ADMIN, FactoryEditCommand, FactoryResult)
+FACTORY_REMOVE = Method("factory.remove", Scope.HUB_ADMIN, FactoryRemoveCommand, FactoryListResult)
 FACTORY_CHECK = Method("factory.check", Scope.HUB_READ, FactoryCheckCommand, FactoryCheckResult)
 FACTORY_DESCRIBE = Method(
     "factory.describe", Scope.HUB_READ, FactoryDescribeCommand, FactoryDescription
@@ -797,6 +809,10 @@ METHODS = (
     WORKBENCH_COMMANDS_SET,
     WORKBENCH_PICKS_GET,
     WORKBENCH_PICKS_SET,
+    LINE_SETUP,
+    LINE_LIST,
+    LINE_GET,
+    LINE_REMOVE,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,
@@ -804,6 +820,7 @@ METHODS = (
     FACTORY_GET,
     FACTORY_CHECK,
     FACTORY_EDIT,
+    FACTORY_REMOVE,
     FACTORY_DESCRIBE,
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,

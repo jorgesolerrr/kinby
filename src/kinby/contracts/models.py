@@ -1776,6 +1776,49 @@ class WorkbenchCreateResult(WorkbenchOperationResult):
     workbench: Workbench
 
 
+class LineSetupCommand(ContractModel):
+    """Set a factory up on a workbench under an owning instance. The result is the line."""
+
+    factory: FactoryName
+    workbench_id: UUID
+    #: None is the home instance.
+    owner_id: UUID | None = None
+    #: The model its agent steps take when a step names none, as ``provider:model``.
+    model: Annotated[str, Field(min_length=1)] | None = None
+    #: Its daily budget in US dollars. Off when absent.
+    usd_per_day: Annotated[float, Field(gt=0)] | None = None
+
+
+class Line(ContractModel):
+    """A factory set up on one workbench under an owning instance."""
+
+    line_id: UUID
+    factory: FactoryName
+    workbench_id: UUID
+    owner_id: UUID
+    model: str | None
+    usd_per_day: float | None
+
+
+class LineListCommand(ContractModel):
+    pass
+
+
+class LineListResult(ContractModel):
+    #: In the order they were set up.
+    lines: list[Line]
+
+
+class LineGetCommand(ContractModel):
+    line_id: UUID
+
+
+class LineRemoveCommand(ContractModel):
+    """Remove one line. Its workbench stays as it is. The result lists the lines left."""
+
+    line_id: UUID
+
+
 class ContainerOwner(StrEnum):
     """Who manages an existing container now, read from the labels it carries."""
 
@@ -2896,6 +2939,12 @@ class FactoryEditCommand(ContractModel):
     files: dict[str, str]
     #: The hash the client read, or null to create a factory no source has yet.
     hash: FileHash | None
+
+
+class FactoryRemoveCommand(ContractModel):
+    """Delete one of the hub's own factories. The result lists the factories left."""
+
+    name: FactoryName
 
 
 class FactoryDescribeCommand(ContractModel):
