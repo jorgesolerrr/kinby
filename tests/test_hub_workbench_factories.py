@@ -170,3 +170,44 @@ def test_a_factory_that_runs_on_a_workbench_offers_no_role_to_pick(tmp_path):
         assert refused.fields == {"factory_role": 'Factory "tickets" has no role "coder".'}
 
     asyncio.run(scenario())
+
+
+CHECK = """\
+from kinby.plugins.hooks import HookResult, StepEnd, hook
+
+
+@hook
+def checked(end: StepEnd) -> HookResult:
+    return HookResult()
+"""
+
+
+def test_a_command_or_code_step_checks_with_a_hook_of_the_factorys_folder(tmp_path):
+    files = _with("kind: command\n", "kind: command\n    check: checked\n") | {
+        "hooks/checked.py": CHECK
+    }
+    files["factory.yaml"] = files["factory.yaml"].replace(
+        "kind: code\n", "kind: code\n    check: checked\n"
+    )
+
+    assert problems(tmp_path, files) == []
+
+
+@pytest.mark.parametrize("check", ["passed", "record_branch"])
+def test_the_check_refuses_a_check_the_factorys_folder_does_not_hold(tmp_path, check):
+    files = _with("kind: code\n", f"kind: code\n    check: {check}\n") | {"hooks/checked.py": CHECK}
+
+    assert problems(tmp_path, files) == [
+        f'Step "open-pr" names check "{check}", which the factory\'s folder does not hold.'
+    ]
+
+
+def test_a_failed_step_runs_again_or_goes_back_but_never_both(tmp_path):
+    again = _with("kind: command\n", "kind: command\n    failed: { retry: 2 }\n")
+    both = _with("kind: command\n", "kind: command\n    failed: { retry: 2 }\n    retry: 1\n")
+
+    assert problems(tmp_path / "again", again) == []
+    assert problems(tmp_path / "both", both) == [
+        'Step "checks" declares both retry and failed, but a failed attempt runs again only '
+        "under failed."
+    ]

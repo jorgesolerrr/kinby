@@ -137,8 +137,15 @@ class SendBack:
     max: Annotated[int, Field(ge=1)]
 
 
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class Retry:
+    """Run the step again after a failed attempt, at most ``retry`` times."""
+
+    retry: Annotated[int, Field(ge=1)]
+
+
 type Outcome = Literal["next", "done", "stop"] | SendBack
-#: What a failed attempt records at a step that declares where its failures go: its summary.
+#: What a failed attempt records at a step that declares what its failures do: its summary.
 FAILURE: ValueName = "failure"
 #: What a wait records as true when it moves on with no signal, its quiet time passed.
 QUIET: ValueName = "quiet"
@@ -154,9 +161,9 @@ class _Step:
     #: What each outcome of the step's result does next.
     outcomes: dict[str, Outcome] = Field(default_factory=dict)
     retry: Annotated[int, Field(ge=0)] | None = None
-    #: Where a failed attempt sends the work instead of trying the step again, with what failed
-    #: as the value ``failure``.
-    failed: SendBack | None = None
+    #: What a failed attempt does in place of ``retry``: send the work back to an earlier step, or
+    #: run this one again. Either way the next attempt reads what failed as the value ``failure``.
+    failed: SendBack | Retry | None = None
     timeout: Duration | None = None
 
 
@@ -208,7 +215,14 @@ class CommandStep(_Step):
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
-class WorkbenchCommandStep(_Step):
+class _WorkbenchWork(_Step):
+    #: A hook of the factory's folder, run however the step ended, that records the step's values
+    #: and names its outcome, or fails it by raising.
+    check: HookName | None = None
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class WorkbenchCommandStep(_WorkbenchWork):
     """Commands in the run's folder on the workbench, each run without a shell. Exit code zero
     passes.
 
@@ -233,7 +247,7 @@ class CodeStep(_Step):
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
-class WorkbenchCodeStep(_Step):
+class WorkbenchCodeStep(_WorkbenchWork):
     """A tool of the factory's folder, run on the workbench. The model never sees it.
 
     A mapping the tool returns is the step's values. A HookResult also names its outcome.

@@ -1,4 +1,6 @@
-"""Declare hooks: instance code kinby runs when a factory step ends, never offered to the model."""
+"""Declare hooks: code kinby runs when a factory step ends, never offered to the model. An
+instance's hooks record its steps' results, and a factory's checks those of its steps on a
+workbench."""
 
 from __future__ import annotations
 
@@ -24,8 +26,10 @@ class StepEnd:
     said.
     """
 
-    instance: Instance
-    #: Where the step ran: its run worktree when it names a branch, else the instance's workspace.
+    #: The instance the step ran in. None on a workbench.
+    instance: Instance | None
+    #: Where the step ran: the run's folder on a workbench, its run worktree when it names a
+    #: branch, else the instance's workspace.
     workspace: Path
     ending: StepEnding
     work_item: Mapping[ValueName, StepValue]

@@ -91,6 +91,7 @@ from kinby.factories.file import (
     InvalidFactoryFile,
     NeedsHumanCall,
     Outcome,
+    Retry,
     SendBack,
     SignalFilter,
     Step,
@@ -732,6 +733,7 @@ class FactoryRuns:
         command = StepRunCommand(
             step=asked,
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step.id),
+            hook=step.check,
             work_item=run.work_item,
             results=results,
             folder=folder,
@@ -874,7 +876,8 @@ class FactoryRuns:
         from the pass it left, save what the step that sent it back recorded: those values go
         with the work to the step it went back to, as if that step's pass held them. Trying a
         step again after an attempt at it that recorded nothing drops nothing, so a retry holds
-        what the attempt before it held.
+        what the attempt before it held. A failed attempt that runs its step again under
+        ``failed`` adds what it recorded.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
         recorded: dict[ValueName, tuple[int, StepValue]] = {}
@@ -894,10 +897,12 @@ class FactoryRuns:
         for attempt in self._registry.attempts(run_id):
             start(attempt.step)
             last, retrying = None, attempt.step
+            index = order.get(attempt.step, -1)
             if attempt.ending is StepEnding.CLEAN or _failed_to(factory, attempt) is not None:
-                index = order.get(attempt.step, -1)
                 recorded |= {name: (index, value) for name, value in attempt.values.items()}
                 last, retrying = (index, attempt.values), None
+            elif _runs_again(factory, attempt):
+                recorded |= {name: (index, value) for name, value in attempt.values.items()}
         if starting is not None:
             start(starting)
         return {name: value for name, (_, value) in recorded.items()}
@@ -1377,10 +1382,10 @@ def _settled(
 
     A clean result goes where its outcome sends it, and leaves the run for a human when it would
     send the work back along an edge more than that edge's max. One that names an outcome the
-    step does not declare fails. A failed result at a step that declares where its failures go
-    records what failed as ``failure`` and goes there, up to that edge's max. Any other failed
-    result is tried again while the step's retries last. A timed-out one, or one that needs a
-    human, never is.
+    step does not declare fails. A failed result at a step that declares what its failures do
+    records what failed as ``failure``. It goes where the step sends its failures, up to that
+    edge's max. Any other failed result is tried again while the step's retries last. A
+    timed-out one, or one that needs a human, never is.
     """
     if result.ending is StepEnding.CLEAN:
         match _outcome(step, result.outcome):
@@ -1402,6 +1407,7 @@ def _settled(
                     return result, FactoryRunStatus.DONE, None
     if result.ending is StepEnding.FAILED and step.failed is not None:
         result = result.model_copy(update={"values": {**result.values, FAILURE: result.summary}})
+    if result.ending is StepEnding.FAILED and isinstance(step.failed, SendBack):
         back, most = step.failed.back, step.failed.max
         if tally.sent_back[step.id, back] >= most:
             reason = f'Step "{step.id}" sent its failures back to "{back}" {most} times, its max.'
@@ -1460,7 +1466,16 @@ def _tally(factory: _Factory, attempts: Iterable[StepAttempt]) -> _Tally:
 def _failed_to(factory: _Factory, attempt: StepAttempt) -> SendBack | None:
     """Where a failed attempt sends the work, when its step declares where its failures go."""
     step = _step(factory, attempt.step)
-    return step.failed if step is not None and attempt.ending is StepEnding.FAILED else None
+    failed = step.failed if step is not None and attempt.ending is StepEnding.FAILED else None
+    return failed if isinstance(failed, SendBack) else None
+
+
+def _runs_again(factory: _Factory, attempt: StepAttempt) -> bool:
+    """Whether a failed attempt runs its step again under the step's ``failed``."""
+    step = _step(factory, attempt.step)
+    return (
+        step is not None and attempt.ending is StepEnding.FAILED and isinstance(step.failed, Retry)
+    )
 
 
 def _checked_done(
@@ -1513,6 +1528,8 @@ def _retries(step: _AnyStep) -> int:
 
     Once for a step a model or a coding client runs, and never for any other unless it opts in.
     """
+    if isinstance(step.failed, Retry):
+        return step.failed.retry
     if step.retry is not None:
         return step.retry
     return 1 if isinstance(step, AgentStep | ClientStep) else 0
