@@ -42,7 +42,6 @@ from tests.test_hub_factories import write_factory
 from tests.test_hub_line_runs import TICKETS, _handed_in, _line, _removed
 from tests.test_hub_lines import _home
 
-WORKTREE = RunFolder(branch="tickets/issue-12")
 REVIEWS = """\
 name: reviews
 requires: { image: coder }
@@ -287,7 +286,8 @@ def test_a_run_that_needs_a_human_calls_the_factorys_needs_human_tool_on_its_wor
         endpoint, call = control.steps[-1]
         assert endpoint.address == f"http://kinby-{line.workbench_id}:8787"
         assert call.step == CodeStepRun(call="report_stop", summary="make lint failed.")
-        assert (call.origin.step, call.attempt, call.folder) == ("test", None, WORKTREE)
+        worktree = RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
+        assert (call.origin.step, call.attempt, call.folder) == ("test", None, worktree)
 
     asyncio.run(scenario())
 
@@ -311,8 +311,9 @@ def test_a_run_that_ends_calls_the_factorys_ended_tool_on_its_workbench_then_los
         endpoint, call = control.steps[-1]
         assert call.step == CodeStepRun(call="report_end")
         assert endpoint.address == f"http://kinby-{line.workbench_id}:8787"
-        assert (call.origin.step, call.folder) == ("label", WORKTREE)
-        assert removed == [WORKTREE]
+        worktree = RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
+        assert (call.origin.step, call.folder) == ("label", worktree)
+        assert removed == [worktree]
         assert (await _handed_in(client, line, 12)).run_id != run.run_id
 
     asyncio.run(scenario())
