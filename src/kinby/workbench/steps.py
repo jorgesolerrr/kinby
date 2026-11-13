@@ -19,7 +19,12 @@ from kinby.contracts import (
     StepRunCommand,
 )
 from kinby.core.held_results import HeldResults
-from kinby.core.run_worktrees import RunWorktreeError, remove_run_worktree, run_worktree
+from kinby.core.run_worktrees import (
+    RunWorktreeError,
+    cut_run_worktree,
+    remove_run_worktree,
+    run_worktree,
+)
 from kinby.core.steps import run_commands, run_tool
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.instance.layout import TOOLS_DIR, WORKSPACE_DIR
@@ -72,7 +77,9 @@ class WorkbenchSteps:
         if command.folder is None:
             return _failed("The step names no run folder.")
         try:
-            folder = await asyncio.to_thread(self._folder, command.origin.run_id, command.folder)
+            folder = await asyncio.to_thread(
+                self._folder, command.origin.run_id, command.folder, fresh=command.fresh_folder
+            )
         except RunWorktreeError as exc:
             return _failed(str(exc))
         match command.step:
@@ -87,11 +94,17 @@ class WorkbenchSteps:
             case _:
                 return _failed(f"A workbench runs no {command.step.kind} step.")
 
-    def _folder(self, run_id: UUID, folder: RunFolder) -> Path:
+    def _folder(self, run_id: UUID, folder: RunFolder, *, fresh: bool) -> Path:
         if folder.branch is None:
             directory = self._directory / _RUNS_DIR / str(run_id)
+            if fresh:
+                shutil.rmtree(directory, ignore_errors=True)
             directory.mkdir(parents=True, exist_ok=True)
             return directory
+        if fresh:
+            return cut_run_worktree(
+                self._directory, self._workspace, folder.branch, _BASE, str(run_id)
+            )
         return run_worktree(self._directory, self._workspace, folder.branch, str(run_id), _BASE)
 
     async def _call(self, step: CodeStepRun, command: StepRunCommand, folder: Path) -> StepResult:

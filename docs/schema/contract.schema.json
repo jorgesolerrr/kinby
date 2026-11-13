@@ -9421,6 +9421,10 @@
           ],
           "default": null
         },
+        "fresh_folder": {
+          "default": false,
+          "type": "boolean"
+        },
         "hook": {
           "anyOf": [
             {

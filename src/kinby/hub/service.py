@@ -310,6 +310,7 @@ from kinby.core.errors import (
     ManagedInstanceNotFound,
     NameTaken,
     PermissionDenied,
+    WorkbenchInUse,
     WorkbenchNotFound,
 )
 from kinby.core.routing import Dispatcher
@@ -350,7 +351,13 @@ from kinby.hub.models import (
 from kinby.hub.outbox import Outbox, Sleep
 from kinby.hub.playwright_browser import PlaywrightBrowser
 from kinby.hub.recovery import recover_lifecycle
-from kinby.hub.registry import FactoryMember, HubRegistry, ManagedInstance, WorkbenchSetup
+from kinby.hub.registry import (
+    UNFINISHED,
+    FactoryMember,
+    HubRegistry,
+    ManagedInstance,
+    WorkbenchSetup,
+)
 from kinby.hub.relay import relayed_call
 from kinby.hub.replies import Replies
 from kinby.hub.runs import FactoryRuns, LostAnswer, UndeliveredCall, Untold
@@ -3366,8 +3373,25 @@ class Hub:
     async def delete_workbench(self, command: WorkbenchDeleteCommand) -> WorkbenchOperationResult:
         """Drain the workbench and remove its container, then delete its directory and named
         volumes, in one operation. A removed workbench has only its storage left, and a deletion
-        that failed part way resumes where it stopped."""
-        record = self._claimed(self._kept_workbench(command.workbench_id))
+        that failed part way resumes where it stopped.
+
+        Refuse while a line on it has unfinished runs, and name each of them.
+        """
+        record = self._kept_workbench(command.workbench_id)
+        unfinished = [
+            f"{run.factory} for "
+            + ", ".join(f"{name} {value}" for name, value in run.work_item.items())
+            + f" ({run.run_id})"
+            for line in self.registry.lines()
+            if line.workbench_id == record.instance_id
+            for run in self.registry.runs(line.factory, UNFINISHED, line_id=line.line_id)
+        ]
+        if unfinished:
+            raise WorkbenchInUse(
+                f'Workbench "{record.manifest_id}" has unfinished runs: {"; ".join(unfinished)}. '
+                "Finish or cancel them before deleting it."
+            )
+        record = self._claimed(record)
         operation_id = uuid4()
         self.registry.record_operation(
             operation_id, record.instance_id, OperationKind.DELETE, "Deletion queued."
