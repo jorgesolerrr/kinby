@@ -552,6 +552,10 @@ export interface Contract {
       command: LineGetCommand;
       result: Line;
     };
+    "line.hand_in": {
+      command: LineHandInCommand;
+      result: FactoryRun;
+    };
     "line.list": {
       command: LineListCommand;
       result: LineListResult;
@@ -671,6 +675,10 @@ export interface Contract {
     "routine.write": {
       command: RoutineWriteCommand;
       result: RoutineFile;
+    };
+    "run.folder.remove": {
+      command: RunFolderRemoveCommand;
+      result: RunFolderRemoveResult;
     };
     "run.stopped": {
       command: RunStop;
@@ -1386,6 +1394,7 @@ export interface FactoryRun {
   created_at: string;
   factory: FactoryName;
   instance_id: string;
+  line_id?: string | null;
   run_id: string;
   status: FactoryRunStatus;
   step: StepId | null;
@@ -1442,6 +1451,7 @@ export interface FactoryRunListCommand {
   factory: FactoryName;
   instance_id?: string | null;
   limit?: number | null;
+  line_id?: string | null;
   status?: FactoryRunStatus | null;
 }
 export interface FactoryRunListResult {
@@ -2068,6 +2078,17 @@ export interface Line {
   usd_per_day: number | null;
   workbench_id: string;
 }
+/**
+ * Hand a work item to a line, which starts a run on its workbench. The result is the run.
+ *
+ * A work item that matches an unfinished run of the line returns that run instead.
+ */
+export interface LineHandInCommand {
+  line_id: string;
+  work_item: {
+    [k: string]: StepValue;
+  };
+}
 export interface LineListCommand {}
 export interface LineListResult {
   lines: Line[];
@@ -2478,6 +2499,20 @@ export interface RoutineWriteCommand {
   hash: string | null;
   name: string;
 }
+/**
+ * Remove the folder of a run that ended done or cancelled, with a run worktree's branch.
+ */
+export interface RunFolderRemoveCommand {
+  folder: RunFolder;
+  run_id: string;
+}
+/**
+ * The folder a run works in on its workbench. The workbench cuts it when it lacks it.
+ */
+export interface RunFolder {
+  branch: string | null;
+}
+export interface RunFolderRemoveResult {}
 /**
  * A factory run that moved to done, cancelled or needs human, with what it did since its
  * previous stop.
@@ -2913,10 +2948,11 @@ export interface RunTotals {
   tokens: number;
 }
 /**
- * Run one step of a factory run in this instance, and return its result.
+ * Run one step of a factory run in this instance or workbench, and return its result.
  */
 export interface StepRunCommand {
   attempt?: number | null;
+  folder?: RunFolder | null;
   hook?: HookName | null;
   origin: FactoryRunOrigin;
   results?: {
@@ -2957,10 +2993,7 @@ export interface ClientStepRun {
 export interface CommandStepRun {
   branch?: string | null;
   kind: "command";
-  /**
-   * @minItems 1
-   */
-  run: [string | RepositoryCommands, ...(string | RepositoryCommands)[]];
+  run: (string | RepositoryCommands)[];
   timeout_seconds?: number | null;
 }
 /**

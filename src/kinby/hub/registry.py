@@ -462,6 +462,9 @@ class HubRegistry:
                     # Set while the factory's ended call for the run is still to make. A run
                     # that ended before the call existed owes none.
                     "ended_call": "INTEGER NOT NULL DEFAULT 0",
+                    # The line it runs on. Null for a run of a factory whose steps run in
+                    # instances.
+                    "line_id": "TEXT",
                 },
             )
             # A run that stopped before stops were recorded gets its latest stop as told, so its
@@ -1937,22 +1940,25 @@ class HubRegistry:
         factory: FactoryName,
         work_item: Mapping[ValueName, StepValue],
         step: StepId,
+        line_id: UUID | None = None,
     ) -> tuple[FactoryRun, bool]:
-        """Queue a new run at its first step, or find the instance's unfinished run of the same
-        work item.
+        """Queue a new run at its first step, or find the unfinished run of the same work item
+        that the instance handed in, or that runs on line *line_id*.
 
         True when the run is new.
         """
         key = _work_item_key(work_item)
+        line = str(line_id) if line_id is not None else None
         with self._transaction() as connection:
             connection.execute("BEGIN IMMEDIATE")
             open_run = connection.execute(
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
-                WHERE instance_id = ? AND work_item = ? AND status NOT IN (?, ?)
+                WHERE (line_id = ? OR (? IS NULL AND line_id IS NULL AND instance_id = ?))
+                    AND work_item = ? AND status NOT IN (?, ?)
                 ORDER BY rowid LIMIT 1
                 """,
-                (str(instance_id), key, *_FINISHED),
+                (line, line, str(instance_id), key, *_FINISHED),
             ).fetchone()
             if open_run is not None:
                 return _factory_run(open_run), False
@@ -1961,13 +1967,15 @@ class HubRegistry:
             connection.execute(
                 """
                 INSERT INTO factory_runs (
-                    id, factory, instance_id, work_item, status, step, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, factory, instance_id, line_id, work_item, status, step, created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(run_id),
                     factory,
                     str(instance_id),
+                    line,
                     key,
                     FactoryRunStatus.QUEUED.value,
                     step,
@@ -2017,6 +2025,7 @@ class HubRegistry:
         statuses: Collection[FactoryRunStatus] | None,
         instance_id: UUID | None = None,
         *,
+        line_id: UUID | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         after: UUID | None = None,
@@ -2024,7 +2033,8 @@ class HubRegistry:
         """The factory's runs, or every factory's, oldest first, in any of *statuses*, or in any
         status without them.
 
-        With *instance_id*, only the runs that instance handed in. With *since* or *until*, only
+        With *instance_id*, only the runs that instance handed in. With *line_id*, only the runs
+        of that line. With *since* or *until*, only
         the runs created in that range, both ends included. With *after*, only the runs handed in
         after that one.
         """
@@ -2039,6 +2049,9 @@ class HubRegistry:
         if instance_id is not None:
             where.append("instance_id = ?")
             parameters.append(str(instance_id))
+        if line_id is not None:
+            where.append("line_id = ?")
+            parameters.append(str(line_id))
         if since is not None:
             where.append("created_at >= ?")
             parameters.append(_stored(since))
@@ -2811,7 +2824,9 @@ class HubRegistry:
             )
 
 
-_RUN_COLUMNS = "id, factory, instance_id, work_item, status, step, wakes_at, created_at, updated_at"
+_RUN_COLUMNS = (
+    "id, factory, instance_id, line_id, work_item, status, step, wakes_at, created_at, updated_at"
+)
 _CHANNEL_COLUMNS = (
     "id, name, kind, settings, enabled, paired_user, pairing_code, pairing_expires_at, "
     "last_sent_at, last_error, last_error_at"
@@ -2922,11 +2937,23 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
 
 
 def _factory_run(row: tuple[str, ...]) -> FactoryRun:
-    run_id, factory, instance_id, work_item, status, step, wakes_at, created_at, updated_at = row
+    (
+        run_id,
+        factory,
+        instance_id,
+        line_id,
+        work_item,
+        status,
+        step,
+        wakes_at,
+        created_at,
+        updated_at,
+    ) = row
     return FactoryRun(
         run_id=UUID(run_id),
         factory=factory,
         instance_id=UUID(instance_id),
+        line_id=UUID(line_id) if line_id is not None else None,
         work_item=json.loads(work_item),
         status=FactoryRunStatus(status),
         step=step,

@@ -105,7 +105,7 @@ from kinby.memory import (
 from kinby.plugins.core import core_tools
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
-from kinby.workbench import WorkbenchServer, prepare_workspace
+from kinby.workbench import WorkbenchServer, WorkbenchSteps, prepare_workspace
 
 if TYPE_CHECKING:
     # The hub pulls in the Docker SDK; only the hub command imports it at runtime.
@@ -542,13 +542,13 @@ async def _serve_instance(instance: Instance) -> int:
             loop.remove_signal_handler(shutdown_signal)
 
 
-async def _serve_workbench(listen: Serve, token: ControlToken) -> int:
+async def _serve_workbench(listen: Serve, token: ControlToken, directory: Path) -> int:
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
     shutdown_signals = (signal.SIGINT, signal.SIGTERM)
     for shutdown_signal in shutdown_signals:
         loop.add_signal_handler(shutdown_signal, stopping.set)
-    server = WorkbenchServer(listen, token)
+    server = WorkbenchServer(listen, token, WorkbenchSteps(directory))
     try:
         address = await server.start()
         print(f"listen: {address.host}:{address.port}", flush=True)
@@ -1154,13 +1154,14 @@ def main(
                 file=sys.stderr,
             )
             return 1
-        workspace = Path(os.environ.get("KINBY_INSTANCE", "/instance")) / WORKSPACE_DIR
+        directory = Path(os.environ.get("KINBY_INSTANCE", "/instance"))
+        workspace = directory / WORKSPACE_DIR
         try:
             prepare_workspace(workspace, args.workspace_source)
         except subprocess.CalledProcessError:
             print(f"Could not clone {args.workspace_source} into {workspace}.", file=sys.stderr)
             return 1
-        return asyncio.run(_serve_workbench(listen, ControlToken(token)))
+        return asyncio.run(_serve_workbench(listen, ControlToken(token), directory))
     try:
         match args.command:
             case "instance" if args.instance_command == "show":

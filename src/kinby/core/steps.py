@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from uuid import uuid4
+
+from pydantic import JsonValue
 
 from kinby.contracts import (
     AgentStepRun,
@@ -44,7 +46,7 @@ from kinby.plugins.hooks import HookResult, StepEnd, load_hooks
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.routines import SharedCodeStep, resolve_code_step
 from kinby.plugins.skills import load_skills
-from kinby.plugins.tools import ToolContext
+from kinby.plugins.tools import Tool, ToolContext
 
 #: How much of a failed command's output its step's summary keeps, from the end.
 _OUTPUT_TAIL = 2_000
@@ -71,7 +73,11 @@ async def run_step(
     if isinstance(command.step, ClientStepRun | CommandStepRun) and command.step.branch is not None:
         try:
             workspace = await asyncio.to_thread(
-                run_worktree, instance, command.step.branch, str(command.origin.run_id)
+                run_worktree,
+                instance.path,
+                workspace,
+                command.step.branch,
+                str(command.origin.run_id),
             )
         except RunWorktreeError as exc:
             return _failed(str(exc))
@@ -237,8 +243,18 @@ async def run_command_step(step: CommandStepRun, instance: Instance, workspace: 
     commands = _commands(step, instance.path)
     if isinstance(commands, StepResult):
         return commands
+    return await run_commands(commands, step.timeout_seconds, workspace)
+
+
+async def run_commands(
+    commands: Sequence[str], timeout_seconds: int | None, workspace: Path
+) -> StepResult:
+    """Run each command in *workspace* without a shell. The first that exits non-zero fails.
+
+    A command still running when *timeout_seconds* pass is killed, and the step times out.
+    """
     try:
-        async with asyncio.timeout(step.timeout_seconds):
+        async with asyncio.timeout(timeout_seconds):
             for command in commands:
                 failed = await _run_command(command, workspace)
                 if failed is not None:
@@ -246,7 +262,7 @@ async def run_command_step(step: CommandStepRun, instance: Instance, workspace: 
     except TimeoutError:
         return StepResult(
             ending=StepEnding.TIMED_OUT,
-            summary=f"The commands ran past the step's timeout of {step.timeout_seconds}s.",
+            summary=f"The commands ran past the step's timeout of {timeout_seconds}s.",
         )
     return StepResult(ending=StepEnding.CLEAN, summary="Every command exited with code 0.")
 
@@ -283,24 +299,38 @@ def _commands(step: CommandStepRun, instance: Path) -> list[str] | StepResult:
 async def _run_code_step(
     step: CodeStepRun, command: StepRunCommand, instance: Instance
 ) -> StepResult:
-    """Call the step's tool as a routine's code step is called, with the run's values and its id.
-
-    A mapping the tool returns is the result's values. A HookResult also names its outcome.
-    """
+    """Call one of the instance's tools as a routine's code step is called."""
     tools, _ = ToolRegistry(instance.path, tools=instance.manifest.tools).refresh()
     try:
         tool = resolve_code_step(SharedCodeStep(step.call), tools)
     except ValueError:
         return _failed(f'Tool "{step.call}" is not one of this instance\'s tools.')
+    # A code step runs on no thread, so its tool's context names one no turn opens.
+    context = ToolContext(instance=instance, thread_id=uuid4())
+    return await run_tool(
+        tool, step, command, lambda arguments: tool.ainvoke_value(arguments, context)
+    )
+
+
+async def run_tool(
+    tool: Tool,
+    step: CodeStepRun,
+    command: StepRunCommand,
+    invoke: Callable[[dict[str, JsonValue]], Awaitable[object]],
+) -> StepResult:
+    """Invoke the code step's tool with the run's values that its parameters name, and its id.
+
+    A mapping the tool returns is the result's values. A HookResult also names its outcome.
+    """
     held = {**command.work_item, **command.results, "run_id": str(command.origin.run_id)}
     if step.summary is not None:
         # The factory's needs_human call: the step the run stopped at, and how it ended.
         held |= {"step": command.origin.step, "summary": step.summary}
-    arguments = {name: value for name, value in held.items() if name in tool.runnable.args}
-    # A code step runs on no thread, so its tool's context names one no turn opens.
-    context = ToolContext(instance=instance, thread_id=uuid4())
+    arguments: dict[str, JsonValue] = {
+        name: value for name, value in held.items() if name in tool.runnable.args
+    }
     try:
-        returned = await tool.ainvoke_value(arguments, context)
+        returned = await invoke(arguments)
         if isinstance(returned, HookResult):
             return StepResult(
                 ending=StepEnding.CLEAN,

@@ -127,6 +127,7 @@ from kinby.contracts.models import (
     LifecycleOperationResult,
     Line,
     LineGetCommand,
+    LineHandInCommand,
     LineListCommand,
     LineListResult,
     LineRemoveCommand,
@@ -175,6 +176,8 @@ from kinby.contracts.models import (
     RoutineRunCommand,
     RoutineSetEnabledCommand,
     RoutineWriteCommand,
+    RunFolderRemoveCommand,
+    RunFolderRemoveResult,
     RunStop,
     Scope,
     SkillCustomizeCommand,
@@ -386,6 +389,13 @@ INSTANCE_DRAIN = Method(
 STEP_RUN = Method("step.run", Scope.INSTANCE_LIFECYCLE, StepRunCommand, StepResult)
 #: The hub tells the instance that handed a factory run in that the run stopped.
 RUN_STOPPED = Method("run.stopped", Scope.INSTANCE_LIFECYCLE, RunStop, AcceptedResult)
+#: The hub has the workbench remove the folder of a run that ended done or cancelled.
+RUN_FOLDER_REMOVE = Method(
+    "run.folder.remove",
+    Scope.INSTANCE_LIFECYCLE,
+    RunFolderRemoveCommand,
+    RunFolderRemoveResult,
+)
 #: The hub starts a turn on a new thread for the home instance, which is that turn's origin.
 THREAD_ASK = Method("thread.ask", Scope.INSTANCE_LIFECYCLE, ThreadAskCommand, AcceptedResult)
 
@@ -548,6 +558,7 @@ LINE_SETUP = Method("line.setup", Scope.HUB_ADMIN, LineSetupCommand, Line)
 LINE_LIST = Method("line.list", Scope.HUB_READ, LineListCommand, LineListResult)
 LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
 LINE_REMOVE = Method("line.remove", Scope.HUB_ADMIN, LineRemoveCommand, LineListResult)
+LINE_HAND_IN = Method("line.hand_in", Scope.HUB_ADMIN, LineHandInCommand, FactoryRun)
 OPERATION_GET = Method(
     "operation.get",
     Scope.HUB_READ,
@@ -742,6 +753,7 @@ METHODS = (
     INSTANCE_DRAIN,
     STEP_RUN,
     RUN_STOPPED,
+    RUN_FOLDER_REMOVE,
     THREAD_ASK,
     ROUTINE_LIST,
     ROUTINE_RUN,
@@ -813,6 +825,7 @@ METHODS = (
     LINE_LIST,
     LINE_GET,
     LINE_REMOVE,
+    LINE_HAND_IN,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,

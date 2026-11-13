@@ -1187,7 +1187,13 @@ def test_the_ended_call_takes_ready_for_human_off_and_says_why_a_run_made_no_cha
     instance = coder_at(tmp_path)
     workspace = instance.manifest.workspace.path
     run = origin("implement")
-    cut_run_worktree(instance, BRANCH["branch"], "origin/main", str(run.run_id))
+    cut_run_worktree(
+        instance.path,
+        instance.manifest.workspace.path,
+        BRANCH["branch"],
+        "origin/main",
+        str(run.run_id),
+    )
     (run_worktree(instance) / "notes.md").write_text("Half done.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode", labels=labels))
@@ -1970,7 +1976,9 @@ LEFTOVER = "agent/5-drop-the-light-theme"
 
 def left_over(instance: Instance, branch: str = LEFTOVER) -> Path:
     """A run worktree an earlier run left on *branch*, with one commit it pushed."""
-    worktree = cut_run_worktree(instance, branch, "origin/main", str(uuid4()))
+    worktree = cut_run_worktree(
+        instance.path, instance.manifest.workspace.path, branch, "origin/main", str(uuid4())
+    )
     commit(worktree, "theme.py", "LIGHT = False\n")
     git(worktree, "push", "origin", branch)
     return worktree

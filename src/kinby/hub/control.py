@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     INSTANCE_DRAIN,
+    RUN_FOLDER_REMOVE,
     RUN_STOPPED,
     STATS_GET,
     STEP_RUN,
@@ -27,6 +28,8 @@ from kinby.contracts import (
     InstanceProbeResult,
     Method,
     ResultFrame,
+    RunFolderRemoveCommand,
+    RunFolderRemoveResult,
     RunStop,
     StatsGetCommand,
     StatsGetResult,
@@ -86,6 +89,10 @@ class InstanceControl(Protocol):
 
     async def run_stopped(self, endpoint: ControlEndpoint, stop: RunStop) -> AcceptedResult: ...
 
+    async def remove_run_folder(
+        self, endpoint: ControlEndpoint, command: RunFolderRemoveCommand
+    ) -> RunFolderRemoveResult: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -123,6 +130,12 @@ class HttpInstanceControl:
     async def run_stopped(self, endpoint: ControlEndpoint, stop: RunStop) -> AcceptedResult:
         """Tell the instance that handed the run in that it stopped."""
         return await _call(endpoint, RUN_STOPPED, stop, "the run's stop")
+
+    async def remove_run_folder(
+        self, endpoint: ControlEndpoint, command: RunFolderRemoveCommand
+    ) -> RunFolderRemoveResult:
+        """Have the workbench remove the folder of a run that ended."""
+        return await _call(endpoint, RUN_FOLDER_REMOVE, command, "the run folder's removal")
 
 
 async def _call[Command: ContractModel, Result: ContractModel](

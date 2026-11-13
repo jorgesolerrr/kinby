@@ -1,5 +1,5 @@
-"""A workbench's runtime: the server its container runs for the hub. It has no persona, threads or
-memory."""
+"""A workbench's runtime: the server its container runs for the hub, which runs the steps of
+factory runs. It has no persona, threads or memory."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from kinby.contracts import (
     CONTRACT_VERSION,
     INSTANCE_DRAIN,
     INSTANCE_PROBE,
+    RUN_FOLDER_REMOVE,
+    STEP_RUN,
     ControlToken,
     DrainState,
     InstanceDrainCommand,
@@ -22,6 +24,7 @@ from kinby.contracts import (
 from kinby.core.contract_server import ContractServer
 from kinby.core.routing import Dispatcher, instance_capabilities
 from kinby.instance import Serve
+from kinby.workbench.steps import FACTORIES_MOUNT, WorkbenchSteps
 
 
 def prepare_workspace(workspace: Path, source: str | None) -> None:
@@ -33,8 +36,9 @@ def prepare_workspace(workspace: Path, source: str | None) -> None:
         subprocess.run(["git", "clone", "--quiet", source, str(workspace)], check=True)
 
 
-def _dispatcher() -> Dispatcher:
-    """The hub's probe, and a drain with no accepted work to wait for."""
+def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
+    """The hub's probe, a drain with no accepted work to wait for, the steps of runs and the
+    removal of their folders."""
     dispatcher = Dispatcher()
 
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
@@ -47,15 +51,18 @@ def _dispatcher() -> Dispatcher:
 
     dispatcher.register(INSTANCE_PROBE, probe)
     dispatcher.register(INSTANCE_DRAIN, drain)
+    dispatcher.register(STEP_RUN, steps.run)
+    dispatcher.register(RUN_FOLDER_REMOVE, steps.remove_folder)
     return dispatcher
 
 
 class WorkbenchServer:
-    """Serve the hub's health probe at ``/health``, and its control socket with *token*."""
+    """Serve the hub's health probe at ``/health``, and its control socket with *token*, which
+    runs *steps*."""
 
-    def __init__(self, listen: Serve, token: ControlToken) -> None:
+    def __init__(self, listen: Serve, token: ControlToken, steps: WorkbenchSteps) -> None:
         self._listen = listen
-        self._contract = ContractServer(_dispatcher(), token)
+        self._contract = ContractServer(_dispatcher(steps), token)
         self._runner: web.AppRunner | None = None
 
     async def start(self) -> Serve:
@@ -84,4 +91,4 @@ class WorkbenchServer:
         )
 
 
-__all__ = ["WorkbenchServer", "prepare_workspace"]
+__all__ = ["FACTORIES_MOUNT", "WorkbenchServer", "WorkbenchSteps", "prepare_workspace"]

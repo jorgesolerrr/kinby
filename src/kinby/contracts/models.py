@@ -1819,6 +1819,16 @@ class LineRemoveCommand(ContractModel):
     line_id: UUID
 
 
+class LineHandInCommand(ContractModel):
+    """Hand a work item to a line, which starts a run on its workbench. The result is the run.
+
+    A work item that matches an unfinished run of the line returns that run instead.
+    """
+
+    line_id: UUID
+    work_item: dict[ValueName, StepValue]
+
+
 class ContainerOwner(StrEnum):
     """Who manages an existing container now, read from the labels it carries."""
 
@@ -3948,7 +3958,8 @@ class CommandStepRun(ContractModel):
     """
 
     kind: Literal["command"] = "command"
-    run: list[Annotated[str, Field(min_length=1)] | RepositoryCommands] = Field(min_length=1)
+    #: Empty on a workbench whose lists of repository commands the step runs are all empty.
+    run: list[Annotated[str, Field(min_length=1)] | RepositoryCommands]
     #: How long the commands may run in all before the step fails. None lets them run.
     timeout_seconds: int | None = Field(default=None, ge=1)
     #: The branch whose run worktree the commands run in. None runs them in the workspace.
@@ -3998,8 +4009,27 @@ class ClientStepRun(ContractModel):
     branch: Annotated[str, Field(min_length=1)] | None = None
 
 
+class RunFolder(ContractModel):
+    """The folder a run works in on its workbench. The workbench cuts it when it lacks it."""
+
+    #: The branch of the run worktree, on a workbench whose workspace is a git clone. None is a
+    #: directory named for the run.
+    branch: Annotated[str, Field(min_length=1)] | None
+
+
+class RunFolderRemoveCommand(ContractModel):
+    """Remove the folder of a run that ended done or cancelled, with a run worktree's branch."""
+
+    run_id: UUID
+    folder: RunFolder
+
+
+class RunFolderRemoveResult(ContractModel):
+    pass
+
+
 class StepRunCommand(ContractModel):
-    """Run one step of a factory run in this instance, and return its result."""
+    """Run one step of a factory run in this instance or workbench, and return its result."""
 
     step: Annotated[
         AgentStepRun | ClientStepRun | CommandStepRun | CodeStepRun, Field(discriminator="kind")
@@ -4014,6 +4044,8 @@ class StepRunCommand(ContractModel):
     work_item: dict[ValueName, StepValue]
     #: Every value the run's earlier steps recorded, by name.
     results: dict[ValueName, StepValue] = Field(default_factory=dict)
+    #: Where a step on a workbench runs. None for a step in an instance.
+    folder: RunFolder | None = None
 
 
 class StepResult(ContractModel):
@@ -4045,8 +4077,10 @@ class FactoryRun(ContractModel):
 
     run_id: UUID
     factory: FactoryName
-    #: The instance that handed in its work item.
+    #: The instance that handed in its work item, or the owner of its line.
     instance_id: UUID
+    #: The line it runs on. None for a run of a factory whose steps run in instances.
+    line_id: UUID | None = None
     work_item: dict[ValueName, StepValue]
     status: FactoryRunStatus
     #: The step the run is at. None once it is done.
@@ -4105,6 +4139,8 @@ class FactoryRunListCommand(ContractModel):
     status: FactoryRunStatus | None = None
     #: Only the runs this instance handed in. None lists every instance's.
     instance_id: UUID | None = None
+    #: Only the runs of this line. None lists every line's.
+    line_id: UUID | None = None
     #: The last run of the previous page. The next page holds the runs handed in after it.
     cursor: UUID | None = None
     #: The most runs on a page. Null puts every run on one page.
