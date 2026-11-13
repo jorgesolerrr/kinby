@@ -1607,7 +1607,8 @@ class InstanceSetup(ContractModel):
 
 
 class RepositoryCommandList(ContractModel):
-    """One of an instance's lists of repository commands, its commands in the order they run."""
+    """One of an instance's or a workbench's lists of repository commands, its commands in the
+    order they run."""
 
     name: CommandListName
     commands: list[str]
@@ -1676,6 +1677,8 @@ class Workbench(ContractModel):
     detail: str = ""
     #: What its container applies only once it is recreated.
     recreate_reasons: list[RecreateReason]
+    #: Its lists of repository commands, by name.
+    repository_commands: list[RepositoryCommandList]
 
 
 class WorkbenchListCommand(ContractModel):
@@ -1743,6 +1746,15 @@ class WorkbenchSecretsSetCommand(ContractModel):
     @field_serializer("secrets", when_used="json")
     def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
         return {name: value.get_secret_value() for name, value in secrets.items()}
+
+
+class WorkbenchCommandsSetCommand(ContractModel):
+    """Set one workbench's list of repository commands *name* to *commands*, replacing the whole
+    list. The result is the workbench's record."""
+
+    workbench_id: UUID
+    name: CommandListName
+    commands: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]]
 
 
 class WorkbenchDeleteCommand(ContractModel):
@@ -3192,6 +3204,25 @@ class InstancePicksResult(ContractModel):
     #: By name.
     mcp_servers: list[McpServerPick]
     #: The hash of the instance's ``skills-lock.json``. Null when it has none.
+    hash: FileHash | None
+
+
+class WorkbenchPicksGetCommand(ContractModel):
+    workbench_id: UUID
+
+
+class WorkbenchPicksSetCommand(ContractModel):
+    workbench_id: UUID
+    #: Every library skill the workbench should hold. A pick left out is dropped.
+    skills: list[SkillName]
+    #: The lock's hash the client read. The set is refused as STALE when the picks changed since.
+    hash: FileHash | None
+
+
+class WorkbenchPicksResult(ContractModel):
+    #: By name.
+    picks: list[SkillPick]
+    #: The hash of the workbench's ``skills-lock.json``. Null when it has none.
     hash: FileHash | None
 
 

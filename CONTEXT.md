@@ -325,7 +325,7 @@ The portable description of an instance's identity and configuration. It contain
 
 ### Workspace
 
-The directory holding the user's *own* work that an instance acts on — a repository, a notes folder. Lives under the instance (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's **conventions** as an additional behavior source. The **software factory**'s runs never work in it directly: each works in its own **run worktree** cut from it.
+The directory holding the user's *own* work that an instance or a **workbench** acts on — a repository, a notes folder. Lives under its instance or workbench (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's **conventions** as an additional behavior source. The **software factory**'s runs never work in it directly: each works in its own **run worktree** cut from it.
 
 ### Conventions
 
@@ -635,7 +635,7 @@ One pickable thing in the **library**, of one kind. An entry added from git reco
 
 ### Pick
 
-An **instance**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill and records the version copied, and a running instance can add or drop one. Picking an **MCP server** records a copy of its definition. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always. Picking a **factory role** happens once, at creation.
+An **instance**'s or a **workbench**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill, or into the workbench's directory, and records the version copied, and a running instance or workbench can add or drop one. Picking an **MCP server** records a copy of its definition. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always. Picking a **factory role** happens once, at creation.
 _Avoid_: install (of a skill or a factory), package
 
 ### Suggested pick
@@ -834,7 +834,7 @@ _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
 
-The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops, recreates, updates, removes, restores and deletes it with an instance's **lifecycle operations**. Its named values read back in its record, and its secrets never do. Its secrets behave as **instance secrets** do: a secret may take a **hub secret**, and a replaced one reaches the container through a **container recreation**, which its record shows as a **recreate reason** until then. A **factory run** works on exactly one workbench, in a folder of its own there.
+The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops, recreates, updates, removes, restores and deletes it with an instance's **lifecycle operations**. Its workspace is cloned from its git source at its first start, or is a plain folder, and keeps the clone and its installs between starts and recreations. Its named values read back in its record, and its secrets never do. Its secrets behave as **instance secrets** do: a secret may take a **hub secret**, and a replaced one reaches the container through a **container recreation**, which its record shows as a **recreate reason** until then. A **factory run** works on exactly one workbench, in a folder of its own there.
 _Avoid_: environment, sandbox, site, station
 
 ### Line
@@ -926,7 +926,7 @@ _Avoid_: fix round (that answers review threads)
 
 ### Repository commands
 
-The commands an **instance** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. The instance records them through the **instance tool**. They belong to the instance, never to the **factory** or the repository, so two instances of one **factory role** each hold their own.
+The commands an **instance** or a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. The instance records them through the **instance tool**, and a workbench's record holds them, each list replaced whole through the **hub**. They belong to the instance or the workbench, never to the **factory** or the repository, so two instances of one **factory role**, or two workbenches, each hold their own.
 _Avoid_: onboarding, environment, the repository's gate
 
 ### Repository survey

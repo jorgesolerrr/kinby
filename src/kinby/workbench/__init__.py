@@ -3,6 +3,9 @@ memory."""
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 from aiohttp import web
 
 from kinby.contracts import (
@@ -19,6 +22,15 @@ from kinby.contracts import (
 from kinby.core.contract_server import ContractServer
 from kinby.core.routing import Dispatcher, instance_capabilities
 from kinby.instance import Serve
+
+
+def prepare_workspace(workspace: Path, source: str | None) -> None:
+    """Clone *source* into *workspace* when it is empty, as at a workbench's first start. A
+    workspace that holds anything stays as it is, so a recreation keeps the clone and what was
+    installed beside it. With no source the workspace is a plain folder."""
+    workspace.mkdir(parents=True, exist_ok=True)
+    if source is not None and not any(workspace.iterdir()):
+        subprocess.run(["git", "clone", "--quiet", source, str(workspace)], check=True)
 
 
 def _dispatcher() -> Dispatcher:
@@ -72,4 +84,4 @@ class WorkbenchServer:
         )
 
 
-__all__ = ["WorkbenchServer"]
+__all__ = ["WorkbenchServer", "prepare_workspace"]

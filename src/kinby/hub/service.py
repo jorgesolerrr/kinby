@@ -125,10 +125,13 @@ from kinby.contracts import (
     THREAD_TAKEOVER_RESUME,
     THREAD_TAKEOVER_START,
     THREAD_TURN_START,
+    WORKBENCH_COMMANDS_SET,
     WORKBENCH_CREATE,
     WORKBENCH_DELETE,
     WORKBENCH_GET,
     WORKBENCH_LIST,
+    WORKBENCH_PICKS_GET,
+    WORKBENCH_PICKS_SET,
     WORKBENCH_RECREATE,
     WORKBENCH_REMOVE,
     WORKBENCH_RESTORE,
@@ -221,6 +224,7 @@ from kinby.contracts import (
     ProcessState,
     Readiness,
     RecreateReason,
+    RepositoryCommandList,
     RevisionBehind,
     RunStop,
     Scope,
@@ -250,6 +254,7 @@ from kinby.contracts import (
     VaultEntryListResult,
     WaitingApproval,
     Workbench,
+    WorkbenchCommandsSetCommand,
     WorkbenchCreateCommand,
     WorkbenchCreateResult,
     WorkbenchDeleteCommand,
@@ -257,6 +262,9 @@ from kinby.contracts import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchOperationResult,
+    WorkbenchPicksGetCommand,
+    WorkbenchPicksResult,
+    WorkbenchPicksSetCommand,
     WorkbenchRecreateCommand,
     WorkbenchRemoveCommand,
     WorkbenchRestoreCommand,
@@ -742,6 +750,9 @@ class Hub:
         dispatcher.register(WORKBENCH_REMOVE, self.remove_workbench)
         dispatcher.register(WORKBENCH_RESTORE, self.restore_workbench)
         dispatcher.register(WORKBENCH_SECRETS_SET, self.set_workbench_secrets)
+        dispatcher.register(WORKBENCH_COMMANDS_SET, self.set_workbench_commands)
+        dispatcher.register(WORKBENCH_PICKS_GET, self.workbench_picks)
+        dispatcher.register(WORKBENCH_PICKS_SET, self.set_workbench_picks)
         dispatcher.register(OPERATION_GET, self.operation)
         dispatcher.register(IMAGE_PREPARE, self.prepare_image)
         dispatcher.register(IMAGE_DESCRIBE, self.describe_image)
@@ -1279,12 +1290,16 @@ class Hub:
         self, record: ManagedInstance, image: str, storage: tuple[StorageItem, ...]
     ) -> InstanceSpec:
         """The container the hub runs for a record: an instance serves, a workbench runs the
-        workbench runtime."""
+        workbench runtime, which clones its source into its workspace at its first start."""
+        command: tuple[str, ...] = ("serve",)
+        if record.workbench is not None:
+            source = record.workbench.workspace_source
+            command = (*_WORKBENCH_COMMAND, *(("--workspace-source", source) if source else ()))
         return InstanceSpec(
             instance_id=record.runtime_id,
             image=image,
             storage=storage,
-            command=_WORKBENCH_COMMAND if record.workbench is not None else ("serve",),
+            command=command,
             env=self._environment(record.path),
             port=_INSTANCE_PORT,
         )
@@ -3227,6 +3242,23 @@ class Hub:
             operation_id=replacing.operation_id, workbench_id=command.workbench_id
         )
 
+    async def set_workbench_commands(self, command: WorkbenchCommandsSetCommand) -> Workbench:
+        self._active_workbench(command.workbench_id)
+        self.registry.set_workbench_commands(command.workbench_id, command.name, command.commands)
+        record = self._active_workbench(command.workbench_id)
+        return await self._workbench(record, self._environment(record.path))
+
+    async def workbench_picks(self, command: WorkbenchPicksGetCommand) -> WorkbenchPicksResult:
+        picks = self.library.picks(self._active_workbench(command.workbench_id).path)
+        return WorkbenchPicksResult(picks=picks.picks, hash=picks.hash)
+
+    async def set_workbench_picks(self, command: WorkbenchPicksSetCommand) -> WorkbenchPicksResult:
+        """Change the workbench's picks in its directory, which its container mounts, as an
+        instance's are."""
+        record = self._active_workbench(command.workbench_id)
+        picks = self.library.pick(record.path, command.skills, command.hash)
+        return WorkbenchPicksResult(picks=picks.picks, hash=picks.hash)
+
     async def delete_workbench(self, command: WorkbenchDeleteCommand) -> WorkbenchOperationResult:
         """Drain the workbench and remove its container, then delete its directory and named
         volumes, in one operation. A removed workbench has only its storage left, and a deletion
@@ -3311,6 +3343,10 @@ class Hub:
             process=observed.process,
             detail=observed.detail,
             recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
+            repository_commands=[
+                RepositoryCommandList(name=name, commands=commands)
+                for name, commands in sorted(record.workbench.commands.items())
+            ],
         )
 
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
