@@ -1560,6 +1560,7 @@ export interface FactoryRunRetryCommand {
  * Its retries and send-backs count afresh.
  */
 export interface FactoryRunSendBackCommand {
+  notes?: string | null;
   run_id: string;
   step: StepId;
 }

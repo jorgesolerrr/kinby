@@ -160,6 +160,15 @@ def test_the_check_holds_a_command_steps_run_values_to_what_earlier_steps_declar
     ]
 
 
+def test_the_check_holds_an_approve_summarys_run_values_to_what_earlier_steps_declare(tmp_path):
+    files = _with("Merge the pull request.", "Merge pull request {{pr}} of {{repo}}, {{title}}.")
+
+    assert problems(tmp_path, files) == [
+        'Step "merge" names "title", which no earlier step declares in its results and the '
+        "work item does not carry."
+    ]
+
+
 def test_a_factory_that_runs_on_a_workbench_offers_no_role_to_pick(tmp_path):
     client = hub_client(factory_hub(tmp_path, FILES))
 

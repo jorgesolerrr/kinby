@@ -149,6 +149,8 @@ type Outcome = Literal["next", "done", "stop"] | SendBack
 FAILURE: ValueName = "failure"
 #: What a wait records as true when it moves on with no signal, its quiet time passed.
 QUIET: ValueName = "quiet"
+#: What the user wrote when they sent the run back, which the steps from there on read.
+NOTES: ValueName = "notes"
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -314,8 +316,8 @@ def run_value_name(expected: str | int) -> ValueName | None:
 
 
 def run_value_names(step: Step | WorkbenchStep) -> list[ValueName]:
-    """The run values a command step's own commands, or a client or command step's branch, name
-    as ``{{name}}``. A list of repository commands takes none."""
+    """The run values a command step's own commands, a client or command step's branch, or an
+    approve step's summary name as ``{{name}}``. A list of repository commands takes none."""
     match step:
         case CommandStep(run=run, branch=branch):
             entries = [entry for entry in (*run, branch) if isinstance(entry, str)]
@@ -323,6 +325,8 @@ def run_value_names(step: Step | WorkbenchStep) -> list[ValueName]:
             entries = [entry for entry in run if isinstance(entry, str)]
         case ClientStep(branch=str() as branch):
             entries = [branch]
+        case ApproveStep(summary=summary):
+            entries = [summary]
         case _:
             entries = []
     return [name for entry in entries for name in _RUN_VALUE.findall(entry)]
@@ -333,12 +337,19 @@ def with_run_values(command: str, held: Mapping[ValueName, StepValue]) -> str:
     return _RUN_VALUE.sub(lambda named: shlex.quote(str(held[named[1]])), command)
 
 
+def with_run_values_as_text(text: str, held: Mapping[ValueName, StepValue]) -> str:
+    """The text with each ``{{name}}`` it names replaced by the run's value, as the user reads
+    it."""
+    return _RUN_VALUE.sub(lambda named: str(held[named[1]]), text)
+
+
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class ApproveStep(_Step):
     """Park the run until the user approves it or sends it back."""
 
     kind: Literal["approve"]
-    #: What the user is asked to approve.
+    #: What the user is asked to approve. A ``{{name}}`` in it stands for the run's value of that
+    #: name.
     summary: str
 
 

@@ -477,6 +477,9 @@ class HubRegistry:
                     # The line it runs on. Null for a run of a factory whose steps run in
                     # instances.
                     "line_id": "TEXT",
+                    # What the user wrote when they last sent the run back. Null when they wrote
+                    # nothing.
+                    "notes": "TEXT",
                 },
             )
             # A run that stopped before stops were recorded gets its latest stop as told, so its
@@ -2280,24 +2283,34 @@ class HubRegistry:
     def restart_run(self, run_id: UUID, step: StepId | None) -> FactoryRun:
         """Queue the run at *step* for the user, its retries and send-backs counted afresh."""
         with self._transaction() as connection:
+            _restart(connection, run_id, step)
+        return self._existing_run(run_id)
+
+    def send_back_run(self, run_id: UUID, step: StepId, notes: str | None) -> FactoryRun:
+        """Restart the run at *step*, with the *notes* the user sent it back with, or none."""
+        with self._transaction() as connection:
+            _restart(connection, run_id, step)
             connection.execute(
-                """
-                UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, restarted_after = (
-                    SELECT COALESCE(MAX(rowid), 0) FROM step_attempts WHERE run_id = ?
-                )
-                WHERE id = ?
-                """,
-                (FactoryRunStatus.QUEUED.value, step, _now(), str(run_id), str(run_id)),
+                "UPDATE factory_runs SET notes = ? WHERE id = ?", (notes, str(run_id))
             )
         return self._existing_run(run_id)
+
+    def run_notes(self, run_id: UUID) -> str | None:
+        """What the user wrote when they last sent the run back, or None."""
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT notes FROM factory_runs WHERE id = ?", (str(run_id),)
+            ).fetchone()
+        return row[0] if row is not None else None
 
     def begin_attempt(
         self,
         run_id: UUID,
         step: StepId,
         status: FactoryRunStatus = FactoryRunStatus.RUNNING,
+        summary: str = "",
     ) -> FactoryRun:
-        """Open the next attempt at *step*, and put the run in *status* at it.
+        """Open the next attempt at *step* with *summary*, and put the run in *status* at it.
 
         A run parked at a wait or an approval keeps its attempt open until it moves on.
         """
@@ -2308,10 +2321,10 @@ class HubRegistry:
                 INSERT INTO step_attempts (
                     run_id, step, attempt, result_values, summary, started_at
                 )
-                SELECT ?, ?, COUNT(*) + 1, '{}', '', ? FROM step_attempts
+                SELECT ?, ?, COUNT(*) + 1, '{}', ?, ? FROM step_attempts
                 WHERE run_id = ? AND step = ?
                 """,
-                (str(run_id), step, now, str(run_id), step),
+                (str(run_id), step, summary, now, str(run_id), step),
             )
             connection.execute(
                 "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
@@ -2922,6 +2935,19 @@ STOPS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED, FactoryRunStatus.NEE
 
 def _now() -> str:
     return _stored(datetime.now(UTC))
+
+
+def _restart(connection: sqlite3.Connection, run_id: UUID, step: StepId | None) -> None:
+    """Queue the run at *step*, its attempts so far counting toward no retry or send-back."""
+    connection.execute(
+        """
+        UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, restarted_after = (
+            SELECT COALESCE(MAX(rowid), 0) FROM step_attempts WHERE run_id = ?
+        )
+        WHERE id = ?
+        """,
+        (FactoryRunStatus.QUEUED.value, step, _now(), str(run_id), str(run_id)),
+    )
 
 
 def _stored(moment: datetime) -> str:

@@ -177,7 +177,7 @@ The sort of service a **channel** talks to, such as Telegram, Discord or email. 
 
 ### Notification
 
-What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits or a **routine notice**, an **instance notice**, or a **factory run** that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run. It can offer options to **reply** with.
+What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits, when a **factory run** parks on the user's approval at a **step**, or when a **routine notice**, an **instance notice**, or a factory run that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run. It can offer options to **reply** with.
 _Avoid_: message, alert, push
 
 ### Reply
@@ -854,7 +854,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. So does an **approval** a kinby **agent step**'s turn requests, until the user answers it. It ends with a **step result**.
+One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. So does an **approval** a kinby **agent step**'s turn requests, until the user answers it. A wait on the user's approval tells the user by itself, with a summary that can name the run's values. The user approves the run, or sends it back to an earlier step, with notes or none. It ends with a **step result**.
 
 ### Work item
 
@@ -879,7 +879,7 @@ The derived record of one **factory run**'s cost: its tokens and price across it
 
 ### Step result
 
-What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
+What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and as `notes` what the user wrote when they last sent the run back, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
 
 ### Step attempt
 

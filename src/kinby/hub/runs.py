@@ -88,6 +88,7 @@ from kinby.core.errors import (
 )
 from kinby.factories.file import (
     FAILURE,
+    NOTES,
     QUIET,
     AgentStep,
     ApproveStep,
@@ -119,6 +120,7 @@ from kinby.factories.file import (
     run_value_name,
     run_value_names,
     with_run_values,
+    with_run_values_as_text,
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.models import Signal
@@ -381,7 +383,8 @@ class FactoryRuns:
         return self._restart(run, run.step)
 
     async def send_back(self, command: FactoryRunSendBackCommand) -> FactoryRun:
-        """Send the run back to a step before the one it stopped or awaits approval at.
+        """Send the run back to a step before the one it stopped or awaits approval at, with the
+        user's notes or none.
 
         Its retries and send-backs count afresh.
         """
@@ -397,7 +400,10 @@ class FactoryRuns:
             self._registry.end_attempt(
                 run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary)
             )
-        return self._restart(run, command.step)
+        moved = self._registry.send_back_run(run.run_id, command.step, command.notes)
+        self._publish(moved)
+        self._enqueue(moved)
+        return moved
 
     async def approve(self, command: FactoryRunApproveCommand) -> FactoryRun:
         """Move a run that awaits the user's approval on, as its approve step's next outcome."""
@@ -695,6 +701,7 @@ class FactoryRuns:
         run.
 
         A wait or approve step runs in no instance: it is the step itself, which parks the run.
+        An approve step comes with the run's values filled in its summary.
         """
         factory = self._file(run.factory)
         step = _step(factory, step_id) if factory is not None else None
@@ -705,7 +712,9 @@ class FactoryRuns:
         unmet = _unmet(factory, step, held)
         if unmet is not None:
             return unmet
-        if isinstance(step, WaitStep | ApproveStep):
+        if isinstance(step, ApproveStep):
+            return replace(step, summary=with_run_values_as_text(step.summary, held))
+        if isinstance(step, WaitStep):
             return step
         if isinstance(step, WorkbenchAgentStep | WorkbenchCommandStep | WorkbenchCodeStep):
             return self._on_workbench(run, factory, step, held, results)
@@ -981,7 +990,8 @@ class FactoryRuns:
         with the work to the step it went back to, as if that step's pass held them. Trying a
         step again after an attempt at it that recorded nothing drops nothing, so a retry holds
         what the attempt before it held. A failed attempt that runs its step again under
-        ``failed`` adds what it recorded.
+        ``failed`` adds what it recorded. The notes the user last sent the run back with are
+        ``notes``.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
         recorded: dict[ValueName, tuple[int, StepValue]] = {}
@@ -1009,7 +1019,9 @@ class FactoryRuns:
                 recorded |= {name: (index, value) for name, value in attempt.values.items()}
         if starting is not None:
             start(starting)
-        return {name: value for name, (_, value) in recorded.items()}
+        results = {name: value for name, (_, value) in recorded.items()}
+        notes = self._registry.run_notes(run_id)
+        return results if notes is None else results | {NOTES: notes}
 
     async def _work(self, instance_id: UUID, queue: asyncio.Queue[_Queued]) -> None:
         """Run the instance's queued work one at a time, in the order it was queued."""
@@ -1129,11 +1141,14 @@ class FactoryRuns:
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
         """Open the step's attempt with the run parked at it, holding no instance.
 
-        A wait a signal already matched on the run's way to it moves on at once.
+        An approval's attempt holds its summary, and tells the user. A wait a signal already
+        matched on the run's way to it moves on at once.
         """
-        parked = self._registry.begin_attempt(run_id, step.id, FactoryRunStatus.PARKED)
+        summary = step.summary if isinstance(step, ApproveStep) else ""
+        parked = self._registry.begin_attempt(run_id, step.id, FactoryRunStatus.PARKED, summary)
         self._publish(parked)
-        if not isinstance(step, WaitStep):
+        if isinstance(step, ApproveStep):
+            self._notify_approval(parked, step.summary)
             return
         woken = self._woken.get(run_id, set())
         if step.id in woken:
@@ -1282,6 +1297,20 @@ class FactoryRuns:
             page="/library",
             options=(_RETRY, *send_back, _CANCEL),
             stop=stop,
+        )
+
+    def _notify_approval(self, run: FactoryRun, summary: str) -> None:
+        """Tell the user the run awaits their approval of what its approve step sums up."""
+        if self._registry.instance(run.instance_id) is None:
+            return
+        attempt = self._registry.attempts(run.run_id)[-1].attempt
+        self._outbox.notify(
+            run.instance_id,
+            f"run_approval:{run.run_id}:{run.step}:{attempt}",
+            source=run.factory,
+            title="Awaits approval",
+            text=f'The run for {_work_item(run)} awaits approval at "{run.step}": {summary}',
+            page="/library",
         )
 
     def _notify_ask(self, run: FactoryRun, ask: WaitingApproval) -> None:

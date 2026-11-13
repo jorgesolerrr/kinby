@@ -4252,6 +4252,8 @@ class FactoryRunSendBackCommand(ContractModel):
 
     run_id: UUID
     step: StepId
+    #: What the user tells the steps from there on, which they read as the run value ``notes``.
+    notes: Annotated[str, Field(min_length=1)] | None = None
 
 
 class FactoryRunApproveCommand(ContractModel):
