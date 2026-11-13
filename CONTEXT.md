@@ -862,7 +862,7 @@ The unit of work a **factory** carries, such as one issue.
 
 ### Factory run
 
-One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run of a factory written the older way belongs to the **instance** that handed the work item in. A work item that matches an unfinished run of the same line, or of the same instance, returns that run, so two lines can each carry a work item with the same values. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run of a factory written the older way belongs to the **instance** that handed the work item in. A work item that matches an unfinished run of the same line, or of the same instance, returns that run, so two lines can each carry a work item with the same values. A line's run counts as unfinished until the **factory**'s ended call for it went through, since its **run folder** goes only then. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
 
 ### Run folder
 

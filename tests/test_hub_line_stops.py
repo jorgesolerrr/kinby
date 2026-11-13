@@ -313,6 +313,7 @@ def test_a_run_that_ends_calls_the_factorys_ended_tool_on_its_workbench_then_los
         assert endpoint.address == f"http://kinby-{line.workbench_id}:8787"
         assert (call.origin.step, call.folder) == ("label", WORKTREE)
         assert removed == [WORKTREE]
+        assert (await _handed_in(client, line, 12)).run_id != run.run_id
 
     asyncio.run(scenario())
 
@@ -345,6 +346,35 @@ def test_a_run_whose_ended_call_fails_keeps_its_folder_until_the_call_goes_throu
 
         assert control.steps[-1][1].step == CodeStepRun(call="report_end")
         assert control.removed_folders == []
+
+    asyncio.run(scenario())
+
+
+def test_a_work_item_whose_run_still_owes_its_ended_call_returns_that_run(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.FAILED, summary="GitHub is down."),
+    ]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime, tickets=STOPS)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 3:
+                await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+
+        again = await _handed_in(client, line, 12)
+
+        assert (again.run_id, again.status) == (run.run_id, FactoryRunStatus.DONE)
+        assert len(control.steps) == 3
 
     asyncio.run(scenario())
 

@@ -1945,6 +1945,9 @@ class HubRegistry:
         """Queue a new run at its first step, or find the unfinished run of the same work item
         that the instance handed in, or that runs on line *line_id*.
 
+        A line's run that still owes the factory's ended call counts as unfinished: its folder
+        goes only after that call, and a new run of the work item would work in the same one.
+
         True when the run is new.
         """
         key = _work_item_key(work_item)
@@ -1955,7 +1958,8 @@ class HubRegistry:
                 f"""
                 SELECT {_RUN_COLUMNS} FROM factory_runs
                 WHERE (line_id = ? OR (? IS NULL AND line_id IS NULL AND instance_id = ?))
-                    AND work_item = ? AND status NOT IN (?, ?)
+                    AND work_item = ?
+                    AND (status NOT IN (?, ?) OR (line_id IS NOT NULL AND ended_call = 1))
                 ORDER BY rowid LIMIT 1
                 """,
                 (line, line, str(instance_id), key, *_FINISHED),
