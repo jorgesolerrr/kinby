@@ -47,6 +47,8 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     ErrorFrame,
+    FactoryRunTranscript,
+    FactoryRunTranscriptCommand,
     FrameId,
     HubSecretSetResult,
     ImageDescribeCommand,
@@ -400,6 +402,10 @@ class FakeControl:
         self.stop_failures: list[Exception] = []
         #: Each run folder the hub had a workbench remove, and the endpoint it asked.
         self.removed_folders: list[tuple[ControlEndpoint, RunFolderRemoveCommand]] = []
+        #: What a workbench answers each transcript read with.
+        self.transcript = FactoryRunTranscript(events=[], cursor=None)
+        #: Each transcript the hub read, and the endpoint it read it from.
+        self.transcripts_read: list[tuple[ControlEndpoint, FactoryRunTranscriptCommand]] = []
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -454,6 +460,12 @@ class FakeControl:
     ) -> RunFolderRemoveResult:
         self.removed_folders.append((endpoint, command))
         return RunFolderRemoveResult()
+
+    async def read_transcript(
+        self, endpoint: ControlEndpoint, command: FactoryRunTranscriptCommand
+    ) -> FactoryRunTranscript:
+        self.transcripts_read.append((endpoint, command))
+        return self.transcript
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

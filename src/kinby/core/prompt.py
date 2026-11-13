@@ -247,18 +247,19 @@ def render_client_message(
     results: Mapping[ValueName, StepValue],
     skills: Sequence[Skill],
     memory: str | None = None,
+    *,
+    remembers: bool = True,
 ) -> str:
     """A client step's message, how to search memory and the *memory* the step brings, how to keep
     a command from holding the step, then the skills catalogue with the path of each skill's file.
+    A client with no memory to search, as on a workbench, is told nothing of memory.
 
     A coding client has no kinby tools, so it searches memory from its shell and reads a skill
     from its path.
     """
     delivered = "" if memory is None else f"\n\n{memory}"
-    message = (
-        f"{render_step_message(prompt, work_item, results)}\n\n{_CLIENT_MEMORY}{delivered}\n\n"
-        f"{_CLIENT_COMMANDS}"
-    )
+    recall = f"{_CLIENT_MEMORY}{delivered}\n\n" if remembers else ""
+    message = f"{render_step_message(prompt, work_item, results)}\n\n{recall}{_CLIENT_COMMANDS}"
     if not skills:
         return message
     catalogue = "\n".join(

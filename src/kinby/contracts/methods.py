@@ -65,6 +65,8 @@ from kinby.contracts.models import (
     FactoryRunRetryCommand,
     FactoryRunSendBackCommand,
     FactoryRunSubscribeCommand,
+    FactoryRunTranscript,
+    FactoryRunTranscriptCommand,
     HubSecretDeleteCommand,
     HubSecretDeleteResult,
     HubSecretListCommand,
@@ -396,6 +398,13 @@ RUN_FOLDER_REMOVE = Method(
     RunFolderRemoveCommand,
     RunFolderRemoveResult,
 )
+#: The hub reads an attempt's transcript from the workbench that ran it.
+RUN_TRANSCRIPT_READ = Method(
+    "run.transcript.read",
+    Scope.INSTANCE_LIFECYCLE,
+    FactoryRunTranscriptCommand,
+    FactoryRunTranscript,
+)
 #: The hub starts a turn on a new thread for the home instance, which is that turn's origin.
 THREAD_ASK = Method("thread.ask", Scope.INSTANCE_LIFECYCLE, ThreadAskCommand, AcceptedResult)
 
@@ -584,6 +593,12 @@ FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
 )
 FACTORY_RUN_GET = Method("factory.run.get", Scope.HUB_READ, FactoryRunGetCommand, FactoryRunDetail)
+FACTORY_RUN_TRANSCRIPT = Method(
+    "factory.run.transcript",
+    Scope.HUB_READ,
+    FactoryRunTranscriptCommand,
+    FactoryRunTranscript,
+)
 FACTORY_RUN_RETRY = Method("factory.run.retry", Scope.HUB_ADMIN, FactoryRunRetryCommand, FactoryRun)
 FACTORY_RUN_SEND_BACK = Method(
     "factory.run.send_back", Scope.HUB_ADMIN, FactoryRunSendBackCommand, FactoryRun
@@ -754,6 +769,7 @@ METHODS = (
     STEP_RUN,
     RUN_STOPPED,
     RUN_FOLDER_REMOVE,
+    RUN_TRANSCRIPT_READ,
     THREAD_ASK,
     ROUTINE_LIST,
     ROUTINE_RUN,
@@ -838,6 +854,7 @@ METHODS = (
     FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
+    FACTORY_RUN_TRANSCRIPT,
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_APPROVE,

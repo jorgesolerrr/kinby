@@ -234,6 +234,29 @@ class WorkbenchCommandStep(_WorkbenchWork):
     run: tuple[Annotated[str, Field(min_length=1)] | RepositoryCommands, ...] = Field(min_length=1)
 
 
+class Engine(StrEnum):
+    """What runs an agent step: a kinby turn, or a coding client, which keeps a session."""
+
+    KINBY = "kinby"
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+@dataclass(frozen=True, kw_only=True, config=_DECLARATION)
+class WorkbenchAgentStep(_WorkbenchWork):
+    """A model doing the work from a prompt of the factory's folder, on the workbench in the run's
+    folder, run by its engine."""
+
+    kind: Literal["agent"]
+    engine: Engine
+    prompt: FactoryPath
+    #: None leaves the coding client's default.
+    model: CodingModel | None = None
+    effort: ReasoningEffort | None = None
+    #: An earlier agent step on the same coding client, whose session this one continues.
+    resume: StepId | None = None
+
+
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class CodeStep(_Step):
     """An instance tool the model never sees.
@@ -326,7 +349,7 @@ type Step = Annotated[
 
 
 type WorkbenchStep = Annotated[
-    WorkbenchCommandStep | WorkbenchCodeStep | WaitStep | ApproveStep,
+    WorkbenchAgentStep | WorkbenchCommandStep | WorkbenchCodeStep | WaitStep | ApproveStep,
     Field(discriminator="kind"),
 ]
 

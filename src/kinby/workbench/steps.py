@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import shutil
 from functools import partial
 from pathlib import Path
 from uuid import UUID
 
+from pydantic import JsonValue
+
 from kinby.contracts import (
+    ClientStepRun,
     CodeStepRun,
     CommandStepRun,
+    DelegatedRunOutcome,
+    FactoryRunTranscript,
+    FactoryRunTranscriptCommand,
     HookName,
     RunFolder,
     RunFolderRemoveCommand,
     RunFolderRemoveResult,
+    StepEnding,
+    StepId,
     StepResult,
     StepRunCommand,
 )
+from kinby.core.coding_clients import run_coding_client
 from kinby.core.held_results import HeldResults
+from kinby.core.prompt import render_client_message
 from kinby.core.run_worktrees import (
     RunWorktreeError,
     cut_run_worktree,
@@ -27,10 +39,11 @@ from kinby.core.run_worktrees import (
 )
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
 from kinby.factories import SHIPPED_FACTORIES
-from kinby.instance.layout import TOOLS_DIR, WORKSPACE_DIR
+from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import load_tool_file
+from kinby.plugins.skills import load_skill_roots
 from kinby.plugins.tools import Tool
 
 #: Where the hub mounts its own factory folders in a workbench's container.
@@ -39,6 +52,12 @@ FACTORIES_MOUNT = Path("/factories")
 _RUNS_DIR = "runs"
 #: What a run worktree of a branch neither the clone nor origin holds is cut from.
 _BASE = "origin/HEAD"
+#: Where each agent step attempt's transcript lives, as ``<run>/<step>/<attempt>.jsonl``.
+_TRANSCRIPTS_DIR = "transcripts"
+#: The most of a transcript one read returns, far under the control socket's frame limit.
+_PAGE_BYTES = 1024 * 1024
+
+_logger = logging.getLogger(__name__)
 
 
 class WorkbenchSteps:
@@ -74,6 +93,29 @@ class WorkbenchSteps:
             )
         return RunFolderRemoveResult()
 
+    async def transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
+        """One page of the attempt's transcript, from its *cursor*-th line. A page holds at least
+        one line, and no more than fit in its size after that. A line that is no JSON object, such
+        as one a killed client left half written, is skipped."""
+        path = self._transcript(command.run_id, command.step, command.attempt)
+        try:
+            text = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
+            lines = text.splitlines()
+        except FileNotFoundError:
+            lines = []
+        page: list[str] = []
+        size = 0
+        for line in lines[command.cursor :]:
+            size += len(line.encode())
+            if page and size > _PAGE_BYTES:
+                break
+            page.append(line)
+        end = command.cursor + len(page)
+        return FactoryRunTranscript(
+            events=[event for line in page if (event := _event(line)) is not None],
+            cursor=end if end < len(lines) else None,
+        )
+
     async def _run(self, command: StepRunCommand) -> StepResult:
         if command.folder is None:
             return step_failed("The step names no run folder.")
@@ -90,6 +132,8 @@ class WorkbenchSteps:
                 if len(commands) < len(run):
                     return step_failed("A workbench reads no list of repository commands itself.")
                 result = await run_commands(commands, timeout, folder)
+            case ClientStepRun() as step:
+                result = await self._agent(step, command, folder)
             case CodeStepRun() as step:
                 result = await self._call(step, command, folder)
             case _:
@@ -110,6 +154,56 @@ class WorkbenchSteps:
                 self._directory, self._workspace, folder.branch, _BASE, str(run_id)
             )
         return run_worktree(self._directory, self._workspace, folder.branch, str(run_id), _BASE)
+
+    async def _agent(
+        self, step: ClientStepRun, command: StepRunCommand, folder: Path
+    ) -> StepResult:
+        """Run the agent step's coding client in the run's folder, offering it the factory's skills
+        and the workbench's picks, and keep what it streams as the attempt's transcript.
+
+        What the client said last is only the summary. A run the plan refused ends limited.
+        """
+        origin = command.origin
+        skills, warnings = await asyncio.to_thread(
+            load_skill_roots,
+            (self._factory(origin.factory) / SKILLS_DIR, self._directory / SKILLS_DIR),
+        )
+        for warning in warnings:
+            _logger.warning("%s: %s", ", ".join(warning.sources), warning.message)
+        transcript = self._transcript(origin.run_id, origin.step, command.attempt or 0)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        ran = await run_coding_client(
+            step.client,
+            render_client_message(
+                step.prompt,
+                command.work_item,
+                command.results,
+                tuple(skills.values()),
+                remembers=False,
+            ),
+            folder,
+            instance=None,
+            state_dir=self._directory / STATE_DIR,
+            origin=origin,
+            attempt=command.attempt,
+            resume=step.resume,
+            timeout_seconds=step.timeout_seconds,
+            model=step.model,
+            effort=step.effort,
+            transcript=transcript,
+        )
+        reported = ran.reported
+        if reported is not None and reported.outcome is DelegatedRunOutcome.LIMITED:
+            return StepResult(
+                ending=StepEnding.LIMITED,
+                summary=ran.summary,
+                session=ran.session,
+                resets_at=reported.resets_at,
+            )
+        return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session)
+
+    def _transcript(self, run_id: UUID, step: StepId, attempt: int) -> Path:
+        return self._directory / _TRANSCRIPTS_DIR / str(run_id) / step / f"{attempt}.jsonl"
 
     async def _call(self, step: CodeStepRun, command: StepRunCommand, folder: Path) -> StepResult:
         """Call the factory's tool, whose path parameters resolve in the run's folder."""
@@ -167,3 +261,11 @@ class WorkbenchSteps:
         """The factory's folder. The hub's hides the one kinby ships."""
         folder = self._factories / name
         return folder if folder.is_dir() else self._shipped / name
+
+
+def _event(line: str) -> dict[str, JsonValue] | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None

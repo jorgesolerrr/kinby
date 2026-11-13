@@ -13,6 +13,7 @@ from kinby.contracts import (
     INSTANCE_DRAIN,
     INSTANCE_PROBE,
     RUN_FOLDER_REMOVE,
+    RUN_TRANSCRIPT_READ,
     STEP_RUN,
     ControlToken,
     DrainState,
@@ -37,8 +38,8 @@ def prepare_workspace(workspace: Path, source: str | None) -> None:
 
 
 def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
-    """The hub's probe, a drain with no accepted work to wait for, the steps of runs and the
-    removal of their folders."""
+    """The hub's probe, a drain with no accepted work to wait for, the steps of runs, the
+    transcripts of their agent steps and the removal of their folders."""
     dispatcher = Dispatcher()
 
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
@@ -53,6 +54,7 @@ def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
     dispatcher.register(INSTANCE_DRAIN, drain)
     dispatcher.register(STEP_RUN, steps.run)
     dispatcher.register(RUN_FOLDER_REMOVE, steps.remove_folder)
+    dispatcher.register(RUN_TRANSCRIPT_READ, steps.transcript)
     return dispatcher
 
 

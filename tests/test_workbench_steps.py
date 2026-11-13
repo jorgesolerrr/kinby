@@ -3,15 +3,21 @@ removes that folder when the hub asks."""
 
 import asyncio
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
 from kinby.contracts import (
+    ClientStepRun,
     CodeStepRun,
+    CodingClient,
     CommandStepRun,
     FactoryRunOrigin,
+    FactoryRunTranscript,
+    FactoryRunTranscriptCommand,
+    ReasoningEffort,
     RunFolder,
     RunFolderRemoveCommand,
     StepEnding,
@@ -20,6 +26,7 @@ from kinby.contracts import (
 )
 from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_hub_factories import write_factory
+from tests.test_steps import CLAUDE_STREAM, recorded_calls, streaming, stub_client
 from tests.test_workbench_workspace import _seed
 
 BRANCH = RunFolder(branch="tickets/issue-12")
@@ -60,7 +67,7 @@ def _workbench(tmp_path: Path, source: str | None) -> WorkbenchSteps:
 
 def _command(
     run_id: UUID,
-    step: CommandStepRun | CodeStepRun,
+    step: CommandStepRun | CodeStepRun | ClientStepRun,
     folder: RunFolder,
     attempt: int = 1,
     *,
@@ -293,3 +300,113 @@ def test_a_check_the_factorys_folder_does_not_hold_fails_the_step(tmp_path, chec
         summary=f'Every command exited with code 0.\nCheck "{check}" is not one of factory '
         '"tickets"\'s hooks.',
     )
+
+
+IMPLEMENT = ClientStepRun(
+    client=CodingClient.CLAUDE,
+    prompt="Implement the issue.",
+    timeout_seconds=30,
+    model="claude-opus-5-5",
+    effort=ReasoningEffort.HIGH,
+)
+
+
+def test_an_agent_step_runs_its_coding_client_in_the_run_folder_with_its_prompt(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, str(_seed(tmp_path)))
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    result = asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, BRANCH)))
+
+    [called] = recorded_calls(calls)
+    assert result == StepResult(
+        ending=StepEnding.CLEAN, summary="Implemented issue 7.", session="claude-1"
+    )
+    assert called.cwd == str(tmp_path / "workbench" / "worktrees" / "tickets" / "issue-12")
+    assert called.stdin.startswith("Implement the issue.\n")
+    assert '{"work_item": {"issue": 12}, "results": {}}' in called.stdin
+    assert "kinby memory" not in called.stdin
+    assert called.argv[-4:] == ["--model", "claude-opus-5-5", "--effort", "high"]
+    assert called.config_dir == str(tmp_path / "workbench" / ".state" / "claude")
+
+
+def test_an_agent_step_that_resumes_continues_the_session_it_names(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    fix = IMPLEMENT.model_copy(update={"resume": "claude-1"})
+
+    asyncio.run(workbench.run(_command(uuid4(), fix, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    assert called.argv[-2:] == ["--resume", "claude-1"]
+
+
+def _skill(name: str, description: str) -> str:
+    return f"---\nname: {name}\ndescription: {description}\n---\nDo it.\n"
+
+
+def test_an_agent_step_offers_the_factorys_skills_and_the_workbenchs_picks(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    owned = "skills/implement-ticket/SKILL.md"
+    picked = "skills/tdd/SKILL.md"
+    write_factory(tmp_path / "factories" / "tickets", {owned: _skill("implement-ticket", "Ship.")})
+    write_factory(tmp_path / "workbench", {picked: _skill("tdd", "Test first.")})
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    assert f"- implement-ticket ({tmp_path / 'factories' / 'tickets' / owned}): Ship." in (
+        called.stdin
+    )
+    assert f"- tdd ({tmp_path / 'workbench' / picked}): Test first." in called.stdin
+
+
+def test_an_agent_step_the_plan_refused_ends_limited_until_its_window_resets(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    resets_at = datetime(2030, 1, 1, 12, tzinfo=UTC)
+    refused = [
+        {
+            "type": "rate_limit_event",
+            "rate_limit_info": {"status": "rejected", "resetsAt": int(resets_at.timestamp())},
+        },
+        {"type": "result", "subtype": "error", "is_error": True, "session_id": "claude-2"},
+    ]
+    stub_client(tmp_path, monkeypatch, "claude", streaming(refused) + "sys.exit(1)")
+
+    result = asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN)))
+
+    assert (result.ending, result.resets_at) == (StepEnding.LIMITED, resets_at)
+
+
+def _transcript(workbench: WorkbenchSteps, run_id: UUID, cursor: int = 0) -> FactoryRunTranscript:
+    command = FactoryRunTranscriptCommand(run_id=run_id, step="client", attempt=1, cursor=cursor)
+    return asyncio.run(workbench.transcript(command))
+
+
+def test_an_agent_steps_attempt_keeps_the_clients_events_as_its_transcript(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    cut_off = 'sys.stdout.write(\'{"type": "assist\')\n'
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM) + cut_off)
+    run_id = uuid4()
+
+    asyncio.run(workbench.run(_command(run_id, IMPLEMENT, PLAIN)))
+
+    assert _transcript(workbench, run_id) == FactoryRunTranscript(events=CLAUDE_STREAM, cursor=None)
+    assert _transcript(workbench, uuid4()) == FactoryRunTranscript(events=[], cursor=None)
+
+
+def test_a_long_transcript_is_read_a_page_at_a_time(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    padded = [{"type": "assistant", "n": n, "text": "x" * 600_000} for n in range(3)]
+    stub_client(tmp_path, monkeypatch, "claude", streaming(padded))
+    run_id = uuid4()
+    asyncio.run(workbench.run(_command(run_id, IMPLEMENT, PLAIN)))
+
+    pages = [_transcript(workbench, run_id)]
+    while (cursor := pages[-1].cursor) is not None:
+        pages.append(_transcript(workbench, run_id, cursor))
+
+    assert len(pages) > 1
+    assert [event for page in pages for event in page.events] == padded

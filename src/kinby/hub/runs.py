@@ -34,6 +34,7 @@ from kinby.contracts import (
     AgentStepRun,
     ClientStepRun,
     CodeStepRun,
+    CodingClient,
     CodingSessionId,
     CommandListName,
     CommandStepRun,
@@ -86,6 +87,7 @@ from kinby.factories.file import (
     CommandStep,
     Duration,
     EndedCall,
+    Engine,
     FactoryFile,
     InstanceName,
     InvalidFactoryFile,
@@ -98,6 +100,7 @@ from kinby.factories.file import (
     ToolCall,
     ValueType,
     WaitStep,
+    WorkbenchAgentStep,
     WorkbenchCodeStep,
     WorkbenchCommandStep,
     WorkbenchFactory,
@@ -654,7 +657,7 @@ class FactoryRuns:
             return unmet
         if isinstance(step, WaitStep | ApproveStep):
             return step
-        if isinstance(step, WorkbenchCommandStep | WorkbenchCodeStep):
+        if isinstance(step, WorkbenchAgentStep | WorkbenchCommandStep | WorkbenchCodeStep):
             return self._on_workbench(run, factory, step, held, results)
         match step:
             case AgentStep():
@@ -697,7 +700,7 @@ class FactoryRuns:
         self,
         run: FactoryRun,
         factory: _Factory,
-        step: WorkbenchCommandStep | WorkbenchCodeStep,
+        step: WorkbenchAgentStep | WorkbenchCommandStep | WorkbenchCodeStep,
         held: Mapping[ValueName, StepValue],
         results: dict[ValueName, StepValue],
     ) -> tuple[UUID, _QueuedStep] | _Refused:
@@ -713,6 +716,11 @@ class FactoryRuns:
         workbench, folder = placed
         assert workbench.workbench is not None
         match step:
+            case WorkbenchAgentStep():
+                agent_run = self._client_run(run, factory, step, held)
+                if isinstance(agent_run, _Refused):
+                    return agent_run
+                asked = agent_run
             case WorkbenchCommandStep():
                 commands: list[str] = []
                 for entry in step.run:
@@ -790,7 +798,9 @@ class FactoryRuns:
             None,
         )
 
-    def _prompt(self, run: FactoryRun, step: AgentStep | ClientStep) -> str | _Refused:
+    def _prompt(
+        self, run: FactoryRun, step: AgentStep | ClientStep | WorkbenchAgentStep
+    ) -> str | _Refused:
         try:
             return self._factories.prompt(run.factory, step.prompt)
         except (FactoryNotFound, OSError) as exc:
@@ -800,14 +810,18 @@ class FactoryRuns:
         self,
         run: FactoryRun,
         factory: _Factory,
-        step: ClientStep,
+        step: ClientStep | WorkbenchAgentStep,
         held: Mapping[ValueName, StepValue],
     ) -> ClientStepRun | _Refused:
-        """What the client step asks its instance to run.
+        """What the client step asks its instance to run, or the agent step its workbench.
 
         When the step it resumes recorded no session, that step fails an attempt, as it would for
         a value it should have produced.
         """
+        if isinstance(step, WorkbenchAgentStep) and step.engine is Engine.KINBY:
+            return _Refused(
+                step.id, f'Step "{step.id}" runs on the kinby engine, which no workbench runs yet.'
+            )
         prompt = self._prompt(run, step)
         if isinstance(prompt, _Refused):
             return prompt
@@ -821,13 +835,13 @@ class FactoryRuns:
                     "which this step did not record.",
                 )
         return ClientStepRun(
-            client=step.client,
+            client=step.client if isinstance(step, ClientStep) else CodingClient(step.engine),
             prompt=prompt,
             resume=session,
             timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
             model=step.model,
             effort=step.effort,
-            branch=_branch(step, held),
+            branch=_branch(step, held) if isinstance(step, ClientStep) else None,
         )
 
     def _session(self, run_id: UUID, factory: _Factory, step: StepId) -> CodingSessionId | None:
@@ -837,7 +851,9 @@ class FactoryRuns:
         a lost session runs in a new one, which the steps after it continue.
         """
         resumes = {
-            other.id: other.resume for other in factory.steps if isinstance(other, ClientStep)
+            other.id: other.resume
+            for other in factory.steps
+            if isinstance(other, ClientStep | WorkbenchAgentStep)
         }
 
         def first(step_id: StepId) -> StepId:
@@ -1532,7 +1548,7 @@ def _retries(step: _AnyStep) -> int:
         return step.failed.retry
     if step.retry is not None:
         return step.retry
-    return 1 if isinstance(step, AgentStep | ClientStep) else 0
+    return 1 if isinstance(step, AgentStep | ClientStep | WorkbenchAgentStep) else 0
 
 
 def _next_backoff(waited: float) -> float:

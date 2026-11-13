@@ -2801,6 +2801,66 @@
       "title": "FactoryRunSubscribeCommand",
       "type": "object"
     },
+    "FactoryRunTranscript": {
+      "additionalProperties": false,
+      "description": "The events a coding client streamed in one attempt, in order. An attempt that streamed\nnone, or that ran no engine, has none.",
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "events",
+        "cursor"
+      ],
+      "title": "FactoryRunTranscript",
+      "type": "object"
+    },
+    "FactoryRunTranscriptCommand": {
+      "additionalProperties": false,
+      "description": "Read one page of the transcript of an attempt at an agent step of a line's run, from the\nrun's workbench.",
+      "properties": {
+        "attempt": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "cursor": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "run_id",
+        "step",
+        "attempt"
+      ],
+      "title": "FactoryRunTranscriptCommand",
+      "type": "object"
+    },
     "FactorySource": {
       "description": "Where the factory the hub serves under a name comes from.",
       "enum": [
@@ -13687,6 +13747,22 @@
           ],
           "type": "object"
         },
+        "factory.run.transcript": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunTranscriptCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRunTranscript"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "hub.secret.delete": {
           "additionalProperties": false,
           "properties": {
@@ -14871,6 +14947,22 @@
           ],
           "type": "object"
         },
+        "run.transcript.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunTranscriptCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRunTranscript"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "skill.customize": {
           "additionalProperties": false,
           "properties": {
@@ -15702,6 +15794,7 @@
         "step.run",
         "run.stopped",
         "run.folder.remove",
+        "run.transcript.read",
         "thread.ask",
         "routine.list",
         "routine.run",
@@ -15786,6 +15879,7 @@
         "factory.run.intake",
         "factory.run.list",
         "factory.run.get",
+        "factory.run.transcript",
         "factory.run.retry",
         "factory.run.send_back",
         "factory.run.approve",

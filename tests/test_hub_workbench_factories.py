@@ -211,3 +211,80 @@ def test_a_failed_step_runs_again_or_goes_back_but_never_both(tmp_path):
         'Step "checks" declares both retry and failed, but a failed attempt runs again only '
         "under failed."
     ]
+
+
+AGENTS = """\
+name: tickets
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: agent
+    engine: claude
+    prompt: prompts/implement.md
+    model: claude-opus-5-5
+    effort: high
+    timeout: 90m
+    check: checked
+  - id: review
+    kind: agent
+    engine: kinby
+    prompt: prompts/implement.md
+  - id: fix
+    kind: agent
+    engine: claude
+    prompt: prompts/implement.md
+    resume: implement
+"""
+AGENT_FILES = {
+    "factory.yaml": AGENTS,
+    "prompts/implement.md": "Implement the issue.\n",
+    "hooks/checked.py": CHECK,
+}
+
+
+def _agents(old: str, new: str) -> dict[str, str]:
+    return AGENT_FILES | {"factory.yaml": AGENTS.replace(old, new)}
+
+
+def test_an_agent_step_runs_a_prompt_of_the_factory_on_an_engine(tmp_path):
+    assert problems(tmp_path, AGENT_FILES) == []
+
+
+def test_the_check_refuses_an_agent_steps_prompt_the_factory_does_not_hold(tmp_path):
+    files = _agents("prompts/implement.md\n    model", "prompts/draft.md\n    model")
+
+    assert problems(tmp_path, files) == [
+        'Step "implement" names prompt "prompts/draft.md", which is not a file in the factory.'
+    ]
+
+
+def test_the_check_refuses_an_unknown_engine(tmp_path):
+    [problem] = problems(tmp_path, _agents("engine: kinby", "engine: gemini"))
+
+    assert problem.startswith("factory.yaml: steps.1.agent.engine: Input should be")
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "refusal"),
+    [
+        (
+            "resume: implement",
+            "resume: review",
+            'Step "fix" resumes "review", which is not an earlier claude step.',
+        ),
+        (
+            "engine: kinby\n",
+            "engine: kinby\n    resume: implement\n",
+            'Step "review" resumes "implement", but the kinby engine keeps no session.',
+        ),
+        (
+            "engine: claude\n    prompt: prompts/implement.md\n    resume",
+            "engine: codex\n    prompt: prompts/implement.md\n    resume",
+            'Step "fix" resumes "implement", which is not an earlier codex step.',
+        ),
+    ],
+)
+def test_an_agent_step_resumes_only_an_earlier_session_of_its_own_engine(
+    tmp_path, old, new, refusal
+):
+    assert problems(tmp_path, _agents(old, new)) == [refusal]
