@@ -870,7 +870,7 @@ The folder one **factory run** works in on its **workbench**: a **run worktree**
 
 ### Run worktree
 
-The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on a branch kinby names for the factory and the **work item**. In an instance its run's first step cuts it from the base. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
+The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on a branch kinby names for the factory, the **work item** and the run. In an instance its run's first step cuts it from the base. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
 _Avoid_: workspace (the shared clone run worktrees are cut from), worktree (git's mechanism, not the concept)
 
 ### Run usage

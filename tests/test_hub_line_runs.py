@@ -66,6 +66,13 @@ def label_issue(issue: int) -> dict[str, int]:
     return {"labelled": issue}
 """,
 }
+TASKS = """\
+name: tasks
+requires: { image: coder }
+work_item: { task: str }
+steps:
+  - { id: draft, kind: command, run: ["make draft"] }
+"""
 LANDING = CEC_BACKEND.model_copy(
     update={"name": "landing", "workspace_source": "https://github.com/owner/landing.git"}
 )
@@ -74,6 +81,7 @@ COURSE = WorkbenchCreateCommand(name="course", recipe="coder")
 
 def _hub(tmp_path: Path, control: FakeControl, runtime: FakeRuntime) -> Hub:
     write_factory(tmp_path / "hub" / "factories" / "tickets", TICKETS)
+    write_factory(tmp_path / "hub" / "factories" / "tasks", {"factory.yaml": TASKS})
     return hub_at(
         tmp_path / "hub",
         runtime=runtime,
@@ -83,16 +91,19 @@ def _hub(tmp_path: Path, control: FakeControl, runtime: FakeRuntime) -> Hub:
 
 
 async def _line(
-    client: ContractClient, runtime: FakeRuntime, workbench: WorkbenchCreateCommand = CEC_BACKEND
+    client: ContractClient,
+    runtime: FakeRuntime,
+    workbench: WorkbenchCreateCommand = CEC_BACKEND,
+    factory: str = "tickets",
 ) -> Line:
-    """The tickets factory set up on a started workbench that holds its checks."""
+    """The factory set up on a started workbench that holds the tickets factory's checks."""
     workbench_id = (await created(client, workbench)).workbench_id
     await _commands_set(client, workbench_id, "checks", ["uv run pytest"])
     start = await client.call(WORKBENCH_START, WorkbenchStartCommand(workbench_id=workbench_id))
     assert (await finished(client, start)).state is OperationState.SUCCEEDED
     runtime.addresses[str(workbench_id)] = f"http://kinby-{workbench_id}:8787"
     line = await client.call(
-        LINE_SETUP, LineSetupCommand(factory="tickets", workbench_id=workbench_id)
+        LINE_SETUP, LineSetupCommand(factory=factory, workbench_id=workbench_id)
     )
     assert isinstance(line, Line), line
     return line
@@ -138,7 +149,7 @@ def test_a_work_item_handed_to_a_line_runs_its_steps_on_the_workbench_in_a_run_w
         done = await settled(hub, run.run_id)
         removed = await _removed(control)
 
-        worktree = RunFolder(branch="tickets/issue-12")
+        worktree = RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
         assert (run.line_id, run.instance_id) == (line.line_id, home)
         assert done.run.status is FactoryRunStatus.DONE
         assert [endpoint.address for endpoint, _ in control.steps] == 2 * [
@@ -193,11 +204,43 @@ def test_a_runs_folder_stays_through_a_stop_and_a_retry_and_goes_once_it_is_canc
         await client.call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id))
 
         assert stopped.run.status is stopped_again.run.status is FactoryRunStatus.NEEDS_HUMAN
-        assert [command.folder for _, command in control.steps] == 2 * [
-            RunFolder(branch="tickets/issue-12")
-        ]
+        worktree = RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
+        assert [command.folder for _, command in control.steps] == 2 * [worktree]
         assert kept == []
-        assert await _removed(control) == [RunFolder(branch="tickets/issue-12")]
+        assert await _removed(control) == [worktree]
+
+    asyncio.run(scenario())
+
+
+def test_work_items_that_differ_only_in_case_and_punctuation_work_in_folders_of_their_own(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime, factory="tasks")
+
+        for task in ("Fix A", "fix-a"):
+            handed = await client.call(
+                LINE_HAND_IN, LineHandInCommand(line_id=line.line_id, work_item={"task": task})
+            )
+            assert isinstance(handed, FactoryRun), handed
+        control.step_release.set()
+        async with asyncio.timeout(5):
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
+
+        folders = [command.folder for _, command in control.steps]
+        assert folders[0] != folders[1]
+        assert all(
+            folder.branch is not None and folder.branch.startswith("tasks/task-fix-a-")
+            for folder in folders
+        )
 
     asyncio.run(scenario())
 

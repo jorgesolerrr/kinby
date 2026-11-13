@@ -725,7 +725,8 @@ class FactoryRuns:
         """The workbench of the run's line and the run's folder there, or None without either.
 
         On a workbench whose workspace is a git clone the folder is the run worktree of a branch
-        named for the factory and the work item. On any other it is a directory named for the run.
+        named for the factory, the work item and the run, since two work items can read alike once
+        lowercased. On any other it is a directory named for the run.
         """
         line = next((line for line in self._registry.lines() if line.line_id == run.line_id), None)
         workbench = self._registry.instance(line.workbench_id) if line is not None else None
@@ -738,7 +739,8 @@ class FactoryRuns:
             for name, value in run.work_item.items()
             for word in _BRANCH_WORD.findall(f"{name} {value}".lower())
         ]
-        return workbench, RunFolder(branch=f"{run.factory}/{'-'.join(words) or run.run_id}")
+        branch = "-".join((*words, run.run_id.hex[:8]))
+        return workbench, RunFolder(branch=f"{run.factory}/{branch}")
 
     def _holder(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
         """The id of the instance that holds role *instance* for the run, or None when none does.
