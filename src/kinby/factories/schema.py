@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from kinby.checkout import checkout_path
-from kinby.factories.file import FACTORY_FILE_ADAPTER
+from kinby.factories.file import FactoryFile, WorkbenchFactory
 
 
 def checkout_schema_path() -> Path:
@@ -17,8 +17,8 @@ def checkout_schema_path() -> Path:
 
 
 def factory_schema() -> dict[str, JsonValue]:
-    """Return the JSON Schema the factory file's declarations make."""
-    schema: dict[str, JsonValue] = FACTORY_FILE_ADAPTER.json_schema()
+    """Return the JSON Schema the factory file's declarations make, for both its forms."""
+    schema: dict[str, JsonValue] = TypeAdapter(WorkbenchFactory | FactoryFile).json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     return schema
 

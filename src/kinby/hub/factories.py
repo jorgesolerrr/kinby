@@ -34,6 +34,7 @@ from kinby.factories.file import (
     InstanceDeclaration,
     InstanceName,
     RecipeName,
+    WorkbenchFactory,
     read_factory_file,
 )
 from kinby.instance import template_tools
@@ -104,9 +105,15 @@ class FactoryStore:
         return FactoryCheckResult(problems=list(await asyncio.to_thread(check_factory, folder)))
 
     def file(self, name: FactoryName) -> FactoryFile:
-        """The factory's file as the hub keeps it: the last version that passed the check."""
+        """The factory's file as the hub keeps it: the last version that passed the check.
+
+        Only a factory whose steps run in instances has runs yet.
+        """
         folder, _ = self._folder(name)
-        return read_factory_file(folder)
+        factory = read_factory_file(folder)
+        if isinstance(factory, WorkbenchFactory):
+            raise FactoryNotFound(f'Factory "{name}" runs on a workbench, not in instances.')
+        return factory
 
     def prompt(self, name: FactoryName, path: FactoryPath) -> str:
         """The text of a prompt file, from the last version of the factory that passed the check."""
@@ -144,11 +151,14 @@ class FactoryStore:
         problems = check_factory(folder)
         if problems:
             raise FactoryCheckFailed(problems)
+        factory = read_factory_file(folder)
+        if isinstance(factory, WorkbenchFactory):
+            return ()
         return tuple(
             _template(
                 instance, declared, readable_template_files(folder / TEMPLATES_DIR / instance)
             )
-            for instance, declared in read_factory_file(folder).instances.items()
+            for instance, declared in factory.instances.items()
         )
 
     async def edit(self, command: FactoryEditCommand) -> FactoryResult:

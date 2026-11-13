@@ -264,7 +264,7 @@ _Avoid_: image build, warm-up
 
 ### Setup field
 
-One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model, its API key and its **behavior prompt**, which starts from kinby's default or the **instance template**'s. kinby writes those itself. An **instance template**'s own fields follow, and each of its configuration fields names its target: a file of the instance and a dotted key inside it. A template may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then template, then the user's value. A template's required secrets read as required secret text fields.
+One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model, its API key and its **behavior prompt**, which starts from kinby's default or the **instance template**'s. kinby writes those itself. An **instance template**'s own fields follow, and each of its configuration fields names its target: a file of the instance and a dotted key inside it. A template may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then template, then the user's value. A template's required secrets read as required secret text fields. A **factory** that declares what a **workbench** must provide lists its secrets and its named values as setup fields apart, each with no kind and no target.
 _Avoid_: required input, form field
 
 ### Subscription login
@@ -829,7 +829,7 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 
 ### Factory
 
-A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, handing it between **instances** and deciding what happens when a step fails. Its instances are ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
+A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, deciding what happens when a step fails. It declares what a **workbench** must provide for its steps: an image recipe, secrets, named values, the names of lists of **repository commands**, **subscription logins** and a browser. Its **tools** live in its folder. A factory written the older way declares **instances** instead: its steps run in ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
 _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
@@ -901,7 +901,7 @@ A **factory run** moving to done, cancelled or **needs human**. The **hub** tell
 
 ### Factory check
 
-kinby's validation of a **factory** as a whole, its file, its **instance templates**, and the **tools** and **hooks** they name, before anything changes. A broken factory keeps its last good version.
+kinby's validation of a **factory** as a whole before anything changes: its file, what it requires of a **workbench**, its **instance templates**, and the **tools** and **hooks** its steps name, from its templates or its own folder. A broken factory keeps its last good version.
 
 ### Software factory
 

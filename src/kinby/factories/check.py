@@ -6,6 +6,9 @@ its needs_human and ended calls' among them, and checks that each step's inputs 
 earlier step or the work item. It runs each template's tool and hook files to learn their names,
 as an instance does, and initializes an instance from each template with its defaults, as a
 creation does.
+
+A factory that runs on a workbench has no templates: its tools are in its own folder, and the
+check holds its steps to what it requires of the workbench.
 """
 
 from __future__ import annotations
@@ -16,7 +19,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
-from kinby.contracts import SetupField, SetupFieldKind, SetupFieldType, SubscriptionLogin
+from kinby.contracts import (
+    RepositoryCommands,
+    SetupField,
+    SetupFieldKind,
+    SetupFieldType,
+    SubscriptionLogin,
+)
 from kinby.factories import ships_recipe
 from kinby.factories.file import (
     TEMPLATES_DIR,
@@ -31,6 +40,9 @@ from kinby.factories.file import (
     InvalidFactoryFile,
     SendBack,
     WaitStep,
+    WorkbenchCodeStep,
+    WorkbenchCommandStep,
+    WorkbenchFactory,
     read_factory_file,
     run_value_name,
     run_value_names,
@@ -62,9 +74,12 @@ _PROMPT_GROUPS = ("url", "code")
 
 @dataclass(frozen=True)
 class _Template:
-    """What one instance template offers the factory's steps."""
+    """What one instance template, or the folder of a factory that runs on a workbench, offers
+    the factory's steps."""
 
     tools: frozenset[str]
+    #: Of its tools, those installed beside kinby rather than written in it.
+    installed: frozenset[str]
     hooks: frozenset[str]
     #: Each tool or hook file of the template that does not load.
     problems: tuple[str, ...]
@@ -76,6 +91,8 @@ def check_factory(folder: Path) -> tuple[str, ...]:
         factory = read_factory_file(folder)
     except InvalidFactoryFile as exc:
         return exc.problems
+    if isinstance(factory, WorkbenchFactory):
+        return _workbench_factory(factory, folder)
     templates = {
         name: _template(folder, folder / TEMPLATES_DIR / name)
         for name in factory.instances
@@ -94,11 +111,29 @@ def check_factory(folder: Path) -> tuple[str, ...]:
     )
 
 
+def _workbench_factory(factory: WorkbenchFactory, folder: Path) -> tuple[str, ...]:
+    own = _template(folder, folder)
+    return (
+        *_name(factory, folder),
+        *_requirements(factory),
+        *own.problems,
+        # Only the factory's folder reaches a workbench, so a tool installed beside kinby is none.
+        *_workbench_steps(factory, own.tools - own.installed),
+        *_inputs(factory),
+        *_order(factory),
+    )
+
+
 def _template(folder: Path, template: Path) -> _Template:
     snapshot, tool_warnings = ToolRegistry(template, tools=Tools()).refresh()
     hooks, hook_warnings = load_hooks(template)
     return _Template(
         tools=frozenset(tool.name for tool in snapshot.tools),
+        installed=frozenset(
+            tool.name
+            for tool in snapshot.tools
+            if not tool.source.is_relative_to(template.resolve())
+        ),
         hooks=frozenset(hook.name for hook in hooks),
         problems=tuple(
             f"{Path(warning.sources[0]).relative_to(folder).as_posix()}: {warning.message}"
@@ -109,7 +144,7 @@ def _template(folder: Path, template: Path) -> _Template:
     )
 
 
-def _name(factory: FactoryFile, folder: Path) -> Iterator[str]:
+def _name(factory: FactoryFile | WorkbenchFactory, folder: Path) -> Iterator[str]:
     if factory.name != folder.name:
         yield (
             f'The factory file names the factory "{factory.name}", '
@@ -169,6 +204,45 @@ def _field_declaration_problems(fields: Iterable[SetupField]) -> Iterator[str]:
             yield from _target_failures(field)
         else:
             yield from _override_failures(field, overridden)
+
+
+def _requirements(factory: WorkbenchFactory) -> Iterator[str]:
+    required = factory.requires
+    if required.image is not None and not ships_recipe(required.image):
+        yield f'The factory requires image recipe "{required.image}", which kinby does not ship.'
+    fields = [
+        *(field.setup_field(SetupFieldKind.SECRET) for field in required.secrets),
+        *(field.setup_field(SetupFieldKind.CONFIG) for field in required.values),
+    ]
+    seen: set[str] = set()
+    for field in fields:
+        if field.name in seen:
+            yield f'Setup field "{field.name}" is declared more than once.'
+        else:
+            seen.add(field.name)
+            yield from _field_failures(field)
+    yield from _login_declaration_problems(required.logins)
+
+
+def _workbench_steps(factory: WorkbenchFactory, tools: frozenset[str]) -> Iterator[str]:
+    for step in factory.steps:
+        if isinstance(step, WorkbenchCommandStep):
+            for entry in step.run:
+                if isinstance(entry, RepositoryCommands) and (
+                    entry.commands not in factory.requires.commands
+                ):
+                    yield (
+                        f'Step "{step.id}" runs command list "{entry.commands}", '
+                        "which requires does not declare."
+                    )
+        if isinstance(step, WorkbenchCodeStep) and step.call not in tools:
+            yield (
+                f'Step "{step.id}" calls tool "{step.call}", '
+                "which the factory's folder does not hold."
+            )
+    for key, call in (("needs_human", factory.needs_human), ("ended", factory.ended)):
+        if call is not None and call.call not in tools:
+            yield f'{key} calls tool "{call.call}", which the factory\'s folder does not hold.'
 
 
 def _field_failures(field: SetupField) -> Iterator[str]:
@@ -329,7 +403,7 @@ def _run_calls(factory: FactoryFile, templates: dict[InstanceName, _Template]) -
             yield f'{key} calls tool "{call.call}", which instance "{call.instance}" does not have.'
 
 
-def _inputs(factory: FactoryFile) -> Iterator[str]:
+def _inputs(factory: FactoryFile | WorkbenchFactory) -> Iterator[str]:
     """Each value a step requires, a wait or a command names is held: by the work item or an
     earlier step. Each value done_requires or a closing filter names is held by any step."""
     held = set(factory.work_item)
@@ -371,7 +445,7 @@ def _inputs(factory: FactoryFile) -> Iterator[str]:
             )
 
 
-def _order(factory: FactoryFile) -> Iterator[str]:
+def _order(factory: FactoryFile | WorkbenchFactory) -> Iterator[str]:
     """Step ids are unique, work is only ever sent back to an earlier step, and a step whose
     failures are sent back declares no retry."""
     earlier: set[str] = set()
