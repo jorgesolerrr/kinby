@@ -1,5 +1,6 @@
 """An agent step's kinby turn on a workbench, which runs with what a workbench has instead of an
-instance: the run's folder, the shipped gate policy, and the skills it is offered."""
+instance: the run's folder, the shipped gate policy, and the skills it is offered. The views it
+writes belong to the run's owner, which the hub writes them to."""
 
 from __future__ import annotations
 
@@ -27,6 +28,8 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnStarted,
+    View,
+    ViewChanged,
     WaitingApproval,
 )
 from kinby.core.errors import CoreError
@@ -49,6 +52,7 @@ from kinby.instance import (
 )
 from kinby.instance.dataclasses import Compaction
 from kinby.instance.permissions import SHIPPED_POLICY
+from kinby.instance.views import read_view
 from kinby.plugins.skills import Skill
 
 #: The default tools a workbench's turn is offered: bash and the file tools.
@@ -73,7 +77,8 @@ async def run_turn(
     resumes the turn that parked on it, from its checkpoint.
 
     A turn the gate parks on an ask ends the attempt asked. What the agent said last is only the
-    summary, and the model calls of the attempt are what it spent.
+    summary, the model calls of the attempt are what it spent, and it hands back each view it
+    wrote, however it ends.
     """
     instance = Instance(
         path=state, manifest=_manifest(state, folder, model), matching_rule="explicit directory"
@@ -139,16 +144,20 @@ async def run_turn(
     else:
         usage, cost = _spent(events, instance, turn.model)
         spent = StepUsage(api=ApiUse(**usage.model_dump(), cost=cost))
+        views = await asyncio.to_thread(_written, events, instance)
         if isinstance(outcome, ParkedTurn):
-            return _asked(turn_id, events, spent)
+            return _asked(turn_id, events, spent).model_copy(update={"views": views})
         await emit(TurnCompleted(outcome=outcome.outcome, cost=cost, **usage.model_dump()))
-        return StepResult(ending=StepEnding.CLEAN, summary=last_message(events), usage=spent)
+        return StepResult(
+            ending=StepEnding.CLEAN, summary=last_message(events), usage=spent, views=views
+        )
     usage, cost = _spent(events, instance, turn.model)
     await emit(TurnFailed(code=code, message=reason, **usage.model_dump()))
     said = StepResult(
         ending=StepEnding.FAILED,
         summary=last_message(events),
         usage=StepUsage(api=ApiUse(**usage.model_dump(), cost=cost)),
+        views=await asyncio.to_thread(_written, events, instance),
     )
     return step_failed(f"The turn failed: {reason}", said)
 
@@ -171,6 +180,14 @@ def _asked(turn_id: UUID, events: Sequence[Event], usage: StepUsage) -> StepResu
         usage=usage,
         ask=WaitingApproval(turn_id=turn_id, request=request),
     )
+
+
+def _written(events: Sequence[Event], instance: Instance) -> list[View]:
+    """Each view the turn wrote, as it stands now, in the order the turn first wrote it."""
+    written = dict.fromkeys(
+        event.payload.view for event in events if isinstance(event.payload, ViewChanged)
+    )
+    return [read_view(instance, view_id) for view_id in written]
 
 
 def _spent(

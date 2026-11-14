@@ -254,6 +254,7 @@ from kinby.contracts.models import (
     ViewListCommand,
     ViewListResult,
     ViewSubscribeCommand,
+    ViewWriteCommand,
     Workbench,
     WorkbenchCommandRunCommand,
     WorkbenchCommandRunResult,
@@ -506,6 +507,7 @@ TOOL_READ_ONLY_SET = Method(
 VIEW_LIST = Method("view.list", Scope.INSTANCE_READ, ViewListCommand, ViewListResult)
 VIEW_GET = Method("view.get", Scope.INSTANCE_READ, ViewGetCommand, View)
 VIEW_SUBSCRIBE = Subscription("view.subscribe", Scope.INSTANCE_READ, ViewSubscribeCommand, View)
+VIEW_WRITE = Method("view.write", Scope.INSTANCE_ADMIN, ViewWriteCommand, ViewListResult)
 VIEW_DELETE = Method("view.delete", Scope.INSTANCE_ADMIN, ViewDeleteCommand, ViewListResult)
 
 INSTANCE_CREATE = Method(
@@ -875,6 +877,7 @@ METHODS = (
     TOOL_READ_ONLY_SET,
     VIEW_LIST,
     VIEW_GET,
+    VIEW_WRITE,
     VIEW_DELETE,
     INSTANCE_CREATE,
     INSTANCE_START,

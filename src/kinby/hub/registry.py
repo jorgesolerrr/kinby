@@ -504,6 +504,8 @@ class HubRegistry:
             # The approval an asked attempt's turn parked on, and the user's answer to it, as
             # JSON. Null for any other.
             self._add_columns(connection, "step_attempts", {"ask": "TEXT", "answer": "TEXT"})
+            # The ids of the views an attempt wrote to its run's instance, as JSON.
+            self._add_columns(connection, "step_attempts", {"views": "TEXT NOT NULL DEFAULT '[]'"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
@@ -2358,7 +2360,7 @@ class HubRegistry:
                 """
                 UPDATE step_attempts
                 SET ending = ?, outcome = ?, result_values = ?, summary = ?, session = ?,
-                    usage = ?, ask = ?, ended_at = ?
+                    usage = ?, ask = ?, views = ?, ended_at = ?
                 WHERE run_id = ? AND ended_at IS NULL
                 """,
                 (
@@ -2369,6 +2371,7 @@ class HubRegistry:
                     result.session,
                     result.usage.model_dump_json() if result.usage is not None else None,
                     result.ask.model_dump_json() if result.ask is not None else None,
+                    json.dumps([view.id for view in result.views]),
                     _now(),
                     str(run_id),
                 ),
@@ -2412,7 +2415,7 @@ class HubRegistry:
                 """
                 SELECT
                     step, attempt, ending, outcome, result_values, summary, session, usage,
-                    ask, answer, started_at, ended_at
+                    ask, answer, views, started_at, ended_at
                 FROM step_attempts
                 WHERE run_id = ? AND rowid > ? AND (? IS NULL OR rowid <= ?)
                 ORDER BY rowid
@@ -2431,6 +2434,7 @@ class HubRegistry:
                 usage=StepUsage.model_validate_json(usage) if usage is not None else None,
                 ask=WaitingApproval.model_validate_json(ask) if ask is not None else None,
                 answer=StepAnswer.model_validate_json(answer) if answer is not None else None,
+                views=json.loads(views),
                 started_at=datetime.fromisoformat(started_at),
                 ended_at=datetime.fromisoformat(ended_at) if ended_at is not None else None,
             )
@@ -2445,6 +2449,7 @@ class HubRegistry:
                 usage,
                 ask,
                 answer,
+                views,
                 started_at,
                 ended_at,
             ) in rows
