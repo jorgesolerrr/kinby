@@ -4948,6 +4948,29 @@
       "title": "LineListResult",
       "type": "object"
     },
+    "LineOwnedListCommand": {
+      "additionalProperties": false,
+      "description": "List the lines this instance owns, each with its unfinished runs.",
+      "properties": {},
+      "title": "LineOwnedListCommand",
+      "type": "object"
+    },
+    "LineOwnedListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/OwnedLine"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "lines"
+      ],
+      "title": "LineOwnedListResult",
+      "type": "object"
+    },
     "LineRemoveCommand": {
       "additionalProperties": false,
       "description": "Remove one line. Its workbench stays as it is. The result lists the lines left.",
@@ -6999,6 +7022,30 @@
         "ask"
       ],
       "title": "OwnBashPatterns",
+      "type": "object"
+    },
+    "OwnedLine": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "$ref": "#/$defs/Line"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/FactoryRun"
+          },
+          "type": "array"
+        },
+        "workbench": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line",
+        "workbench",
+        "runs"
+      ],
+      "title": "OwnedLine",
       "type": "object"
     },
     "PermissionMode": {
@@ -14839,6 +14886,38 @@
           ],
           "type": "object"
         },
+        "line.owned.hand_in": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineHandInCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.owned.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineOwnedListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LineOwnedListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "line.remove": {
           "additionalProperties": false,
           "properties": {
@@ -16274,6 +16353,8 @@
         "line.remove",
         "line.hand_in",
         "line.intake",
+        "line.owned.list",
+        "line.owned.hand_in",
         "operation.get",
         "image.prepare",
         "image.describe",

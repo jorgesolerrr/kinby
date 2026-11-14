@@ -1275,7 +1275,7 @@ def test_a_vanilla_instance_gets_a_hub_url_to_raise_notifications_only(tmp_path)
         assert (
             environment["KINBY_HUB_URL"] == f"http://hub:8080/instances/{created.instance_id}/hub"
         )
-        assert environment["KINBY_HUB_SCOPES"] == "line:intake,notification:raise"
+        assert environment["KINBY_HUB_SCOPES"] == "line:intake,line:owner,notification:raise"
 
     asyncio.run(scenario())
 
