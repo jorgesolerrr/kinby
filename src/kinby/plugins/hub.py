@@ -35,6 +35,7 @@ from kinby.contracts import (
     HubWriteCommand,
     HubWriteResult,
     ImagePrepareCommand,
+    InstanceConvertCommand,
     InstanceCreateCommand,
     InstancePicksSetCommand,
     InstanceRecreateCommand,
@@ -93,6 +94,7 @@ class HubWriteOperation(StrEnum):
     INSTANCE_ROUTINE_RUN = "instance_routine_run"
     INSTANCE_ROUTINE_DELETE = "instance_routine_delete"
     INSTANCE_ASK = "instance_ask"
+    INSTANCE_CONVERT = "instance_convert"
     IMAGE_PREPARE = "image_prepare"
     LIBRARY_SKILL_WRITE = "library_skill_write"
     LIBRARY_GIT_ADD = "library_git_add"
@@ -130,7 +132,7 @@ async def hub_write(operation: str, arguments: dict[str, JsonValue], context: To
 
     operation is one of instance_create, instance_lifecycle, instance_picks_set,
     instance_prompt_set, instance_routine_write, instance_routine_set_enabled,
-    instance_routine_run, instance_routine_delete, instance_ask, image_prepare,
+    instance_routine_run, instance_routine_delete, instance_ask, instance_convert, image_prepare,
     library_skill_write, library_git_add, library_move, library_mcp_server_write, factory_write,
     line_setup, channel_mute and channel_unmute. `kinby hub help <operation>` prints its arguments.
     """
@@ -197,6 +199,7 @@ type HomeWrite = (
     | InstancePicksSetCommand
     | RelayedWrite
     | InstanceAsk
+    | InstanceConvertCommand
     | ImagePrepareCommand
     | LibrarySkillWriteCommand
     | LibraryGitAddCommand
@@ -239,6 +242,7 @@ _HUB_RUN_WRITES: Mapping[str, type[ContractModel]] = {
     HubWriteOperation.INSTANCE_LIFECYCLE: _LifecycleCall,
     HubWriteOperation.INSTANCE_PICKS_SET: InstancePicksSetCommand,
     HubWriteOperation.INSTANCE_ASK: InstanceAsk,
+    HubWriteOperation.INSTANCE_CONVERT: InstanceConvertCommand,
     HubWriteOperation.IMAGE_PREPARE: ImagePrepareCommand,
     HubWriteOperation.LIBRARY_SKILL_WRITE: LibrarySkillWriteCommand,
     HubWriteOperation.LIBRARY_GIT_ADD: LibraryGitAddCommand,
@@ -307,6 +311,8 @@ def home_write(operation: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                 return InstancePicksSetCommand.model_validate(arguments)
             case HubWriteOperation.INSTANCE_ASK:
                 return InstanceAsk.model_validate(arguments)
+            case HubWriteOperation.INSTANCE_CONVERT:
+                return InstanceConvertCommand.model_validate(arguments)
             case HubWriteOperation.IMAGE_PREPARE:
                 return ImagePrepareCommand.model_validate(arguments)
             case HubWriteOperation.LIBRARY_SKILL_WRITE:

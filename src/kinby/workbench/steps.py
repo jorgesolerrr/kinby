@@ -112,6 +112,12 @@ class WorkbenchSteps:
         self._shipped = shipped
         self._held = HeldResults(directory / "step-results")
 
+    @property
+    def state(self) -> Path:
+        """Where the workbench keeps its state, beside the state of the instance converted into
+        it, if one was."""
+        return self._directory / STATE_DIR
+
     async def run(self, command: StepRunCommand) -> StepResult:
         """Run the step once per attempt in its run's folder, cut first when the workbench lacks
         it. A folder that cannot be had fails the step before it starts."""

@@ -764,7 +764,7 @@ class FactoryRuns:
                 hook = step.hook
             case CodeStep():
                 asked, hook = CodeStepRun(call=step.call), None
-        instance_id = self._holder(run, step.instance)
+        instance_id = self.holder(run, step.instance)
         if instance_id is None:
             return _Refused(
                 step.id, f'No instance holds role "{step.instance}" of factory "{run.factory}".'
@@ -868,13 +868,16 @@ class FactoryRuns:
         branch = "-".join((*words, run.run_id.hex[:8]))
         return workbench, RunFolder(branch=f"{run.factory}/{branch}")
 
-    def _holder(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
+    def holder(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
         """The id of the instance that holds role *instance* for the run, or None when none does.
 
         The instance that handed the run in holds its own role for it, and no other instance of
-        that role does, since one may work on another repository.
+        that role does, since one may work on another repository. None does once that instance
+        was converted into a workbench.
         """
         owner = self._registry.instance(run.instance_id)
+        if owner is not None and owner.workbench is not None:
+            return None
         if owner is not None and owner.factory is not None and owner.factory.name == instance:
             return owner.instance_id if owner.active else None
         return self._first_in(run.factory, instance)
@@ -1383,7 +1386,7 @@ class FactoryRuns:
 
     def _put_stop(self, queued: _QueuedStop) -> None:
         owner = self._registry.instance(self._existing(queued.stop.run_id).instance_id)
-        if owner is None or not owner.active:
+        if owner is None or not owner.active or owner.workbench is not None:
             _logger.warning(
                 "Factory run %s stopped, and the instance that handed it in is gone.",
                 queued.stop.run_id,
@@ -1444,7 +1447,7 @@ class FactoryRuns:
             placed = self._workbench(run)
             instance_id = placed[0].instance_id if placed is not None and placed[0].active else None
         else:
-            instance_id = self._holder(run, report.instance)
+            instance_id = self.holder(run, report.instance)
         if instance_id is None:
             _logger.warning(
                 "Factory run %s stopped, and neither its line's workbench nor an instance of "

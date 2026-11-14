@@ -249,6 +249,17 @@ class GraphStore:
             if memory.workbench == workbench
         }
 
+    def as_marked(self, workbench: str) -> dict[NodeId, str]:
+        """The file of each node no workbench marks, by node, as it reads marked with
+        *workbench*. A forgotten fact's comes too, as marked() gives it."""
+        return {
+            memory.node: _with_mark(
+                self._node_path(memory.node).read_text(encoding="utf-8"), workbench
+            )
+            for memory, _ in self._read_all()
+            if memory.workbench is None
+        }
+
     def take(self, files: Mapping[NodeId, str]) -> list[NodeId]:
         """Write each node file this graph holds no node of yet, and answer which it wrote."""
         self._path.mkdir(parents=True, exist_ok=True)
@@ -272,6 +283,12 @@ def _write_node(path: Path, document: str) -> None:
         staging.replace(path)
     finally:
         staging.unlink(missing_ok=True)
+
+
+def _with_mark(document: str, workbench: str) -> str:
+    """*document*, a node file, with a workbench mark first in its frontmatter."""
+    opening, rest = document.split("\n", 1)
+    return f"{opening}\nworkbench: {render_frontmatter_value(workbench)}\n{rest}"
 
 
 def _render_node(memory: MemoryNode) -> str:

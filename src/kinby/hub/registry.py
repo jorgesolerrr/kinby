@@ -353,6 +353,12 @@ class HubRegistry:
                     usd_per_day REAL,
                     UNIQUE (factory, workbench_id)
                 );
+                -- The line whose intake takes the deliveries to an instance's signal path, by the
+                -- instance converted into the line's workbench, so its webhook keeps its address.
+                CREATE TABLE IF NOT EXISTS signal_lines (
+                    instance_id TEXT PRIMARY KEY REFERENCES instances(id),
+                    line_id TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS factory_runs (
                     id TEXT PRIMARY KEY,
                     factory TEXT NOT NULL,
@@ -849,26 +855,8 @@ class HubRegistry:
                     "INSERT OR REPLACE INTO hub_metadata (key, value) VALUES ('home_instance', ?)",
                     (str(instance.instance_id),),
                 )
-            workbench = instance.workbench
-            if workbench is not None:
-                connection.execute(
-                    """
-                    INSERT INTO workbenches (
-                        instance_id, recipe, workspace_source, named_values, commands, logins,
-                        browser
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(instance.instance_id),
-                        workbench.recipe,
-                        workbench.workspace_source,
-                        json.dumps(workbench.values),
-                        json.dumps(workbench.commands),
-                        _LOGINS.dump_json(workbench.logins).decode(),
-                        workbench.browser,
-                    ),
-                )
+            if instance.workbench is not None:
+                self._insert_workbench(connection, instance.instance_id, instance.workbench)
             self._insert_operation(
                 connection,
                 operation_id,
@@ -1321,6 +1309,28 @@ class HubRegistry:
             )
 
     @staticmethod
+    def _insert_workbench(
+        connection: sqlite3.Connection, workbench_id: UUID, workbench: WorkbenchSetup
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO workbenches (
+                instance_id, recipe, workspace_source, named_values, commands, logins, browser
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(workbench_id),
+                workbench.recipe,
+                workbench.workspace_source,
+                json.dumps(workbench.values),
+                json.dumps(workbench.commands),
+                _LOGINS.dump_json(workbench.logins).decode(),
+                workbench.browser,
+            ),
+        )
+
+    @staticmethod
     def _insert_storage(
         connection: sqlite3.Connection,
         instance_id: UUID,
@@ -1637,21 +1647,49 @@ class HubRegistry:
 
     def add_line(self, line: Line) -> None:
         with self._transaction() as connection:
+            self._insert_line(connection, line)
+
+    @staticmethod
+    def _insert_line(connection: sqlite3.Connection, line: Line) -> None:
+        connection.execute(
+            """
+            INSERT INTO lines (id, factory, workbench_id, owner_id, model, usd_per_day, intake)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(line.line_id),
+                line.factory,
+                str(line.workbench_id),
+                str(line.owner_id),
+                line.model,
+                line.usd_per_day,
+                line.intake,
+            ),
+        )
+
+    def convert_instance(self, workbench: ManagedInstance, line: Line) -> None:
+        """Record the instance as the *workbench* it was converted into, with its storage, and
+        *line* on it, whose intake takes the deliveries to the instance's signal path."""
+        assert workbench.workbench is not None
+        instance_id = str(workbench.instance_id)
+        with self._transaction() as connection:
+            connection.execute("DELETE FROM factory_members WHERE instance_id = ?", (instance_id,))
+            self._insert_workbench(connection, workbench.instance_id, workbench.workbench)
+            connection.execute("DELETE FROM storage WHERE instance_id = ?", (instance_id,))
+            self._insert_storage(connection, workbench.instance_id, workbench.storage)
+            self._insert_line(connection, line)
             connection.execute(
-                """
-                INSERT INTO lines (id, factory, workbench_id, owner_id, model, usd_per_day, intake)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(line.line_id),
-                    line.factory,
-                    str(line.workbench_id),
-                    str(line.owner_id),
-                    line.model,
-                    line.usd_per_day,
-                    line.intake,
-                ),
+                "INSERT INTO signal_lines (instance_id, line_id) VALUES (?, ?)",
+                (instance_id, str(line.line_id)),
             )
+
+    def signal_line(self, instance_id: UUID) -> UUID | None:
+        """The line whose intake takes the deliveries to the converted instance's signal path."""
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT line_id FROM signal_lines WHERE instance_id = ?", (str(instance_id),)
+            ).fetchone()
+        return UUID(row[0]) if row is not None else None
 
     def lines(self) -> list[Line]:
         """Every line, in the order it was set up."""
@@ -1709,6 +1747,7 @@ class HubRegistry:
 
     def remove_line(self, line_id: UUID) -> None:
         with self._transaction() as connection:
+            connection.execute("DELETE FROM signal_lines WHERE line_id = ?", (str(line_id),))
             connection.execute("DELETE FROM lines WHERE id = ?", (str(line_id),))
 
     def mark_deleted(self, instance_id: UUID) -> None:
