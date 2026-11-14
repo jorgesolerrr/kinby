@@ -305,7 +305,8 @@ from kinby.contracts import (
     VaultEntryEditCommand,
     VaultEntryListCommand,
     VaultEntryListResult,
-    View,
+    ViewGetCommand,
+    ViewId,
     ViewWriteCommand,
     WaitingApproval,
     Workbench,
@@ -853,7 +854,7 @@ class Hub:
                 self._tell_stop,
                 self.outbox,
                 self._remove_run_folder,
-                self._write_view,
+                self._hand_view,
             )
             self.replies = Replies(
                 self.registry,
@@ -1308,7 +1309,9 @@ class Hub:
         endpoint = await self._endpoint(self._active_workbench(workbench_id))
         return await self._control.remove_run_folder(endpoint, command)
 
-    async def _write_view(self, instance_id: UUID, view: View) -> None:
+    async def _hand_view(self, workbench_id: UUID, instance_id: UUID, view_id: ViewId) -> None:
+        endpoint = await self._endpoint(self._active_workbench(workbench_id))
+        view = await self._control.read_view(endpoint, ViewGetCommand(id=view_id))
         command = ViewWriteCommand(id=view.id, title=view.title, spec=view.spec, data=view.data)
         await self._relayed(instance_id, VIEW_WRITE.name, command.model_dump(mode="json"))
 

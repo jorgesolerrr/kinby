@@ -9813,7 +9813,7 @@
         },
         "views": {
           "items": {
-            "$ref": "#/$defs/View"
+            "$ref": "#/$defs/ViewId"
           },
           "type": "array"
         }

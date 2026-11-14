@@ -4221,8 +4221,9 @@ class StepResult(ContractModel):
     usage: StepUsage | None = None
     #: The approval an asked step's turn parked on. Only an asked step has one.
     ask: WaitingApproval | None = None
-    #: Each view a kinby turn wrote, as it stands, which the hub writes to the run's owner.
-    views: list[View] = Field(default_factory=list)
+    #: The views a kinby turn wrote, which the hub reads from the workbench one at a time and
+    #: writes to the run's owner.
+    views: list[ViewId] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _resets_at_only_when_limited(self) -> Self:

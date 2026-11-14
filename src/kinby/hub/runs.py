@@ -71,7 +71,7 @@ from kinby.contracts import (
     StepValue,
     Stream,
     ValueName,
-    View,
+    ViewId,
     WaitingApproval,
 )
 from kinby.core.coding_clients import own_tokens
@@ -174,8 +174,9 @@ class Untold:
 type StopTeller = Callable[[UUID, RunStop], Awaitable[Untold | None]]
 #: Have the workbench with this id remove the folder of a run that ended. Raises when it did not.
 type FolderRemover = Callable[[UUID, RunFolderRemoveCommand], Awaitable[object]]
-#: Write the view among the views of the instance with this id. Raises when it did not take it.
-type ViewWriter = Callable[[UUID, View], Awaitable[object]]
+#: Read the view with this id from the workbench with the first id, and write it among the views
+#: of the instance with the second. Raises when it did not.
+type ViewHandover = Callable[[UUID, UUID, ViewId], Awaitable[object]]
 
 _logger = logging.getLogger(__name__)
 
@@ -268,7 +269,7 @@ class FactoryRuns:
         tell_stop: StopTeller,
         outbox: Outbox,
         remove_folder: FolderRemover,
-        write_view: ViewWriter,
+        hand_view: ViewHandover,
     ) -> None:
         self._registry = registry
         self._factories = factories
@@ -276,7 +277,7 @@ class FactoryRuns:
         self._tell_stop = tell_stop
         self._outbox = outbox
         self._remove_folder = remove_folder
-        self._write_view = write_view
+        self._hand_view = hand_view
         #: The steps, needs_human and ended calls and run stops waiting for each instance, and
         #: the steps and folder removals waiting for each workbench, by id.
         self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
@@ -1068,7 +1069,7 @@ class FactoryRuns:
                 command = queued.command.model_copy(update={"attempt": attempt})
             answer = await self._run_step(instance_id, command)
             if isinstance(answer, StepResult):
-                answer = await self._views_written(queued.run_id, answer)
+                answer = await self._views_handed(instance_id, queued.run_id, answer)
                 self._advance(queued.run_id, self._own_usage(queued.run_id, answer))
                 return
             if isinstance(answer, UndeliveredCall):
@@ -1091,19 +1092,24 @@ class FactoryRuns:
                 self._enqueue(self._existing(queued.run_id))
                 return
 
-    async def _views_written(self, run_id: UUID, result: StepResult) -> StepResult:
-        """*result* with the views it wrote that the run's instance, the owner of its line, took
-        among its views. Each one it did not take is named after the summary."""
+    async def _views_handed(
+        self, workbench_id: UUID, run_id: UUID, result: StepResult
+    ) -> StepResult:
+        """*result* with the views it wrote on the workbench that the run's instance, the owner
+        of its line, took among its views. Each one it did not take is named after the summary.
+
+        Each view goes on its own, so views that fit the cap one by one never outgrow a call.
+        """
         instance_id = self._existing(run_id).instance_id
-        taken: list[View] = []
-        for view in result.views:
+        taken: list[ViewId] = []
+        for view_id in result.views:
             try:
-                await self._write_view(instance_id, view)
+                await self._hand_view(workbench_id, instance_id, view_id)
             except Exception as exc:
-                reason = f'The owner did not take view "{view.id}": {exc or type(exc).__name__}'
+                reason = f'The owner did not take view "{view_id}": {exc or type(exc).__name__}'
                 result = _noted(result, reason, result.ending)
             else:
-                taken.append(view)
+                taken.append(view_id)
         return result.model_copy(update={"views": taken})
 
     def _own_usage(self, run_id: UUID, result: StepResult) -> StepResult:

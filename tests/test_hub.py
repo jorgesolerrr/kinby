@@ -87,6 +87,9 @@ from kinby.contracts import (
     StepValue,
     StorageItem,
     StorageKind,
+    View,
+    ViewGetCommand,
+    ViewId,
     WorkbenchOperationResult,
 )
 from kinby.hub import (
@@ -419,6 +422,10 @@ class FakeControl:
         self.workspace_reads: list[tuple[ControlEndpoint, ContractModel]] = []
         #: What the next reads of a workspace answer, in order.
         self.workspace_answers: list[ContractModel] = []
+        #: The views a workbench serves, by id.
+        self.views: dict[ViewId, View] = {}
+        #: Each view the hub read from a workbench, and the endpoint it read it from.
+        self.views_read: list[tuple[ControlEndpoint, ViewGetCommand]] = []
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -493,6 +500,10 @@ class FakeControl:
         answer = self.workspace_answers.pop(0)
         assert isinstance(answer, method.result), answer
         return answer
+
+    async def read_view(self, endpoint: ControlEndpoint, command: ViewGetCommand) -> View:
+        self.views_read.append((endpoint, command))
+        return self.views[command.id]
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

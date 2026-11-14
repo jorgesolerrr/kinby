@@ -28,8 +28,8 @@ from kinby.contracts import (
     TurnCompleted,
     TurnFailed,
     TurnStarted,
-    View,
     ViewChanged,
+    ViewId,
     WaitingApproval,
 )
 from kinby.core.errors import CoreError
@@ -52,7 +52,6 @@ from kinby.instance import (
 )
 from kinby.instance.dataclasses import Compaction
 from kinby.instance.permissions import SHIPPED_POLICY
-from kinby.instance.views import read_view
 from kinby.plugins.skills import Skill
 
 #: The default tools a workbench's turn is offered: bash and the file tools.
@@ -77,8 +76,8 @@ async def run_turn(
     resumes the turn that parked on it, from its checkpoint.
 
     A turn the gate parks on an ask ends the attempt asked. What the agent said last is only the
-    summary, the model calls of the attempt are what it spent, and it hands back each view it
-    wrote, however it ends.
+    summary, the model calls of the attempt are what it spent, and it names each view it wrote,
+    however it ends.
     """
     instance = Instance(
         path=state, manifest=_manifest(state, folder, model), matching_rule="explicit directory"
@@ -144,7 +143,7 @@ async def run_turn(
     else:
         usage, cost = _spent(events, instance, turn.model)
         spent = StepUsage(api=ApiUse(**usage.model_dump(), cost=cost))
-        views = await asyncio.to_thread(_written, events, instance)
+        views = _written(events)
         if isinstance(outcome, ParkedTurn):
             return _asked(turn_id, events, spent).model_copy(update={"views": views})
         await emit(TurnCompleted(outcome=outcome.outcome, cost=cost, **usage.model_dump()))
@@ -157,7 +156,7 @@ async def run_turn(
         ending=StepEnding.FAILED,
         summary=last_message(events),
         usage=StepUsage(api=ApiUse(**usage.model_dump(), cost=cost)),
-        views=await asyncio.to_thread(_written, events, instance),
+        views=_written(events),
     )
     return step_failed(f"The turn failed: {reason}", said)
 
@@ -182,12 +181,13 @@ def _asked(turn_id: UUID, events: Sequence[Event], usage: StepUsage) -> StepResu
     )
 
 
-def _written(events: Sequence[Event], instance: Instance) -> list[View]:
-    """Each view the turn wrote, as it stands now, in the order the turn first wrote it."""
-    written = dict.fromkeys(
-        event.payload.view for event in events if isinstance(event.payload, ViewChanged)
+def _written(events: Sequence[Event]) -> list[ViewId]:
+    """Each view the turn wrote, in the order it first wrote it."""
+    return list(
+        dict.fromkeys(
+            event.payload.view for event in events if isinstance(event.payload, ViewChanged)
+        )
     )
-    return [read_view(instance, view_id) for view_id in written]
 
 
 def _spent(
