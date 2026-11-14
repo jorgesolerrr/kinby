@@ -4,14 +4,20 @@ import { createRoot } from "react-dom/client"
 
 import "./index.css"
 import App from "./App.tsx"
+import { FactoriesPrototype, PROTOTYPE_PATH } from "./components/factories-prototype"
 
 const root = document.getElementById("root")
 if (root === null) throw new Error("index.html has no #root element")
 
-const client = createClient(window.location.origin, browserTransport)
+// PROTOTYPE (#1299): a throwaway route on fixed data, with no hub behind it.
+const prototype = import.meta.env.DEV && window.location.pathname === PROTOTYPE_PATH
 
 createRoot(root).render(
   <StrictMode>
-    <App client={client} />
+    {prototype ? (
+      <FactoriesPrototype />
+    ) : (
+      <App client={createClient(window.location.origin, browserTransport)} />
+    )}
   </StrictMode>,
 )
