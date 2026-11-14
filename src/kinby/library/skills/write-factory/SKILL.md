@@ -1,49 +1,45 @@
 ---
 name: write-factory
-description: Write or edit a factory with hub_write's factory_write operation, its steps, hooks, instance templates and prompts, so it passes the factory check. Use when the user wants a factory designed, created or changed.
+description: Write or edit a factory with hub_write's factory_write operation, its steps, checks, tools and prompts, so it passes the factory check, then set it up as a line. Use when the user wants a factory designed, created or changed.
 ---
 
-A factory is a folder of files the hub runs as a line of steps. Its instances are ordinary instances that picked one of its roles. It holds behavior only. Nothing in it names one repository's commands or conventions, and its prompts name no skill an instance picks. Each instance keeps those itself.
+A factory is a folder of files: a sequence of steps the hub runs to carry a work item, such as one issue, from start to finish. It runs on a workbench, which holds the image, the secrets, the workspace and its lists of repository commands. Set up on one workbench under an owning instance, it is a line. The factory holds behavior only. Nothing in it names one repository's commands or conventions, and its prompts name no skill a workbench picks. Each workbench keeps those itself.
 
 ## Read before you write
 
-Read `factory.list`, then `factory.get` for the factory to change or the one closest to what the user wants. It returns every file of the folder and the folder's `hash`. The shipped software factory is a worked example of every step kind. Read `factory.run.list` to see how a factory's runs went before changing it.
+Read `factory.list`, then `factory.get` for the factory to change or the one closest to what the user wants. It returns every file of the folder and the folder's `hash`. Read `factory.run.list` to see how a factory's runs went before changing it.
 
-This skill's `references/factory.md` covers every `factory.yaml` field, the step kinds, send-back and needs human, what the gate does in each step, the hook and tool decorators with their imports, the step endings, `hand_over`, the template rules and settings, and the image recipes. Read it with the `skill` tool, `file` set to that path. Never read kinby's installed source to learn these.
+This skill's `references/factory.md` covers every `factory.yaml` field, the step kinds and engines, send-back, retries and needs human, the gate in each step, checks and tools with their imports, the step endings and the run folder, with a worked example that passes the factory check. Read it with the `skill` tool, `file` set to that path. Never read kinby's installed source to learn these.
+
+A factory whose file declares `instances` is in an older form, still run by the instances that picked its roles. Rewriting it in this form takes it from them, so write new factories in this form, and ask the user before you convert an old one.
 
 ## The folder
 
 - `factory.yaml` declares the factory. Its `name` is the folder's name.
-- `instances/<role>/` is the instance template of one role: `SYSTEM.md`, `kinby.toml`, and the `tools/`, `hooks/`, `routines/` and `skills/` the role's instances start with. The hub copies it into each instance that picks the role.
-- Prompts for agent and client steps, at any path in the folder, such as `prompts/implement.md`.
+- `prompts/` holds the agent steps' prompts, such as `prompts/implement.md`.
+- `hooks/` holds the checks, `tools/` the tools, and `skills/` skills of the factory's own that its agent steps are offered.
 
 ## factory.yaml
 
-- `instances` declares each role. `image` names one of the image recipes kinby ships, such as `coder`, and leaving it out builds kinby's base image. `setup_fields` and `logins` are what the role asks for at creation. `suggested_picks` must be skills kinby ships in its library.
-- `intake` names the instance and the routine that hands the factory its work items. That routine lives in the role's template and calls `hand_to_factory` with one work item.
+- `requires` says what a workbench must provide: the image recipe, `secrets`, named `values`, the names of the lists of repository `commands` the steps run, `logins` and a `browser`.
+- `intake` declares what fires the line's intake, a `schedule`, a `delivery` or both, and the tool it calls to find work items. Setting the line up creates the intake routine in the owner.
 - `work_item` declares the values each work item carries, by name and type: `str`, `int` or `bool`.
-- `steps` is the line of steps, run in order.
-- `done_requires` lists the values a run must hold once its last step ends.
-- `needs_human` names a tool, `in` an instance, that the hub calls when a run stops for the user.
-- `ended` names a tool the same way, that the hub calls once when a run ends done or cancelled.
-- `closing` ends a run that needs the user once its work finished elsewhere: a signal matching one of its `done` filters ends it done, one matching a `cancelled` filter ends it cancelled. A filter reads as a `wait`'s does.
+- `steps` is the sequence of steps, run in order, each on the workbench in the run's folder, which kinby cuts. No step names where it runs.
+- `done_requires`, `needs_human`, `ended` and `closing` say when a run is done, and what the factory's tools do when it stops for the user or ends.
 
 ## Steps
 
 Every step has an `id`. It may declare `requires`, the values it needs from the work item or an earlier step, and `results`, the values it hands on by name and type. A step whose required value no earlier step produces fails the check.
 
-- `agent`: a kinby turn on a new thread `in` an instance, with a `prompt` file and a `hook`.
-- `client`: a coding client run (`claude` or `codex`) in the instance's container, with a `prompt`, a `hook`, and optionally `model`, `effort`, `resume` to continue an earlier client step's session, and `branch: "{{name}}"` to run it in the run worktree of the branch that run value names.
-- `command`: commands in the instance's workspace, each without a shell. `{{name}}` stands for a run value, and an entry `{ commands: <list> }` runs the instance's own list of repository commands. Exit code zero passes. `branch: "{{name}}"` runs them in that branch's run worktree.
-- `code`: a tool of the template the model never sees, named in `call`. A mapping it returns is the step's values.
-- `wait`: parks the run until a signal matches one of its `signal` filters, or until `quiet` or `deadline` passes. A filter reads `routine`, `headers.<Name>` or `body.<key>`.
-- `approve`: parks the run until the user approves it or sends it back, showing its `summary`.
+- `agent`: a model doing the work from a `prompt`, run by its `engine`: `claude` or `codex`, a coding client that keeps a session a later step can `resume`, or `kinby`, a kinby turn that goes through the gate. `model` and `effort` are optional, and the line's model fills a model left out.
+- `command`: commands in the run's folder, each without a shell. `{{name}}` stands for a run value, and `{ commands: <name> }` runs the workbench's list of repository commands of that name.
+- `code`: a tool of the factory's folder the model never sees, named in `call`. A mapping it returns is the step's values.
+- `wait`: parks the run until a signal matches one of its `signal` filters, or until `quiet` or `deadline` passes.
+- `approve`: parks the run and notifies the user with its `summary`, which can name run values, until they approve it or send it back with notes.
 
-What happens next: `retry` sets how often a failed attempt runs again. `failed: { back: <step>, max: <n> }` sends a failure back to an earlier step instead, with what failed as the value `failure`. `outcomes` maps each outcome a hook or code step names to `next`, `done`, `stop` or `{ back: <step>, max: <n> }`. `timeout` is a duration like `60m`. A timed-out attempt never runs again.
+A step's result comes from the world, never from what the agent says it did. An `agent`, `command` or `code` step names a `check` to record it: a hook of the factory's folder that reads the run's folder and returns the step's values and outcome, or raises to fail the step. A step with nothing to record names none.
 
-## Hooks
-
-A step's result comes from the world, never from what the agent says it did. A hook records it. It is a function in the template's `hooks/`, decorated with `hook` from `kinby.plugins.hooks`. It takes a `StepEnd` (the instance, the `workspace` the step ran in, how the step ended, the work item, the run's values so far) and returns a `HookResult` with `values` and, when the step has outcomes, an `outcome`, or None to record nothing. Raise to fail the step. kinby's default hooks `record_branch` and `find_pull_request` are there without a file.
+What happens next: `failed: { retry: <n> }` runs a failed step again with what failed as the value `failure`, and `failed: { back: <step>, max: <n> }` sends the failure to an earlier step instead. `outcomes` maps each outcome a check or code step names to `next`, `done`, `stop` or `{ back: <step>, max: <n> }`. A step the user sends back reads their notes as `notes`, so no step saves them.
 
 ## Write it
 
@@ -51,4 +47,8 @@ Call `hub_write` with `factory_write` and, as its arguments, the factory's `name
 
 The hub runs the factory check before it keeps anything. A factory that fails it is refused with every problem listed, and the last good version stays. Fix each problem and write again.
 
-Done when `factory_write` returns the factory and `factory.check` on it reports no problems. Then tell the user that an instance takes a new role only at creation, and that existing instances of a changed role get the new template files through an instance update in the web app.
+Done when `factory_write` returns the factory and `factory.check` on it reports no problems. A changed factory reaches every line at its next step, with nothing to update.
+
+## Set it up as a line
+
+A new factory runs nothing until it is set up as a line: on one workbench, under an owner, with a model and a daily budget. Offer it to the user once the factory is written. Setup is one `line_setup` write, run as the kinby-hub skill's Setting a line up says: `line.setup.describe` lists what the factory requires and the workbench lacks, and one call answers it, creating the workbench when the user has none.
