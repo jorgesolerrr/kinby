@@ -1,123 +1,105 @@
 # The factory reference
 
-Every `factory.yaml` field, what each step kind does, where a run goes next, and what an instance template may hold. The shipped software factory, from `factory.get`, uses most of it.
+Every `factory.yaml` field, what each step kind does, where a run goes next, and the code a factory's folder holds. The worked example at the end passes the factory check as written.
+
+A factory runs on a workbench: the place with the image, the secrets, the workspace and its lists of repository commands. Set up on one workbench under an owning instance, it is a line. Each run of the line works on that workbench, in a run folder kinby cuts for it.
 
 ## factory.yaml
 
 - `name`: the factory's name, the same as its folder's. Lowercase letters, digits and `-`.
-- `instances`: each role, by name, with its declaration. At least one. Its template is `instances/<role>/`.
-  - `image`: one of the image recipes kinby ships. Left out, the role runs kinby's base image. kinby ships one recipe:
-    - `coder`: the base image with `gh`, Claude Code, Codex, Bun, Node and pnpm, for `client` steps.
-  - `setup_fields`: what an instance of the role asks for at creation, after kinby's built-in `model` and `api_key`. See Setup fields.
-  - `logins`: the sign-ins the role runs at creation. See Logins.
-  - `suggested_picks`: skills the role's instances are offered, each a skill kinby ships in its library.
-- `intake`: the routine that hands the factory its work items.
-  - `instance`: the role it runs in.
-  - `routine`: its name. It must be `instances/<instance>/routines/<routine>/ROUTINE.md`.
+- `requires`: what a workbench must provide for the steps to run on it. See Requires.
+- `intake`: what fires the line's intake and the tool that finds work items. See Intake.
 - `work_item`: the values each work item carries, by name and type: `str`, `int` or `bool`. A name is lowercase letters, digits and `_`.
-- `steps`: the line of steps, run in order. At least one. See Steps.
+- `steps`: the sequence of steps, run in order. At least one. See Steps.
 - `done_requires`: values the run must hold once its last step ends. A value missing or false fails that step.
 - `needs_human`: a tool the hub calls each time a run stops for the user. See Needs human.
 - `ended`: a tool the hub calls once when a run ends done or cancelled. See Ended.
 - `closing`: the signals that end a run that needs the user, once its work finished elsewhere. See Closing.
 
-### requires
+## Requires
 
-A factory may declare `requires` in place of `instances`. Its steps then run on a workbench, and the file is read in that form:
+Each field may be left out.
 
-- `requires`: what a workbench must provide. Each field may be left out.
-  - `image`: one of the image recipes kinby ships, as under `instances`.
-  - `secrets`: setup fields, each without `kind` or `target`. A secret is text or multiline and has no default.
-  - `values`: named values that are not secrets, setup fields without `kind` or `target`.
-  - `commands`: the names of the workbench's lists of repository commands the steps run. A `command` step's `{ commands: <name> }` names one of them.
-  - `logins`: as under `instances`, signed in on the workbench, which keeps them through a recreation. Setting up a line refuses a workbench whose login of that `id` has not signed in. See Logins.
-  - `browser`: `true` when the steps need a browser. Setting up a line refuses a workbench created without one. Its browser session stays between runs, so a site a step signed in to is still signed in at the next run.
-- `intake`: optional. Setting up a line creates the line's intake routine in its owner from it, and removing the line deletes it. The line's `intake` names that routine.
-  - `call`: a tool of the factory's folder, run on the workbench. Its `signal` parameter receives the delivery that fired it, or `{}`. It returns a list of work items, each a mapping of the `work_item` values, or `None` for none, and the hub hands each to the line.
-  - `schedule`: a cron expression with five fields, as a routine's.
-  - `delivery`: deliveries fire it at `/lines/<line_id>/signals` on the hub, one address per line that a change of owner keeps. `secret` names the owner's secret they are signed with, which setting up the line, or giving it another owner, needs that owner to hold. `auth`, `signature_header` and `delivery_header` are as for a routine's `signal`.
-  - It takes a `schedule`, a `delivery` or both.
-- Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
-- An `agent` step runs a model on the workbench, in the run's folder:
-  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. It goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. On a workbench with a browser it has the browser tools too, and `browser_takeover` parks the run the same way until the user finishes the takeover. The step's `check` runs once the turn ends.
-  - `prompt`: a file of the factory's folder, as for an `agent` step in an instance.
-  - `model`: the client's model, such as `claude-opus-5-5`. Left out, the line's model when the engine runs its provider's models, `anthropic` for `claude` and `openai` for `codex`, and the client's default otherwise.
-    For `kinby`, a `provider:model`, such as `anthropic:claude-opus-5-5`, and left out, the line's model. The workbench must hold that provider's `<PROVIDER>_API_KEY`, and setting up the line refuses one without it. List it under `requires.secrets`.
-  - `effort`: as for `client`. The `kinby` engine ignores it, as it does `timeout`.
-  - `resume`: an earlier `agent` step on the same coding client whose session this one continues. The `kinby` engine keeps no session.
-  - The client is offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Its transcript is kept on the workbench, one per attempt.
-- An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended, though not while its kinby turn waits on an ask. See Hooks. kinby's default hooks are no check.
-- `needs_human` and `ended` take only `call`.
-- Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `intake`, `needs_human` or `ended` calls one of them.
+- `image`: one of the image recipes kinby ships. Left out, kinby's base image. Setting up a line refuses a workbench built from another recipe, so a factory that leaves it out runs only on a workbench on the base image. kinby ships one:
+  - `coder`: the base image with `gh`, Claude Code, Codex, Bun, Node and pnpm, for the coding client engines.
+- `secrets`: the secrets the steps read, as environment variables of the workbench. See Fields.
+- `values`: named values that are not secrets, such as a site's address, which the workbench's record holds by name. See Fields.
+- `commands`: the names of the workbench's lists of repository commands the steps run, such as `setup` and `checks`. A `command` step's `{ commands: <name> }` names one of them. The workbench holds the commands themselves, so the factory names no repository's commands.
+- `logins`: the sign-ins the workbench runs, which it keeps through a recreation. Setting up a line refuses a workbench whose login of that `id` has not signed in. See Logins.
+- `browser`: `true` when the steps need a browser. Setting up a line refuses a workbench created without one. Its browser session stays between runs, so a site a step signed in to is still signed in at the next run.
 
-### Setup fields
+### Fields
 
-Each entry of `setup_fields`:
+Each entry of `secrets` and `values`:
 
-- `name`: a secret's name is an environment variable name. Naming a built-in field, `model` or `api_key`, gives it another default and keeps its kind and type. `behavior_prompt` is refused: it starts from the template's `SYSTEM.md`.
-- `label` and `description`: what the user sees. Neither may be empty.
-- `kind`: `config` lands in the instance's configuration, `secret` in its secrets.
+- `name`: a secret's name is an environment variable name, such as `GH_TOKEN`.
+- `label` and `description`: what the user sees when they set the line up. Neither may be empty.
 - `type`: `text`, `multiline`, `boolean`, `integer`, `choice`, `email` or `url`. A secret is `text` or `multiline`.
-- `required`: whether creation needs a value.
+- `required`: whether setup needs a value.
 - `default`: the value when the user sends none, of the field's type. A secret never has one.
 - `choices`: the values a `choice` field offers. Only a `choice` field has them.
-- `target`: where a `config` field lands, as `file`, always `kinby.toml`, and `key`, a dotted key in it such as `workspace.source`. Every `config` field but a built-in one names a target. A secret names none.
 
 ### Logins
 
-Each entry of `logins` is a sign-in run in a setup container at creation:
+Each entry of `logins` is a sign-in the user runs on the workbench, in a setup container:
 
 - `id`: names the login's volume, so letters, digits, `.`, `_` and `-`, starting with a letter or digit.
 - `label` and `description`: what the user sees.
 - `command`: what the setup container runs, as a list of arguments.
-- `volume`: the absolute path the login's volume mounts at, in the instance and in the setup container.
+- `volume`: the absolute path the login's volume mounts at, on the workbench and in the setup container.
 - `prompt_pattern`: a regular expression with the named groups `url` and `code`, which finds the sign-in URL and the one-time code in the command's output.
+
+## Intake
+
+Optional. Without it, a line's runs start only when its owner hands a work item in. Setting up a line creates the line's intake routine in its owner from it, and removing the line deletes the routine.
+
+- `call`: a tool of the factory's folder, run on the workbench. Its `signal` parameter receives the delivery that fired it, or `{}`. It returns a list of work items, each a mapping of the `work_item` values, or `None` for none, and the hub hands each to the line. A work item that matches an unfinished run of the line returns that run, so finding the same item again starts nothing.
+- `schedule`: a cron expression with five fields, as a routine's.
+- `delivery`: deliveries fire it at `/lines/<line_id>/signals` on the hub, one address per line that a change of owner keeps.
+  - `secret`: the owner's secret the deliveries are signed with. Setting up the line, or giving it another owner, needs that owner to hold it.
+  - `auth`: `token`, the default, or `hmac-sha256`. `signature_header` and `delivery_header` are as for a routine's signal.
+- It takes a `schedule`, a `delivery` or both.
 
 ## Steps
 
-Every step has these fields:
+Every step runs on the workbench, in the run folder. Every step has these fields:
 
 - `id`: unique in the factory. Lowercase letters, digits, `_` and `-`.
-- `kind`: `agent`, `client`, `command`, `code`, `wait` or `approve`.
+- `kind`: `agent`, `command`, `code`, `wait` or `approve`.
 - `requires`: values the step needs, from the work item or an earlier step's `results`. The check refuses a value neither holds. A value false counts as missing.
 - `results`: the values the step hands on, by name and type, as in `work_item`.
-- `outcomes`: what each outcome a hook or code step names does next. See What happens next.
+- `outcomes`: what each outcome a check or code step names does next. See What happens next.
 - `retry`: how many times a failed attempt runs again.
-- `failed`: `{ back: <step>, max: <n> }`, where a failed attempt is sent instead of running again, or `{ retry: <n> }`, how many times it runs again. Either way the next attempt reads what failed as `failure`.
+- `failed`: `{ retry: <n> }`, how many times a failed attempt runs again, or `{ back: <step>, max: <n> }`, the earlier step it is sent back to instead. Either way the next attempt reads what failed as the value `failure`.
 - `timeout`: a duration such as `90s`, `60m`, `2h` or `7d`.
+
+An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder that records the step's values and names its outcome, or fails the step. See Checks. A step without one records only what its kind records itself.
 
 Each kind adds its own:
 
-- `agent`: a kinby turn on a new thread in the instance.
-  - `in`: the role whose instance runs it.
-  - `prompt`: the turn's message, a file in the factory's folder such as `prompts/implement.md`.
-  - `hook`: records the step's values.
-  - The turn runs in the instance's default permission mode. A write the gate asks about parks the step until the user answers. `timeout` doesn't apply: the instance's turn budgets bound the turn.
-- `client`: a coding client run in the instance's container, with no kinby turn around it.
-  - `in`, `prompt` and `hook`, as for `agent`.
-  - `client`: `claude` or `codex`.
-  - `model`: the client's model, such as `claude-opus-5-5`. Left out, the client's default.
-  - `effort`: `low`, `medium`, `high`, `xhigh` or `max`. Codex has no `max`. Left out, the client's default.
-  - `resume`: an earlier `client` step of the same role and client whose session this one continues.
-  - `branch`: `"{{name}}"`, the run value naming the branch whose run worktree the client runs in. Left out, it runs in the workspace.
-  - kinby's gate is not involved: Claude Code edits and runs commands unasked, Codex runs without approvals or sandbox. Without `timeout` an attempt stops after 60 minutes.
-- `command`: commands in the instance's workspace, each without a shell.
-  - `in`: the role.
-  - `run`: the commands, in order. A `{{name}}` in a command stands for that run value, as one argument. An entry `{ commands: <list> }` runs the instance's own list of repository commands its `commands` names, as written. Exit code zero passes. The first that fails fails the step, with the command and the last 2,000 characters of its output as the attempt's summary.
-  - `hook`: optional. Without one the step records no values.
-  - `branch`: as for `client`.
+- `agent`: a model doing the work from a prompt.
+  - `engine`: what runs it. `claude` and `codex` are coding clients. `kinby` is a kinby turn.
+  - `prompt`: a file of the factory's folder, such as `prompts/implement.md`. The message the engine gets is the prompt followed by the work item and the values the run holds, `failure` and `notes` among them, as data.
+  - `model`: for a coding client, the client's model, such as `claude-opus-5-5`, and left out, the line's model when the engine runs its provider's models, `anthropic` for `claude` and `openai` for `codex`, else the client's default. For `kinby`, a `provider:model` such as `anthropic:claude-opus-5-5`, and left out, the line's model. The workbench must hold that provider's `<PROVIDER>_API_KEY`: setting up the line asks for it when the workbench lacks it.
+  - `effort`: `low`, `medium`, `high`, `xhigh` or `max`. Codex has no `max`. Left out, the client's default. The `kinby` engine ignores it.
+  - `resume`: an earlier `agent` step on the same coding client, whose session this one continues, so one session can write a change, answer its reviews and repair its checks. The `kinby` engine keeps no session, and the check refuses `resume` on it.
+  - Both engines are offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Each attempt's transcript is kept on the workbench, and the run shows it.
+  - A coding client runs without kinby's gate: Claude Code edits and runs commands unasked, Codex runs without approvals or sandbox. Without `timeout` an attempt stops after 60 minutes.
+  - A kinby turn has bash and the file tools, in the run folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. On a workbench with a browser it has the browser tools too. It goes through kinby's default gate policy: when the gate asks about a call, the run parks and the user gets a notification that names it, and their answer resumes the turn. `browser_takeover` parks the run the same way until the user finishes the takeover. The `kinby` engine ignores `timeout`: the line's budget bounds the turn.
+- `command`: commands in the run folder, each without a shell.
+  - `run`: the commands, in order. A `{{name}}` in a command stands for that run value, as one argument. An entry `{ commands: <name> }` runs the workbench's list of repository commands of that name, which `requires.commands` must declare. Exit code zero passes. The first that fails fails the step, with the command and the last 2,000 characters of its output as the attempt's summary.
   - No gate. Without `timeout` the commands run as long as they take.
-- `code`: a tool of the template the model never sees.
-  - `in`: the role.
+- `code`: a tool of the factory's folder the model never sees.
   - `call`: the tool's name. Its parameters named like a run value receive it, and `run_id` the run's id. A mapping it returns is the step's values, and a `HookResult` also names an outcome. Raising fails the step.
   - No gate: the tool runs even when it writes.
-- `wait`: parks the run, holding no instance.
-  - `signal`: filters, at least one. A signal matches a filter when it carries every field of the filter with the same value and type. A field reads `routine`, the routine the signal came in on, `headers.<Name>` or `body.<key>.<key>`. A value `"{{name}}"` stands for that run value. A match moves on and records nothing.
+- `wait`: parks the run, holding no workbench.
+  - `signal`: filters, at least one. A signal matches a filter when it carries every field of the filter with the same value and type. A field reads `routine`, the routine the signal came in on, `headers.<Name>` or `body.<key>.<key>`. A value `"{{name}}"` stands for that run value. A signal any routine of the line's owner accepts can match, the intake's deliveries among them. A match moves on and records nothing.
   - `quiet`: a duration. With no signal for that long, the wait moves on by itself and records `quiet` as true.
   - `deadline`: a duration. With no signal for that long, the wait fails.
-- `approve`: parks the run until the user approves it or sends it back, and notifies the user when it parks.
-  - `summary`: what the user is asked to approve, as the notification and the run show it. A `{{name}}` stands for that run value, which the work item or an earlier step must declare, so the summary can name the draft to read.
-  - Approving moves on and records nothing. The user can send the run back to any earlier step, with notes the steps from there read as the value `notes`, so no step saves them first.
+- `approve`: parks the run until the user approves it or sends it back, holding no workbench.
+  - `summary`: what the user is asked to approve. A `{{name}}` stands for that run value, which the work item or an earlier step must declare, so the summary can name the draft to read.
+  - The hub notifies the user when the run parks here, so no step exists only to tell them.
+  - Approving moves on and records nothing. Sending back goes to any earlier step, with notes the steps from there read as the value `notes`, so no step saves them first.
 
 ## What happens next
 
@@ -128,34 +110,35 @@ Each kind adds its own:
   - `stop`: the run ends cancelled, without `done_requires`.
   - An outcome the step doesn't map fails the attempt.
 
+### Retries
+
+- Without `retry` or `failed`, an `agent` step runs once more after a failure, and other kinds never do. `retry: 0` never runs again.
+- `failed: { retry: <n> }` runs the step again up to `n` times, and records what failed, the attempt's summary, as `failure`, so a redraft reads why its draft failed. A plain `retry` records nothing.
+- The count is per step over the whole run, until the user retries or sends the run back.
+- A timed-out attempt never runs again and is never sent back.
+- A coding client that hits its subscription limit parks the run until the plan window resets, then runs again without using a retry.
+- A step declares `retry` or `failed`, never both.
+
 ### Send-back
 
 `{ back: <step>, max: <n> }`, in `outcomes` or `failed`, sends the work to an earlier step:
 
 - `back`: the step, which must come earlier. `max`: how many times this edge may send work back, at least 1. One more makes the run need the user.
 - The run drops every value the target step and the steps after it recorded, except the sending step's own, which travel back with the work.
-- `failed` also records what failed, the attempt's summary, as the value `failure`.
-- A step declares `retry` or `failed`, never both.
-
-### Retries
-
-- Without `retry`, an `agent` or `client` step runs once more after a failure, and other kinds never do. `retry: 0` never runs again.
-- `failed: { retry: <n> }` runs the step again as `retry: <n>` does, and records what failed, the attempt's summary, as `failure`, so a redraft reads why its draft failed.
-- The count is per step over the whole run, until the user retries or sends the run back.
-- A timed-out attempt never runs again and is never sent back.
-- A coding client that hits its subscription limit waits for the reset and runs again without using a retry.
+- Under `failed`, it records what failed, the attempt's summary, as `failure`.
+- Sent back to the first step, the run gets a fresh run folder, cut again from the base.
 
 ### Needs human
 
-A run needs the user when a failure has no retry left, an attempt times out, a send-back reaches its `max`, a step's instance or `{ commands: <list> }` is missing, or the factory or the step no longer exists. A value a later step needs and no step recorded fails the step that should have recorded it.
+A run needs the user when a failure has no retry left, an attempt times out, a send-back reaches its `max`, or the factory or the step no longer exists. A step that cannot start fails, such as one that runs a list of repository commands the workbench lacks, or an agent step once the line's daily budget is spent. A value a later step needs and no step recorded fails the step that should have recorded it. The run folder stays as it is, with its uncommitted work.
 
-The hub then notifies the user, who can retry the step, send the run back to an earlier step, with notes read as `notes`, or cancel it. Handing the same work item in again also retries it.
+The hub then notifies the user and tells the line's owner. The user can retry the step, send the run back to an earlier step, with notes read as `notes`, or cancel it. Handing the same work item in again also retries it.
 
-If `needs_human` is set, the hub calls it: `in`, the role whose instance holds the tool, and `call`, the tool. Its parameters named like a run value receive it, `run_id` the run's id, `step` the step the run stopped at, and `summary` that attempt's summary. A failed call is tried again until the run moves on.
+If `needs_human` is set, the hub calls its `call`, a tool of the factory's folder, on the workbench. Its parameters named like a run value receive it, `run_id` the run's id, `step` the step the run stopped at, and `summary` that attempt's summary. A failed call is tried again until the run moves on.
 
 ### Ended
 
-If `ended` is set, the hub calls it once a run ends done or cancelled, by any path. `in` and `call` as for `needs_human`. Its parameters receive the run values and `run_id`, never `step` or `summary`. A failed call is tried again.
+If `ended` is set, the hub calls its `call` once a run ends done or cancelled, by any path, before it removes the run folder. Its parameters receive the run values and `run_id`, never `step` or `summary`. A failed call is tried again.
 
 ### Closing
 
@@ -164,40 +147,29 @@ If `ended` is set, the hub calls it once a run ends done or cancelled, by any pa
 - `done`: filters. A signal matching one ends the run done, without `done_requires`.
 - `cancelled`: filters. A signal matching one ends the run cancelled.
 
-A filter reads as a `wait`'s does. The signal can come in on any of the factory's instances.
+A filter reads as a `wait`'s does.
 
-## Hooks
+## Checks
 
-A hook is a function in the template's `hooks/`, or a check in the factory's folder's `hooks/`, decorated with `hook`. The hook's name is the function's. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`:
-
-```python
-from kinby.plugins.hooks import HookResult, StepEnd, hook
-
-
-@hook
-def record_brief(end: StepEnd) -> HookResult | None:
-    if not (end.workspace / "brief.md").is_file():
-        raise FileNotFoundError("The step wrote no brief.md.")
-    return HookResult(values={"briefed": True})
-```
+A check is a function in the factory's folder's `hooks/`, decorated with `hook`. Its name is the function's, and a step names it as its `check`. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`. kinby's default hooks are no check. The worked example has two.
 
 - It takes a `StepEnd`, with these fields:
-  - `instance`: the instance the step ran in. None for a check, on a workbench.
-  - `workspace`: the `Path` the step ran in: the run's folder on a workbench, its run worktree when the step names a `branch`, else the instance's workspace.
+  - `workspace`: the `Path` of the run folder.
   - `ending`: how the step ended, a `StepEnding` from `kinby.contracts`. See Step endings.
   - `work_item`: the work item's values, by name.
   - `results`: every value the run's earlier steps recorded, by name.
+  - `instance`: None on a workbench.
 - It returns a `HookResult`, or None to record nothing. Its fields, each with a default:
   - `values`: the values the step records, by name, as its `results` declare them. Each is a `str`, `int` or `bool`.
   - `outcome`: the outcome it names, one of the step's `outcomes`. None takes the next step.
-  - `summary`: only a `code` step's tool sets it. A hook's step keeps the summary it ended with.
+  - `summary`: only a `code` step's tool sets it. A check's step keeps the summary it ended with.
 - Raising fails a step that ended `clean`, and keeps any other ending.
 - It runs for every ending of the step but `asked`, a failed one included. It may be `async def`. A plain `def` runs in a thread.
-- kinby's default hooks need no file. `record_branch` records `branch`, the workspace's current branch. `find_pull_request` records `pr`, the number of the pull request of the run's `branch`.
+- A step's result comes from the world, never from what the agent says it did. A check reads the run folder, the repository or an outside system, and records what it finds.
 
 ### Step endings
 
-`StepEnding` is a string enum. A hook compares `end.ending` with its members or their values:
+`StepEnding` is a string enum. A check compares `end.ending` with its members or their values:
 
 - `clean`: the step did its work. The outcome says what the run does next.
 - `failed`: the step failed. The run tries it again under its `retry` or `failed`.
@@ -209,66 +181,166 @@ def record_brief(end: StepEnd) -> HookResult | None:
 
 ## Tools
 
-A tool is a function in the template's `tools/` or in a routine's `run.py`, decorated with `tool` from `kinby.plugins.tools`. Its name is the function's, its description the docstring, and its parameters, with their type hints, are its arguments. It may be `async def`.
-
-```python
-from kinby.plugins.tools import ToolContext, tool
-
-
-@tool(write=True)
-async def hand_issue(issue: int, context: ToolContext) -> str:
-    """Hand the factory the issue to brief."""
-```
+A tool is a function in the factory's folder's `tools/`, decorated with `tool` from `kinby.plugins.tools`. Its name is the function's, its description the docstring, and its parameters, with their type hints, are its arguments. It may be `async def`. A `code` step, `intake`, `needs_human` or `ended` calls it, on the workbench, where the workbench's secrets are its environment variables.
 
 The decorator's arguments, all by keyword:
 
-- `write`: required. True for a tool that changes anything, which the instance's permission mode governs.
-- `paths`: the names of the parameters that hold a path. kinby resolves each against the workspace before the call, and the `auto` mode lets a write with declared paths inside the workspace run unasked.
-- `hub`, `notify` and `view`: these mark kinby's own hub, notify and view tools. A template's tool leaves them out.
+- `write`: required. True for a tool that changes anything.
+- `paths`: the names of the parameters that hold a path, which a `code` step resolves against the run folder before the call.
+- `hub`, `notify` and `view`: these mark kinby's own hub, notify and view tools. A factory's tool leaves them out.
 
-A parameter typed `ToolContext` receives the call's context, never shown to the model: `instance`, `workspace`, and `routine`, the routine whose turn or code step runs the tool.
+A workbench has no tool context, so a tool that takes a `ToolContext` parameter fails.
 
-## Intake
+## The factory's folder
 
-The intake routine hands the factory one work item per call. The work item holds exactly the `work_item` values, each of its type. A work item matching an open run returns that run.
+- `factory.yaml` declares the factory.
+- `prompts/`: the agent steps' prompts, at any path in the folder.
+- `hooks/`: the checks.
+- `tools/`: the tools.
+- `skills/`: skills of the factory itself, such as one that says how to implement a ticket, offered to its agent steps beside the workbench's picks.
 
-- A routine's turn calls the tool `hand_to_factory` with its `work_item`, such as `{"issue": 42}`.
-- A routine's code step calls `hand_over` from `kinby.plugins.intake`:
+Nothing copies the folder into a workbench: each step reads it as it is then, so an edit reaches every line at its next step. The factory names no repository's commands or conventions, and its prompts name no skill a workbench picks. Each workbench holds those itself, in its lists of repository commands and its picks.
 
-  ```python
-  async def hand_over(routine: str, work_item: Mapping[str, str | int | bool]) -> FactoryRun
-  ```
+## The run folder
 
-  `routine` is the intake routine's name, `context.routine` in its tool. `work_item` maps each value's name to its value. The `FactoryRun` it returns carries the run's `run_id`, `factory` and `status`.
+kinby cuts a folder for each run when its first step starts: a run worktree on a branch it names for the factory, the work item and the run when the workspace is a git clone, and a directory named for the run otherwise. Every step runs in it. A stop for the user, a retry and a park leave it as it is. It goes when the run ends done or cancelled, after the `ended` call. No step cuts or removes it.
 
-## Instance templates
+## A worked example
 
-`instances/<role>/` is copied into each instance that picks the role at creation.
+A factory that implements issues of a repository: it finds issues labeled `ready-for-agent`, has Claude Code implement one, runs the repository's checks and sends a failure back, has a kinby turn title the change, and asks the user before it opens the pull request. The kinby turn runs on the line's model, so setting the line up asks for that provider's key. A tool runs outside the run folder, so `gh` finds the repository in `GH_REPO`.
 
-- It may hold `SYSTEM.md`, `kinby.toml`, `tools/`, `hooks/`, `routines/` and `skills/`, and other text files.
-- It may not hold `.state/`, `workspace/`, `.env`, or anything in `memory/` but `memory/profile.md`.
-- `SYSTEM.md` is the default of the instance's behavior prompt.
-- `kinby.toml` merges into the starter manifest, table by table. See Template settings.
-- The factory check loads every tool and hook file, and creates an instance from the template with its defaults.
-- The factory names no repository's commands or conventions, and its prompts name no skill an instance picks. Each instance keeps those itself, in its lists of repository commands and its picks.
-- An instance update writes the template's changed files into an instance where the instance hasn't changed them, and removes files the template dropped. Files the instance changed stay.
+`factory.yaml`:
 
-### Template settings
+```yaml
+name: tickets
+requires:
+  image: coder
+  secrets:
+    - name: GH_TOKEN
+      label: GitHub token
+      description: A token with repo scope. gh and git push run as it.
+      type: text
+      required: true
+    - name: GH_REPO
+      label: Repository
+      description: The repository gh works on, as owner/name.
+      type: text
+      required: true
+    - name: CLAUDE_CODE_OAUTH_TOKEN
+      label: Claude Code token
+      description: Claude Code's subscription token, from `claude setup-token`.
+      type: text
+      required: true
+  commands: [setup, checks]
+intake:
+  call: find_issues
+  schedule: "*/30 * * * *"
+work_item: { issue: int }
+steps:
+  - id: setup
+    kind: command
+    run: [{ commands: setup }]
+  - id: implement
+    kind: agent
+    engine: claude
+    model: claude-opus-5-5
+    effort: high
+    prompt: prompts/implement.md
+    check: record_commit
+    results: { commit: str }
+    failed: { retry: 2 }
+  - id: checks
+    kind: command
+    run: [{ commands: checks }]
+    failed: { back: implement, max: 2 }
+  - id: title
+    kind: agent
+    engine: kinby
+    prompt: prompts/title.md
+    check: record_title
+    results: { title: str }
+  - id: review
+    kind: approve
+    summary: "Open the pull request {{title}} for issue {{issue}}."
+  - id: publish
+    kind: command
+    requires: [title]
+    run:
+      - git push --set-upstream origin HEAD
+      - gh pr create --title {{title}} --body "Closes #{{issue}}."
+done_requires: [commit, title]
+needs_human: { call: label_needs_human }
+```
 
-A template's `kinby.toml` may set these tables and keys. It may not set `id`, `persona_name` or `state_dir`.
+`prompts/implement.md`:
 
-- `models`: `main`, `recap` and `embed`, each as `provider:model`.
-- `workspace`: `path`; `source`, the git URL the instance clones on its first start; `snapshots`; `conventions`, with `enabled`, `instructions` and `skills`; and `commands`, the instance's lists of repository commands by name.
-- `memory`: `recap`, `every-turn` or `off`.
-- `feedback`: `ask`, `every-turn` or `off`. A factory's turns have nobody to answer, so set it `off`.
-- `compaction`: `automatic`, and `trigger`, a context size in tokens.
-- `tools`: `defaults`, false to switch off every default tool; `off`, default tools to switch off by name; `search`, `brave`, `tavily`, `exa` or `searxng`; and `bash_timeout_seconds`.
-- `browser`: true gives the instance the browser tools.
-- `routines`: `timezone`, an IANA time zone.
-- `serve`: `listen`, as `host:port`.
-- `budgets`: a turn's `steps`, `tokens` and `seconds`, and the instance's `usd_per_day`.
-- `prices`: by model, `input`, `output`, `cache_read`, `cache_write` and `window`.
+```markdown
+Implement the GitHub issue the run's work item names, test-first, and commit it. When the run
+holds a failure or notes, address them first.
+```
 
-## Run worktrees
+`prompts/title.md`:
 
-A step with `branch` runs in the run worktree of that branch, cut from it the first time a step needs it. kinby never removes one. The factory's own code removes it, usually in its `ended` call.
+```markdown
+Read the commit on this branch and write a pull request title for it, one line, to
+.scratch/pr-title.txt.
+```
+
+`hooks/checks.py`:
+
+```python
+import subprocess
+from pathlib import Path
+
+from kinby.contracts import StepEnding
+from kinby.plugins.hooks import HookResult, StepEnd, hook
+
+
+def _git(folder: Path, *arguments: str) -> str:
+    done = subprocess.run(["git", *arguments], cwd=folder, capture_output=True, text=True)
+    return done.stdout.strip()
+
+
+@hook
+def record_commit(end: StepEnd) -> HookResult | None:
+    if end.ending is not StepEnding.CLEAN:
+        return None
+    if _git(end.workspace, "rev-list", "--count", "origin/HEAD..HEAD") in ("", "0"):
+        raise RuntimeError("The step made no commit.")
+    return HookResult(values={"commit": _git(end.workspace, "rev-parse", "HEAD")})
+
+
+@hook
+def record_title(end: StepEnd) -> HookResult | None:
+    title = end.workspace / ".scratch" / "pr-title.txt"
+    if not title.is_file():
+        raise FileNotFoundError("The step wrote no .scratch/pr-title.txt.")
+    return HookResult(values={"title": title.read_text(encoding="utf-8").strip()})
+```
+
+`tools/github.py`:
+
+```python
+import json
+import subprocess
+
+from kinby.plugins.tools import tool
+
+
+def _gh(*arguments: str) -> str:
+    done = subprocess.run(["gh", *arguments], capture_output=True, text=True, check=True)
+    return done.stdout
+
+
+@tool(write=False)
+def find_issues(signal: dict) -> list[dict[str, int]]:
+    """The open issues labeled ready-for-agent, each a work item."""
+    found = json.loads(_gh("issue", "list", "--label", "ready-for-agent", "--json", "number"))
+    return [{"issue": issue["number"]} for issue in found]
+
+
+@tool(write=True)
+def label_needs_human(issue: int) -> None:
+    """Mark the issue as waiting for the user."""
+    _gh("issue", "edit", str(issue), "--add-label", "ready-for-human")
+```
