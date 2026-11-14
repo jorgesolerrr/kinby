@@ -2268,19 +2268,21 @@ class HubRegistry:
         with self._transaction() as connection:
             row = connection.execute(
                 """
-                SELECT factory, work_item, run_stops.status, last_attempt, (
+                SELECT factory_runs.factory, work_item, run_stops.status, last_attempt, (
                     SELECT COALESCE(MAX(earlier.last_attempt), 0) FROM run_stops AS earlier
                     WHERE earlier.run_id = run_stops.run_id
                         AND earlier.generation < run_stops.generation
-                )
+                ), workbench.manifest_id
                 FROM run_stops JOIN factory_runs ON factory_runs.id = run_stops.run_id
+                LEFT JOIN lines ON lines.id = factory_runs.line_id
+                LEFT JOIN instances AS workbench ON workbench.id = lines.workbench_id
                 WHERE run_stops.run_id = ? AND run_stops.generation = ?
                 """,
                 (str(run_id), generation),
             ).fetchone()
         if row is None:
             raise ValueError(f'Factory run "{run_id}" has no stop {generation}.')
-        factory, work_item, status, last_attempt, after = row
+        factory, work_item, status, last_attempt, after, workbench = row
         return RunStop(
             run_id=run_id,
             factory=factory,
@@ -2288,6 +2290,7 @@ class HubRegistry:
             status=FactoryRunStatus(status),
             generation=generation,
             attempts=self._attempts_after(run_id, after, last_attempt),
+            workbench=workbench,
         )
 
     def mark_told(self, run_id: UUID, generation: int) -> None:

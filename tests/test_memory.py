@@ -15,6 +15,7 @@ from kinby.memory import (
     MemoryNodeError,
     NodeId,
     NodeNotFound,
+    RecappedRun,
     RecappedTurn,
 )
 from tests.helpers import every_event
@@ -537,6 +538,54 @@ def test_remember_writes_a_fact_with_its_source_episodes(tmp_path: Path) -> None
         "---\n"
         "Every deploy so far went out on a Friday.\n"
     )
+
+
+def test_remember_writes_a_run_episode_and_a_fact_marked_with_their_workbench(
+    tmp_path: Path,
+) -> None:
+    run_id = UUID("33333333-3333-3333-3333-333333333333")
+    episode = Episode(
+        node=NodeId("2026-09-02-fixed-the-pnpm-install"),
+        date=date(2026, 9, 2),
+        description="Fixed the pnpm install",
+        subjects=("pnpm",),
+        body="The lockfile was stale.",
+        recaps=RecappedRun(run=run_id, generation=1),
+        tools=(),
+        workbench="landing",
+    )
+    fact = Fact(
+        node=NodeId("2026-09-03-pnpm-needs-a-fresh-lockfile"),
+        date=date(2026, 9, 3),
+        description="pnpm needs a fresh lockfile",
+        subjects=("pnpm",),
+        body="Run pnpm install before the checks.",
+        thread=_THREAD_ID,
+        sources=(episode.node,),
+        workbench="landing",
+    )
+    memory = _graph_store(tmp_path)
+
+    memory.remember(episode)
+    memory.remember(fact)
+
+    assert memory.open(episode.node) == episode
+    assert memory.open(fact.node) == fact
+    assert (tmp_path / "memory" / "graph" / f"{episode.node}.md").read_text(encoding="utf-8") == (
+        "---\n"
+        "date: 2026-09-02\n"
+        f"run: {run_id}\n"
+        "generation: 1\n"
+        'workbench: "landing"\n'
+        'description: "Fixed the pnpm install"\n'
+        'subjects: ["pnpm"]\n'
+        "tools: []\n"
+        "---\n"
+        "The lockfile was stale.\n"
+    )
+    assert 'workbench: "landing"\n' in (
+        tmp_path / "memory" / "graph" / f"{fact.node}.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_remember_escapes_frontmatter_values(tmp_path: Path) -> None:

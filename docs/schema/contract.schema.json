@@ -8278,6 +8278,17 @@
             "$ref": "#/$defs/ValueName"
           },
           "type": "object"
+        },
+        "workbench": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
