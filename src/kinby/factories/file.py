@@ -1,8 +1,8 @@
 """The factory file: one YAML file that declares a factory's steps, and either what it requires
 of a workbench or the instances its steps run in, with its intake.
 
-These declarations are the factory file's JSON Schema, published as
-``docs/schema/factory.schema.json``.
+The declarations of a factory that runs on a workbench are the factory file's JSON Schema,
+published as ``docs/schema/factory.schema.json``.
 """
 
 from __future__ import annotations
@@ -437,7 +437,7 @@ class Closing:
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class FactoryFile:
-    """A factory: the instances its steps run in, its intake, and its line of steps."""
+    """A factory: the instances its steps run in, its intake, and its sequence of steps."""
 
     name: FactoryName
     instances: dict[InstanceName, InstanceDeclaration] = Field(min_length=1)
