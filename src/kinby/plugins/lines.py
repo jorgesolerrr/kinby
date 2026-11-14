@@ -39,7 +39,7 @@ async def list_lines() -> str:
     return json.dumps(listed, ensure_ascii=False)
 
 
-@tool(write=True)
+@tool(write=True, hub=True)
 async def hand_to_line(line_id: UUID, work_item: dict[str, StepValue]) -> str:
     """Hand a work item to one of the lines you own, which starts a run of its factory on its
     workbench.

@@ -3,8 +3,10 @@ runs, on its hub route."""
 
 import asyncio
 import json
-from uuid import UUID
+from pathlib import Path
+from uuid import UUID, uuid4
 
+import pytest
 from langchain_core.messages import AIMessageChunk
 
 from kinby.contracts import (
@@ -21,12 +23,16 @@ from kinby.contracts import (
     LineHandInCommand,
     LineOwnedListCommand,
     LineOwnedListResult,
+    PermissionMode,
     ToolResult,
 )
 from kinby.core.dispatcher import Dispatcher
+from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turns import ParkedTurn
+from kinby.instance.permissions import GatePolicy
 from tests.test_browser_tools import _parked
 from tests.test_factory_runs import intake_client
-from tests.test_gate import ScriptedModel
+from tests.test_gate import ScriptedModel, _instance, _run_turn
 from tests.test_hub import created_instance
 from tests.test_hub_home_writes import calling
 from tests.test_hub_line_intake import LANDING, Owned, _line, _runs, owned
@@ -176,3 +182,38 @@ def test_an_instance_lists_none_of_the_lines_another_owns(tmp_path, monkeypatch)
             assert listed == LineOwnedListResult(lines=[])
 
     asyncio.run(scenario())
+
+
+def _hand_in_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: GatePolicy | None = None
+) -> LangGraphRunner:
+    """A turn that hands a line issue 12, in an instance its hub grants line:owner."""
+    monkeypatch.setenv("KINBY_HUB_URL", "http://hub:8080/instances/x/hub")
+    monkeypatch.setenv("KINBY_HUB_SCOPES", "line:owner")
+    arguments: dict[str, object] = {"line_id": str(uuid4()), "work_item": {"issue": 12}}
+    model = ScriptedModel([calling("hand-in", "hand_to_line", arguments), DONE])
+    return LangGraphRunner(_instance(tmp_path), model_factory=lambda _: model, gate_policy=policy)
+
+
+@pytest.mark.parametrize(
+    "mode", [PermissionMode.ASK, PermissionMode.AUTO, PermissionMode.FULL_ACCESS]
+)
+def test_a_hand_in_asks_the_user_in_every_mode_but_read_only(tmp_path, monkeypatch, mode):
+    runner = _hand_in_runner(tmp_path, monkeypatch, GatePolicy(mode=mode))
+
+    result, payloads = asyncio.run(_run_turn(runner))
+
+    assert isinstance(result, ParkedTurn)
+    assert [p.name for p in payloads if isinstance(p, ApprovalRequested)] == ["hand_to_line"]
+
+
+def test_an_allow_rule_in_permissions_does_not_lower_a_hand_ins_ask(tmp_path, monkeypatch):
+    runner = _hand_in_runner(tmp_path, monkeypatch)
+    (tmp_path / "instance" / "permissions.toml").write_text(
+        'mode = "full-access"\n\n[tools]\nhand_to_line = "allow"\n', encoding="utf-8"
+    )
+
+    result, payloads = asyncio.run(_run_turn(runner))
+
+    assert isinstance(result, ParkedTurn)
+    assert [p.name for p in payloads if isinstance(p, ApprovalRequested)] == ["hand_to_line"]
