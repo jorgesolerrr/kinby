@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -240,6 +240,41 @@ class GraphStore:
         """Delete *node*'s file, leaving no tombstone (ADR 0074)."""
         self._node_path(node).unlink(missing_ok=True)
 
+    def marked(self, workbench: str) -> dict[NodeId, str]:
+        """The file of each node marked with *workbench*, by node. A forgotten fact's comes too,
+        so a graph that takes it never learns the fact back."""
+        return {
+            memory.node: self._node_path(memory.node).read_text(encoding="utf-8")
+            for memory, _ in self._read_all()
+            if memory.workbench == workbench
+        }
+
+    def take(self, files: Mapping[NodeId, str]) -> dict[NodeId, str | None]:
+        """Write each node file this graph holds no node of yet, or holds live where the file is
+        forgotten, so a forget made in another graph wins. Answer the file each node written had
+        before, None for none, which `restore` puts back."""
+        held = {node: self._file(node) for node in files}
+        replaced = {
+            node: before
+            for node, before in held.items()
+            if before is None or (_forgotten(files[node]) and not _forgotten(before))
+        }
+        self.restore({node: files[node] for node in replaced})
+        return replaced
+
+    def restore(self, files: Mapping[NodeId, str | None]) -> None:
+        """Write each node's file, or delete it where *files* holds None."""
+        self._path.mkdir(parents=True, exist_ok=True)
+        for node, document in files.items():
+            if document is None:
+                self.prune(node)
+            else:
+                _write_node(self._node_path(node), document)
+
+    def _file(self, node: NodeId) -> str | None:
+        path = self._node_path(node)
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
     def _node_path(self, node: NodeId) -> Path:
         relative = Path(f"{node}.md")
         if relative.parent != Path():
@@ -297,6 +332,11 @@ def _origin(memory: MemoryNode) -> str:
     if isinstance(memory.recaps, RecappedTurn):
         return f"thread: {memory.recaps.thread}\nturn: {memory.recaps.turn}\n"
     return f"run: {memory.recaps.run}\ngeneration: {memory.recaps.generation}\n"
+
+
+def _forgotten(document: str) -> bool:
+    values, _ = parse_frontmatter(document)
+    return _FRONTMATTER.validate_python(values).tombstone
 
 
 def _read_node(path: Path) -> MemoryNode | None:

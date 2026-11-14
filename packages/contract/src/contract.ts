@@ -588,6 +588,10 @@ export interface Contract {
       command: LineOwnedListCommand;
       result: LineOwnedListResult;
     };
+    "line.owner.set": {
+      command: LineOwnerSetCommand;
+      result: Line;
+    };
     "line.remove": {
       command: LineRemoveCommand;
       result: LineListResult;
@@ -2328,6 +2332,18 @@ export interface OwnedLine {
   line: Line;
   runs: FactoryRun[];
   workbench: string;
+}
+/**
+ * Move one line to another owning instance, with its intake routine and the memory marked
+ * with its workbench. The result is the line.
+ *
+ * Refused while a run of the line is running a step. A change that fails part way leaves all
+ * three with the old owner. An old owner that keeps another line on the workbench keeps a copy
+ * of that memory.
+ */
+export interface LineOwnerSetCommand {
+  line_id: string;
+  owner_id: string;
 }
 /**
  * Remove one line. Its workbench stays as it is. The result lists the lines left.

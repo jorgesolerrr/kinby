@@ -99,6 +99,7 @@ class HubContractServer:
             allow_head=False,
         )
         application.router.add_post("/signals/{routine}", self._aliased_signal)
+        application.router.add_post("/lines/{line_id}/signals", self._line_signal)
         application.router.add_post("/channels/{channel_id}/{kind}", self._channel)
         if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
@@ -150,7 +151,8 @@ class HubContractServer:
 
     async def _instance_signal(self, request: web.Request) -> web.Response:
         """Webhooks carry their own signature, so the hub authenticates none of them."""
-        return await self._signal(request, await self._reach(request))
+        routine = RoutineName(request.match_info["routine"])
+        return await self._signal(request, await self._reach(request), routine)
 
     async def _hub_socket(self, request: web.Request) -> web.WebSocketResponse:
         """An instance calls the hub with the control token the hub gave it, and nothing else."""
@@ -176,15 +178,28 @@ class HubContractServer:
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""
-        return await self._signal(request, _reached(await self._routing.signal_endpoint()))
+        routine = RoutineName(request.match_info["routine"])
+        return await self._signal(request, _reached(await self._routing.signal_endpoint()), routine)
 
-    async def _signal(self, request: web.Request, endpoint: InstanceEndpoint) -> web.Response:
+    async def _line_signal(self, request: web.Request) -> web.Response:
+        """A line's deliveries keep one address, whichever instance owns the line."""
+        try:
+            line_id = UUID(request.match_info["line_id"])
+        except ValueError as exc:
+            raise unreachable(InstanceUnreachable.MISSING) from exc
+        reached = await self._routing.intake_endpoint(line_id)
+        if isinstance(reached, InstanceUnreachable):
+            raise unreachable(reached)
+        return await self._signal(request, *reached)
+
+    async def _signal(
+        self, request: web.Request, endpoint: InstanceEndpoint, routine: RoutineName
+    ) -> web.Response:
         """Forward the signal, then hand it on when the instance accepted it as a new delivery.
 
         The instance authenticates the signal, so one it rejects or has seen moves no run. A wait
         matches only the headers the instance received.
         """
-        routine = RoutineName(request.match_info["routine"])
         answer = await forward_signal(request, endpoint, routine)
         if answer.status == web.HTTPAccepted.status_code:
             self._routing.signal_accepted(
