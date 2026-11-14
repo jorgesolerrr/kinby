@@ -1,4 +1,11 @@
-import { CallError, type FactoryRun, type Line, type Workbench } from "@kinby/contract"
+import {
+  CallError,
+  type FactoryRun,
+  type FactoryRunDetail,
+  type Line,
+  type StepAttempt,
+  type Workbench,
+} from "@kinby/contract"
 import { type Answers, instanceSummary, stubCaller } from "@kinby/contract/testing"
 
 export const instances = [
@@ -13,6 +20,7 @@ requires: { image: coder }
 steps:
   - { id: ticket, kind: code, call: vet_ticket }
   - { id: implement, kind: agent, engine: claude, prompt: Implement it. }
+  - { id: checks, kind: command, run: ["bun run check"] }
   - { id: publish, kind: code, call: publish }
 `,
   course: `
@@ -147,15 +155,72 @@ const runs: FactoryRun[] = [
   }),
 ]
 
-const attempt = {
-  attempt: 1,
-  ended_at: null,
-  ending: null,
-  outcome: null,
-  started_at: "2026-10-12T09:10:00Z",
-  step: "implement",
-  summary: "",
-  values: {},
+export function attempt(fields: Partial<StepAttempt> = {}): StepAttempt {
+  return {
+    attempt: 1,
+    ended_at: null,
+    ending: null,
+    outcome: null,
+    started_at: "2026-10-12T09:10:00Z",
+    step: "implement",
+    summary: "",
+    values: {},
+    ...fields,
+  }
+}
+
+/** The stopped run's attempts: implement, sent back once by its failing checks, then out of tries. */
+const stoppedAttempts: StepAttempt[] = [
+  attempt({
+    step: "ticket",
+    started_at: "2026-10-12T09:00:00Z",
+    ended_at: "2026-10-12T09:00:04Z",
+    ending: "clean",
+    summary: "The ticket is the maintainer's.",
+  }),
+  attempt({
+    started_at: "2026-10-12T09:01:00Z",
+    ended_at: "2026-10-12T09:21:00Z",
+    ending: "clean",
+    session: "claude-1",
+    summary: "Implemented the board.",
+    usage: { api: { input_tokens: 1_000, output_tokens: 200, cost: 0.42 } },
+  }),
+  attempt({
+    step: "checks",
+    started_at: "2026-10-12T09:21:00Z",
+    ended_at: "2026-10-12T09:24:00Z",
+    ending: "failed",
+    summary: '"bun run check" exited with code 1.\nFAIL src/board.test.tsx',
+  }),
+  attempt({
+    attempt: 2,
+    started_at: "2026-10-12T09:24:00Z",
+    ended_at: "2026-10-12T09:40:00Z",
+    ending: "failed",
+    session: "claude-1",
+    summary: "The board test still fails.",
+  }),
+]
+
+/** What Claude Code streamed in the stopped run's first attempt at implement. */
+const implementing = [
+  { type: "system", subtype: "init", session_id: "claude-1" },
+  {
+    type: "assistant",
+    message: {
+      content: [
+        { type: "text", text: "Reading the ticket." },
+        { type: "tool_use", id: "t1", name: "Bash", input: { command: "gh issue view 1305" } },
+      ],
+    },
+  },
+]
+
+/** Each run's attempts, where the fixture holds more than one waiting at its step. */
+function attempts(run: FactoryRun): StepAttempt[] {
+  if (run.run_id === "r-stopped") return stoppedAttempts
+  return [attempt({ step: run.step ?? "implement", ask: run.run_id === "r-asking" ? ask : null })]
 }
 
 const ask = {
@@ -213,10 +278,10 @@ export const answers: Answers = {
     runs: runs.filter((held) => held.line_id === line_id),
     cursor: null,
   }),
-  "factory.run.get": ({ run_id }) => ({
-    run: runs.find((held) => held.run_id === run_id) ?? runs[0],
-    attempts: [{ ...attempt, ask: run_id === "r-asking" ? ask : null }],
-    earlier_steps: [],
+  "factory.run.get": ({ run_id }) => detail(run_id),
+  "factory.run.transcript": ({ run_id, step, attempt }) => ({
+    events: run_id === "r-stopped" && step === "implement" && attempt === 1 ? implementing : [],
+    cursor: null,
   }),
   // As the hub does, it refuses to describe a new line where the factory has one already.
   "line.setup.describe": ({ workbench_id }) => {
@@ -244,6 +309,15 @@ export const answers: Answers = {
       workbench: [],
     }
   },
+}
+
+/** The run of the fixture by its ID, with its attempts and the steps it can go back to. */
+export function detail(runId: string): FactoryRunDetail {
+  const run = runs.find((held) => held.run_id === runId)
+  if (run === undefined) throw new Error(`No run ${runId}`)
+  const steps = FILES[run.factory]?.match(/id: \w+/g)?.map((id) => id.slice(4)) ?? []
+  const earlier = run.step === null ? [] : steps.slice(0, steps.indexOf(run.step))
+  return { run, attempts: attempts(run), earlier_steps: earlier }
 }
 
 /** A hub that answers as `answers` says, and as `more` says over it. */

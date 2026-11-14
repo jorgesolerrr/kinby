@@ -610,6 +610,16 @@ describe("the sidebar", () => {
     )
   })
 
+  it("opens a run's page at its path, as the hub's notifications link to it", async () => {
+    window.history.replaceState(null, "", "/factories/runs/r-gone")
+    openApp({ signedIn: true, instances: [ada] })
+
+    await userMenu()
+    expect(screen.getByRole("link", { name: /^Factories/ }).getAttribute("aria-current")).toBe(
+      "page",
+    )
+  })
+
   it("shows the dot while threads or factory runs need you, unfolding the group", async () => {
     openApp({
       signedIn: true,

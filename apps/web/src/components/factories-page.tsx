@@ -29,7 +29,7 @@ import {
   readFloor,
   unfinished,
 } from "@/lib/lines"
-import { libraryPath, linePath, navigate } from "@/lib/selection"
+import { libraryPath, linePath, navigate, runPath } from "@/lib/selection"
 
 /** The board's columns, each holding the unfinished runs it names. */
 const COLUMNS: { title: string; holds: (held: LineRun) => boolean }[] = [
@@ -44,7 +44,7 @@ const COLUMNS: { title: string; holds: (held: LineRun) => boolean }[] = [
 /**
  * The Factories area: a board of the lines' unfinished runs, in the columns Needs you, Running and
  * Waiting, over a card per factory with its steps and a table of its lines. A row of filters
- * narrows both to one factory. A run's card and a line's row open the line's page. `instances`
+ * narrows both to one factory. A run's card opens the run's page, and a line's row the line's. `instances`
  * name the lines' owners.
  */
 export function FactoriesPage({
@@ -102,7 +102,7 @@ export function FactoriesPage({
                     return (
                       <PageLink
                         key={run.run_id}
-                        href={linePath(line.line_id)}
+                        href={runPath(run.run_id)}
                         aria-label={`${workItem(run)} on ${name}`}
                         className="flex flex-col gap-1 rounded-lg border bg-background p-3 text-sm hover:bg-muted"
                       >

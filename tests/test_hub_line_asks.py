@@ -41,6 +41,7 @@ from tests.test_hub import FakeControl, FakeImages, FakeRuntime, hub_client
 from tests.test_hub_line_agents import _hub, _kinby
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
+from tests.test_hub_notices import PUBLIC_URL
 from tests.test_hub_workbenches import CEC_BACKEND
 
 KINBY = _kinby("    model: anthropic:claude-opus-5-5\n")
@@ -110,6 +111,7 @@ def test_a_kinby_steps_ask_parks_its_run_and_raises_one_notification_naming_the_
         assert notification.title == "Approval waiting"
         assert notification.text == 'The run for issue 12 asks at "implement": write: path=draft.md'
         assert notification.options == ["Approve", "Deny"]
+        assert notification.link == f"{PUBLIC_URL}/factories/runs/{run.run_id}"
 
     asyncio.run(scenario())
 

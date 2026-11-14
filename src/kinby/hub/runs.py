@@ -1380,7 +1380,7 @@ class FactoryRuns:
             source=run.factory,
             title="Needs human",
             text=f'The run for {_work_item(run)} stopped at "{run.step}".',
-            page="/library",
+            page=_page(run),
             options=(_RETRY, *send_back, _CANCEL),
             stop=stop,
         )
@@ -1396,7 +1396,7 @@ class FactoryRuns:
             source=run.factory,
             title="Awaits approval",
             text=f'The run for {_work_item(run)} awaits approval at "{run.step}": {summary}',
-            page="/library",
+            page=_page(run),
         )
 
     def _notify_ask(self, run: FactoryRun, ask: WaitingApproval | WaitingTakeover) -> None:
@@ -1413,7 +1413,7 @@ class FactoryRuns:
                 title=taking_over.title,
                 text=f"The run for {_work_item(run)} asks you to take over its browser at "
                 f'"{run.step}": {taking_over.text}',
-                page="/library",
+                page=_page(run),
             )
             return
         raised = approval_notification(run.factory, ask.turn_id, ask.request, in_routine=False)
@@ -1423,7 +1423,7 @@ class FactoryRuns:
             source=run.factory,
             title=raised.title,
             text=f'The run for {_work_item(run)} asks at "{run.step}": {raised.text}',
-            page="/library",
+            page=_page(run),
             options=tuple(raised.options),
             ask=RunAskRef(run.run_id, ask),
         )
@@ -1536,6 +1536,12 @@ def _first_at_work(factory: _Factory) -> _AnyStep | None:
 def _work_item(run: FactoryRun) -> str:
     """The run's work item, as a notification names the run."""
     return ", ".join(f"{name} {value}" for name, value in run.work_item.items())
+
+
+def _page(run: FactoryRun) -> str:
+    """The web app's page a notification about the run opens: a line's run has its own, and a run
+    of a factory written the older way shows in the Library."""
+    return "/library" if run.line_id is None else f"/factories/runs/{run.run_id}"
 
 
 def _needing_human(run: FactoryRun) -> FactoryRun:
