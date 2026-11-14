@@ -193,6 +193,7 @@ async def software_line(hub: Hub, runtime: FakeRuntime) -> Line:
     dispatcher, _ = signal_runtime(instance, RoutineModel())
     token = control_token(hub, str(home))
     with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
         patch.setenv("KINBY_CONTROL_TOKEN", token)
         patch.setenv("KINBY_HUB_SCOPES", ",".join(hub.instance_scopes(home)))
         async with (
