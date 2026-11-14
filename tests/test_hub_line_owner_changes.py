@@ -18,6 +18,7 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_RUN_APPROVE,
     LINE_GET,
+    LINE_INTAKE,
     LINE_OWNED_HAND_IN,
     LINE_OWNER_SET,
     ErrorCode,
@@ -28,6 +29,8 @@ from kinby.contracts import (
     Line,
     LineGetCommand,
     LineHandInCommand,
+    LineIntakeCommand,
+    LineIntakeResult,
     LineOwnerSetCommand,
     RoutineListResult,
 )
@@ -361,5 +364,37 @@ def test_an_old_owner_that_cannot_delete_the_routine_keeps_the_line_and_the_new_
             assert await _routine_names(dispatcher) == []
             assert lessons["cec-backend"] in _recalled(hub.hub, hub.home)
             assert _recalled(hub.hub, teammate) == []
+
+    asyncio.run(scenario())
+
+
+def test_an_intake_that_answers_after_the_change_hands_its_work_to_the_new_owner(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        async with (
+            owned(tmp_path, monkeypatch) as hub,
+            _served_teammate(hub, tmp_path) as (teammate, _),
+        ):
+            line = await _intake_line(hub)
+            assert line.intake is not None
+            hub.control.found = [[{"issue": 12}]]
+            hub.control.intake_release.clear()
+            intake = asyncio.create_task(
+                intake_client(hub.hub, hub.home).call(
+                    LINE_INTAKE, LineIntakeCommand(routine=line.intake)
+                )
+            )
+            async with asyncio.timeout(5):
+                while not hub.control.intakes:
+                    await asyncio.sleep(0.01)
+
+            changed = await _owner_set(hub.client, line, teammate)
+            hub.control.intake_release.set()
+            found = await intake
+
+            assert isinstance(changed, Line), changed
+            assert isinstance(found, LineIntakeResult), found
+            assert [run.instance_id for run in found.runs] == [teammate]
 
     asyncio.run(scenario())

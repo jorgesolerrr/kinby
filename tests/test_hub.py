@@ -415,6 +415,9 @@ class FakeControl:
         self.intakes: list[tuple[ControlEndpoint, IntakeRunCommand]] = []
         #: What the next intakes find, in order. An intake past them finds no work item.
         self.found: list[list[dict[str, StepValue]]] = []
+        #: An intake answers once this is set. Clear it to hold every intake.
+        self.intake_release = asyncio.Event()
+        self.intake_release.set()
         #: Each read of a workbench's workspace the hub sent, and the endpoint it sent it to.
         self.workspace_reads: list[tuple[ControlEndpoint, ContractModel]] = []
         #: What the next reads of a workspace answer, in order.
@@ -484,6 +487,7 @@ class FakeControl:
         self, endpoint: ControlEndpoint, command: IntakeRunCommand
     ) -> IntakeRunResult:
         self.intakes.append((endpoint, command))
+        await self.intake_release.wait()
         return IntakeRunResult(work_items=self.found.pop(0) if self.found else [])
 
     async def read_workspace[Command: ContractModel, Result: ContractModel](

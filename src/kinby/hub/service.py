@@ -3967,7 +3967,10 @@ class Hub:
 
     async def line_intake(self, instance_id: UUID, command: LineIntakeCommand) -> LineIntakeResult:
         """Run the intake of the instance's line whose intake is this routine on the line's
-        workbench, where its secrets are, and hand the line each work item it finds."""
+        workbench, where its secrets are, and hand the line each work item it finds.
+
+        The line is read again once the intake answers, so a change of owner meanwhile gives its
+        runs to the new owner."""
         line = next(
             (
                 line
@@ -3990,6 +3993,7 @@ class Hub:
                 f'The intake of line "{line.factory}" did not run on workbench '
                 f'"{self._workbench_name(line.workbench_id)}": {exc}'
             ) from exc
+        line = await self.get_line(LineGetCommand(line_id=line.line_id))
         return LineIntakeResult(
             runs=[await self.runs.hand_in(line, work_item) for work_item in found.work_items]
         )
