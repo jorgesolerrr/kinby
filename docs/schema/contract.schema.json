@@ -2830,6 +2830,18 @@
       "additionalProperties": false,
       "description": "Send a run that needs a human or awaits approval back to an earlier step.\n\nIts retries and send-backs count afresh.",
       "properties": {
+        "notes": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "run_id": {
           "format": "uuid",
           "type": "string"

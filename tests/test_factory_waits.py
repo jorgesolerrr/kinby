@@ -551,7 +551,7 @@ def test_sending_back_a_run_that_awaits_approval_runs_the_earlier_step_again(tmp
             ("test", 1, StepEnding.CLEAN, ""),
             ("merge", 1, StepEnding.CLEAN, 'The user sent the run back to "test".'),
             ("test", 2, StepEnding.CLEAN, ""),
-            ("merge", 2, None, ""),
+            ("merge", 2, None, "Merge the branch."),
         ]
 
     asyncio.run(scenario())
