@@ -766,7 +766,7 @@ _Avoid_: component library
 
 ### Hub tool
 
-A **tool** only the **home instance** holds, through which it asks the hub to change something the hub owns or another instance's setup. One that writes asks in every **permission mode**, and the hub runs it only after seeing the user approve that exact call. Hub tools are present only on turns the user starts.
+A **tool** through which an **instance** asks the hub to change something the hub owns: the **home instance**'s writes to the hub and to another instance's setup, and an owner's hand-in to one of its **lines**. One that writes asks in every **permission mode** but read-only. The hub runs a home instance's write only after seeing the user approve that exact call. Hub tools are present only on turns the user starts.
 _Avoid_: admin tool, system tool
 
 ### Hub read
@@ -839,7 +839,7 @@ _Avoid_: environment, sandbox, site, station
 
 ### Line
 
-A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, or the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, and names each. Setup then creates the line's **intake** in the owner, and the owner refusing it refuses the setup. The line holds its **factory runs**. The owner lists its lines with their unfinished runs, and hands one a **work item** when the user asks in chat, a write the **gate** holds as any other; the **hub** takes a hand-in only from the line's owner. A workbench can carry several lines, and an instance can own several. Removing a line removes its intake and leaves its workbench as it is, and a factory with lines is never removed.
+A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, or the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, and names each. Setup then creates the line's **intake** in the owner, and the owner refusing it refuses the setup. The line holds its **factory runs**. The owner lists its lines with their unfinished runs, and hands one a **work item** when the user asks in chat, through a **hub tool**; the **hub** takes a hand-in only from the line's owner. A workbench can carry several lines, and an instance can own several. Removing a line removes its intake and leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
 ### Agent step
