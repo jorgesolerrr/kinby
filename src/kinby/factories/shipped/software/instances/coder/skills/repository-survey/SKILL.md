@@ -7,6 +7,14 @@ The factory's `setup` step runs your `setup` list on the run's branch. Its `chec
 
 Asked to change one list, take the steps below for that list alone: propose and record it and leave the other as it is. Try a `checks` list after the `setup` list the coder holds.
 
+## From the owner's chat
+
+When you own a line on a workbench, the lists are the workbench's, and you reach it through the hub. `list_lines` names each line's `workbench_id`. `read_workbench_file` and `list_workbench_directory` read the workbench's workspace, and `run_workbench_command` runs a command there that only reads, such as `ls`, `cat`, `grep` or `find`. The workbench refuses every other command, so you cannot try a list there. Take the process below with these changes:
+
+- In step 1, read the workbench's workspace with those tools.
+- Skip step 3. In step 4, mark each command untried in place of its exit code: the run's `setup` and `checks` steps are the first to run it.
+- In step 5, call `record_workbench_commands` with the workbench's id in place of `repository_commands_write`.
+
 ## Process
 
 1. **Read the repository.** Read `AGENTS.md`, the CI workflows in `.github/workflows/`, the lockfiles, `package.json` and `pyproject.toml`, whichever exist. Done when you know what CI installs and what it runs to judge a change.

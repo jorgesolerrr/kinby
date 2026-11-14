@@ -82,8 +82,8 @@ class Scope(StrEnum):
     FACTORY_INTAKE = "factory:intake"
     #: Run the intake of a line the instance owns. Every instance holds it, on its hub route.
     LINE_INTAKE = "line:intake"
-    #: Hand work to the lines the instance owns, and list them. Every instance holds it, on its
-    #: hub route.
+    #: Hand work to the lines the instance owns and list them, read their workbenches, and record
+    #: those workbenches' repository commands. Every instance holds it, on its hub route.
     LINE_OWNER = "line:owner"
     #: Read another instance through the hub, and run the hub writes the user approved. Only the
     #: home instance holds it, on its hub route.
@@ -1762,6 +1762,45 @@ class WorkbenchCommandsSetCommand(ContractModel):
     workbench_id: UUID
     name: CommandListName
     commands: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]]
+
+
+class WorkbenchFileReadCommand(ContractModel):
+    """Read one UTF-8 text file of a workbench's workspace."""
+
+    workbench_id: UUID
+    #: Relative to the workspace, which it must not leave, through a link either.
+    path: Annotated[str, Field(min_length=1)]
+
+
+class WorkbenchFileReadResult(ContractModel):
+    #: Cut at bash's output cap.
+    text: str
+
+
+class WorkbenchDirectoryListCommand(ContractModel):
+    """List one directory of a workbench's workspace."""
+
+    workbench_id: UUID
+    #: Relative to the workspace, which it must not leave, through a link either.
+    path: Annotated[str, Field(min_length=1)] = "."
+
+
+class WorkbenchDirectoryListResult(ContractModel):
+    #: Its entries' names, sorted, each directory's ending in a slash.
+    entries: list[str]
+
+
+class WorkbenchCommandRunCommand(ContractModel):
+    """Run one shell read in a workbench's workspace: a bash command whose programs only read, on
+    paths inside the workspace (ADR 0119). Any other command is refused."""
+
+    workbench_id: UUID
+    command: Annotated[str, Field(min_length=1)]
+
+
+class WorkbenchCommandRunResult(ContractModel):
+    #: Led by a nonzero exit code, and cut at bash's output cap.
+    output: str
 
 
 class WorkbenchDeleteCommand(ContractModel):

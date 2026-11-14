@@ -255,10 +255,16 @@ from kinby.contracts.models import (
     ViewListResult,
     ViewSubscribeCommand,
     Workbench,
+    WorkbenchCommandRunCommand,
+    WorkbenchCommandRunResult,
     WorkbenchCommandsSetCommand,
     WorkbenchCreateCommand,
     WorkbenchCreateResult,
     WorkbenchDeleteCommand,
+    WorkbenchDirectoryListCommand,
+    WorkbenchDirectoryListResult,
+    WorkbenchFileReadCommand,
+    WorkbenchFileReadResult,
     WorkbenchGetCommand,
     WorkbenchListCommand,
     WorkbenchListResult,
@@ -408,6 +414,27 @@ RUN_FOLDER_REMOVE = Method(
 )
 #: The hub runs a line's intake tool on the line's workbench.
 INTAKE_RUN = Method("intake.run", Scope.INSTANCE_LIFECYCLE, IntakeRunCommand, IntakeRunResult)
+#: The hub reads a file of a workbench's workspace for the owner of one of its lines.
+WORKSPACE_FILE_READ = Method(
+    "workspace.file.read",
+    Scope.INSTANCE_LIFECYCLE,
+    WorkbenchFileReadCommand,
+    WorkbenchFileReadResult,
+)
+#: The hub lists a directory of a workbench's workspace for the owner of one of its lines.
+WORKSPACE_DIRECTORY_LIST = Method(
+    "workspace.directory.list",
+    Scope.INSTANCE_LIFECYCLE,
+    WorkbenchDirectoryListCommand,
+    WorkbenchDirectoryListResult,
+)
+#: The hub runs a shell read in a workbench's workspace for the owner of one of its lines.
+WORKSPACE_COMMAND_RUN = Method(
+    "workspace.command.run",
+    Scope.INSTANCE_LIFECYCLE,
+    WorkbenchCommandRunCommand,
+    WorkbenchCommandRunResult,
+)
 #: The hub reads an attempt's transcript from the workbench that ran it.
 RUN_TRANSCRIPT_READ = Method(
     "run.transcript.read",
@@ -584,6 +611,27 @@ LINE_OWNED_LIST = Method(
     "line.owned.list", Scope.LINE_OWNER, LineOwnedListCommand, LineOwnedListResult
 )
 LINE_OWNED_HAND_IN = Method("line.owned.hand_in", Scope.LINE_OWNER, LineHandInCommand, FactoryRun)
+WORKBENCH_OWNED_FILE_READ = Method(
+    "workbench.owned.file.read",
+    Scope.LINE_OWNER,
+    WorkbenchFileReadCommand,
+    WorkbenchFileReadResult,
+)
+WORKBENCH_OWNED_DIRECTORY_LIST = Method(
+    "workbench.owned.directory.list",
+    Scope.LINE_OWNER,
+    WorkbenchDirectoryListCommand,
+    WorkbenchDirectoryListResult,
+)
+WORKBENCH_OWNED_COMMAND_RUN = Method(
+    "workbench.owned.command.run",
+    Scope.LINE_OWNER,
+    WorkbenchCommandRunCommand,
+    WorkbenchCommandRunResult,
+)
+WORKBENCH_OWNED_COMMANDS_SET = Method(
+    "workbench.owned.commands.set", Scope.LINE_OWNER, WorkbenchCommandsSetCommand, Workbench
+)
 OPERATION_GET = Method(
     "operation.get",
     Scope.HUB_READ,
@@ -789,6 +837,9 @@ METHODS = (
     RUN_STOPPED,
     RUN_FOLDER_REMOVE,
     INTAKE_RUN,
+    WORKSPACE_FILE_READ,
+    WORKSPACE_DIRECTORY_LIST,
+    WORKSPACE_COMMAND_RUN,
     RUN_TRANSCRIPT_READ,
     THREAD_ASK,
     ROUTINE_LIST,
@@ -866,6 +917,10 @@ METHODS = (
     LINE_INTAKE,
     LINE_OWNED_LIST,
     LINE_OWNED_HAND_IN,
+    WORKBENCH_OWNED_FILE_READ,
+    WORKBENCH_OWNED_DIRECTORY_LIST,
+    WORKBENCH_OWNED_COMMAND_RUN,
+    WORKBENCH_OWNED_COMMANDS_SET,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,

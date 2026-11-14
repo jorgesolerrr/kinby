@@ -99,6 +99,8 @@ def test_a_command_that_only_reads_inside_the_workspace_is_a_shell_read(command:
         "tree -l",
         "diff -r a b",
         "sort --files0-from=list",
+        "printf -v PATH .; cat -c id",
+        "printf -vPATH .",
     ],
 )
 def test_any_other_command_is_not_a_shell_read(command: str) -> None:
