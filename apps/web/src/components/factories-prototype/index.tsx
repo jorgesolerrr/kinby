@@ -6,17 +6,20 @@ import { PrototypeSwitcher } from "./shared"
 import { VariantA } from "./variant-a"
 import { VariantB } from "./variant-b"
 import { VariantC } from "./variant-c"
+import { VariantD } from "./variant-d"
 
 export const PROTOTYPE_PATH = "/prototype/factories"
 
+// D is the iteration on the pick; A, B and C stay for comparison.
 const VARIANTS = [
+  { key: "D", name: "Board and directory", component: VariantD },
   { key: "A", name: "Directory", component: VariantA },
   { key: "B", name: "Lines in the sidebar", component: VariantB },
   { key: "C", name: "Owner-centric", component: VariantC },
 ]
 
 export function FactoriesPrototype() {
-  const key = useParam("variant") ?? "A"
+  const key = useParam("variant") ?? VARIANTS[0].key
   const Variant = (VARIANTS.find((v) => v.key === key) ?? VARIANTS[0]).component
   return (
     <>

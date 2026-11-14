@@ -58,7 +58,7 @@ export function To({
 }) {
   return (
     <a
-      href={`?variant=${param("variant") ?? "A"}&at=${at}`}
+      href={`?variant=${param("variant") ?? "D"}&at=${at}`}
       className={cn("underline-offset-4 hover:underline", className)}
       onClick={(event) => {
         event.preventDefault()

@@ -191,7 +191,7 @@ function Area({ setup }: { setup: boolean }) {
   )
 }
 
-function LineRow({ l }: { l: Line }) {
+export function LineRow({ l }: { l: Line }) {
   const runs = runsOf(l.id).filter(unfinished)
   const owner = teammate(l.owner)
   return (
@@ -222,7 +222,7 @@ function LineRow({ l }: { l: Line }) {
   )
 }
 
-function LinePage({ l }: { l: Line }) {
+export function LinePage({ l }: { l: Line }) {
   const [owning, setOwning] = useState(false)
   const owner = teammate(l.owner)
   const w = workbench(l.workbench)
@@ -413,7 +413,7 @@ function ChangeOwner({
   )
 }
 
-function RunPage({ r }: { r: Run }) {
+export function RunPage({ r }: { r: Run }) {
   const l = line(r.line)
   const f = factory(l.factory)
   return (
@@ -521,7 +521,7 @@ function WaitingCard({ r }: { r: Run }) {
   )
 }
 
-function OwnerPage({ ownerId }: { ownerId: string }) {
+export function OwnerPage({ ownerId }: { ownerId: string }) {
   const who = teammate(ownerId)
   const owned = linesOwnedBy(ownerId)
   return (
@@ -558,7 +558,7 @@ function OwnerPage({ ownerId }: { ownerId: string }) {
 const PICK = "rounded-lg border px-4 py-3 text-left text-sm hover:bg-muted disabled:opacity-50"
 
 /** Set up a line, in a dialog: the factory, then the workbench, then only what is missing. */
-function SetupDialog({ open }: { open: boolean }) {
+export function SetupDialog({ open }: { open: boolean }) {
   const [stage, setStage] = useState<"factory" | "workbench" | "answers">("factory")
   const [factoryId, setFactoryId] = useState<string>()
   const [benchId, setBenchId] = useState<string | null>()
