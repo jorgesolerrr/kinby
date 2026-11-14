@@ -1873,6 +1873,8 @@ class LineSetupDescription(ContractModel):
     #: Whether the factory requires a browser the workbench lacks. A new workbench takes one when
     #: the hub runs the browser service, and a chosen one has one only if it was created with it.
     browser: bool
+    #: The library skills the factory suggests the workbench picks, which a client preselects.
+    suggested_picks: list[SkillName] = Field(default_factory=list)
 
 
 class NewWorkbench(ContractModel):
@@ -4270,8 +4272,13 @@ class RunFolder(ContractModel):
     """The folder a run works in on its workbench. The workbench cuts it when it lacks it."""
 
     #: The branch of the run worktree, on a workbench whose workspace is a git clone. None is a
-    #: directory named for the run.
+    #: directory named for the run, unless ``named_by`` names the branch.
     branch: Annotated[str, Field(min_length=1)] | None
+    #: The branch of origin a missing run worktree is cut from. None is origin's default branch.
+    base: Annotated[str, Field(min_length=1)] | None = None
+    #: The factory's tool that names the run worktree's branch and base, which the workbench calls
+    #: in its workspace first. The step's result records them as ``branch`` and ``base``.
+    named_by: ToolName | None = None
 
 
 class RunFolderRemoveCommand(ContractModel):

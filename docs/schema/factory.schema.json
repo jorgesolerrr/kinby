@@ -340,6 +340,14 @@
           "title": "Secrets",
           "type": "array"
         },
+        "suggested_picks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Suggested Picks",
+          "type": "array"
+        },
         "values": {
           "default": [],
           "items": {
@@ -496,7 +504,7 @@
     },
     "ToolCall": {
       "additionalProperties": false,
-      "description": "A tool of the factory's folder the hub calls on the workbench, as ``needs_human`` or\n``ended``. The tool's parameters named like a value of the run receive that value.",
+      "description": "A tool of the factory's folder the hub calls on the workbench, as ``needs_human``, ``ended``\nor ``worktree``. The tool's parameters named like a value of the run receive that value.",
       "properties": {
         "call": {
           "$ref": "#/$defs/ToolName"
@@ -1125,6 +1133,17 @@
       },
       "title": "Work Item",
       "type": "object"
+    },
+    "worktree": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolCall"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

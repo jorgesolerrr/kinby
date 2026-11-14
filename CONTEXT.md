@@ -617,7 +617,7 @@ The initial behavior, configuration and **setup fields** a **factory** supplies 
 
 ### Factory role
 
-The part an **instance** plays in a **factory**, such as `coder`. A factory has an **instance template** per role. An instance picks at most one role, at creation, and keeps it until a **conversion** turns it into a **workbench** and a **line**.
+The part an **instance** plays in a **factory** written the older way. A factory has an **instance template** per role. An instance picks at most one role, at creation, and keeps it until a **conversion** turns it into a **workbench** and a **line**.
 _Avoid_: member, slot
 
 ### Vanilla instance
@@ -640,7 +640,7 @@ _Avoid_: install (of a skill or a factory), package
 
 ### Suggested pick
 
-A **skill** a **factory role** proposes to an **instance** that picks the role. The **onboarding** preselects it, and the user may decline it.
+A **skill** a **factory role** proposes to an **instance** that picks the role, or a **factory** proposes to the **workbench** of a **line** set up from it. The **onboarding** or the line's setup preselects it, and the user may decline it.
 
 ### Onboarding
 
@@ -875,7 +875,7 @@ The folder one **factory run** works in on its **workbench**: a **run worktree**
 
 ### Run worktree
 
-The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on a branch kinby names for the factory, the **work item** and the run. In an instance its run's first step cuts it from the base. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
+The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on the branch the **factory** names with the base it is cut from, as the **software factory** names an **agent PR**'s branch and stacks it on its blockers' work, or else on a branch kinby names for the factory, the **work item** and the run. In an instance its run's first step cuts it from the base. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
 _Avoid_: workspace (the shared clone run worktrees are cut from), worktree (git's mechanism, not the concept)
 
 ### Run usage
@@ -958,11 +958,11 @@ One conversation attached to a pull request diff. It may be resolved, or remain 
 
 ### Review reply
 
-The coding **instance**'s answer on a **review thread**. A reply records whether the feedback was fixed and explains what changed or why it stayed unchanged. A fixed reply names the commit that holds the fix.
+The **software factory**'s answer on a **review thread**. A reply records whether the feedback was fixed and explains what changed or why it stayed unchanged. A fixed reply names the commit that holds the fix.
 
 ### Actionable thread
 
-An unresolved **review thread** whose latest reply is not from the coding **instance**. The **software factory** has feedback to handle there.
+An unresolved **review thread** whose latest reply is not from the **software factory**. The **software factory** has feedback to handle there.
 
 ### Merge-ready
 

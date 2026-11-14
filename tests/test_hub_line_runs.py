@@ -9,6 +9,7 @@ from kinby.contracts import (
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_LIST,
     FACTORY_RUN_RETRY,
+    FACTORY_RUN_SEND_BACK,
     LINE_HAND_IN,
     LINE_SETUP,
     WORKBENCH_START,
@@ -21,6 +22,7 @@ from kinby.contracts import (
     FactoryRunListCommand,
     FactoryRunListResult,
     FactoryRunRetryCommand,
+    FactoryRunSendBackCommand,
     FactoryRunStatus,
     Line,
     LineHandInCommand,
@@ -209,6 +211,120 @@ def test_a_runs_folder_stays_through_a_stop_and_a_retry_and_goes_once_it_is_canc
         assert [command.folder for _, command in control.steps] == 2 * [worktree]
         assert kept == []
         assert await _removed(control) == [worktree]
+
+    asyncio.run(scenario())
+
+
+NAMED_TICKETS = TICKETS | {
+    "factory.yaml": TICKETS["factory.yaml"] + "worktree: { call: agent_branch }\n",
+    "tools/branch.py": """\
+from kinby.plugins.tools import tool
+
+
+@tool(write=False)
+def agent_branch(issue: int) -> dict[str, str]:
+    \"\"\"Name the issue's branch.\"\"\"
+    return {"branch": f"agent/{issue}-dark-mode", "base": "main"}
+""",
+}
+NAMING = RunFolder(branch=None, named_by="agent_branch")
+STACKED = {"branch": "agent/12-dark-mode", "base": "feature"}
+
+
+def _named_hub(tmp_path: Path, control: FakeControl, runtime: FakeRuntime) -> Hub:
+    write_factory(tmp_path / "hub" / "factories" / "tickets", NAMED_TICKETS)
+    return hub_at(
+        tmp_path / "hub", runtime=runtime, control=control, shipped_factories=tmp_path / "shipped"
+    )
+
+
+def test_a_factorys_worktree_call_names_the_branch_and_base_of_the_folder_its_run_works_in(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.CLEAN, values=STACKED)]
+    runtime = FakeRuntime()
+    hub = _named_hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+
+        run = await _handed_in(client, line, 12)
+        done = await settled(hub, run.run_id)
+        removed = await _removed(control)
+
+        stacked = RunFolder(branch="agent/12-dark-mode", base="feature")
+        assert done.run.status is FactoryRunStatus.DONE
+        (_, test), (_, label) = control.steps
+        assert (test.folder, label.folder) == (NAMING, stacked)
+        assert label.results == STACKED
+        assert removed == [stacked]
+
+    asyncio.run(scenario())
+
+
+def test_a_retry_keeps_what_a_failed_attempt_named_and_a_send_back_to_the_start_names_it_again(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.FAILED, summary="make lint failed.", values=STACKED),
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.FAILED, summary="The label is gone."),
+        StepResult(ending=StepEnding.CLEAN, values=STACKED | {"base": "main"}),
+    ]
+    runtime = FakeRuntime()
+    hub = _named_hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+
+        await client.call(FACTORY_RUN_RETRY, FactoryRunRetryCommand(run_id=run.run_id))
+        await settled(hub, run.run_id)
+        await client.call(
+            FACTORY_RUN_SEND_BACK, FactoryRunSendBackCommand(run_id=run.run_id, step="test")
+        )
+        done = await settled(hub, run.run_id)
+
+        stacked = RunFolder(branch="agent/12-dark-mode", base="feature")
+        assert done.run.status is FactoryRunStatus.DONE
+        assert [
+            (command.origin.step, command.folder, command.fresh_folder)
+            for _, command in control.steps
+        ] == [
+            ("test", NAMING, False),
+            ("test", stacked, False),
+            ("label", stacked, False),
+            ("test", NAMING, True),
+            ("label", RunFolder(branch="agent/12-dark-mode", base="main"), False),
+        ]
+        assert control.steps[2][1].results == STACKED
+
+    asyncio.run(scenario())
+
+
+def test_a_run_whose_folder_was_never_named_has_a_directory_named_for_it_removed(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="No base.")]
+    runtime = FakeRuntime()
+    hub = _named_hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+
+        await client.call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id))
+
+        assert await _removed(control) == [RunFolder(branch=None)]
 
     asyncio.run(scenario())
 

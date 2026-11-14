@@ -5222,6 +5222,12 @@
           },
           "type": "array"
         },
+        "suggested_picks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "values": {
           "items": {
             "$ref": "#/$defs/SetupField"
@@ -8434,6 +8440,18 @@
       "additionalProperties": false,
       "description": "The folder a run works in on its workbench. The workbench cuts it when it lacks it.",
       "properties": {
+        "base": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "branch": {
           "anyOf": [
             {
@@ -8444,6 +8462,17 @@
               "type": "null"
             }
           ]
+        },
+        "named_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

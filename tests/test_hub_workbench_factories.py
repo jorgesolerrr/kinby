@@ -87,6 +87,27 @@ def test_a_run_call_calls_a_tool_of_the_factorys_folder(tmp_path, key):
     ]
 
 
+def test_a_worktree_call_names_the_branch_and_base_the_steps_after_it_read(tmp_path):
+    named = FACTORY.replace('"git status"', '"git switch {{branch}}"').replace(
+        "requires: [repo]", "requires: [repo, base]"
+    )
+    files = FILES | {"factory.yaml": named + "worktree: { call: open_pull_request }\n"}
+    missing = FILES | {"factory.yaml": named + "worktree: { call: name_branch }\n"}
+
+    assert problems(tmp_path / "named", files) == []
+    assert problems(tmp_path / "missing", missing) == [
+        'worktree calls tool "name_branch", which the factory\'s folder does not hold.'
+    ]
+
+
+def test_a_factory_suggests_only_picks_the_shipped_library_holds(tmp_path):
+    suggesting = _with("browser: true", "browser: true\n  suggested_picks: [tdd, house-style]")
+
+    assert problems(tmp_path, suggesting) == [
+        'The factory suggests skill "house-style", which the shipped library does not hold.'
+    ]
+
+
 def test_the_check_reports_a_tool_file_of_the_factorys_folder_that_does_not_load(tmp_path):
     found = problems(tmp_path, FILES | {"tools/github.py": "raise RuntimeError('no token')\n"})
 

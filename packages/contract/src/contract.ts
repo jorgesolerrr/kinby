@@ -2427,6 +2427,7 @@ export interface LineSetupDescription {
   commands: CommandListName[];
   logins: SubscriptionLogin[];
   secrets: SetupField[];
+  suggested_picks?: string[];
   values: SetupField[];
   workbench: SetupField[];
 }
@@ -2822,7 +2823,9 @@ export interface RunFolderRemoveCommand {
  * The folder a run works in on its workbench. The workbench cuts it when it lacks it.
  */
 export interface RunFolder {
+  base?: string | null;
   branch: string | null;
+  named_by?: ToolName | null;
 }
 export interface RunFolderRemoveResult {}
 /**
