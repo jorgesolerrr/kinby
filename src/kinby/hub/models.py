@@ -106,7 +106,11 @@ class InstanceRouting(Protocol):
 
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable: ...
 
-    async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable: ...
+    async def signal_endpoint(
+        self, routine: RoutineName, instance_id: UUID | None = None
+    ) -> tuple[InstanceEndpoint, RoutineName] | InstanceUnreachable:
+        """Where a delivery to the instance's signal path goes, or to the public path without
+        one, and the routine there that takes it."""
 
     async def intake_endpoint(
         self, line_id: UUID

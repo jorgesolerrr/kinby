@@ -227,6 +227,16 @@ class WorkbenchInUse(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class InstanceInUse(CoreError):
+    """The instance runs, or a run needs it, so it is not converted."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
+class ConversionFailed(CoreError):
+    """A part of an instance's conversion failed, so the instance stays as it was."""
+
+
 class InstanceUnavailable(CoreError):
     """The hub cannot reach the instance: it is not running, or did not answer."""
 

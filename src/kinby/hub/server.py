@@ -151,8 +151,7 @@ class HubContractServer:
 
     async def _instance_signal(self, request: web.Request) -> web.Response:
         """Webhooks carry their own signature, so the hub authenticates none of them."""
-        routine = RoutineName(request.match_info["routine"])
-        return await self._signal(request, await self._reach(request), routine)
+        return await self._routed_signal(request, _instance_id(request))
 
     async def _hub_socket(self, request: web.Request) -> web.WebSocketResponse:
         """An instance calls the hub with the control token the hub gave it, and nothing else."""
@@ -178,8 +177,14 @@ class HubContractServer:
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""
+        return await self._routed_signal(request, None)
+
+    async def _routed_signal(self, request: web.Request, instance_id: UUID | None) -> web.Response:
         routine = RoutineName(request.match_info["routine"])
-        return await self._signal(request, _reached(await self._routing.signal_endpoint()), routine)
+        reached = await self._routing.signal_endpoint(routine, instance_id)
+        if isinstance(reached, InstanceUnreachable):
+            raise unreachable(reached)
+        return await self._signal(request, *reached)
 
     async def _line_signal(self, request: web.Request) -> web.Response:
         """A line's deliveries keep one address, whichever instance owns the line."""
@@ -209,11 +214,7 @@ class HubContractServer:
         return answer
 
     async def _reach(self, request: web.Request) -> InstanceEndpoint:
-        try:
-            instance_id = UUID(request.match_info["instance_id"])
-        except ValueError as exc:
-            raise unreachable(InstanceUnreachable.MISSING) from exc
-        return _reached(await self._routing.endpoint(instance_id))
+        return _reached(await self._routing.endpoint(_instance_id(request)))
 
     def _scopes(self, request: web.Request) -> frozenset[Scope] | None:
         """A bearer token authenticates any client; a cookie only from the hub's own page."""
@@ -226,6 +227,13 @@ class HubContractServer:
         if session is None or not _same_origin(request):
             return None
         return HUB_SCOPES if self._access.session_open(SessionId(session)) else None
+
+
+def _instance_id(request: web.Request) -> UUID:
+    try:
+        return UUID(request.match_info["instance_id"])
+    except ValueError as exc:
+        raise unreachable(InstanceUnreachable.MISSING) from exc
 
 
 def _reached(endpoint: InstanceEndpoint | InstanceUnreachable) -> InstanceEndpoint:
