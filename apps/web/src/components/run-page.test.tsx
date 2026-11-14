@@ -1,6 +1,6 @@
-import type { FactoryRun, FactoryRunDetail } from "@kinby/contract"
+import type { FactoryRun, FactoryRunDetail, FactoryRunTranscript } from "@kinby/contract"
 import { type Answers, fakeClock, stubSubscriber } from "@kinby/contract/testing"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it } from "vitest"
 
@@ -80,6 +80,56 @@ describe("a run's page", () => {
     await clock.advance(5_000)
 
     expect(await screen.findByText("Done")).toBeDefined()
+  })
+
+  it("reads an attempt's transcript once more when the attempt ends", async () => {
+    const clock = fakeClock()
+    const said = (text: string) => ({
+      type: "assistant",
+      message: { content: [{ type: "text", text }] },
+    })
+    let current = detail("r-running")
+    let events = [said("Working.")]
+    let now = 0
+    const pass = async (ms: number) => {
+      now += ms
+      await clock.advance(ms)
+    }
+    // Time passes until the text shows, however late the page asks for it.
+    const shows = (text: string) =>
+      waitFor(async () => {
+        await pass(250)
+        expect(screen.getByText(text)).toBeDefined()
+      })
+    // A transcript comes from the workbench, so it lands a second after the run it belongs to.
+    const transcript = () =>
+      new Promise<FactoryRunTranscript>((resolve) =>
+        clock.after(1_000, () => resolve({ events, cursor: null })),
+      )
+    openRun(
+      "r-running",
+      {
+        "factory.run.get": () => current,
+        "factory.run.transcript": transcript as unknown as Answers["factory.run.transcript"],
+      },
+      clock,
+    )
+    await screen.findByRole("region", { name: "implement" })
+    await shows("Working.")
+
+    const [running] = current.attempts
+    current = {
+      ...current,
+      attempts: [{ ...running!, ended_at: "2026-10-12T09:30:00Z", ending: "clean" }],
+    }
+    events = [said("Working."), said("Opened the pull request.")]
+    // The run's next read falls due at 5 s, before the transcript's.
+    await pass(5_000 - now)
+    await screen.findByText("Clean")
+    // The page has seen the attempt end before its next transcript read falls due.
+    await act(async () => {})
+
+    await shows("Opened the pull request.")
   })
 
   it("retries a run that needs a human", async () => {

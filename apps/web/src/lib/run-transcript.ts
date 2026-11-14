@@ -1,6 +1,6 @@
-import type { Client, Event, FactoryRunTranscript, JsonValue, StepId } from "@kinby/contract"
+import type { Client, FactoryRunTranscript, JsonValue, StepId } from "@kinby/contract"
 
-import { EMPTY_TIMELINE, mainArgument, project } from "@/lib/timeline"
+import { mainArgument } from "@/lib/timeline"
 
 type Streamed = { [k: string]: JsonValue }
 
@@ -35,32 +35,36 @@ export async function readTranscript(
 }
 
 /**
- * An attempt's transcript as what its agent said and did, in order. A kinby turn's events read as
- * its thread would show them, and a coding client's stream, Claude Code's or Codex's, as the
- * messages, tools and commands in it. Anything else in a stream shows nothing.
+ * An attempt's transcript as what its agent said and did, in order: a kinby turn's events, from
+ * the turn's start or from the answer that resumed it, or a coding client's stream, Claude Code's
+ * or Codex's. Anything else shows nothing.
  */
 export function entries(events: Streamed[]): Entry[] {
-  return events.some(isKinby) ? kinby(events as unknown as Event[]) : events.flatMap(streamed)
+  const read: Entry[] = []
+  for (const event of events) {
+    const last = read.at(-1)
+    const said = isObject(event.payload) ? kinby(event.payload) : streamed(event)
+    // A kinby turn streams its text in pieces, so a piece joins the text before it.
+    if (isObject(event.payload) && said[0]?.kind === "say" && last?.kind === "say") {
+      read[read.length - 1] = { kind: "say", text: last.text + said[0].text }
+    } else {
+      read.push(...said)
+    }
+  }
+  return read
 }
 
-function isKinby(event: Streamed): boolean {
-  return typeof event.turn_id === "string" && typeof event.payload === "object"
-}
-
-function kinby(events: Event[]): Entry[] {
-  const { turns } = events.reduce(project, EMPTY_TIMELINE)
-  return turns
-    .flatMap(({ steps }) => steps)
-    .flatMap((step): Entry[] => {
-      switch (step.kind) {
-        case "text":
-          return [{ kind: "say", text: step.text }]
-        case "tool":
-          return [{ kind: "tool", name: step.name, text: mainArgument(step.arguments) ?? "" }]
-        default:
-          return []
-      }
-    })
+function kinby(payload: Streamed): Entry[] {
+  switch (payload.type) {
+    case "message.delta":
+      return [{ kind: "say", text: text(payload.text) }]
+    case "tool.call": {
+      const args = isObject(payload.arguments) ? payload.arguments : {}
+      return [{ kind: "tool", name: text(payload.name), text: mainArgument(args) ?? "" }]
+    }
+    default:
+      return []
+  }
 }
 
 function streamed(event: Streamed): Entry[] {

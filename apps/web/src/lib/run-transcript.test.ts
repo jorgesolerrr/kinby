@@ -21,6 +21,21 @@ describe("an attempt's transcript", () => {
     ])
   })
 
+  it("reads a resumed kinby turn, which starts with no turn.started, and an event too large to read", () => {
+    const events = thread(
+      ["turn-1", { type: "message.delta", text: "Signed in." }],
+      ["turn-1", { type: "tool.call", call_id: "c2", name: "browse", arguments: { url: "a.edu" } }],
+    )
+
+    expect(
+      entries([...JSON.parse(JSON.stringify(events)), { type: "cut", bytes: 5_000_000 }]),
+    ).toEqual([
+      { kind: "say", text: "Signed in." },
+      { kind: "tool", name: "browse", text: "a.edu" },
+      { kind: "cut", bytes: 5_000_000 },
+    ])
+  })
+
   it("reads Claude Code's stream as what it said and the tools it used", () => {
     const events = [
       { type: "system", subtype: "init", session_id: "s-1" },

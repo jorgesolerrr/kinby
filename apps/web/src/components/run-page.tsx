@@ -308,7 +308,14 @@ function Transcript({
     () => readTranscript(hub, runId, step, attempt),
     [hub, runId, step, attempt],
   )
-  const { value: entries } = useFollowed(read, clock, () => ended_at === null)
+  const ended = ended_at !== null
+  const { value: entries, readAgain } = useFollowed(read, clock, () => !ended)
+  // Ending cancels the next read, which may hold the attempt's last words.
+  const endedBefore = useRef(ended)
+  useEffect(() => {
+    if (ended && !endedBefore.current) readAgain()
+    endedBefore.current = ended
+  }, [ended, readAgain])
   if (entries === undefined || entries.length === 0) return null
   return (
     <ol className="flex flex-col gap-1.5 text-sm">
