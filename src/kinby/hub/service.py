@@ -774,6 +774,12 @@ _INTAKE_PROMPT = (
 )
 
 
+def _intake_name(factory: FactoryName, workbench: str) -> RoutineName:
+    """The name of the line's intake routine. A factory name holds no underscore, so the first
+    one ends it and no two lines share a name."""
+    return RoutineName(f"{factory}_{workbench}")
+
+
 def _intake_routine(factory: FactoryName, workbench: str, intake: WorkbenchIntake) -> str:
     """The ROUTINE.md of the line's intake routine, fired as the factory's intake declares. Its
     code step has the hub run the intake on the workbench."""
@@ -3995,7 +4001,7 @@ class Hub:
         assert owner is not None
         intake = None
         if factory.intake is not None:
-            intake = RoutineName(f"{command.factory}-{record.manifest_id}")
+            intake = _intake_name(command.factory, record.manifest_id)
             routine = _intake_routine(command.factory, record.manifest_id, factory.intake)
             await self._write_intake(owner, intake, routine)
         if command.workbench is None:
@@ -4218,7 +4224,7 @@ class Hub:
                 intake=(
                     None
                     if factory.intake is None
-                    else RoutineName(f"{member.factory}-{record.manifest_id}")
+                    else _intake_name(member.factory, record.manifest_id)
                 ),
             )
             await self._convert(record, workbench, line, factory.intake, home)

@@ -226,7 +226,7 @@ def test_setting_up_a_line_creates_its_intake_routine_in_the_owner(tmp_path, mon
             [routine] = await _routines(hub)
 
             assert line.owner_id == hub.home
-            assert line.intake == "tickets-cec-backend"
+            assert line.intake == "tickets_cec-backend"
             assert routine.name == line.intake
             assert routine.schedule == "0 9 * * *"
             assert routine.code_step == "run_line_intake"
@@ -288,8 +288,8 @@ def test_two_lines_of_one_factory_have_different_delivery_addresses(tmp_path, mo
             await hub.fired()
 
             assert [routine.name for routine in await _routines(hub)] == [
-                "tickets-cec-backend",
-                "tickets-landing",
+                "tickets_cec-backend",
+                "tickets_landing",
             ]
             assert [endpoint.address for endpoint, _ in hub.control.intakes] == [
                 f"http://kinby-{landing.workbench_id}:8787"
