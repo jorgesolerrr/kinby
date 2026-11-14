@@ -25,18 +25,14 @@ from tests.test_hub_line_runs import TASKS
 from tests.test_scheduler import call
 from tests.test_views import BOARD, DATA
 
-DRAFTED = StepResult(
-    ending=StepEnding.CLEAN,
-    views=[
-        View(
-            id="board",
-            title="Applications",
-            spec=ViewSpec.model_validate(BOARD),
-            data=DATA,
-            updated_at=datetime(2026, 11, 14, tzinfo=UTC),
-        )
-    ],
+BOARD_VIEW = View(
+    id="board",
+    title="Applications",
+    spec=ViewSpec.model_validate(BOARD),
+    data=DATA,
+    updated_at=datetime(2026, 11, 14, tzinfo=UTC),
 )
+DRAFTED = StepResult(ending=StepEnding.CLEAN, views=["board"])
 
 
 async def _handed_in(owned: Owned) -> FactoryRun:
@@ -61,6 +57,7 @@ def test_a_view_a_step_writes_appears_among_its_owners_views_and_its_run_names_i
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
             hub.control.step_results = [DRAFTED]
+            hub.control.views = {"board": BOARD_VIEW}
 
             run = await _handed_in(hub)
             done = await settled(hub.hub, run.run_id)
@@ -73,7 +70,11 @@ def test_a_view_a_step_writes_appears_among_its_owners_views_and_its_run_names_i
             assert [(view.id, view.title) for view in listed.views] == [("board", "Applications")]
             held = await call(hub.dispatcher, "view.get", id="board")
             assert isinstance(held, View), held
-            assert (held.spec, held.data) == (DRAFTED.views[0].spec, DATA)
+            assert (held.spec, held.data) == (BOARD_VIEW.spec, DATA)
+            [(workbench, _)] = hub.control.steps
+            assert [(endpoint, read.id) for endpoint, read in hub.control.views_read] == [
+                (workbench, "board")
+            ]
 
     asyncio.run(scenario())
 
@@ -84,6 +85,7 @@ def test_a_view_its_owner_does_not_take_is_named_in_the_attempts_summary(tmp_pat
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
             hub.control.step_results = [DRAFTED.model_copy(update={"summary": "Drafted."})]
+            hub.control.views = {"board": BOARD_VIEW}
             del hub.runtime.addresses[str(hub.home)]
 
             run = await _handed_in(hub)

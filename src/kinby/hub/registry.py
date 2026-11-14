@@ -2371,7 +2371,7 @@ class HubRegistry:
                     result.session,
                     result.usage.model_dump_json() if result.usage is not None else None,
                     result.ask.model_dump_json() if result.ask is not None else None,
-                    json.dumps([view.id for view in result.views]),
+                    json.dumps(result.views),
                     _now(),
                     str(run_id),
                 ),

@@ -169,12 +169,6 @@ export type CodingClient = "claude" | "codex";
  * How hard a coding client reasons. Codex has no ``max``.
  */
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
-export type ViewComponent =
-  ViewCard | ViewRow | ViewText | ViewLink | ViewTable | ViewBadge | ViewKanban | ViewStat | ViewChart | ViewChecklist;
-export type ViewComponentId = string;
-export type JsonPointer = string;
-export type TextProp = string | Binding;
-export type ChartKind = "line" | "bar" | "area";
 export type ApprovalDecision = "approve" | "deny" | "allow_in_routine" | "mark_read_only";
 export type ThreadStatus = "idle" | "running" | "awaiting_approval" | "awaiting_takeover" | "awaiting_reply" | "failed";
 /**
@@ -197,6 +191,12 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
  * What the gate does with a tool: its own rule in permissions.toml, or the mode's.
  */
 export type ToolRule = "allow" | "ask" | "deny" | "mode";
+export type ViewComponent =
+  ViewCard | ViewRow | ViewText | ViewLink | ViewTable | ViewBadge | ViewKanban | ViewStat | ViewChart | ViewChecklist;
+export type ViewComponentId = string;
+export type JsonPointer = string;
+export type TextProp = string | Binding;
+export type ChartKind = "line" | "bar" | "area";
 export type RecipeName = string;
 export type ServerFrame = ResultFrame | ErrorFrame | SubscribedFrame | ItemFrame | EndFrame;
 export type ErrorCode =
@@ -3207,154 +3207,7 @@ export interface StepResult {
   values?: {
     [k: string]: StepValue;
   };
-  views?: View[];
-}
-/**
- * A page of UI an instance keeps: its layout from the view catalogue, and the data the
- * layout's bindings read.
- */
-export interface View {
-  data: {
-    [k: string]: JsonValue;
-  };
-  id: ViewId;
-  spec: ViewSpec;
-  title: string;
-  updated_at: string;
-}
-/**
- * A view's layout: a flat list of components, one of them the root, that name their children
- * by id.
- */
-export interface ViewSpec {
-  components: ViewComponent[];
-}
-/**
- * A card with an optional title and description, holding its children.
- */
-export interface ViewCard {
-  children?: ViewComponentId[] | ListBinding;
-  component: "Card";
-  description?: TextProp | null;
-  id: ViewComponentId;
-  title?: TextProp | null;
-}
-/**
- * Children repeated from an array in the view's data: the template once per item, with its
- * paths read in the item.
- */
-export interface ListBinding {
-  path: JsonPointer;
-  template: ViewComponentId;
-}
-/**
- * A prop whose value is read from the view's data. A path that does not resolve renders as
- * empty.
- */
-export interface Binding {
-  path: JsonPointer;
-}
-/**
- * Its children side by side, sharing the width, and wrapping onto the next line when they
- * run out of room.
- */
-export interface ViewRow {
-  children?: ViewComponentId[] | ListBinding;
-  component: "Row";
-  id: ViewComponentId;
-}
-/**
- * A paragraph of text.
- */
-export interface ViewText {
-  component: "Text";
-  id: ViewComponentId;
-  text: TextProp;
-}
-/**
- * A link that opens its target, an http, https or mailto address, in a new tab.
- */
-export interface ViewLink {
-  component: "Link";
-  href: TextProp;
-  id: ViewComponentId;
-  label: TextProp;
-}
-/**
- * A table with one row per item of an array in the view's data.
- */
-export interface ViewTable {
-  columns: ViewTableColumn[];
-  component: "Table";
-  id: ViewComponentId;
-  rows: Binding;
-}
-/**
- * A table column: its header, and the component each row shows in it, with the component's
- * paths read in the row.
- */
-export interface ViewTableColumn {
-  cell: ViewComponentId;
-  header: TextProp;
-}
-/**
- * A short label, such as a stage.
- */
-export interface ViewBadge {
-  component: "Badge";
-  id: ViewComponentId;
-  label: TextProp;
-}
-/**
- * A board with one column per item of an array in the view's data. Each column's title and
- * cards are read in its item.
- */
-export interface ViewKanban {
-  cards: ListBinding;
-  columns: Binding;
-  component: "Kanban";
-  id: ViewComponentId;
-  title: TextProp;
-}
-/**
- * One figure with its label, and an optional line under it.
- */
-export interface ViewStat {
-  component: "Stat";
-  description?: TextProp | null;
-  id: ViewComponentId;
-  label: TextProp;
-  value: TextProp;
-}
-/**
- * A line, bar or area chart of the points in an array in the view's data. Each point's place
- * on the x axis and its series' values are read in the point.
- */
-export interface ViewChart {
-  component: "Chart";
-  id: ViewComponentId;
-  kind: ChartKind;
-  points: Binding;
-  /**
-   * @minItems 1
-   */
-  series: [ViewChartSeries, ...ViewChartSeries[]];
-  x: Binding;
-}
-export interface ViewChartSeries {
-  label: string;
-  value: Binding;
-}
-/**
- * A read-only checklist with one entry per item of an array in the view's data. Each entry's
- * label and whether it is done are read in its item.
- */
-export interface ViewChecklist {
-  component: "Checklist";
-  done: boolean | Binding;
-  id: ViewComponentId;
-  items: Binding;
-  label: TextProp;
+  views?: ViewId[];
 }
 export interface ThreadApprovalRespondCommand {
   approval_id: string;
@@ -3582,6 +3435,153 @@ export interface ViewSummary {
 }
 export interface ViewGetCommand {
   id: ViewId;
+}
+/**
+ * A page of UI an instance keeps: its layout from the view catalogue, and the data the
+ * layout's bindings read.
+ */
+export interface View {
+  data: {
+    [k: string]: JsonValue;
+  };
+  id: ViewId;
+  spec: ViewSpec;
+  title: string;
+  updated_at: string;
+}
+/**
+ * A view's layout: a flat list of components, one of them the root, that name their children
+ * by id.
+ */
+export interface ViewSpec {
+  components: ViewComponent[];
+}
+/**
+ * A card with an optional title and description, holding its children.
+ */
+export interface ViewCard {
+  children?: ViewComponentId[] | ListBinding;
+  component: "Card";
+  description?: TextProp | null;
+  id: ViewComponentId;
+  title?: TextProp | null;
+}
+/**
+ * Children repeated from an array in the view's data: the template once per item, with its
+ * paths read in the item.
+ */
+export interface ListBinding {
+  path: JsonPointer;
+  template: ViewComponentId;
+}
+/**
+ * A prop whose value is read from the view's data. A path that does not resolve renders as
+ * empty.
+ */
+export interface Binding {
+  path: JsonPointer;
+}
+/**
+ * Its children side by side, sharing the width, and wrapping onto the next line when they
+ * run out of room.
+ */
+export interface ViewRow {
+  children?: ViewComponentId[] | ListBinding;
+  component: "Row";
+  id: ViewComponentId;
+}
+/**
+ * A paragraph of text.
+ */
+export interface ViewText {
+  component: "Text";
+  id: ViewComponentId;
+  text: TextProp;
+}
+/**
+ * A link that opens its target, an http, https or mailto address, in a new tab.
+ */
+export interface ViewLink {
+  component: "Link";
+  href: TextProp;
+  id: ViewComponentId;
+  label: TextProp;
+}
+/**
+ * A table with one row per item of an array in the view's data.
+ */
+export interface ViewTable {
+  columns: ViewTableColumn[];
+  component: "Table";
+  id: ViewComponentId;
+  rows: Binding;
+}
+/**
+ * A table column: its header, and the component each row shows in it, with the component's
+ * paths read in the row.
+ */
+export interface ViewTableColumn {
+  cell: ViewComponentId;
+  header: TextProp;
+}
+/**
+ * A short label, such as a stage.
+ */
+export interface ViewBadge {
+  component: "Badge";
+  id: ViewComponentId;
+  label: TextProp;
+}
+/**
+ * A board with one column per item of an array in the view's data. Each column's title and
+ * cards are read in its item.
+ */
+export interface ViewKanban {
+  cards: ListBinding;
+  columns: Binding;
+  component: "Kanban";
+  id: ViewComponentId;
+  title: TextProp;
+}
+/**
+ * One figure with its label, and an optional line under it.
+ */
+export interface ViewStat {
+  component: "Stat";
+  description?: TextProp | null;
+  id: ViewComponentId;
+  label: TextProp;
+  value: TextProp;
+}
+/**
+ * A line, bar or area chart of the points in an array in the view's data. Each point's place
+ * on the x axis and its series' values are read in the point.
+ */
+export interface ViewChart {
+  component: "Chart";
+  id: ViewComponentId;
+  kind: ChartKind;
+  points: Binding;
+  /**
+   * @minItems 1
+   */
+  series: [ViewChartSeries, ...ViewChartSeries[]];
+  x: Binding;
+}
+export interface ViewChartSeries {
+  label: string;
+  value: Binding;
+}
+/**
+ * A read-only checklist with one entry per item of an array in the view's data. Each entry's
+ * label and whether it is done are read in its item.
+ */
+export interface ViewChecklist {
+  component: "Checklist";
+  done: boolean | Binding;
+  id: ViewComponentId;
+  items: Binding;
+  label: TextProp;
 }
 export interface ViewListCommand {}
 /**

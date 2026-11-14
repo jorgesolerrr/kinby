@@ -34,6 +34,8 @@ from kinby.contracts import (
     StepUsage,
     StepValue,
     ValueName,
+    View,
+    ViewGetCommand,
     WorkbenchCommandRunCommand,
     WorkbenchCommandRunResult,
     WorkbenchDirectoryListCommand,
@@ -42,7 +44,12 @@ from kinby.contracts import (
     WorkbenchFileReadResult,
 )
 from kinby.core.coding_clients import run_coding_client
-from kinby.core.errors import IntakeFailed, WorkspaceReadFailed, WorkspaceReadRefused
+from kinby.core.errors import (
+    IntakeFailed,
+    ViewNotFound,
+    WorkspaceReadFailed,
+    WorkspaceReadRefused,
+)
 from kinby.core.held_results import HeldResults
 from kinby.core.prompt import render_client_message
 from kinby.core.run_worktrees import (
@@ -54,7 +61,7 @@ from kinby.core.run_worktrees import (
 from kinby.core.shell_reads import is_shell_read
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
 from kinby.factories import SHIPPED_FACTORIES
-from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
+from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, VIEWS_DIR, WORKSPACE_DIR
 from kinby.plugins.defaults.files import workspace_path
 from kinby.plugins.defaults.shell import OUTPUT_CAP, run_capped
 from kinby.plugins.errors import exception_message
@@ -196,6 +203,15 @@ class WorkbenchSteps:
             return workspace_path(self._workspace, path)
         except ValueError as exc:
             raise WorkspaceReadRefused(str(exc)) from exc
+
+    async def view(self, command: ViewGetCommand) -> View:
+        """A view a kinby turn wrote here, as it last wrote it, for the hub to hand to the run's
+        owner."""
+        path = self._directory / STATE_DIR / _TURNS_DIR / VIEWS_DIR / f"{command.id}.json"
+        try:
+            return View.model_validate_json(await asyncio.to_thread(path.read_bytes))
+        except FileNotFoundError:
+            raise ViewNotFound(f'View "{command.id}" was not found.') from None
 
     async def transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
         """One page of the attempt's transcript, from its *cursor*-th line, no larger than its

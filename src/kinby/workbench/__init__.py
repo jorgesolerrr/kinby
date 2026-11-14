@@ -16,6 +16,7 @@ from kinby.contracts import (
     RUN_FOLDER_REMOVE,
     RUN_TRANSCRIPT_READ,
     STEP_RUN,
+    VIEW_GET,
     WORKSPACE_COMMAND_RUN,
     WORKSPACE_DIRECTORY_LIST,
     WORKSPACE_FILE_READ,
@@ -43,8 +44,8 @@ def prepare_workspace(workspace: Path, source: str | None) -> None:
 
 def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
     """The hub's probe, a drain with no accepted work to wait for, the steps of runs, the
-    transcripts of their agent steps, the removal of their folders, the intakes of lines, and the
-    reads of the workspace its lines' owners send."""
+    transcripts of their agent steps and the views they wrote, the removal of their folders, the
+    intakes of lines, and the reads of the workspace its lines' owners send."""
     dispatcher = Dispatcher()
 
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
@@ -60,6 +61,7 @@ def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
     dispatcher.register(STEP_RUN, steps.run)
     dispatcher.register(RUN_FOLDER_REMOVE, steps.remove_folder)
     dispatcher.register(RUN_TRANSCRIPT_READ, steps.transcript)
+    dispatcher.register(VIEW_GET, steps.view)
     dispatcher.register(INTAKE_RUN, steps.intake)
     dispatcher.register(WORKSPACE_FILE_READ, steps.read_file)
     dispatcher.register(WORKSPACE_DIRECTORY_LIST, steps.list_directory)
