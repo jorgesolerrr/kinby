@@ -348,6 +348,40 @@ def test_the_frame_names_each_bad_run_with_its_workbench(tmp_path: Path) -> None
     assert "the run by its run id and its workbench" in model.wake
 
 
+def test_a_bad_run_matches_its_workbench_facts_and_the_unmarked_only(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    review_stage(instance)
+    graph = GraphStore(instance.path)
+    marked = {
+        workbench: graph.remember(
+            Fact(
+                node=new_node_id(date(2026, 9, 1), f"Install lesson on {workbench}"),
+                date=date(2026, 9, 1),
+                description=f"Install lesson on {workbench}",
+                subjects=("install",),
+                body="Install before the checks.",
+                thread=None,
+                workbench=workbench,
+            )
+        )
+        for workbench in ("landing", "cec-backend", None)
+    }
+    sent_back = factory_run(
+        instance,
+        attempt("implement", 1, "Built it."),
+        attempt("implement", 2, "Installed first."),
+        workbench="landing",
+    )
+    run_episode(instance, sent_back, "The checks ran before the install", "install")
+    model = ReviewingModel()
+
+    review(instance, model)
+
+    assert marked["landing"] in model.wake
+    assert marked[None] in model.wake
+    assert marked["cec-backend"] not in model.wake
+
+
 def test_the_stage_is_offered_no_write_tool_and_writes_nothing(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     review_stage(instance)
