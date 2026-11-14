@@ -249,13 +249,31 @@ class GraphStore:
             if memory.workbench == workbench
         }
 
-    def take(self, files: Mapping[NodeId, str]) -> list[NodeId]:
-        """Write each node file this graph holds no node of yet, and answer which it wrote."""
+    def take(self, files: Mapping[NodeId, str]) -> dict[NodeId, str | None]:
+        """Write each node file this graph holds no node of yet, or holds live where the file is
+        forgotten, so a forget made in another graph wins. Answer the file each node written had
+        before, None for none, which `restore` puts back."""
+        held = {node: self._file(node) for node in files}
+        replaced = {
+            node: before
+            for node, before in held.items()
+            if before is None or (_forgotten(files[node]) and not _forgotten(before))
+        }
+        self.restore({node: files[node] for node in replaced})
+        return replaced
+
+    def restore(self, files: Mapping[NodeId, str | None]) -> None:
+        """Write each node's file, or delete it where *files* holds None."""
         self._path.mkdir(parents=True, exist_ok=True)
-        written = [node for node in files if not self._node_path(node).exists()]
-        for node in written:
-            _write_node(self._node_path(node), files[node])
-        return written
+        for node, document in files.items():
+            if document is None:
+                self.prune(node)
+            else:
+                _write_node(self._node_path(node), document)
+
+    def _file(self, node: NodeId) -> str | None:
+        path = self._node_path(node)
+        return path.read_text(encoding="utf-8") if path.is_file() else None
 
     def _node_path(self, node: NodeId) -> Path:
         relative = Path(f"{node}.md")
@@ -314,6 +332,11 @@ def _origin(memory: MemoryNode) -> str:
     if isinstance(memory.recaps, RecappedTurn):
         return f"thread: {memory.recaps.thread}\nturn: {memory.recaps.turn}\n"
     return f"run: {memory.recaps.run}\ngeneration: {memory.recaps.generation}\n"
+
+
+def _forgotten(document: str) -> bool:
+    values, _ = parse_frontmatter(document)
+    return _FRONTMATTER.validate_python(values).tombstone
 
 
 def _read_node(path: Path) -> MemoryNode | None:
