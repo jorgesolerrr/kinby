@@ -1619,7 +1619,7 @@ export interface FactoryRunIntakeCommand {
 }
 export interface FactoryRunListCommand {
   cursor?: string | null;
-  factory: FactoryName;
+  factory?: FactoryName | null;
   instance_id?: string | null;
   limit?: number | null;
   line_id?: string | null;

@@ -41,7 +41,7 @@ The hub's own reads:
 - Setup: `image.describe`, `factory.describe`, `hub.secret.list`.
 - Library: `library.list`, `library.skill.read`, `library.skill.file.read`, `library.skill.check`, `library.git.preview`, `library.mcp_server.read`. A library skill's `SKILL.md` comes from `library.skill.read` and each of its other files from `library.skill.file.read`, by the path `library.skill.read` lists it under. Never fetch library content from the network, or from the hub's files with bash.
 - Factories: `factory.list`, `factory.get`, `factory.check`, `factory.run.list`, `factory.run.get`.
-- Lines and workbenches: `line.list`, `line.get`, `line.setup.describe`, `workbench.list`, `workbench.get`.
+- Lines and workbenches: `line.list`, `line.get`, `line.setup.describe`, `workbench.list`, `workbench.get`. A line's runs come from `factory.run.list` with its `line_id` alone, and one run with its step attempts from `factory.run.get`.
 - Usage: `stats.summary`.
 - Channels: `channel.list`, each channel with the instances it mutes.
 - Operations: `operation.get`. To follow one until it ends, run `kinby hub wait <operation_id>` instead. It prints the operation once it succeeded or failed, and exits nonzero unless it succeeded. When it times out, the operation is still going: run it again. Never poll with `sleep`.
