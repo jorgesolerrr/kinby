@@ -829,7 +829,7 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 
 ### Factory
 
-A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, deciding what happens when a step fails. It declares what a **workbench** must provide for its steps: an image recipe, secrets, named values, the names of lists of **repository commands**, **subscription logins** and a browser. Its **tools** live in its folder. A factory written the older way declares **instances** instead: its steps run in ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
+A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, deciding what happens when a step fails. It declares what a **workbench** must provide for its steps: an image recipe, secrets, named values, the names of lists of **repository commands**, **subscription logins** and a browser. Its **tools** live in its folder, and it declares its **intake**: what fires it, a schedule, **deliveries** or both, and the tool that finds **work items**. A factory written the older way declares **instances** instead: its steps run in ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
 _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
@@ -839,7 +839,7 @@ _Avoid_: environment, sandbox, site, station
 
 ### Line
 
-A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, or the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, and names each. The line holds the **intake** and its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line leaves its workbench as it is, and a factory with lines is never removed.
+A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**, which the user can change at any time. Only a factory that declares what a workbench must provide is set up on one. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that lacks a required secret, named value or list of **repository commands**, or the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, and names each. Setup then creates the line's **intake** in the owner, and the owner refusing it refuses the setup. The line holds its **factory runs**. A workbench can carry several lines, and an instance can own several. Removing a line removes its intake and leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
 ### Agent step
@@ -897,7 +897,7 @@ _Avoid_: factory check (validates the whole factory), repository check (a comman
 
 ### Intake
 
-The **routine** that starts **factory runs**: it finds new **work items** and hands each to its **factory**.
+The **routine** that starts **factory runs**: it finds new **work items** and hands each to its **factory**. A **line**'s intake is a routine of its owner, which setting the line up creates from the factory's declaration and removing the line deletes. It fires on the factory's schedule and on its **deliveries**, which reach it at its own address, one per line. Its **code step** has the **hub** run the factory's tool on the line's **workbench**, where the secrets that tool needs are, and the hub hands the line each work item the tool returns. The owner never holds the workbench's secrets, only the one its deliveries are signed with. In a factory written the older way, the intake is a routine of one of its instances that hands each work item over itself.
 
 ### Needs human
 

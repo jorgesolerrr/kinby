@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from kinby.contracts import (
     INSTANCE_DRAIN,
+    INTAKE_RUN,
     RUN_FOLDER_REMOVE,
     RUN_STOPPED,
     RUN_TRANSCRIPT_READ,
@@ -29,6 +30,8 @@ from kinby.contracts import (
     FrameId,
     InstanceDrainCommand,
     InstanceProbeResult,
+    IntakeRunCommand,
+    IntakeRunResult,
     Method,
     ResultFrame,
     RunFolderRemoveCommand,
@@ -100,6 +103,10 @@ class InstanceControl(Protocol):
         self, endpoint: ControlEndpoint, command: FactoryRunTranscriptCommand
     ) -> FactoryRunTranscript: ...
 
+    async def run_intake(
+        self, endpoint: ControlEndpoint, command: IntakeRunCommand
+    ) -> IntakeRunResult: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -149,6 +156,12 @@ class HttpInstanceControl:
     ) -> FactoryRunTranscript:
         """Read one page of an attempt's transcript from the workbench that ran it."""
         return await _call(endpoint, RUN_TRANSCRIPT_READ, command, "the transcript read")
+
+    async def run_intake(
+        self, endpoint: ControlEndpoint, command: IntakeRunCommand
+    ) -> IntakeRunResult:
+        """Have the workbench run a line's intake tool and wait for the work items it found."""
+        return await _call(endpoint, INTAKE_RUN, command, "the intake")
 
 
 async def _call[Command: ContractModel, Result: ContractModel](

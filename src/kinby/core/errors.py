@@ -132,6 +132,11 @@ class NotAnIntake(CoreError):
     code = ErrorCode.PERMISSION_DENIED
 
 
+class IntakeFailed(CoreError):
+    """A line's intake tool did not run on its workbench, or failed there, so it handed the line
+    no work item."""
+
+
 class RepositoryCommandsMissing(CoreError):
     """The instance lacks lists of repository commands its factory role's steps name, so no run
     started."""

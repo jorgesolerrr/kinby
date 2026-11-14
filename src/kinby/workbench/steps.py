@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from kinby.contracts import (
     AgentStepRun,
@@ -22,6 +22,8 @@ from kinby.contracts import (
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
     HookName,
+    IntakeRunCommand,
+    IntakeRunResult,
     RunFolder,
     RunFolderRemoveCommand,
     RunFolderRemoveResult,
@@ -30,8 +32,11 @@ from kinby.contracts import (
     StepResult,
     StepRunCommand,
     StepUsage,
+    StepValue,
+    ValueName,
 )
 from kinby.core.coding_clients import run_coding_client
+from kinby.core.errors import IntakeFailed
 from kinby.core.held_results import HeldResults
 from kinby.core.prompt import render_client_message
 from kinby.core.run_worktrees import (
@@ -64,6 +69,7 @@ _TRANSCRIPTS_DIR = "transcripts"
 _PAGE_BYTES = 1024 * 1024
 #: Where the kinby turns of agent steps keep their events and checkpoints, under the state.
 _TURNS_DIR = "turns"
+_WORK_ITEMS = TypeAdapter(list[dict[ValueName, StepValue]])
 
 _logger = logging.getLogger(__name__)
 
@@ -107,6 +113,30 @@ class WorkbenchSteps:
                 remove_run_worktree, self._directory, self._workspace, branch, str(command.run_id)
             )
         return RunFolderRemoveResult()
+
+    async def intake(self, command: IntakeRunCommand) -> IntakeRunResult:
+        """Run the factory's intake tool with the delivery as its ``signal``. Each mapping in the
+        list it returns is a work item it found, and None finds none."""
+        factory = command.factory
+        try:
+            tool = self._tool(factory, command.call)
+        except Exception as exc:
+            # Tool files are user code. Whatever goes wrong loading them fails the intake.
+            raise IntakeFailed(
+                f'The tools of factory "{factory}" cannot load: {exception_message(exc)}'
+            ) from exc
+        if tool is None:
+            raise IntakeFailed(f'Tool "{command.call}" is not one of factory "{factory}"\'s tools.')
+        if tool.context_parameter is not None:
+            raise IntakeFailed(
+                f'Tool "{command.call}" takes a tool context, which a workbench lacks.'
+            )
+        arguments = {"signal": command.signal} if "signal" in tool.runnable.args else {}
+        try:
+            found = await tool.runnable.ainvoke(arguments)
+            return IntakeRunResult(work_items=_WORK_ITEMS.validate_python(found or []))
+        except Exception as exc:
+            raise IntakeFailed(f'Tool "{command.call}" failed: {exception_message(exc)}') from exc
 
     async def transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
         """One page of the attempt's transcript, from its *cursor*-th line, no larger than its

@@ -289,7 +289,7 @@ def test_a_template_file_the_hub_cannot_read_leaves_the_list_whole(tmp_path, mon
 ROUTE_MISSING = HubRouteMissing(
     message=(
         "The instance cannot reach the hub with the scopes it holds, "
-        "factory:intake,notification:raise. An instance update gives it the route."
+        "factory:intake,line:intake,notification:raise. An instance update gives it the route."
     )
 )
 
@@ -372,7 +372,7 @@ def test_a_vanilla_instance_without_its_hub_route_says_so(tmp_path):
             HubRouteMissing(
                 message=(
                     "The instance cannot reach the hub with the scopes it holds, "
-                    "notification:raise. An instance update gives it the route."
+                    "line:intake,notification:raise. An instance update gives it the route."
                 )
             )
         ]

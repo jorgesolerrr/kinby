@@ -508,6 +508,10 @@ export interface Contract {
       command: InstanceUpdateCommand;
       result: LifecycleOperationResult;
     };
+    "intake.run": {
+      command: IntakeRunCommand;
+      result: IntakeRunResult;
+    };
     "library.git.add": {
       command: LibraryGitAddCommand;
       result: LibraryGitAddResult;
@@ -563,6 +567,10 @@ export interface Contract {
     "line.hand_in": {
       command: LineHandInCommand;
       result: FactoryRun;
+    };
+    "line.intake": {
+      command: LineIntakeCommand;
+      result: LineIntakeResult;
     };
     "line.list": {
       command: LineListCommand;
@@ -2018,6 +2026,22 @@ export interface InstanceUpdateCommand {
   revision: string;
 }
 /**
+ * Run a factory's intake tool on this workbench, in its workspace, and return the work items
+ * it finds.
+ */
+export interface IntakeRunCommand {
+  call: ToolName;
+  factory: FactoryName;
+  signal?: {
+    [k: string]: JsonValue;
+  };
+}
+export interface IntakeRunResult {
+  work_items: {
+    [k: string]: StepValue;
+  }[];
+}
+/**
  * Add skills a preview showed to the library.
  */
 export interface LibraryGitAddCommand {
@@ -2184,6 +2208,7 @@ export interface LineGetCommand {
  */
 export interface Line {
   factory: FactoryName;
+  intake: string | null;
   line_id: string;
   model: string | null;
   owner_id: string;
@@ -2200,6 +2225,19 @@ export interface LineHandInCommand {
   work_item: {
     [k: string]: StepValue;
   };
+}
+/**
+ * Run the intake of the line whose intake is this instance's routine, on the line's
+ * workbench, and hand the line each work item it finds.
+ */
+export interface LineIntakeCommand {
+  routine: string;
+  signal?: {
+    [k: string]: JsonValue;
+  };
+}
+export interface LineIntakeResult {
+  runs: FactoryRun[];
 }
 export interface LineListCommand {}
 export interface LineListResult {
