@@ -661,13 +661,9 @@ class _Holding:
     browser: bool = False
 
     def answered(self, command: LineSetupCommand) -> _Holding:
-        """Blank text answers no secret, as a creation reads it."""
-        typed = (
-            name for name, value in command.secrets.items() if value.get_secret_value().strip()
-        )
         return replace(
             self,
-            secrets={*self.secrets, *typed, *command.hub_secrets},
+            secrets={*self.secrets, *command.secrets, *command.hub_secrets},
             values={*self.values, *command.values},
             commands={*self.commands, *command.commands},
         )
@@ -701,11 +697,18 @@ def _asked(
     """What setting *factory* up on a workbench that holds *holding* asks for: each secret, named
     value, list of repository commands and login the factory requires and it does not hold, and
     the browser when it has none. A field with a default is held, and a login only once it signed
-    in. A *new* workbench is asked for its own fields and every field the factory declares."""
+    in. The key of each kinby agent step's model is required, even one the factory declares
+    optional. A *new* workbench is asked for its own fields and every field the factory declares."""
     requires = factory.requires
     declared = {field.name for field in requires.secrets}
+    keys = _model_keys(factory, model)
     secrets = [
-        *(field.setup_field(SetupFieldKind.SECRET) for field in requires.secrets),
+        *(
+            field.setup_field(SetupFieldKind.SECRET).model_copy(
+                update={"required": field.required or field.name in keys}
+            )
+            for field in requires.secrets
+        ),
         *(
             SetupField(
                 name=key,
@@ -715,7 +718,7 @@ def _asked(
                 type=SetupFieldType.TEXT,
                 required=True,
             )
-            for key in _model_keys(factory, model)
+            for key in keys
             if key not in declared
         ),
     ]
@@ -1912,6 +1915,9 @@ class Hub:
                 "Instance started.",
             )
 
+    async def _running(self, record: ManagedInstance) -> bool:
+        return (await self._runtime.status(record.runtime_id)).state not in _ALREADY_STOPPED
+
     async def _stopped_with_replaced_secrets(self, record: ManagedInstance) -> bool:
         """A stopped container still holds the secrets it was created with. A running one waits
         for an explicit recreation.
@@ -2032,9 +2038,12 @@ class Hub:
                 return item
         raise ValueError(f"This instance has no volume at {login.volume} for {login.label}.")
 
-    async def set_secrets(self, command: InstanceSecretsSetCommand) -> LifecycleOperationResult:
+    async def set_secrets(
+        self, command: InstanceSecretsSetCommand, *, apply: bool = False
+    ) -> LifecycleOperationResult:
         """Replace the named values in this instance's secrets, typed or taken from the hub secrets
-        each field links. A typed value unlinks its field. No value travels back out."""
+        each field links. A typed value unlinks its field. No value travels back out. With
+        *apply*, a running container is recreated with them in the same operation."""
         record = self._active_instance(command.instance_id)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         operation_id = uuid4()
@@ -2045,7 +2054,9 @@ class Hub:
             "Secret replacement queued.",
         )
         self._schedule(
-            self._set_secrets(operation_id, record.instance_id, secrets, command.hub_secrets)
+            self._set_secrets(
+                operation_id, record.instance_id, secrets, command.hub_secrets, apply=apply
+            )
         )
         return LifecycleOperationResult(
             operation_id=operation_id,
@@ -2058,6 +2069,8 @@ class Hub:
         instance_id: UUID,
         secrets: dict[str, str],
         hub_secrets: dict[str, HubSecretName],
+        *,
+        apply: bool = False,
     ) -> None:
         try:
             # The lock serializes this write against every other lifecycle mutation.
@@ -2091,6 +2104,19 @@ class Hub:
                     )
                     return
                 self.registry.link_secrets(instance_id, links, unlinked=typed)
+                if apply and await self._running(record):
+                    try:
+                        await self._replace_container(operation_id, record)
+                    except Exception as exc:
+                        detail = str(exc) or type(exc).__name__
+                        self._fail(operation_id, record, detail, values.values())
+                        return
+                    self.registry.finish_operation(
+                        operation_id,
+                        OperationState.SUCCEEDED,
+                        "Secrets replaced, and the container recreated with them.",
+                    )
+                    return
                 self.registry.finish_operation(
                     operation_id,
                     OperationState.SUCCEEDED,
@@ -3887,6 +3913,17 @@ class Hub:
 
     async def _set_up_line(self, command: LineSetupCommand) -> LineSetupResult:
         factory = await self._workbench_factory(command.factory)
+        # Blank text answers no secret, as a creation reads it, so it neither replaces one the
+        # workbench holds nor collides with a hub secret linked to its variable.
+        command = command.model_copy(
+            update={
+                "secrets": {
+                    name: value
+                    for name, value in command.secrets.items()
+                    if value.get_secret_value().strip()
+                }
+            }
+        )
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         errors = self._secret_errors(secrets, command.hub_secrets)
         fields = {
@@ -3963,7 +4000,8 @@ class Hub:
         self, record: ManagedInstance, command: LineSetupCommand
     ) -> UUID | None:
         """Store the setup's values and lists of repository commands on the workbench, and start
-        the replacement of its secrets, whose operation this returns."""
+        the replacement of its secrets, which a running workbench takes through a recreation in
+        the same operation. Return that operation."""
         self.registry.set_workbench_values(record.instance_id, command.values)
         for name, commands in command.commands.items():
             self.registry.set_workbench_commands(record.instance_id, name, commands)
@@ -3974,7 +4012,8 @@ class Hub:
                 instance_id=record.instance_id,
                 secrets=command.secrets,
                 hub_secrets=command.hub_secrets,
-            )
+            ),
+            apply=True,
         )
         return replacing.operation_id
 

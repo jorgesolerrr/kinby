@@ -75,7 +75,7 @@ One `line_setup` call sets a factory up on a workbench the user chose, or create
 2. Read `line.setup.describe` with `factory`, the chosen `workbench_id` or none, and the line's `model` when the user wants one. It lists only what is left to answer: `workbench`, a new one's `name` and `workspace_source`, then `secrets`, `values` and `commands`, the lists of repository commands by name. Done when each required field it lists has an answer, and the user settled the model, the daily budget in `usd_per_day` and the owner in `owner_id`, left out for you.
 3. Put a hub secret's name in `hub_secrets` for each secret, by the variable it lists, as `{"GH_TOKEN": "github"}`. When no hub secret fits, the user adds one first. Never put a secret's value in the call.
 4. A login it lists, or `browser` true, is something no answer gives: the login is signed in on the workbench, and a browser comes with a workbench created with one. Name it, point the user to the web app, and set nothing up.
-5. Call `hub_write` with `line_setup` and these values. A refusal names each wrong field and creates nothing. When the result carries an `operation_id`, run `kinby hub wait` with it: it creates the new workbench, or stores the secrets on the chosen one. A new workbench is stopped until the user starts it.
+5. Call `hub_write` with `line_setup` and these values. A refusal names each wrong field and creates nothing. When the result carries an `operation_id`, run `kinby hub wait` with it: it creates the new workbench, or stores the secrets on the chosen one and recreates it if it runs. A new workbench is stopped until the user starts it.
 
 Some changes stay the user's, and no tool makes them:
 
