@@ -1,5 +1,5 @@
 import type { Client, Clock, InstanceSummary } from "@kinby/contract"
-import { LibraryIcon, SearchIcon, SquarePenIcon } from "lucide-react"
+import { FactoryIcon, LibraryIcon, SearchIcon, SquarePenIcon } from "lucide-react"
 import type * as React from "react"
 import { useCallback, useEffect, useState } from "react"
 
@@ -7,12 +7,14 @@ import { KinbyMark } from "@/components/kinby-mark"
 import { type Folds, NavInstances, type Reached } from "@/components/nav-instances"
 import { NavUser } from "@/components/nav-user"
 import { SearchPalette } from "@/components/search-palette"
+import { Badge } from "@/components/ui/badge"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -20,13 +22,15 @@ import {
 } from "@/components/ui/sidebar"
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
-import { homePath, LIBRARY_PATH } from "@/lib/selection"
+import { FACTORIES_PATH, homePath, LIBRARY_PATH } from "@/lib/selection"
 
 export function AppSidebar({
   instances,
   selected,
   creating,
   libraryOpen,
+  factoriesOpen,
+  waiting,
   client,
   clock,
   selectedClient,
@@ -37,6 +41,9 @@ export function AppSidebar({
   selected: InstanceSummary | undefined
   creating: boolean
   libraryOpen: boolean
+  factoriesOpen: boolean
+  /** How many runs of the lines wait on the user. */
+  waiting: number
   /** Reaches the instances that are not selected, to list their threads and views. */
   client: Pick<Client, "instance">
   clock: Clock
@@ -72,9 +79,11 @@ export function AppSidebar({
       return next
     })
   }, [])
+  // Teammates only: an instance that holds a factory role shows on its factory's Library page.
+  const teammates = instances.filter((instance) => instance.factory_role == null)
   const ordered = [
-    ...instances.filter((instance) => instance.home),
-    ...instances.filter((instance) => !instance.home),
+    ...teammates.filter((instance) => instance.home),
+    ...teammates.filter((instance) => !instance.home),
   ]
   return (
     <>
@@ -149,6 +158,30 @@ export function AppSidebar({
                   </a>
                 }
               />
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={factoriesOpen}
+                aria-current={factoriesOpen ? "page" : undefined}
+                onClick={(event) => {
+                  event.preventDefault()
+                  open(FACTORIES_PATH)
+                }}
+                render={
+                  <a href={FACTORIES_PATH}>
+                    <FactoryIcon />
+                    <span>Factories</span>
+                  </a>
+                }
+              />
+              {waiting > 0 && (
+                <SidebarMenuBadge>
+                  <Badge variant="attention">
+                    <span aria-hidden>{waiting}</span>
+                    <span className="sr-only">{waiting} waiting for you</span>
+                  </Badge>
+                </SidebarMenuBadge>
+              )}
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarHeader>

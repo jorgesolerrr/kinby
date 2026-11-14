@@ -12,9 +12,11 @@ import {
   type Transport,
 } from "./client"
 import type {
+  FactoryRun,
   InstancePicksResult,
   InstanceSetup,
   InstanceSummary,
+  Line,
   OperationGetResult,
   ThreadSummary,
 } from "./contract"
@@ -54,6 +56,10 @@ export interface FakeHub {
   setups: Record<string, InstanceSetup>
   /** What `instance.picks.get` answers with, by instance. */
   picks: Record<string, InstancePicksResult>
+  /** What `line.list` answers with. */
+  lines: Line[]
+  /** The lines' runs, which `factory.run.list` answers with by line. */
+  runs: FactoryRun[]
 }
 
 /**
@@ -64,7 +70,8 @@ export interface FakeHub {
  * `thread.list` for an instance `threads` names, `view.list` with no views, `thread.create` with
  * `thread-1`, `thread-2` and on, and accepts every `thread.turn.start`. `instance.status` answers
  * with the setup `setups` holds for the instance, or nothing left to set up. `instance.picks.get`
- * answers with what `picks` holds for the instance, or no picks.
+ * answers with what `picks` holds for the instance, or no picks. `line.list` answers with `lines`
+ * and `factory.run.list` with the `runs` of the line it names, on no factories and no workbenches.
  */
 export function fakeHub({
   signedIn = true,
@@ -73,6 +80,8 @@ export function fakeHub({
   threads = {},
   setups = {},
   picks = {},
+  lines = [],
+  runs = [],
 }: {
   signedIn?: boolean
   instances?: InstanceSummary[]
@@ -80,6 +89,8 @@ export function fakeHub({
   threads?: Record<string, ThreadSummary[]>
   setups?: Record<string, InstanceSetup>
   picks?: Record<string, InstancePicksResult>
+  lines?: Line[]
+  runs?: FactoryRun[]
 } = {}): FakeHub {
   const operations = new Map<string, OperationGetResult>()
   let created = 0
@@ -104,6 +115,8 @@ export function fakeHub({
     threads,
     setups,
     picks,
+    lines,
+    runs,
     sockets: [],
     transport: {
       openSocket(url, events) {
@@ -185,6 +198,12 @@ export function fakeHub({
             return (
               hub.picks[String(params.instance_id)] ?? { hash: null, picks: [], mcp_servers: [] }
             )
+          }
+          if (method === "factory.list") return { factories: [] }
+          if (method === "workbench.list") return { workbenches: [] }
+          if (method === "line.list") return { lines: hub.lines }
+          if (method === "factory.run.list" && isRecord(params)) {
+            return { runs: hub.runs.filter((run) => run.line_id === params.line_id), cursor: null }
           }
           return undefined
         })

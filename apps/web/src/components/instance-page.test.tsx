@@ -18,6 +18,7 @@ import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
+import { answers as lineAnswers } from "@/components/factories-testing"
 import { InstancePage } from "@/components/instance-page"
 
 const setup: InstanceSetup = {
@@ -855,5 +856,33 @@ describe("the toolset of an instance", () => {
     const toolset = await openWithToolset({ ...stopped, setup_pending: false })
 
     expect(within(toolset).getByText("Off: bash")).toBeDefined()
+  })
+})
+
+describe("the lines it owns", () => {
+  const home = instanceSummary({ instance_id: "home", persona_name: "Kinby", home: true })
+
+  it("links to each line it owns, with its runs that need you under it", async () => {
+    const { user } = await openPage(lineAnswers, home)
+
+    const owned = within(await screen.findByRole("list", { name: "Lines" }))
+    expect(owned.getAllByRole("listitem").map((item) => item.getAttribute("aria-label"))).toEqual([
+      "software on kinby",
+      "course on cec-moodle",
+      "course on kinby",
+    ])
+    const kinby = within(owned.getByRole("listitem", { name: "software on kinby" }))
+    expect(kinby.getByText("2 unfinished")).toBeDefined()
+    expect(kinby.getByRole("link", { name: /issue 1305/ })).toBeDefined()
+    expect(kinby.queryByRole("link", { name: /issue 1310/ })).toBeNull()
+    await user.click(kinby.getByRole("link", { name: "software on kinby" }))
+    expect(window.location.pathname).toBe("/factories/lines/l-kinby")
+  })
+
+  it("is absent on an instance that owns no line", async () => {
+    await openPage(lineAnswers, instanceSummary({ instance_id: "ada", persona_name: "Ada" }))
+
+    await screen.findByRole("list", { name: "Toolset" })
+    expect(screen.queryByRole("list", { name: "Lines" })).toBeNull()
   })
 })

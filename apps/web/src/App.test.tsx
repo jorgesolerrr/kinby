@@ -1,8 +1,10 @@
 import { createClient } from "@kinby/contract"
 import type {
+  FactoryRun,
   InstancePicksResult,
   InstanceSetup,
   InstanceSummary,
+  Line,
   ThreadSummary,
 } from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
@@ -28,6 +30,8 @@ function openApp({
   threads = {},
   setups = {},
   picks = {},
+  lines = [],
+  runs = [],
 }: {
   signedIn: boolean
   instances?: InstanceSummary[]
@@ -35,8 +39,10 @@ function openApp({
   threads?: Record<string, ThreadSummary[]>
   setups?: Record<string, InstanceSetup>
   picks?: Record<string, InstancePicksResult>
+  lines?: Line[]
+  runs?: FactoryRun[]
 }) {
-  const hub = fakeHub({ signedIn, instances, removed, threads, setups, picks })
+  const hub = fakeHub({ signedIn, instances, removed, threads, setups, picks, lines, runs })
   const clock = fakeClock()
   const { unmount } = render(
     <App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />,
@@ -188,6 +194,18 @@ describe("the instances", () => {
 
     expect(await screen.findByRole("button", { name: "Ada" })).toBeDefined()
     expect((await instanceGroup("research")).getByText("stopped")).toBeDefined()
+  })
+
+  it("lists teammates only, leaving out an instance that holds a factory role", async () => {
+    const coder = instanceSummary({
+      instance_id: "hub-coder",
+      persona_name: "Coder",
+      factory_role: { factory: "software", name: "coder" },
+    })
+    openApp({ signedIn: true, instances: [ada, coder] })
+
+    expect(await instanceRow("Ada")).toBeDefined()
+    expect(screen.queryByRole("button", { name: /^Coder/ })).toBeNull()
   })
 
   it("shows the state the runtime observed, not the one the instance is meant to be in", async () => {
@@ -521,6 +539,7 @@ describe("the sidebar", () => {
       "kinby",
       "New thread",
       "Library",
+      "Factories",
       "New instance",
     ])
     const newInstance = screen.getByRole("link", { name: "New instance" })
@@ -539,6 +558,56 @@ describe("the sidebar", () => {
 
     expect(window.location.pathname).toBe("/library")
     expect(await screen.findByRole("heading", { name: "Library" })).toBeDefined()
+  })
+
+  it("opens the Factories area from its top band, counting the runs that need you", async () => {
+    const line = {
+      line_id: "l-kinby",
+      factory: "software",
+      workbench_id: "wb-kinby",
+      owner_id: "hub-ada",
+      model: null,
+      usd_per_day: null,
+      intake: null,
+    }
+    const run = (run_id: string, status: FactoryRun["status"]): FactoryRun => ({
+      run_id,
+      status,
+      line_id: "l-kinby",
+      factory: "software",
+      instance_id: "hub-ada",
+      step: "implement",
+      work_item: { issue: 7 },
+      created_at: "2026-10-12T09:00:00Z",
+      updated_at: "2026-10-12T09:00:00Z",
+    })
+    openApp({
+      signedIn: true,
+      instances: [ada],
+      lines: [line],
+      runs: [run("r-1", "needs-human"), run("r-2", "needs-human"), run("r-3", "running")],
+    })
+    const user = userEvent.setup()
+
+    const factories = await screen.findByRole("link", { name: /^Factories/ })
+    expect(
+      await within(factories.closest("li") as HTMLElement).findByText("2 waiting for you"),
+    ).toBeDefined()
+    await user.click(factories)
+
+    expect(window.location.pathname).toBe("/factories")
+    expect(await screen.findByRole("heading", { name: "Factories", level: 1 })).toBeDefined()
+    expect(factories.getAttribute("aria-current")).toBe("page")
+  })
+
+  it("opens a line's page at its path", async () => {
+    window.history.replaceState(null, "", "/factories/lines/l-gone")
+    openApp({ signedIn: true, instances: [ada] })
+
+    await userMenu()
+    expect(screen.getByRole("link", { name: /^Factories/ }).getAttribute("aria-current")).toBe(
+      "page",
+    )
   })
 
   it("shows the dot while threads or factory runs need you, unfolding the group", async () => {

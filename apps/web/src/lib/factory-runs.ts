@@ -12,6 +12,19 @@ export const STATUSES: Record<FactoryRunStatus, string> = {
   cancelled: "Cancelled",
 }
 
+/** How each status of a run shows as a badge. */
+export const STATUS_BADGES: Record<
+  FactoryRunStatus,
+  "attention" | "success" | "outline" | "secondary"
+> = {
+  "needs-human": "attention",
+  running: "success",
+  queued: "outline",
+  parked: "outline",
+  done: "secondary",
+  cancelled: "secondary",
+}
+
 /** A run's work item as its values, "issue 7". */
 export function workItem(run: FactoryRun): string {
   return Object.entries(run.work_item)

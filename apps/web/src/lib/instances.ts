@@ -11,6 +11,9 @@ export const INSTANCE_TABS: { id: InstanceTab; label: string }[] = [
   { id: "stats", label: "Stats" },
 ]
 
+/** What the hub runs as a container, an instance or a workbench, as it reports how it runs. */
+type Contained = Pick<InstanceSummary, "intended_state" | "process" | "detail">
+
 export type InstanceNotice = InstanceSummary["notices"][number]
 
 const NOTICE_TITLES: Record<InstanceNotice["code"], string> = {
@@ -38,8 +41,20 @@ export function instanceName(instance: InstanceSummary): string {
   return instance.persona_name ?? instance.manifest_id
 }
 
-/** What the runtime saw the instance doing when it was listed. A container in a restart loop reads as restarting. */
-export function observedState(instance: InstanceSummary): ProcessState | "restarting" {
+/** What each state `shownState` gives is called. */
+export const STATES: Record<ReturnType<typeof shownState>, string> = {
+  running: "Running",
+  starting: "Starting",
+  restarting: "Restarting",
+  stopped: "Stopped",
+  failed: "Failed",
+  created: "Created",
+  missing: "Missing",
+  unavailable: "Unavailable",
+}
+
+/** What the runtime saw the instance or workbench doing when it was listed. A container in a restart loop reads as restarting. */
+export function observedState(instance: Contained): ProcessState | "restarting" {
   return instance.process === "starting" && instance.detail === "restarting"
     ? "restarting"
     : instance.process
@@ -49,7 +64,7 @@ export function observedState(instance: InstanceSummary): ProcessState | "restar
  * What the sidebar says the instance is doing. One the user stopped reads stopped when its
  * container is down for any reason, a crash included. The process reads as observed otherwise.
  */
-export function shownState(instance: InstanceSummary): ProcessState | "restarting" {
+export function shownState(instance: Contained): ProcessState | "restarting" {
   const down = ["stopped", "failed", "created", "missing"].includes(instance.process)
   return instance.intended_state === "stopped" && down ? "stopped" : observedState(instance)
 }

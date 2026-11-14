@@ -17,6 +17,7 @@ import {
 } from "react"
 
 import { BrowserProfiles } from "@/components/browser-profiles"
+import { PageLink, RunBadge } from "@/components/factories-page"
 import { SectionFrame } from "@/components/section-frame"
 import { Secrets } from "@/components/secrets-section"
 import { LoginRow, SubscriptionLogins } from "@/components/subscription-logins"
@@ -36,8 +37,11 @@ import {
   ItemTitle,
 } from "@/components/ui/item"
 import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
+import { useRead } from "@/hooks/use-read"
+import { workItem } from "@/lib/factory-runs"
 import { instanceName, noticeKey, noticeTitle, observedState } from "@/lib/instances"
-import { openSkills, openView } from "@/lib/selection"
+import { lineName, readFloor, unfinished } from "@/lib/lines"
+import { linePath, openSkills, openView } from "@/lib/selection"
 import { BotIcon, ChevronRightIcon, CirclePauseIcon, LayoutDashboardIcon } from "lucide-react"
 
 /**
@@ -83,6 +87,7 @@ export function InstancePage({
   )
   const sections = (
     <>
+      <OwnedLines caller={caller} clock={clock} instanceId={instance.instance_id} name={name} />
       {status?.browser === true && (
         <>
           <BrowserProfiles caller={caller} clock={clock} instanceId={instance.instance_id} />
@@ -165,6 +170,63 @@ export function InstancePage({
     )
   }
   return null
+}
+
+/**
+ * The lines the instance owns, each linking to its page, with how many runs it has unfinished and
+ * the runs that wait on the user under it. Absent while the instance owns none, or when the lines
+ * cannot be read.
+ */
+function OwnedLines({
+  caller,
+  clock,
+  instanceId,
+  name,
+}: {
+  caller: Pick<Client, "call">
+  clock: Clock
+  instanceId: string
+  name: string
+}) {
+  const read = useCallback(() => readFloor(caller), [caller])
+  const floor = useRead(read, clock).value
+  const owned = floor?.lines.filter(({ line }) => line.owner_id === instanceId) ?? []
+  if (floor === undefined || owned.length === 0) return null
+  return (
+    <SectionFrame title="Lines" lead={`The factories ${name} looks after.`} variant="page">
+      <ItemGroup variant="outline" aria-label="Lines">
+        {owned.map(({ line, runs }) => {
+          const lineTitle = lineName(line, floor.workbenches)
+          return (
+            <li key={line.line_id} aria-label={lineTitle}>
+              <Item size="sm">
+                <ItemContent>
+                  <ItemTitle>
+                    <PageLink href={linePath(line.line_id)} className="hover:underline">
+                      {lineTitle}
+                    </PageLink>
+                  </ItemTitle>
+                  <ItemDescription>{unfinished(runs).length} unfinished</ItemDescription>
+                  {runs
+                    .filter(({ needsYou }) => needsYou)
+                    .map((held) => (
+                      <PageLink
+                        key={held.run.run_id}
+                        href={linePath(line.line_id)}
+                        className="flex items-center gap-2 hover:underline"
+                      >
+                        <RunBadge {...held} />
+                        {workItem(held.run)}
+                      </PageLink>
+                    ))}
+                </ItemContent>
+              </Item>
+            </li>
+          )
+        })}
+      </ItemGroup>
+    </SectionFrame>
+  )
 }
 
 /** Overview's sections, one under the other. */

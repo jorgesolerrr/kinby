@@ -1,11 +1,4 @@
-import type {
-  Client,
-  Clock,
-  FactoryRun,
-  FactoryRunDetail,
-  FactoryRunStatus,
-  InstanceSummary,
-} from "@kinby/contract"
+import type { Client, Clock, FactoryRun, FactoryRunDetail, InstanceSummary } from "@kinby/contract"
 import { CircleAlertIcon, GitBranchIcon } from "lucide-react"
 import { useCallback, useId, useState } from "react"
 
@@ -43,18 +36,16 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { useRead } from "@/hooks/use-read"
 import { when } from "@/lib/config-changes"
-import { byAttention, finished, STATUSES, standing, workItem } from "@/lib/factory-runs"
+import {
+  byAttention,
+  finished,
+  STATUS_BADGES,
+  STATUSES,
+  standing,
+  workItem,
+} from "@/lib/factory-runs"
 import { instanceName } from "@/lib/instances"
 import { openTab } from "@/lib/selection"
-
-const BADGES: Record<FactoryRunStatus, "attention" | "success" | "outline" | "secondary"> = {
-  "needs-human": "attention",
-  running: "success",
-  queued: "outline",
-  parked: "outline",
-  done: "secondary",
-  cancelled: "secondary",
-}
 
 /** How many finished runs a card shows before the user asks for the rest. */
 const FINISHED_SHOWN = 3
@@ -193,7 +184,7 @@ function InstanceRuns({
               <ItemContent className="min-w-48">
                 <ItemTitle>
                   {workItem(run)}
-                  <Badge variant={BADGES[run.status]}>{STATUSES[run.status]}</Badge>
+                  <Badge variant={STATUS_BADGES[run.status]}>{STATUSES[run.status]}</Badge>
                 </ItemTitle>
                 <ItemDescription>
                   {[
