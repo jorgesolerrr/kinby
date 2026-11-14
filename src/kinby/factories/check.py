@@ -28,6 +28,8 @@ from kinby.contracts import (
 )
 from kinby.factories import ships_recipe
 from kinby.factories.file import (
+    BASE,
+    BRANCH,
     TEMPLATES_DIR,
     AgentStep,
     ApproveStep,
@@ -169,24 +171,28 @@ def _instances(
     folder: Path,
     templates: dict[InstanceName, _Template],
 ) -> Iterator[str]:
-    shipped_skills = {path.name for path in SHIPPED_SKILLS.iterdir() if path.is_dir()}
     for name, declared in factory.instances.items():
         if name not in templates:
             yield f'Instance "{name}" has no template: {TEMPLATES_DIR}/{name}/ is not a folder.'
         recipe = declared.image
         if recipe is not None and not ships_recipe(recipe):
             yield f'Instance "{name}" names image recipe "{recipe}", which kinby does not ship.'
-        for skill in declared.suggested_picks:
-            if skill not in shipped_skills:
-                yield (
-                    f'Instance "{name}" suggests skill "{skill}", '
-                    "which the shipped library does not hold."
-                )
+        for skill in _unshipped(declared.suggested_picks):
+            yield (
+                f'Instance "{name}" suggests skill "{skill}", '
+                "which the shipped library does not hold."
+            )
         declarations = list(_declarations(name, declared))
         yield from declarations
         # The defaults land only where the declarations hold, so one mistake is reported once.
         if name in templates and not declarations:
             yield from _initialization(name, declared, folder / TEMPLATES_DIR / name)
+
+
+def _unshipped(skills: Iterable[str]) -> list[str]:
+    """Those of *skills* the shipped library does not hold."""
+    shipped = {path.name for path in SHIPPED_SKILLS.iterdir() if path.is_dir()}
+    return [skill for skill in skills if skill not in shipped]
 
 
 def _declarations(name: InstanceName, declared: InstanceDeclaration) -> Iterator[str]:
@@ -234,6 +240,8 @@ def _requirements(factory: WorkbenchFactory) -> Iterator[str]:
             seen.add(field.name)
             yield from _field_failures(field)
     yield from login_declaration_problems(required.logins)
+    for skill in _unshipped(required.suggested_picks):
+        yield f'The factory suggests skill "{skill}", which the shipped library does not hold.'
 
 
 def _workbench_steps(
@@ -269,6 +277,7 @@ def _workbench_steps(
         ("intake", intake),
         ("needs_human", factory.needs_human),
         ("ended", factory.ended),
+        ("worktree", factory.worktree),
     ):
         if call is not None and call.call not in tools:
             yield f'{key} calls tool "{call.call}", which the factory\'s folder does not hold.'
@@ -434,9 +443,12 @@ def _run_calls(factory: FactoryFile, templates: dict[InstanceName, _Template]) -
 
 
 def _inputs(factory: FactoryFile | WorkbenchFactory) -> Iterator[str]:
-    """Each value a step requires, a wait or a command names is held: by the work item or an
-    earlier step. Each value done_requires or a closing filter names is held by any step."""
+    """Each value a step requires, a wait or a command names is held: by the work item, the
+    factory's worktree call or an earlier step. Each value done_requires or a closing filter names
+    is held by any step."""
     held = set(factory.work_item)
+    if isinstance(factory, WorkbenchFactory) and factory.worktree is not None:
+        held |= {BRANCH, BASE}
     for step in factory.steps:
         for value in step.requires:
             if value not in held:

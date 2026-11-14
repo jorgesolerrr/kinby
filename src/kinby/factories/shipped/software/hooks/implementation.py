@@ -158,7 +158,7 @@ def _ahead(workspace: Path, branch: str, base: str) -> list[str]:
     """The commits of *branch* past its base, or, once the base merged and left origin, past both
     its last head and the branch it landed on.
 
-    The coder's github tools count them the same way. A plugin file loads alone, so each keeps
+    The factory's github tools count them the same way. A plugin file loads alone, so each keeps
     its own copy.
     """
     merged = _merged_base(workspace, base)

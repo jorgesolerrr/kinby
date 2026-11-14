@@ -267,9 +267,9 @@ def test_a_converted_instance_is_a_workbench_with_what_it_held_and_a_line_owned_
             assert isinstance(line, Line), line
             assert (line.factory, line.workbench_id, line.owner_id) == ("tickets", coder, hub.home)
             assert line.model == "openai:gpt-5"
-            assert line.intake == "tickets-cec-backend"
+            assert line.intake == "tickets_cec-backend"
             assert await _lines(hub) == [line]
-            assert await _routines(hub) == ["tickets-cec-backend"]
+            assert await _routines(hub) == ["tickets_cec-backend"]
             assert isinstance(workbench, Workbench), workbench
             assert workbench.name == "cec-backend"
             assert workbench.recipe == "coder"

@@ -9,7 +9,7 @@ When a read this flow depends on fails, stop and tell the user what failed. Neve
 
 ## 1. Choose what it starts from
 
-Read `factory.list`. If a factory has a role for the work, such as the software factory's `coder` for a repository, the instance takes that role in `factory_role`, as `{"factory": ..., "name": ...}`. It keeps the role for life and is written from the role's template. Anything else is a vanilla instance, built from kinby's defaults, and leaves `factory_role` out.
+Read `factory.list`. If a factory has a role for the work, the instance takes that role in `factory_role`, as `{"factory": ..., "name": ...}`. It keeps the role for life and is written from the role's template. Anything else is a vanilla instance, built from kinby's defaults, and leaves `factory_role` out.
 
 Done when you know the role, or know there is none.
 

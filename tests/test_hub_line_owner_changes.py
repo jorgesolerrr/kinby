@@ -309,7 +309,7 @@ def test_the_intake_routine_moves_to_the_new_owner_and_keeps_its_delivery_addres
             assert isinstance(changed, Line), changed
             assert (before, after) == (202, 202)
             assert await _routine_names(hub.dispatcher) == []
-            assert await _routine_names(dispatcher) == ["tickets-cec-backend"]
+            assert await _routine_names(dispatcher) == ["tickets_cec-backend"]
 
     asyncio.run(scenario())
 
@@ -329,10 +329,10 @@ def test_a_change_that_fails_part_way_leaves_the_line_its_routine_and_memory_wit
             assert isinstance(refused, ErrorEnvelope), refused
             assert refused.code is ErrorCode.INVALID_SETUP
             assert refused.fields["owner_id"].startswith(
-                'Instance "teammate" did not take the intake routine "tickets-cec-backend": '
+                'Instance "teammate" did not take the intake routine "tickets_cec-backend": '
             )
             assert await _owner(hub.client, line) == hub.home
-            assert await _routine_names(hub.dispatcher) == ["tickets-cec-backend"]
+            assert await _routine_names(hub.dispatcher) == ["tickets_cec-backend"]
             assert _recalled(hub.hub, hub.home) == [
                 lessons[None],
                 lessons["landing"],
@@ -360,7 +360,7 @@ def test_an_old_owner_that_cannot_delete_the_routine_keeps_the_line_and_the_new_
             assert isinstance(refused, ErrorEnvelope), refused
             assert refused.code is ErrorCode.ROUTINE_PENDING
             assert await _owner(hub.client, line) == hub.home
-            assert await _routine_names(hub.dispatcher) == ["tickets-cec-backend"]
+            assert await _routine_names(hub.dispatcher) == ["tickets_cec-backend"]
             assert await _routine_names(dispatcher) == []
             assert lessons["cec-backend"] in _recalled(hub.hub, hub.home)
             assert _recalled(hub.hub, teammate) == []
