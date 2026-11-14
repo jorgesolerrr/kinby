@@ -61,7 +61,7 @@ _RULES = (
 _CONTRACT = (
     "Write nothing and propose nothing. Your final message is the dream report: each "
     "repeated mistake and ignored lesson, citing the turn by its thread and turn ids or the "
-    "run by its run id, and the fact by its node id."
+    "run by its run id and its workbench, and the fact by its node id."
 )
 
 
@@ -109,6 +109,12 @@ class _RunLog:
         return [attempt for stop in self.stops for attempt in stop.attempts]
 
     @property
+    def workbench(self) -> str | None:
+        """The workbench of the line the run belongs to. None for a run of a factory written the
+        older way."""
+        return next((stop.workbench for stop in self.stops if stop.workbench is not None), None)
+
+    @property
     def started(self) -> datetime:
         return min(
             [turn.at for turn in self.turns] + [attempt.started_at for attempt in self.attempts]
@@ -137,6 +143,7 @@ class _BadTurn:
 @dataclass(frozen=True)
 class _BadRun:
     run: UUID
+    workbench: str | None
     attempts: tuple[StepAttempt, ...]
     failed_tools: tuple[_FailedTool, ...]
     bad_ratings: tuple[TurnRated, ...]
@@ -216,6 +223,7 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
             )
             return _BadRun(
                 run=run_id,
+                workbench=run.workbench,
                 attempts=tuple(run.attempts),
                 failed_tools=tuple(failed for turn in run.turns for failed in turn.failed_tools),
                 bad_ratings=tuple(

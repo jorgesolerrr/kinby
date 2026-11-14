@@ -183,7 +183,12 @@ def attempt(step: str, number: int, summary: str) -> StepAttempt:
     )
 
 
-def factory_run(instance: Instance, *attempts: StepAttempt, recalled: NodeId | None = None) -> UUID:
+def factory_run(
+    instance: Instance,
+    *attempts: StepAttempt,
+    recalled: NodeId | None = None,
+    workbench: str | None = None,
+) -> UUID:
     """A run that stopped as done in the week after *attempts*, whose coding session may have
     recalled a fact."""
     run_id = uuid4()
@@ -206,6 +211,7 @@ def factory_run(instance: Instance, *attempts: StepAttempt, recalled: NodeId | N
         status=FactoryRunStatus.DONE,
         generation=1,
         attempts=list(attempts),
+        workbench=workbench,
     )
     record(instance, _IN_THE_WEEK, run_id, RunStopped(stop=stop))
     return run_id
@@ -322,6 +328,24 @@ def test_the_frame_holds_only_the_bad_turns_and_runs_with_their_facts_and_recall
         assert str(clean) not in model.wake
     assert "repeated mistake" in model.wake
     assert "ignored lesson" in model.wake
+
+
+def test_the_frame_names_each_bad_run_with_its_workbench(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    review_stage(instance)
+    sent_back = factory_run(
+        instance,
+        attempt("implement", 1, "Built it."),
+        attempt("implement", 2, "Fixed the lint."),
+        workbench="cec-backend",
+    )
+    model = ReviewingModel()
+
+    review(instance, model)
+
+    assert str(sent_back) in model.wake
+    assert '"workbench": "cec-backend"' in model.wake
+    assert "the run by its run id and its workbench" in model.wake
 
 
 def test_the_stage_is_offered_no_write_tool_and_writes_nothing(tmp_path: Path) -> None:
