@@ -576,6 +576,14 @@ export interface Contract {
       command: LineListCommand;
       result: LineListResult;
     };
+    "line.owned.hand_in": {
+      command: LineHandInCommand;
+      result: FactoryRun;
+    };
+    "line.owned.list": {
+      command: LineOwnedListCommand;
+      result: LineOwnedListResult;
+    };
     "line.remove": {
       command: LineRemoveCommand;
       result: LineListResult;
@@ -2242,6 +2250,18 @@ export interface LineIntakeResult {
 export interface LineListCommand {}
 export interface LineListResult {
   lines: Line[];
+}
+/**
+ * List the lines this instance owns, each with its unfinished runs.
+ */
+export interface LineOwnedListCommand {}
+export interface LineOwnedListResult {
+  lines: OwnedLine[];
+}
+export interface OwnedLine {
+  line: Line;
+  runs: FactoryRun[];
+  workbench: string;
 }
 /**
  * Remove one line. Its workbench stays as it is. The result lists the lines left.

@@ -116,9 +116,11 @@ from kinby.contracts import (
     LINE_GET,
     LINE_HAND_IN,
     LINE_INTAKE,
-    LINE_INTAKE_SCOPES,
     LINE_LIST,
+    LINE_OWNED_HAND_IN,
+    LINE_OWNED_LIST,
     LINE_REMOVE,
+    LINE_SCOPES,
     LINE_SETUP,
     LINE_UPDATE,
     NOTIFICATION_LIST,
@@ -241,6 +243,8 @@ from kinby.contracts import (
     LineIntakeResult,
     LineListCommand,
     LineListResult,
+    LineOwnedListCommand,
+    LineOwnedListResult,
     LineRemoveCommand,
     LineSetupCommand,
     LineUpdateCommand,
@@ -251,6 +255,7 @@ from kinby.contracts import (
     OperationGetResult,
     OperationKind,
     OperationState,
+    OwnedLine,
     PermissionMode,
     ProcessState,
     Readiness,
@@ -983,7 +988,7 @@ class Hub:
             return frozenset()
         return (
             NOTIFICATION_SCOPES
-            | LINE_INTAKE_SCOPES
+            | LINE_SCOPES
             | (INTAKE_SCOPES if record.factory is not None else frozenset())
             | (HOME_SCOPES if record.home else frozenset())
             | (BROWSER_SCOPES if self._browser_on(manifest) else frozenset())
@@ -1016,6 +1021,9 @@ class Hub:
             dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
         if Scope.LINE_INTAKE in scopes:
             dispatcher.register(LINE_INTAKE, partial(self.line_intake, instance_id))
+        if Scope.LINE_OWNER in scopes:
+            dispatcher.register(LINE_OWNED_LIST, partial(self.owned_lines, instance_id))
+            dispatcher.register(LINE_OWNED_HAND_IN, partial(self.owned_hand_in, instance_id))
         if Scope.BROWSER_OPEN in scopes:
             browsers = self._browsers
             assert browsers is not None
@@ -3728,6 +3736,31 @@ class Hub:
         """Start a run on the line's workbench, or return the line's unfinished run of the same
         work item."""
         line = await self.get_line(LineGetCommand(line_id=command.line_id))
+        return await self.runs.hand_in(line, command.work_item)
+
+    async def owned_lines(
+        self, instance_id: UUID, command: LineOwnedListCommand
+    ) -> LineOwnedListResult:
+        """The lines the instance owns, each with its unfinished runs."""
+        return LineOwnedListResult(
+            lines=[
+                OwnedLine(
+                    line=line,
+                    workbench=self._workbench_name(line.workbench_id),
+                    runs=self.registry.runs(line.factory, UNFINISHED, line_id=line.line_id),
+                )
+                for line in self.registry.lines()
+                if line.owner_id == instance_id
+            ]
+        )
+
+    async def owned_hand_in(self, instance_id: UUID, command: LineHandInCommand) -> FactoryRun:
+        """Hand a work item to a line the instance owns, as hand_in does."""
+        line = next(
+            (line for line in self.registry.lines() if line.line_id == command.line_id), None
+        )
+        if line is None or line.owner_id != instance_id:
+            raise PermissionDenied(f'Line "{command.line_id}" is no line of this instance.')
         return await self.runs.hand_in(line, command.work_item)
 
     async def line_intake(self, instance_id: UUID, command: LineIntakeCommand) -> LineIntakeResult:

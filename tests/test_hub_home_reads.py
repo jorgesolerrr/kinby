@@ -352,6 +352,7 @@ def test_hub_tools_are_on_turns_the_user_starts_only(
     tmp_path, monkeypatch, origin: Origin, present
 ):
     as_the_home_instance(monkeypatch, "http://hub:8080/instances/x/hub")
+    monkeypatch.setenv("KINBY_HUB_SCOPES", "hub:home,hub:read,line:owner")
     instance = instance_at(tmp_path)
     routine_file(instance, "description: News")
     model = RoutineModel()
@@ -376,6 +377,8 @@ def test_hub_tools_are_on_turns_the_user_starts_only(
 
     assert "hub_read" not in model.tools
     assert ("hub_write" in model.tools) is present
+    assert ("hand_to_line" in model.tools) is present
+    assert "list_lines" in model.tools
 
 
 @asynccontextmanager

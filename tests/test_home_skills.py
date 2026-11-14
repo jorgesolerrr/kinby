@@ -15,7 +15,7 @@ from kinby.instance import init_instance, inspect_instance
 from kinby.instance.layout import SKILL_FILE
 from kinby.instance.manifest import RawManifest
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
-from kinby.plugins import defaults, hub
+from kinby.plugins import defaults, hub, lines
 from kinby.plugins.core import core_tools
 from kinby.plugins.hooks import HookResult, StepEnd, hook
 from kinby.plugins.hub import (
@@ -175,6 +175,11 @@ def test_the_factory_reference_names_what_a_templates_code_and_kinby_toml_use():
 
 def test_write_routine_names_every_hub_tool_a_routine_lacks():
     """A new hub tool fails this until write-routine says a routine's turns lack it."""
-    declared = {each.name for each in vars(hub).values() if isinstance(each, Tool) and each.hub}
+    declared = {
+        each.name
+        for module in (hub, lines)
+        for each in vars(module).values()
+        if isinstance(each, Tool) and each.hub
+    }
 
     assert declared <= _cited("write-routine")
