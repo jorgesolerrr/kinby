@@ -35,7 +35,7 @@ from kinby.contracts import (
     WorkbenchDeleteCommand,
 )
 from kinby.hub import Hub
-from tests.test_factory_runs import detail, settled
+from tests.test_factory_runs import detail, settled, told
 from tests.test_factory_waits import awaiting_approval, parked, signalled, stopped
 from tests.test_hub import FakeControl, FakeRuntime, finished_operation, hub_at, hub_client
 from tests.test_hub_factories import write_factory
@@ -288,6 +288,31 @@ def test_a_run_that_needs_a_human_calls_the_factorys_needs_human_tool_on_its_wor
         assert call.step == CodeStepRun(call="report_stop", summary="make lint failed.")
         worktree = RunFolder(branch=f"tickets/issue-12-{run.run_id.hex[:8]}")
         assert (call.origin.step, call.attempt, call.folder) == ("test", None, worktree)
+
+    asyncio.run(scenario())
+
+
+def test_a_run_that_needs_a_human_tells_the_lines_owner_once_for_that_stop(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="make lint failed.")]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        home = await _started_home(hub)
+        runtime.addresses[str(home)] = f"http://kinby-{home}:8787"
+        line = await _line(client, runtime)
+
+        run = await _handed_in(client, line, 12)
+        stopped = await settled(hub, run.run_id)
+
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert [(stop.run_id, stop.status) for stop in await told(control, 1)] == [
+            (run.run_id, FactoryRunStatus.NEEDS_HUMAN)
+        ]
+        [(endpoint, _)] = control.stops
+        assert endpoint.address == f"http://kinby-{home}:8787"
 
     asyncio.run(scenario())
 
