@@ -50,13 +50,19 @@ from kinby.contracts import (
 from kinby.hub import Hub
 from tests.test_factory_templates import FILES as ROLE_FILES
 from tests.test_factory_templates import created_roles, factory_hub
-from tests.test_hub import FakeRuntime, created_instance, finished_operation, hub_client
+from tests.test_hub import (
+    FakeRuntime,
+    created_instance,
+    finished_operation,
+    hub_client,
+    instance_environment,
+)
 from tests.test_hub_browser import FakeBrowserRuntime
 from tests.test_hub_factories import write_factory
 from tests.test_hub_logins import EDITOR
 from tests.test_hub_workbench_logins import SIGNED
 from tests.test_hub_workbench_workspace import _commands_set
-from tests.test_hub_workbenches import CEC_BACKEND, created, finished, got
+from tests.test_hub_workbenches import CEC_BACKEND, created, finished, got, started
 
 TICKETS = """\
 name: tickets
@@ -780,3 +786,112 @@ def test_a_setup_names_one_workbench_chosen_or_new():
     for named in ({}, {"workbench_id": uuid4(), "workbench": NewWorkbench(name="landing")}):
         with pytest.raises(ValidationError, match="Choose a workbench or describe a new one"):
             LineSetupCommand.model_validate({"factory": "tickets", **named})
+
+
+def test_a_setup_recreates_a_running_workbench_with_the_secrets_it_answers(tmp_path):
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        workbench_id = await started(client, runtime)
+
+        set_up = await client.call(
+            LINE_SETUP,
+            LineSetupCommand(
+                factory="tickets",
+                workbench_id=workbench_id,
+                secrets={"GH_TOKEN": SecretStr("ghp-new")},
+                commands={"checks": ["uv run pytest"]},
+            ),
+        )
+        assert isinstance(set_up, LineSetupResult), set_up
+        assert set_up.operation_id is not None
+        applied = await finished(
+            client,
+            WorkbenchOperationResult(operation_id=set_up.operation_id, workbench_id=workbench_id),
+        )
+
+        assert applied.state is OperationState.SUCCEEDED
+        [*_, container] = [
+            spec for spec in runtime.created if spec.instance_id == str(workbench_id)
+        ]
+        assert container.env["GH_TOKEN"] == "ghp-new"
+        assert (await got(client, workbench_id)).recreate_reasons == []
+
+    asyncio.run(scenario())
+
+
+def test_a_blank_secret_answers_nothing_and_keeps_the_one_the_workbench_holds(tmp_path):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        workbench_id = await _cec_backend(client)
+        bare = await created(client, WorkbenchCreateCommand(name="bare", recipe="coder"))
+
+        kept = await client.call(
+            LINE_SETUP,
+            LineSetupCommand(
+                factory="tickets", workbench_id=workbench_id, secrets={"GH_TOKEN": SecretStr(" ")}
+            ),
+        )
+        lacking = await _refused(
+            client,
+            LineSetupCommand(
+                factory="tickets",
+                workbench_id=bare.workbench_id,
+                secrets={"GH_TOKEN": SecretStr("")},
+                values={"MOODLE_URL": "https://moodle.example.com"},
+                commands={"checks": ["uv run pytest"]},
+            ),
+        )
+
+        assert isinstance(kept, LineSetupResult), kept
+        assert kept.operation_id is None
+        assert instance_environment(hub, workbench_id)["GH_TOKEN"] == "ghp-secret"
+        assert lacking == {
+            "workbench_id": 'Workbench "bare" lacks what factory "tickets" requires: '
+            'secret "GH_TOKEN".'
+        }
+
+    asyncio.run(scenario())
+
+
+def test_the_key_of_a_kinby_agent_steps_model_stays_required_when_the_factory_declares_it_optional(
+    tmp_path,
+):
+    hub = _hub(tmp_path)
+    optional = DRAFTS["factory.yaml"].replace(
+        "requires: { image: coder }",
+        """requires:
+  image: coder
+  secrets:
+    - { name: ANTHROPIC_API_KEY, label: Anthropic key, description: Calls Claude., type: text,
+        required: false }""",
+    )
+    write_factory(tmp_path / "hub" / "factories" / "drafts", DRAFTS | {"factory.yaml": optional})
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        workbench_id = await _cec_backend(client)
+
+        asked = await _described(
+            client, LineSetupDescribeCommand(factory="drafts", workbench_id=workbench_id)
+        )
+        fields = await _refused(
+            client, LineSetupCommand(factory="drafts", workbench_id=workbench_id)
+        )
+
+        assert [(field.name, field.required) for field in asked.secrets] == [
+            ("ANTHROPIC_API_KEY", True)
+        ]
+        assert fields == {
+            "workbench_id": 'Workbench "cec-backend" lacks what factory "drafts" requires: '
+            'secret "ANTHROPIC_API_KEY".'
+        }
+
+    asyncio.run(scenario())
