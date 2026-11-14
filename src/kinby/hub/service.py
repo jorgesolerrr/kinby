@@ -3860,8 +3860,7 @@ class Hub:
             source, target = GraphStore(old.path), GraphStore(owner.path)
             memory = source.marked(self._workbench_name(line.workbench_id))
             async with AsyncExitStack() as undo:
-                for node in target.take(memory):
-                    undo.callback(target.prune, node)
+                undo.callback(target.restore, target.take(memory))
                 if line.intake is not None:
                     read = RoutineReadCommand(name=line.intake)
                     held = RoutineFile.model_validate(
@@ -3879,9 +3878,8 @@ class Hub:
                     and (other.owner_id, other.workbench_id) == (old.instance_id, line.workbench_id)
                     for other in self.registry.lines()
                 ):
-                    undo.callback(source.take, memory)
-                    for node in memory:
-                        source.prune(node)
+                    undo.callback(source.restore, memory)
+                    source.restore(dict.fromkeys(memory))
                 self.registry.set_line_owner(line.line_id, owner.instance_id)
                 undo.pop_all()
             return moved

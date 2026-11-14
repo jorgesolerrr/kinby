@@ -669,8 +669,26 @@ def test_a_graph_takes_no_node_it_holds_already(tmp_path: Path) -> None:
 
     written = target.take(source.marked("landing"))
 
-    assert written == []
+    assert written == {}
     assert target.recall("install") == ()
+
+
+def test_a_forgotten_node_a_graph_takes_hides_the_live_copy_it_held_until_restored(
+    tmp_path: Path,
+) -> None:
+    source, target = GraphStore(tmp_path / "home"), GraphStore(tmp_path / "teammate")
+    node = _install_lessons(source)["landing"]
+    target.take(source.marked("landing"))
+    held = target.marked("landing")
+    source.forget(node, _FORGOTTEN_ON)
+
+    replaced = target.take(source.marked("landing"))
+    forgotten = [gone.fact.node for gone in target.forgotten_facts()]
+    target.restore(replaced)
+
+    assert replaced == held
+    assert forgotten == [node]
+    assert [hit.node for hit in target.recall("install")] == [node]
 
 
 def test_remember_escapes_frontmatter_values(tmp_path: Path) -> None:
