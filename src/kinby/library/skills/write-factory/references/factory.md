@@ -209,7 +209,7 @@ Nothing copies the folder into a workbench: each step reads it as it is then, so
 
 kinby cuts a folder for each run when its first step starts: a run worktree when the workspace is a git clone, and a directory named for the run otherwise. Every step runs in it. A stop for the user, a retry and a park leave it as it is. It goes when the run ends done or cancelled, after the `ended` call. No step cuts or removes it.
 
-Without `worktree`, the run worktree is on a branch kinby names for the factory, the work item and the run, cut from origin's default branch. With it, kinby first calls `worktree`'s `call` in the workspace, with the run values and `workspace` as a tool's parameters receive them. It returns the `branch` and the `base`, a branch of origin the run worktree is cut from, and the run holds both as values. A call that raises, or returns no branch or base, fails the step before it starts. Sent back to its first step, the run calls it again and starts over from the new base.
+Without `worktree`, the run worktree is on a branch kinby names for the factory, the work item and the run, cut from origin's default branch. With it, kinby first calls `worktree`'s `call` in the workspace, with the run values and `workspace` as a tool's parameters receive them. It returns the `branch` and the `base`, a branch of origin the run worktree is cut from, and the run holds both as values. A call that raises, or returns no branch or base, fails the step before it starts. kinby cuts the run worktree fresh from the base each time it names one, so commits an earlier run left on the branch never carry over. A retry of the step keeps the folder it named. Sent back to its first step, the run calls it again and starts over from the new base.
 
 ## A worked example
 

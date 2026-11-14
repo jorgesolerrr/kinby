@@ -258,7 +258,8 @@ def test_a_factorys_worktree_call_names_the_branch_and_base_of_the_folder_its_ru
         stacked = RunFolder(branch="agent/12-dark-mode", base="feature")
         assert done.run.status is FactoryRunStatus.DONE
         (_, test), (_, label) = control.steps
-        assert (test.folder, label.folder) == (NAMING, stacked)
+        assert (test.folder, test.fresh_folder) == (NAMING, True)
+        assert (label.folder, label.fresh_folder) == (stacked, False)
         assert label.results == STACKED
         assert removed == [stacked]
 
@@ -298,7 +299,7 @@ def test_a_retry_keeps_what_a_failed_attempt_named_and_a_send_back_to_the_start_
             (command.origin.step, command.folder, command.fresh_folder)
             for _, command in control.steps
         ] == [
-            ("test", NAMING, False),
+            ("test", NAMING, True),
             ("test", stacked, False),
             ("label", stacked, False),
             ("test", NAMING, True),
@@ -404,6 +405,31 @@ def test_a_work_item_that_matches_an_unfinished_run_of_the_line_returns_that_run
         assert again.run_id == first.run_id
         assert [run.run_id for run in await _runs(client, line)] == [first.run_id]
         control.step_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_handing_in_the_work_item_of_a_run_that_needs_a_human_retries_its_step(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="make lint failed.")]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        stopped = await settled(hub, run.run_id)
+
+        again = await _handed_in(client, line, 12)
+        done = await settled(hub, run.run_id)
+
+        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
+        assert again.run_id == run.run_id
+        assert again.status is not FactoryRunStatus.NEEDS_HUMAN
+        assert done.run.status is FactoryRunStatus.DONE
+        assert [attempt.step for attempt in done.attempts] == ["test", "test", "label"]
 
     asyncio.run(scenario())
 

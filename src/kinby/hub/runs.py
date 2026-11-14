@@ -331,7 +331,8 @@ class FactoryRuns:
     async def hand_in(self, line: Line, work_item: Mapping[ValueName, StepValue]) -> FactoryRun:
         """Start a run of the line's factory on its workbench, which the line's owner holds.
 
-        A work item that matches an unfinished run of the line returns that run.
+        A work item that matches an unfinished run of the line returns that run, and retries
+        the step of one that needs a human.
         """
         factory = self._file(line.factory)
         if factory is None:
@@ -345,6 +346,8 @@ class FactoryRuns:
         if started:
             self._publish(run)
             self._enqueue(run)
+        elif run.status is FactoryRunStatus.NEEDS_HUMAN:
+            return self._restart(run, run.step)
         return run
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
@@ -794,8 +797,8 @@ class FactoryRuns:
         step that works in the folder has it cut again once the run went back to it from a later
         one, so the run starts over from the base. A retry of that step keeps the folder. A
         factory's worktree call names the run worktree's branch and base again for that cut, and
-        first for a run that holds none yet. An agent step fails once what the line's runs cost
-        today reached its daily budget.
+        first for a run that holds none yet, and the folder is cut fresh from that base either
+        way. An agent step fails once what the line's runs cost today reached its daily budget.
         """
         line, placed = self._line(run), self._workbench(run)
         if line is None or placed is None:
@@ -839,7 +842,9 @@ class FactoryRuns:
             and workbench.workbench.workspace_source is not None
             and (fresh or folder.branch is None)
         ):
-            folder = RunFolder(branch=None, named_by=naming.call)
+            # A branch the factory names may hold an abandoned run's commits, so naming cuts it
+            # fresh from the base the factory names with it.
+            folder, fresh = RunFolder(branch=None, named_by=naming.call), True
         command = StepRunCommand(
             step=asked,
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step.id),
