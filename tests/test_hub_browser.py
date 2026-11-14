@@ -19,6 +19,7 @@ from kinby.contracts import (
     INSTANCE_STATUS,
     THREAD_TAKEOVER_INPUT,
     THREAD_TAKEOVER_START,
+    WORKBENCH_START,
     BrowserProfile,
     BrowserProfileDeleteCommand,
     BrowserProfileListResult,
@@ -30,17 +31,23 @@ from kinby.contracts import (
     FrameType,
     InstanceStatusCommand,
     InstanceStatusResult,
+    OperationState,
+    Scope,
     Stream,
     TakeoverKey,
     ThreadTakeoverInputCommand,
+    WorkbenchCreateCommand,
+    WorkbenchStartCommand,
 )
 from kinby.hub import Hub
 from kinby.hub.browser import BrowserLimits
 from kinby.instance import Serve
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE
 from tests.test_hub import FakeRuntime, hub_at, hub_client, started_instance
 from tests.test_hub_home_reads import answers
 from tests.test_hub_routing import control_token
 from tests.test_hub_server import served, url
+from tests.test_hub_workbenches import created, finished
 
 _PRIVATE_URL = "http://hub:8080"
 #: A browser service no browser in these tests reaches.
@@ -321,3 +328,49 @@ def test_the_status_says_which_instances_open_browsers(tmp_path):
     assert isinstance(alice, InstanceStatusResult)
     assert isinstance(bob, InstanceStatusResult)
     assert (alice.browser, bob.browser) == (True, False)
+
+
+async def started_workbench(hub: BrowserHub, *, name: str, browser: bool) -> UUID:
+    """Create and start a workbench, with a browser or with none."""
+    client = hub_client(hub.hub)
+    command = WorkbenchCreateCommand(name=name, browser=browser)
+    workbench_id = (await created(client, command)).workbench_id
+    start = await client.call(WORKBENCH_START, WorkbenchStartCommand(workbench_id=workbench_id))
+    assert (await finished(client, start)).state is OperationState.SUCCEEDED
+    hub.instances.addresses[str(workbench_id)] = _NO_INSTANCE
+    return workbench_id
+
+
+def test_a_workbench_with_a_browser_reaches_the_browser_service_and_one_with_none_is_refused(
+    tmp_path,
+):
+    async def scenario() -> None:
+        async with browser_hub(tmp_path / "hub", _LIMITS) as hub:
+            browsing = await started_workbench(hub, name="browsing", browser=True)
+            plain = await started_workbench(hub, name="plain", browser=False)
+
+            refused = error(await hub.open(plain, uuid4()))
+            assert hub.runtime.starts == 0
+            await hub.open(browsing, uuid4())
+            watched = [
+                await hub.hub.dispatcher.subscribe(
+                    THREAD_TAKEOVER_START.name,
+                    {"instance_id": workbench_id, "turn_id": uuid4()},
+                    HUB_SCOPES,
+                )
+                for workbench_id in (browsing, plain)
+            ]
+
+            assert refused["code"] == ErrorCode.NOT_FOUND.value
+            assert hub.runtime.starts == 1
+            assert [
+                isinstance(answer, ErrorEnvelope) and "browser off" in answer.message
+                for answer in watched
+            ] == [False, True]
+            routes = {
+                spec.instance_id: spec.env.get(HUB_SCOPES_VARIABLE)
+                for spec in hub.instances.created
+            }
+            assert (routes[str(browsing)], routes[str(plain)]) == (Scope.BROWSER_OPEN.value, None)
+
+    asyncio.run(scenario())

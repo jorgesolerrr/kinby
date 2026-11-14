@@ -637,6 +637,13 @@ class WaitingApproval(ContractModel):
     request: ApprovalRequested
 
 
+class WaitingTakeover(ContractModel):
+    """A takeover a workbench's turn parked on, which the user finishes on the hub."""
+
+    turn_id: UUID
+    request: TakeoverRequested
+
+
 class NotificationContent(ContractModel):
     """What an instance's notification says. The hub adds its header and link."""
 
@@ -935,6 +942,7 @@ class ThreadTakeoverStartCommand(ContractModel):
     """Watch the page of the instance's turn parked on a takeover, frame by frame. The hub keeps
     the page (ADR 0114)."""
 
+    #: The instance, or the workbench whose agent step's turn parked on the takeover.
     instance_id: UUID
     turn_id: UUID
 
@@ -949,6 +957,7 @@ class ThreadTakeoverInputCommand(ContractModel):
     """Pass the user's mouse or keyboard to the page of the instance's turn parked on a
     takeover."""
 
+    #: The instance, or the workbench whose agent step's turn parked on the takeover.
     instance_id: UUID
     turn_id: UUID
     input: TakeoverInput
@@ -1659,6 +1668,10 @@ class WorkbenchCreateCommand(ContractModel):
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
     #: The hub secret each variable takes and stays linked to, by variable.
     hub_secrets: dict[str, HubSecretName] = Field(default_factory=dict)
+    #: The subscription logins it holds, each signed in through workbench.login.start.
+    logins: list[SubscriptionLogin] = Field(default_factory=list)
+    #: Whether its agent steps get a browser, whose session it keeps between runs.
+    browser: bool = False
 
     @field_serializer("secrets", when_used="json")
     def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
@@ -1686,6 +1699,9 @@ class Workbench(ContractModel):
     recreate_reasons: list[RecreateReason]
     #: Its lists of repository commands, by name.
     repository_commands: list[RepositoryCommandList]
+    #: Its subscription logins, and how each stands.
+    logins: list[LoginSetup] = Field(default_factory=list)
+    browser: bool = False
 
 
 class WorkbenchListCommand(ContractModel):
@@ -1703,6 +1719,13 @@ class WorkbenchGetCommand(ContractModel):
 
 class WorkbenchStartCommand(ContractModel):
     workbench_id: UUID
+
+
+class WorkbenchLoginStartCommand(ContractModel):
+    """Run one of the workbench's subscription logins in a setup container."""
+
+    workbench_id: UUID
+    login_id: Annotated[str, Field(min_length=1)]
 
 
 class WorkbenchStopCommand(ContractModel):
@@ -4033,9 +4056,9 @@ class StepEnding(StrEnum):
     #: The subscription's limit stopped the step's coding client. The run parks until the plan
     #: window resets, then tries the step again without spending a retry.
     LIMITED = "limited"
-    #: The gate asked the user about a call of a kinby turn on a workbench. The run parks until
-    #: they answer, and the answer resumes the turn as the step's next attempt, spending no
-    #: retry.
+    #: The gate asked the user about a call of a kinby turn on a workbench, or the turn asked them
+    #: to take over its browser. The run parks until they answer or finish the takeover, which
+    #: resumes the turn as the step's next attempt, spending no retry.
     ASKED = "asked"
 
 
@@ -4084,7 +4107,8 @@ class CodeStepRun(ContractModel):
 
 
 class StepAnswer(ContractModel):
-    """The user's answer to the ask a kinby turn on a workbench parked on."""
+    """The user's answer to the ask a kinby turn on a workbench parked on. A finished takeover
+    answers approve."""
 
     decision: Literal[ApprovalDecision.APPROVE, ApprovalDecision.DENY]
     #: What the model should do instead. Only a denial carries one.
@@ -4100,7 +4124,7 @@ class StepAnswer(ContractModel):
 class AnsweredAsk(ContractModel):
     """The ask an earlier attempt's turn parked on, and the user's answer to it."""
 
-    ask: WaitingApproval
+    ask: WaitingApproval | WaitingTakeover
     answer: StepAnswer
 
 
@@ -4219,8 +4243,8 @@ class StepResult(ContractModel):
     resets_at: AwareDatetime | None = None
     #: What a step on a workbench spent. None for a step that ran no model.
     usage: StepUsage | None = None
-    #: The approval an asked step's turn parked on. Only an asked step has one.
-    ask: WaitingApproval | None = None
+    #: The approval or the takeover an asked step's turn parked on. Only an asked step has one.
+    ask: WaitingApproval | WaitingTakeover | None = None
     #: Each view a kinby turn wrote, as it stands, which the hub writes to the run's owner.
     views: list[View] = Field(default_factory=list)
 
@@ -4277,8 +4301,8 @@ class StepAttempt(ContractModel):
     session: CodingSessionId | None = None
     #: What a step on a workbench spent, a coding client counting only its own tokens.
     usage: StepUsage | None = None
-    #: The approval an asked attempt's turn parked on.
-    ask: WaitingApproval | None = None
+    #: The approval or the takeover an asked attempt's turn parked on.
+    ask: WaitingApproval | WaitingTakeover | None = None
     #: The user's answer to that ask, once they gave it.
     answer: StepAnswer | None = None
     #: The views the attempt wrote among the views of the run's instance.
@@ -4368,6 +4392,15 @@ class FactoryRunAnswerCommand(ContractModel):
     run_id: UUID
     approval_id: UUID
     answer: StepAnswer
+
+
+class FactoryRunTakeoverFinishCommand(ContractModel):
+    """Resume the turn a run's kinby step parked on its takeover, with its page as the user left
+    it, as the step's next attempt. The user drives the page with thread.takeover.start and
+    thread.takeover.input, naming the line's workbench and the turn."""
+
+    run_id: UUID
+    takeover_id: UUID
 
 
 class FactoryRunCancelCommand(ContractModel):

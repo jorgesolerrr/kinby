@@ -103,6 +103,7 @@ from kinby.memory import (
     open_memory,
 )
 from kinby.plugins.core import core_tools
+from kinby.plugins.hub_browser import HubBrowser, lends_a_browser
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
 from kinby.workbench import WorkbenchServer, WorkbenchSteps, prepare_workspace
@@ -548,7 +549,8 @@ async def _serve_workbench(listen: Serve, token: ControlToken, directory: Path) 
     shutdown_signals = (signal.SIGINT, signal.SIGTERM)
     for shutdown_signal in shutdown_signals:
         loop.add_signal_handler(shutdown_signal, stopping.set)
-    server = WorkbenchServer(listen, token, WorkbenchSteps(directory))
+    browser = HubBrowser() if lends_a_browser() else None
+    server = WorkbenchServer(listen, token, WorkbenchSteps(directory, browser=browser))
     try:
         address = await server.start()
         print(f"listen: {address.host}:{address.port}", flush=True)

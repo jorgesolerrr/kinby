@@ -1,6 +1,7 @@
 """An agent step's kinby turn on a workbench, which runs with what a workbench has instead of an
-instance: the run's folder, the shipped gate policy, and the skills it is offered. The views it
-writes belong to the run's owner, which the hub writes them to."""
+instance: the run's folder, the shipped gate policy, the skills it is offered, and the hub's
+browser when the workbench has one. The views it writes belong to the run's owner, which the hub
+writes them to."""
 
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from kinby.contracts import (
     StepResult,
     StepRunCommand,
     StepUsage,
+    TakeoverRequested,
     TokenTotals,
     TurnCompleted,
     TurnFailed,
@@ -31,6 +33,7 @@ from kinby.contracts import (
     View,
     ViewChanged,
     WaitingApproval,
+    WaitingTakeover,
 )
 from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
@@ -53,6 +56,7 @@ from kinby.instance import (
 from kinby.instance.dataclasses import Compaction
 from kinby.instance.permissions import SHIPPED_POLICY
 from kinby.instance.views import read_view
+from kinby.plugins.browser import BrowserService
 from kinby.plugins.skills import Skill
 
 #: The default tools a workbench's turn is offered: bash and the file tools.
@@ -71,18 +75,19 @@ async def run_turn(
     state: Path,
     transcript: Path,
     model_factory: ModelFactory,
+    browser: BrowserService | None,
 ) -> StepResult:
     """Run the step's turn in *folder* with *model*, its events kept in *state* and appended to
-    *transcript*. The turn is on a thread of its own, which no instance holds. An *answered* ask
-    resumes the turn that parked on it, from its checkpoint.
+    *transcript*, with the browser tools on *browser* when there is one. The turn is on a thread
+    of its own, which no instance holds. An *answered* ask resumes the turn that parked on it,
+    from its checkpoint.
 
-    A turn the gate parks on an ask ends the attempt asked. What the agent said last is only the
-    summary, the model calls of the attempt are what it spent, and it hands back each view it
-    wrote, however it ends.
+    A turn the gate parks on an ask, or that asks the user to take over its browser, ends the
+    attempt asked. What the agent said last is only the summary, the model calls of the attempt
+    are what it spent, and it hands back each view it wrote, however it ends.
     """
-    instance = Instance(
-        path=state, manifest=_manifest(state, folder, model), matching_rule="explicit directory"
-    )
+    manifest = _manifest(state, folder, model, browser=browser is not None)
+    instance = Instance(path=state, manifest=manifest, matching_rule="explicit directory")
     state.mkdir(parents=True, exist_ok=True)
     log = EventLog(state)
     runner = LangGraphRunner(
@@ -90,6 +95,7 @@ async def run_turn(
         event_log=log,
         model_factory=model_factory,
         gate_policy=SHIPPED_POLICY,
+        browser=browser,
         workbench_skills=tuple(skills),
     )
     preparation = runner.prepare_for_turn()
@@ -163,23 +169,26 @@ async def run_turn(
 
 
 def _asked(turn_id: UUID, events: Sequence[Event], usage: StepUsage) -> StepResult:
-    """The attempt of a turn that parked on the gate's ask, which the user answers."""
+    """The attempt of a turn that parked on the gate's ask, which the user answers, or on a
+    takeover, which the user finishes."""
     request = next(
         (
             event.payload
             for event in reversed(events)
-            if isinstance(event.payload, ApprovalRequested)
+            if isinstance(event.payload, ApprovalRequested | TakeoverRequested)
         ),
         None,
     )
-    if request is None:
-        return step_failed("The turn parked on something other than an ask of the gate.")
-    return StepResult(
-        ending=StepEnding.ASKED,
-        summary=f"The turn asks to call {request.name}.",
-        usage=usage,
-        ask=WaitingApproval(turn_id=turn_id, request=request),
-    )
+    match request:
+        case ApprovalRequested(name=name):
+            summary = f"The turn asks to call {name}."
+            ask = WaitingApproval(turn_id=turn_id, request=request)
+        case TakeoverRequested(reason=reason):
+            summary = f"The turn asks you to take over its browser: {reason}"
+            ask = WaitingTakeover(turn_id=turn_id, request=request)
+        case _:
+            return step_failed("The turn parked on something other than an ask of the gate.")
+    return StepResult(ending=StepEnding.ASKED, summary=summary, usage=usage, ask=ask)
 
 
 def _written(events: Sequence[Event], instance: Instance) -> list[View]:
@@ -210,9 +219,10 @@ def _usage(events: Sequence[Event]) -> TokenTotals:
     )
 
 
-def _manifest(state: Path, folder: Path, model: str) -> Manifest:
+def _manifest(state: Path, folder: Path, model: str, *, browser: bool) -> Manifest:
     """What an instance's manifest would hold for the turn: its model, the run's folder as its
-    workspace, bash and the file tools, and no budget of its own, which is the line's."""
+    workspace, bash and the file tools, the browser tools when it has a browser, and no budget
+    of its own, which is the line's."""
     return Manifest(
         id="workbench",
         persona_name=None,
@@ -228,6 +238,7 @@ def _manifest(state: Path, folder: Path, model: str) -> Manifest:
         budgets=Budgets(),
         prices={},
         windows={},
+        browser=browser,
     )
 
 

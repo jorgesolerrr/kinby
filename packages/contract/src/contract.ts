@@ -392,6 +392,10 @@ export interface Contract {
       command: FactoryRunSendBackCommand;
       result: FactoryRun;
     };
+    "factory.run.takeover.finish": {
+      command: FactoryRunTakeoverFinishCommand;
+      result: FactoryRun;
+    };
     "factory.run.transcript": {
       command: FactoryRunTranscriptCommand;
       result: FactoryRunTranscript;
@@ -883,6 +887,10 @@ export interface Contract {
     "workbench.list": {
       command: WorkbenchListCommand;
       result: WorkbenchListResult;
+    };
+    "workbench.login.start": {
+      command: WorkbenchLoginStartCommand;
+      result: WorkbenchOperationResult;
     };
     "workbench.owned.command.run": {
       command: WorkbenchCommandRunCommand;
@@ -1455,7 +1463,8 @@ export interface FactoryRunAnswerCommand {
   run_id: string;
 }
 /**
- * The user's answer to the ask a kinby turn on a workbench parked on.
+ * The user's answer to the ask a kinby turn on a workbench parked on. A finished takeover
+ * answers approve.
  */
 export interface StepAnswer {
   decision: "approve" | "deny";
@@ -1503,7 +1512,7 @@ export interface FactoryRunDetail {
  */
 export interface StepAttempt {
   answer?: StepAnswer | null;
-  ask?: WaitingApproval | null;
+  ask?: WaitingApproval | WaitingTakeover | null;
   attempt: number;
   ended_at: string | null;
   ending: StepEnding | null;
@@ -1534,6 +1543,21 @@ export interface ApprovalRequested {
   preview?: string | null;
   rule: string;
   type: "approval.requested";
+}
+/**
+ * A takeover a workbench's turn parked on, which the user finishes on the hub.
+ */
+export interface WaitingTakeover {
+  request: TakeoverRequested;
+  turn_id: string;
+}
+/**
+ * The turn waits while the user drives its browser, until the user finishes (ADR 0113).
+ */
+export interface TakeoverRequested {
+  reason: string;
+  takeover_id: string;
+  type: "takeover.requested";
 }
 /**
  * What one attempt at a step on a workbench spent: its model calls on the API, priced where
@@ -1612,6 +1636,15 @@ export interface FactoryRunSendBackCommand {
   notes?: string | null;
   run_id: string;
   step: StepId;
+}
+/**
+ * Resume the turn a run's kinby step parked on its takeover, with its page as the user left
+ * it, as the step's next attempt. The user drives the page with thread.takeover.start and
+ * thread.takeover.input, naming the line's workbench and the turn.
+ */
+export interface FactoryRunTakeoverFinishCommand {
+  run_id: string;
+  takeover_id: string;
 }
 /**
  * Read one page of the transcript of an attempt at an agent step of a line's run, from the
@@ -3145,7 +3178,7 @@ export interface AgentStepRun {
  */
 export interface AnsweredAsk {
   answer: StepAnswer;
-  ask: WaitingApproval;
+  ask: WaitingApproval | WaitingTakeover;
 }
 /**
  * Run a coding client in the instance's workspace, with the prompt and the run's values.
@@ -3197,7 +3230,7 @@ export interface CodeStepRun {
  * What one attempt at a step hands back to the hub.
  */
 export interface StepResult {
-  ask?: WaitingApproval | null;
+  ask?: WaitingApproval | WaitingTakeover | null;
   ending: StepEnding;
   outcome?: string | null;
   resets_at?: string | null;
@@ -3608,11 +3641,13 @@ export interface WorkbenchCommandsSetCommand {
  * A workbench's record. It names its secrets and never carries their values.
  */
 export interface Workbench {
+  browser?: boolean;
   detail?: string;
   hub_secrets: {
     [k: string]: HubSecretName;
   };
   intended_state: IntendedState;
+  logins?: LoginSetup[];
   name: string;
   process: ProcessState;
   recipe: RecipeName | null;
@@ -3626,9 +3661,11 @@ export interface Workbench {
   workspace_source: string | null;
 }
 export interface WorkbenchCreateCommand {
+  browser?: boolean;
   hub_secrets?: {
     [k: string]: HubSecretName;
   };
+  logins?: SubscriptionLogin[];
   name: string;
   recipe?: RecipeName | null;
   secrets?: {
@@ -3666,6 +3703,13 @@ export interface WorkbenchListCommand {
 }
 export interface WorkbenchListResult {
   workbenches: Workbench[];
+}
+/**
+ * Run one of the workbench's subscription logins in a setup container.
+ */
+export interface WorkbenchLoginStartCommand {
+  login_id: string;
+  workbench_id: string;
 }
 /**
  * Run one shell read in a workbench's workspace: a bash command whose programs only read, on
@@ -3902,14 +3946,6 @@ export interface ToolResult {
   output: string;
   size?: number | null;
   type: "tool.result";
-}
-/**
- * The turn waits while the user drives its browser, until the user finishes (ADR 0113).
- */
-export interface TakeoverRequested {
-  reason: string;
-  takeover_id: string;
-  type: "takeover.requested";
 }
 export interface TurnCompleted {
   cache_creation_tokens?: number;

@@ -30,8 +30,8 @@ A factory may declare `requires` in place of `instances`. Its steps then run on 
   - `secrets`: setup fields, each without `kind` or `target`. A secret is text or multiline and has no default.
   - `values`: named values that are not secrets, setup fields without `kind` or `target`.
   - `commands`: the names of the workbench's lists of repository commands the steps run. A `command` step's `{ commands: <name> }` names one of them.
-  - `logins`: as under `instances`. See Logins.
-  - `browser`: `true` when the steps need a browser.
+  - `logins`: as under `instances`, signed in on the workbench, which keeps them through a recreation. Setting up a line refuses a workbench whose login of that `id` has not signed in. See Logins.
+  - `browser`: `true` when the steps need a browser. Setting up a line refuses a workbench created without one. Its browser session stays between runs, so a site a step signed in to is still signed in at the next run.
 - `intake`: optional. Setting up a line creates the line's intake routine in its owner from it, and removing the line deletes it. The line's `intake` names that routine.
   - `call`: a tool of the factory's folder, run on the workbench. Its `signal` parameter receives the delivery that fired it, or `{}`. It returns a list of work items, each a mapping of the `work_item` values, or `None` for none, and the hub hands each to the line.
   - `schedule`: a cron expression with five fields, as a routine's.
@@ -39,7 +39,7 @@ A factory may declare `requires` in place of `instances`. Its steps then run on 
   - It takes a `schedule`, a `delivery` or both.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
 - An `agent` step runs a model on the workbench, in the run's folder:
-  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. It goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. The step's `check` runs once the turn ends.
+  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. It goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. On a workbench with a browser it has the browser tools too, and `browser_takeover` parks the run the same way until the user finishes the takeover. The step's `check` runs once the turn ends.
   - `prompt`: a file of the factory's folder, as for an `agent` step in an instance.
   - `model`: the client's model, such as `claude-opus-5-5`. Left out, the line's model when the engine runs its provider's models, `anthropic` for `claude` and `openai` for `codex`, and the client's default otherwise.
     For `kinby`, a `provider:model`, such as `anthropic:claude-opus-5-5`, and left out, the line's model. The workbench must hold that provider's `<PROVIDER>_API_KEY`, and setting up the line refuses one without it. List it under `requires.secrets`.
@@ -205,7 +205,7 @@ def record_brief(end: StepEnd) -> HookResult | None:
 - `interrupted`: the hub stopped while the attempt ran. Only old runs hold it, and it counts as failed.
 - `needs-human`: the step cannot run until the user supplies what it lacks. The run stops for them.
 - `limited`: the subscription's limit stopped the step's coding client. The run waits for the reset and tries again without using a retry.
-- `asked`: the gate asked about a call of the step's kinby turn. The run parks until the user answers, and the answer resumes the turn without using a retry.
+- `asked`: the gate asked about a call of the step's kinby turn, or the turn asked the user to take over its browser. The run parks until the user answers or finishes the takeover, which resumes the turn without using a retry.
 
 ## Tools
 

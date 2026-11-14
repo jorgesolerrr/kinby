@@ -32,6 +32,7 @@ from kinby.contracts import (
     StepEnding,
     StepResult,
     WaitingApproval,
+    WaitingTakeover,
 )
 from kinby.hub import Hub
 from tests.test_factory_runs import detail, settled
@@ -72,7 +73,10 @@ async def _asking(hub: Hub, runtime: FakeRuntime, issue: int = 12) -> tuple[Line
     return line, run
 
 
-async def _answered(hub: Hub, run_id: UUID, ask: WaitingApproval, answer: StepAnswer) -> object:
+async def _answered(
+    hub: Hub, run_id: UUID, ask: WaitingApproval | WaitingTakeover | None, answer: StepAnswer
+) -> object:
+    assert isinstance(ask, WaitingApproval)
     command = FactoryRunAnswerCommand(
         run_id=run_id, approval_id=ask.request.approval_id, answer=answer
     )

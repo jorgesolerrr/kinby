@@ -72,6 +72,7 @@ from kinby.contracts import (
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_SUBSCRIBE,
+    FACTORY_RUN_TAKEOVER_FINISH,
     FACTORY_RUN_TRANSCRIPT,
     HOME_SCOPES,
     HUB_SECRET_DELETE,
@@ -147,6 +148,7 @@ from kinby.contracts import (
     WORKBENCH_DELETE,
     WORKBENCH_GET,
     WORKBENCH_LIST,
+    WORKBENCH_LOGIN_START,
     WORKBENCH_OWNED_COMMAND_RUN,
     WORKBENCH_OWNED_COMMANDS_SET,
     WORKBENCH_OWNED_DIRECTORY_LIST,
@@ -258,6 +260,8 @@ from kinby.contracts import (
     LineSetupCommand,
     LineUpdateCommand,
     LoginPrompt,
+    LoginSetup,
+    LoginState,
     McpServerFailed,
     Method,
     NewerVersion,
@@ -319,6 +323,7 @@ from kinby.contracts import (
     WorkbenchGetCommand,
     WorkbenchListCommand,
     WorkbenchListResult,
+    WorkbenchLoginStartCommand,
     WorkbenchOperationResult,
     WorkbenchPicksGetCommand,
     WorkbenchPicksResult,
@@ -359,6 +364,7 @@ from kinby.core.errors import (
 )
 from kinby.core.routing import Dispatcher
 from kinby.factories import SHIPPED_FACTORIES, ships_recipe
+from kinby.factories.check import login_declaration_problems
 from kinby.factories.file import (
     Engine,
     FactoryFile,
@@ -627,10 +633,16 @@ def _image(recipe: RecipeName | None) -> str:
 
 
 def _lacking(
-    requires: Requirements, workbench: WorkbenchSetup, secrets: Collection[str]
+    requires: Requirements,
+    workbench: WorkbenchSetup,
+    secrets: Collection[str],
+    signed_in: Collection[str],
+    *,
+    browser: bool,
 ) -> list[str]:
-    """Each secret, named value and list of repository commands the factory requires and the
-    workbench does not hold. A field with a default is held."""
+    """Each secret, named value, list of repository commands and login the factory requires and
+    the workbench does not hold, and the browser when it has none. A field with a default is
+    held, and a login only once it signed in."""
     return [
         *(
             f'secret "{field.name}"'
@@ -643,6 +655,8 @@ def _lacking(
             if field.required and field.default is None and field.name not in workbench.values
         ),
         *(f'command list "{name}"' for name in requires.commands if name not in workbench.commands),
+        *(f'login "{login.id}"' for login in requires.logins if login.id not in signed_in),
+        *(["a browser"] if requires.browser and not browser else []),
     ]
 
 
@@ -867,7 +881,9 @@ class Hub:
             )
             self._control = control if control is not None else HttpInstanceControl()
             self._browsers = (
-                PlaywrightBrowser(browser, browser_limits, self.browser_profiles, self.vault)
+                PlaywrightBrowser(
+                    browser, browser_limits, self.browser_profiles, self.vault, self._is_workbench
+                )
                 if browser is not None
                 else None
             )
@@ -925,6 +941,7 @@ class Hub:
         dispatcher.register(WORKBENCH_REMOVE, self.remove_workbench)
         dispatcher.register(WORKBENCH_RESTORE, self.restore_workbench)
         dispatcher.register(WORKBENCH_SECRETS_SET, self.set_workbench_secrets)
+        dispatcher.register(WORKBENCH_LOGIN_START, self.start_workbench_login)
         dispatcher.register(WORKBENCH_COMMANDS_SET, self.set_workbench_commands)
         dispatcher.register(WORKBENCH_PICKS_GET, self.workbench_picks)
         dispatcher.register(WORKBENCH_PICKS_SET, self.set_workbench_picks)
@@ -950,6 +967,7 @@ class Hub:
         dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
         dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
         dispatcher.register(FACTORY_RUN_ANSWER, self.runs.answer)
+        dispatcher.register(FACTORY_RUN_TAKEOVER_FINISH, self.runs.finish_takeover)
         dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
         dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
         dispatcher.register(LIBRARY_LIST, self.library.list)
@@ -1006,7 +1024,8 @@ class Hub:
 
     def _scopes(self, record: ManagedInstance, manifest: Manifest | None) -> frozenset[Scope]:
         if record.workbench is not None:
-            return frozenset()
+            browser = record.workbench.browser and self._browsers is not None
+            return BROWSER_SCOPES if browser else frozenset()
         return (
             NOTIFICATION_SCOPES
             | LINE_SCOPES
@@ -1020,7 +1039,13 @@ class Hub:
         return self._browsers is not None and manifest is not None and manifest.browser
 
     def _instance_browser_on(self, instance_id: UUID) -> bool:
-        return self._browser_on(self._manifest(self._active_instance(instance_id)))
+        """Whether the instance's manifest, or the workbench's record, turns the browser on."""
+        record = self._active_instance(instance_id)
+        return Scope.BROWSER_OPEN in self._scopes(record, self._manifest(record))
+
+    def _is_workbench(self, instance_id: UUID) -> bool:
+        record = self.registry.instance(instance_id)
+        return record is not None and record.workbench is not None
 
     async def _resume_takeover(
         self, instance_id: UUID, command: ThreadTakeoverResumeCommand
@@ -1830,7 +1855,8 @@ class Hub:
         for login in logins:
             if login.id == login_id:
                 return login
-        raise LoginNotFound(f'Instance "{record.instance_id}" declares no login "{login_id}".')
+        kind = "Instance" if record.workbench is None else "Workbench"
+        raise LoginNotFound(f'{kind} "{record.instance_id}" declares no login "{login_id}".')
 
     async def _sign_in(
         self,
@@ -3315,7 +3341,10 @@ class Hub:
         return ObservedProcess(process, readiness, self._redact(status.detail, secrets))
 
     def _declared_setup(self, record: ManagedInstance) -> DeclaredSetup | None:
-        """What the instance asks for: its template's as created, or its image's."""
+        """What the instance asks for: its template's as created, or its image's. A workbench
+        declares only the logins it was created with."""
+        if record.workbench is not None:
+            return DeclaredSetup(setup_fields=[], logins=list(record.workbench.logins))
         if record.factory is not None:
             return record.factory.setup
         return self.registry.description()
@@ -3380,8 +3409,9 @@ class Hub:
 
     async def create_workbench(self, command: WorkbenchCreateCommand) -> WorkbenchCreateResult:
         """Accept a workbench only once its name is free, kinby ships its recipe, each secret
-        names a variable and the hub keeps each hub secret it links. Its image builds and its
-        container is created in the background."""
+        names a variable, the hub keeps each hub secret it links and each login can sign in. Its
+        image builds and its container is created in the background, with a volume for each
+        login."""
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         kept = self.secrets.values()
         errors = link_errors(secrets, command.hub_secrets, {}, kept)
@@ -3396,6 +3426,8 @@ class Hub:
         ]
         if invalid:
             errors["secrets"] = f'Invalid environment variable name: "{invalid[0]}".'
+        if problems := list(login_declaration_problems(command.logins)):
+            errors["logins"] = " ".join(problems)
         if errors:
             raise InvalidSetup(errors)
         record = self._new_record(
@@ -3404,6 +3436,8 @@ class Hub:
                 recipe=command.recipe,
                 workspace_source=command.workspace_source,
                 values=command.values,
+                logins=tuple(command.logins),
+                browser=command.browser,
             ),
         )
         secrets |= {variable: kept[name] for variable, name in command.hub_secrets.items()}
@@ -3416,7 +3450,7 @@ class Hub:
             self._write_secrets(
                 staging / ".env", secrets | {CONTROL_TOKEN_VARIABLE: new_control_token()}
             )
-            return ()
+            return command.logins
 
         operation_id = self._begin_create(record, write, secrets.values())
         self.registry.link_secrets(record.instance_id, command.hub_secrets)
@@ -3509,6 +3543,18 @@ class Hub:
         self.registry.set_workbench_commands(command.workbench_id, command.name, command.commands)
         record = self._active_workbench(command.workbench_id)
         return await self._workbench(record, self._environment(record.path))
+
+    async def start_workbench_login(
+        self, command: WorkbenchLoginStartCommand
+    ) -> WorkbenchOperationResult:
+        """Sign one of the workbench's subscription logins in, or return the one running."""
+        self._active_workbench(command.workbench_id)
+        started = await self.start_login(
+            InstanceLoginStartCommand(instance_id=command.workbench_id, login_id=command.login_id)
+        )
+        return WorkbenchOperationResult(
+            operation_id=started.operation_id, workbench_id=command.workbench_id
+        )
 
     async def workbench_picks(self, command: WorkbenchPicksGetCommand) -> WorkbenchPicksResult:
         picks = self.library.picks(self._active_workbench(command.workbench_id).path)
@@ -3607,16 +3653,19 @@ class Hub:
         return record
 
     async def _workbench(self, record: ManagedInstance, environment: dict[str, str]) -> Workbench:
-        """The workbench's record, with the names of the secrets *environment* holds."""
+        """The workbench's record, with the names of the secrets *environment* holds, and how
+        each of its logins stands. The variables of its hub route are no secrets of its own."""
         assert record.workbench is not None
         observed = await self._observed(record, _InstanceFiles(environment, None))
+        states = self.registry.login_states(record.instance_id)
+        own = environment.keys() - {CONTROL_TOKEN_VARIABLE, HUB_URL_VARIABLE, HUB_SCOPES_VARIABLE}
         return Workbench(
             workbench_id=record.instance_id,
             name=record.manifest_id,
             recipe=record.workbench.recipe,
             workspace_source=record.workbench.workspace_source,
             values=record.workbench.values,
-            secrets=sorted(name for name in environment if name != CONTROL_TOKEN_VARIABLE),
+            secrets=sorted(own),
             hub_secrets=self.registry.secret_links(record.instance_id),
             intended_state=record.intended_state,
             process=observed.process,
@@ -3626,6 +3675,21 @@ class Hub:
                 RepositoryCommandList(name=name, commands=commands)
                 for name, commands in sorted(record.workbench.commands.items())
             ],
+            logins=[
+                LoginSetup(
+                    id=login.id,
+                    label=login.label,
+                    description=login.description,
+                    state=states.get(login.id, LoginState.PENDING),
+                    operation_id=(
+                        running[0]
+                        if (running := self.registry.running_login(record.instance_id, login.id))
+                        else None
+                    ),
+                )
+                for login in record.workbench.logins
+            ],
+            browser=record.workbench.browser,
         )
 
     async def set_up_line(self, command: LineSetupCommand) -> Line:
@@ -3661,8 +3725,14 @@ class Hub:
                 f'and workbench "{record.manifest_id}" runs {_image(record.workbench.recipe)}.'
             )
         environment = self._environment(record.path)
+        signed_in = [
+            login_id
+            for login_id, state in self.registry.login_states(record.instance_id).items()
+            if state is LoginState.SIGNED_IN
+        ]
+        browser = Scope.BROWSER_OPEN in self._scopes(record, None)
         lacking = [
-            *_lacking(factory.requires, record.workbench, environment),
+            *_lacking(factory.requires, record.workbench, environment, signed_in, browser=browser),
             *(
                 f'secret "{key}"'
                 for key in _model_keys(factory, command.model)

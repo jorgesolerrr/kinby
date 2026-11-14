@@ -65,6 +65,7 @@ from kinby.plugins.tools import Tool
 
 if TYPE_CHECKING:
     from kinby.core.turn_runner import ModelFactory
+    from kinby.plugins.browser import BrowserService
 
 #: Where the hub mounts its own factory folders in a workbench's container.
 FACTORIES_MOUNT = Path("/factories")
@@ -90,7 +91,8 @@ class WorkbenchSteps:
     folders in *factories*, over the ones kinby ships in *shipped*.
 
     Nothing copies a factory here, so a step runs its tool as the factory's folder holds it then.
-    An agent step on the kinby engine calls its model through *model_factory*.
+    An agent step on the kinby engine calls its model through *model_factory*, and opens pages
+    on *browser*, the hub's, when the workbench has one.
     """
 
     def __init__(
@@ -100,9 +102,11 @@ class WorkbenchSteps:
         shipped: Path = SHIPPED_FACTORIES,
         *,
         model_factory: ModelFactory | None = None,
+        browser: BrowserService | None = None,
     ) -> None:
         self._directory = directory
         self._model_factory = model_factory
+        self._browser = browser
         self._workspace = directory / WORKSPACE_DIR
         self._factories = factories
         self._shipped = shipped
@@ -258,6 +262,7 @@ class WorkbenchSteps:
                     self._directory / STATE_DIR / _TURNS_DIR,
                     self._attempt_transcript(command),
                     self._model_factory or init_chat_model,
+                    self._browser,
                 )
             case CodeStepRun() as step:
                 result = await self._call(step, command, folder)

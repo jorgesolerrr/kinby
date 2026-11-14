@@ -136,7 +136,14 @@
           "$ref": "#/$defs/StepAnswer"
         },
         "ask": {
-          "$ref": "#/$defs/WaitingApproval"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "$ref": "#/$defs/WaitingTakeover"
+            }
+          ]
         }
       },
       "required": [
@@ -2875,6 +2882,26 @@
       "description": "Follow every factory run of the hub as its state changes. Nothing is replayed.",
       "properties": {},
       "title": "FactoryRunSubscribeCommand",
+      "type": "object"
+    },
+    "FactoryRunTakeoverFinishCommand": {
+      "additionalProperties": false,
+      "description": "Resume the turn a run's kinby step parked on its takeover, with its page as the user left\nit, as the step's next attempt. The user drives the page with thread.takeover.start and\nthread.takeover.input, naming the line's workbench and the turn.",
+      "properties": {
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "takeover_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "takeover_id"
+      ],
+      "title": "FactoryRunTakeoverFinishCommand",
       "type": "object"
     },
     "FactoryRunTranscript": {
@@ -9552,7 +9579,7 @@
     },
     "StepAnswer": {
       "additionalProperties": false,
-      "description": "The user's answer to the ask a kinby turn on a workbench parked on.",
+      "description": "The user's answer to the ask a kinby turn on a workbench parked on. A finished takeover\nanswers approve.",
       "properties": {
         "decision": {
           "enum": [
@@ -9598,6 +9625,9 @@
           "anyOf": [
             {
               "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "$ref": "#/$defs/WaitingTakeover"
             },
             {
               "type": "null"
@@ -9743,6 +9773,9 @@
           "anyOf": [
             {
               "$ref": "#/$defs/WaitingApproval"
+            },
+            {
+              "$ref": "#/$defs/WaitingTakeover"
             },
             {
               "type": "null"
@@ -12966,6 +12999,25 @@
       "title": "WaitingApproval",
       "type": "object"
     },
+    "WaitingTakeover": {
+      "additionalProperties": false,
+      "description": "A takeover a workbench's turn parked on, which the user finishes on the hub.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/TakeoverRequested"
+        },
+        "turn_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "request"
+      ],
+      "title": "WaitingTakeover",
+      "type": "object"
+    },
     "Warning": {
       "additionalProperties": false,
       "properties": {
@@ -13032,6 +13084,10 @@
       "additionalProperties": false,
       "description": "A workbench's record. It names its secrets and never carries their values.",
       "properties": {
+        "browser": {
+          "default": false,
+          "type": "boolean"
+        },
         "detail": {
           "default": "",
           "type": "string"
@@ -13044,6 +13100,12 @@
         },
         "intended_state": {
           "$ref": "#/$defs/IntendedState"
+        },
+        "logins": {
+          "items": {
+            "$ref": "#/$defs/LoginSetup"
+          },
+          "type": "array"
         },
         "name": {
           "type": "string"
@@ -13179,11 +13241,21 @@
     "WorkbenchCreateCommand": {
       "additionalProperties": false,
       "properties": {
+        "browser": {
+          "default": false,
+          "type": "boolean"
+        },
         "hub_secrets": {
           "additionalProperties": {
             "$ref": "#/$defs/HubSecretName"
           },
           "type": "object"
+        },
+        "logins": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionLogin"
+          },
+          "type": "array"
         },
         "name": {
           "minLength": 1,
@@ -13379,6 +13451,26 @@
         "workbenches"
       ],
       "title": "WorkbenchListResult",
+      "type": "object"
+    },
+    "WorkbenchLoginStartCommand": {
+      "additionalProperties": false,
+      "description": "Run one of the workbench's subscription logins in a setup container.",
+      "properties": {
+        "login_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id",
+        "login_id"
+      ],
+      "title": "WorkbenchLoginStartCommand",
       "type": "object"
     },
     "WorkbenchOperationResult": {
@@ -14283,6 +14375,22 @@
           "properties": {
             "command": {
               "$ref": "#/$defs/FactoryRunSendBackCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryRun"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.run.takeover.finish": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRunTakeoverFinishCommand"
             },
             "result": {
               "$ref": "#/$defs/FactoryRun"
@@ -16262,6 +16370,22 @@
           ],
           "type": "object"
         },
+        "workbench.login.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchLoginStartCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchOperationResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "workbench.owned.command.run": {
           "additionalProperties": false,
           "properties": {
@@ -16619,6 +16743,7 @@
         "workbench.remove",
         "workbench.restore",
         "workbench.secrets.set",
+        "workbench.login.start",
         "workbench.commands.set",
         "workbench.picks.get",
         "workbench.picks.set",
@@ -16652,6 +16777,7 @@
         "factory.run.send_back",
         "factory.run.approve",
         "factory.run.answer",
+        "factory.run.takeover.finish",
         "factory.run.cancel",
         "library.list",
         "library.skill.read",

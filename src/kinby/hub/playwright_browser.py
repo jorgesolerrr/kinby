@@ -8,7 +8,7 @@ import asyncio
 import base64
 import mimetypes
 import re
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -163,6 +163,8 @@ class _Opened:
     browser: Browser
     context: BrowserContext
     profile: BrowserProfileName | None
+    #: Whether the context is a workbench's, whose state its next turn opens with.
+    session: bool = False
     #: The downloads begun since the last action returned, which the next action returns.
     downloads: list[PlaywrightDownload] = field(default_factory=list)
     begun: asyncio.Event = field(default_factory=asyncio.Event)
@@ -192,7 +194,11 @@ class PlaywrightBrowser:
     """A fresh context for each turn of each instance, on a browser the service *runtime* runs
     lends it, at most *limits.cap* at once. A context opens with one of the instance's
     *profiles*, and its state is saved back to the profile when it closes. A sign-in fills from
-    the instance's *vault*, and the turn never reads a value it filled."""
+    the instance's *vault*, and the turn never reads a value it filled.
+
+    The turns of an id *sessions* names, a workbench's, share one browser session instead: each
+    context opens in the state the last one closed in, so a site stays signed in between runs.
+    """
 
     def __init__(
         self,
@@ -200,10 +206,12 @@ class PlaywrightBrowser:
         limits: BrowserLimits,
         profiles: BrowserProfiles,
         vault: Vault,
+        sessions: Callable[[UUID], bool],
     ) -> None:
         self._browsers = HubBrowsers(runtime, limits)
         self._profiles = profiles
         self._vault = vault
+        self._sessions = sessions
         self._idle_seconds = limits.turn_idle_seconds
         self._opened: dict[_Turn, _Opened] = {}
         #: Each turn's open and close take turns, so a close that comes while the open is still
@@ -225,13 +233,18 @@ class PlaywrightBrowser:
                 )
             self._touch(turn, opened)
             return BrowserOpenResult()
-        state = self._profiles.state(turn[0], profile) if profile is not None else None
+        session = profile is None and self._sessions(turn[0])
+        if profile is not None:
+            state = self._profiles.state(turn[0], profile)
+        else:
+            state = self._profiles.session(turn[0]) if session else None
         address = await self._browsers.lend()
         try:
             opened = await _connected(address, state, profile)
         except BaseException:
             self._browsers.give_back()
             raise
+        opened.session = session
         self._opened[turn] = opened
         self._touch(turn, opened)
         return BrowserOpenResult()
@@ -430,9 +443,12 @@ class PlaywrightBrowser:
         try:
             # The turn has ended, so a browser service that already went away changes nothing.
             with suppress(PlaywrightError):
-                if opened.profile is not None:
-                    state = await opened.context.storage_state()
-                    self._profiles.refresh(turn[0], opened.profile, _kept(state))
+                if opened.profile is not None or opened.session:
+                    state = _kept(await opened.context.storage_state())
+                    if opened.profile is not None:
+                        self._profiles.refresh(turn[0], opened.profile, state)
+                    if opened.session:
+                        self._profiles.keep_session(turn[0], state)
                 await opened.context.close()
                 await opened.browser.close()
             await opened.playwright.stop()

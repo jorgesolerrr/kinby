@@ -66,6 +66,7 @@ from kinby.contracts.models import (
     FactoryRunRetryCommand,
     FactoryRunSendBackCommand,
     FactoryRunSubscribeCommand,
+    FactoryRunTakeoverFinishCommand,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
     HubSecretDeleteCommand,
@@ -269,6 +270,7 @@ from kinby.contracts.models import (
     WorkbenchGetCommand,
     WorkbenchListCommand,
     WorkbenchListResult,
+    WorkbenchLoginStartCommand,
     WorkbenchOperationResult,
     WorkbenchPicksGetCommand,
     WorkbenchPicksResult,
@@ -593,6 +595,12 @@ WORKBENCH_RESTORE = Method(
 WORKBENCH_SECRETS_SET = Method(
     "workbench.secrets.set", Scope.HUB_ADMIN, WorkbenchSecretsSetCommand, WorkbenchOperationResult
 )
+WORKBENCH_LOGIN_START = Method(
+    "workbench.login.start",
+    Scope.HUB_ADMIN,
+    WorkbenchLoginStartCommand,
+    WorkbenchOperationResult,
+)
 WORKBENCH_COMMANDS_SET = Method(
     "workbench.commands.set", Scope.HUB_ADMIN, WorkbenchCommandsSetCommand, Workbench
 )
@@ -674,6 +682,9 @@ FACTORY_RUN_APPROVE = Method(
 )
 FACTORY_RUN_ANSWER = Method(
     "factory.run.answer", Scope.HUB_ADMIN, FactoryRunAnswerCommand, FactoryRun
+)
+FACTORY_RUN_TAKEOVER_FINISH = Method(
+    "factory.run.takeover.finish", Scope.HUB_ADMIN, FactoryRunTakeoverFinishCommand, FactoryRun
 )
 FACTORY_RUN_CANCEL = Method(
     "factory.run.cancel", Scope.HUB_ADMIN, FactoryRunCancelCommand, FactoryRun
@@ -908,6 +919,7 @@ METHODS = (
     WORKBENCH_REMOVE,
     WORKBENCH_RESTORE,
     WORKBENCH_SECRETS_SET,
+    WORKBENCH_LOGIN_START,
     WORKBENCH_COMMANDS_SET,
     WORKBENCH_PICKS_GET,
     WORKBENCH_PICKS_SET,
@@ -941,6 +953,7 @@ METHODS = (
     FACTORY_RUN_SEND_BACK,
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_ANSWER,
+    FACTORY_RUN_TAKEOVER_FINISH,
     FACTORY_RUN_CANCEL,
     LIBRARY_LIST,
     LIBRARY_SKILL_READ,

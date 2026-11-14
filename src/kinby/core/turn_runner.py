@@ -143,7 +143,7 @@ from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
 from kinby.plugins.browser import BrowserService
-from kinby.plugins.browser_tools import browser_takeover
+from kinby.plugins.browser_tools import browser_takeover, browser_tools
 from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hub_browser import HubBrowser
@@ -444,7 +444,7 @@ class LangGraphRunner:
 
     def _core_tools(self, skills: tuple[Skill, ...]) -> tuple[Tool, ...]:
         if self._workbench_skills is not None:
-            return (skill_tool(skills), view_write)
+            return (skill_tool(skills), view_write, *browser_tools(self._instance))
         return core_tools(self._instance, skills, today=self._today)
 
     def routine_mode(self, name: RoutineName) -> PermissionMode | None:

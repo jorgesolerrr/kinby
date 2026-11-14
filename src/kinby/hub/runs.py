@@ -56,6 +56,7 @@ from kinby.contracts import (
     FactoryRunSendBackCommand,
     FactoryRunStatus,
     FactoryRunSubscribeCommand,
+    FactoryRunTakeoverFinishCommand,
     Line,
     RepositoryCommandList,
     RunFolder,
@@ -73,6 +74,7 @@ from kinby.contracts import (
     ValueName,
     View,
     WaitingApproval,
+    WaitingTakeover,
 )
 from kinby.core.coding_clients import own_tokens
 from kinby.core.errors import (
@@ -86,6 +88,7 @@ from kinby.core.errors import (
     RunAwaitsNoAnswer,
     RunAwaitsNoApproval,
     RunNeedsNoHuman,
+    TakeoverNotFound,
 )
 from kinby.factories.file import (
     FAILURE,
@@ -135,7 +138,7 @@ from kinby.hub.registry import (
     RunStopRef,
 )
 from kinby.instance import ManifestError, repository_commands
-from kinby.plugins.notify import approval_notification
+from kinby.plugins.notify import approval_notification, takeover_notification
 
 if TYPE_CHECKING:
     from kinby.hub.outbox import Outbox
@@ -425,12 +428,27 @@ class FactoryRuns:
         step's next attempt on its workbench's queue."""
         run = self._existing(command.run_id)
         ask = self._parked_ask(run)
-        if ask is None or ask.request.approval_id != command.approval_id:
+        if not isinstance(ask, WaitingApproval) or ask.request.approval_id != command.approval_id:
             raise RunAwaitsNoAnswer(
                 f'Factory run "{run.run_id}" is {run.status.value}, and waits for no answer to '
                 f'ask "{command.approval_id}".'
             )
         moved = self._registry.answer_ask(run.run_id, command.answer)
+        self._publish(moved)
+        self._enqueue(moved)
+        return moved
+
+    async def finish_takeover(self, command: FactoryRunTakeoverFinishCommand) -> FactoryRun:
+        """Resume the turn the run's kinby step parked on the takeover the user finished, as the
+        step's next attempt on its workbench's queue."""
+        run = self._existing(command.run_id)
+        ask = self._parked_ask(run)
+        if not isinstance(ask, WaitingTakeover) or ask.request.takeover_id != command.takeover_id:
+            raise TakeoverNotFound(
+                f'Factory run "{run.run_id}" is {run.status.value}, and waits for no takeover '
+                f'"{command.takeover_id}".'
+            )
+        moved = self._registry.answer_ask(run.run_id, StepAnswer(decision=ApprovalDecision.APPROVE))
         self._publish(moved)
         self._enqueue(moved)
         return moved
@@ -643,7 +661,7 @@ class FactoryRuns:
             return None
         return member, factory
 
-    def _parked_ask(self, run: FactoryRun) -> WaitingApproval | None:
+    def _parked_ask(self, run: FactoryRun) -> WaitingApproval | WaitingTakeover | None:
         """The ask the run's kinby turn is parked on, or None when it is parked on none."""
         last = self._registry.attempts(run.run_id)[-1:]
         if run.status is not FactoryRunStatus.PARKED or not last:
@@ -1334,9 +1352,22 @@ class FactoryRuns:
             page="/library",
         )
 
-    def _notify_ask(self, run: FactoryRun, ask: WaitingApproval) -> None:
-        """Ask the user to approve or deny the call the run's turn parked on."""
+    def _notify_ask(self, run: FactoryRun, ask: WaitingApproval | WaitingTakeover) -> None:
+        """Ask the user to approve or deny the call the run's turn parked on, or to take over its
+        browser, which they finish on the hub."""
         if self._registry.instance(run.instance_id) is None:
+            return
+        if isinstance(ask, WaitingTakeover):
+            taking_over = takeover_notification(run.factory, ask.request)
+            self._outbox.notify(
+                run.instance_id,
+                f"run_takeover:{run.run_id}:{ask.request.takeover_id}",
+                source=run.factory,
+                title=taking_over.title,
+                text=f"The run for {_work_item(run)} asks you to take over its browser at "
+                f'"{run.step}": {taking_over.text}',
+                page="/library",
+            )
             return
         raised = approval_notification(run.factory, ask.turn_id, ask.request, in_routine=False)
         self._outbox.notify(

@@ -22,8 +22,11 @@ from kinby.contracts import (
     StepEnding,
     StepResult,
     StepRunCommand,
+    WaitingApproval,
+    WaitingTakeover,
 )
 from kinby.workbench import WorkbenchSteps, prepare_workspace
+from tests.test_browser_tools import FakeBrowser
 from tests.test_hub_factories import write_factory
 from tests.test_views import BOARD, DATA
 from tests.test_workbench_steps import CHECK
@@ -68,11 +71,16 @@ def _run(
     run_id: UUID | None = None,
     step: AgentStepRun = STEP,
     attempt: int = 1,
+    browser: FakeBrowser | None = None,
 ) -> StepResult:
     directory = tmp_path / "workbench"
     prepare_workspace(directory / "workspace", source)
     workbench = WorkbenchSteps(
-        directory, tmp_path / "factories", tmp_path / "shipped", model_factory=lambda _: model
+        directory,
+        tmp_path / "factories",
+        tmp_path / "shipped",
+        model_factory=lambda _: model,
+        browser=browser,
     )
     command = StepRunCommand(
         step=step,
@@ -113,7 +121,7 @@ def test_a_kinby_turns_write_the_gate_asks_about_ends_its_attempt_asked(tmp_path
     result = _run(tmp_path, model, run_id=run_id, check="drafted")
 
     assert result.ending is StepEnding.ASKED
-    assert result.ask is not None and result.ask.request.name == "write"
+    assert isinstance(result.ask, WaitingApproval) and result.ask.request.name == "write"
     assert result.ask.request.arguments == {"path": "draft.md", "content": "# Draft\n"}
     assert "write" in result.summary
     assert result.values == {}
@@ -277,3 +285,46 @@ def test_a_kinby_turn_is_offered_the_factorys_skills_and_the_workbenchs_picks(tm
 
 def _skill(name: str) -> str:
     return f"---\nname: {name}\ndescription: Do {name}.\n---\nDo it.\n"
+
+
+def test_a_kinby_turns_takeover_ends_its_attempt_asked_and_finishing_it_resumes_the_turn(
+    tmp_path,
+):
+    browser = FakeBrowser()
+    model = TurnModel(
+        _calling("browser_takeover", reason="Sign in to Moodle."),
+        AIMessageChunk(content="Signed in."),
+    )
+    run_id = uuid4()
+
+    asked = _run(tmp_path, model, run_id=run_id, browser=browser)
+    assert isinstance(asked.ask, WaitingTakeover)
+    finished = AnsweredAsk(ask=asked.ask, answer=StepAnswer(decision=ApprovalDecision.APPROVE))
+    resumed = _run(
+        tmp_path,
+        model,
+        run_id=run_id,
+        step=STEP.model_copy(update={"answered": finished}),
+        attempt=2,
+        browser=browser,
+    )
+
+    assert asked.ending is StepEnding.ASKED
+    assert asked.ask.request.reason == "Sign in to Moodle."
+    assert "take over" in asked.summary
+    assert (resumed.ending, resumed.summary) == (StepEnding.CLEAN, "Signed in.")
+    assert "The user finished the takeover." in _tool_output(model)
+    assert browser.opened == [asked.ask.turn_id]
+    assert browser.closed == [asked.ask.turn_id]
+
+
+def test_a_kinby_turn_on_a_workbench_with_no_browser_has_no_browser_tools(tmp_path):
+    model = TurnModel(
+        _calling("browser_takeover", reason="Sign in to Moodle."),
+        AIMessageChunk(content="I cannot."),
+    )
+
+    result = _run(tmp_path, model)
+
+    assert (result.ending, result.summary) == (StepEnding.CLEAN, "I cannot.")
+    assert "browser_takeover" in _tool_output(model)
