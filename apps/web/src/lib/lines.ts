@@ -46,9 +46,14 @@ export interface LineOpened extends LineRuns {
   factory: FactorySteps
   /** The other lines on its workbench. */
   others: Line[]
-  /** All the factory requires of a workbench, and what this workbench lacks of it. */
+  /** All the factory requires of a workbench. */
   required: LineSetupDescription
-  lacking: LineSetupDescription
+}
+
+/** One thing a factory requires of a workbench, and whether the workbench holds it. */
+export interface Requirement {
+  label: string
+  held: boolean
 }
 
 /** Read every factory, line and workbench, and each line's runs. */
@@ -71,12 +76,12 @@ export async function readFloor(caller: Caller): Promise<Floor> {
 export async function readLine(caller: Caller, lineId: string): Promise<LineOpened> {
   const line = await caller.call("line.get", { line_id: lineId })
   const { factory: name, workbench_id, model } = line
-  const [workbench, factory, { lines }, required, lacking] = await Promise.all([
+  // Described with no workbench: the hub refuses one that has a line of the factory already.
+  const [workbench, factory, { lines }, required] = await Promise.all([
     caller.call("workbench.get", { workbench_id }),
     readFactory(caller, name),
     caller.call("line.list", {}),
     caller.call("line.setup.describe", { factory: name, model }),
-    caller.call("line.setup.describe", { factory: name, model, workbench_id }),
   ])
   return {
     ...(await readRuns(caller, line, factory)),
@@ -86,8 +91,37 @@ export async function readLine(caller: Caller, lineId: string): Promise<LineOpen
       (other) => other.workbench_id === workbench_id && other.line_id !== lineId,
     ),
     required,
-    lacking,
   }
+}
+
+/**
+ * What the factory requires of a workbench, each with whether the workbench holds it, as the hub
+ * judges it at setup: a required secret it holds, a required value it holds or that has a default,
+ * a list of repository commands, a login signed in, and a browser it was created with.
+ */
+export function requirements(required: LineSetupDescription, workbench: Workbench): Requirement[] {
+  const commands = workbench.repository_commands.map(({ name }) => name)
+  const signedIn = (workbench.logins ?? []).filter(({ state }) => state === "signed_in")
+  return [
+    ...required.secrets
+      .filter((field) => field.required)
+      .map(({ name, label }) => ({ label, held: workbench.secrets.includes(name) })),
+    ...required.values
+      .filter((field) => field.required)
+      .map((field) => ({
+        label: field.label,
+        held: field.default != null || field.name in workbench.values,
+      })),
+    ...required.commands.map((name) => ({
+      label: `${name} commands`,
+      held: commands.includes(name),
+    })),
+    ...required.logins.map(({ id, label }) => ({
+      label,
+      held: signedIn.some((login) => login.id === id),
+    })),
+    ...(required.browser ? [{ label: "Browser", held: workbench.browser === true }] : []),
+  ]
 }
 
 /** A line as the user knows it, "software on kinby". */

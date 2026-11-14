@@ -1,4 +1,4 @@
-import type { FactoryRun, Line, LineSetupDescription, Workbench } from "@kinby/contract"
+import { CallError, type FactoryRun, type Line, type Workbench } from "@kinby/contract"
 import { type Answers, instanceSummary, stubCaller } from "@kinby/contract/testing"
 
 export const instances = [
@@ -50,6 +50,9 @@ export const workbenches: Workbench[] = [
     workbench_id: "wb-kinby",
     name: "kinby",
     workspace_source: "https://github.com/jorgesolerrr/kinby",
+    secrets: ["GH_TOKEN"],
+    values: { REPOSITORY: "jorgesolerrr/kinby" },
+    logins: [{ id: "claude", label: "Claude Code", description: "", state: "signed_in" }],
     repository_commands: [
       { name: "setup", commands: ["uv sync", "bun install"] },
       { name: "checks", commands: ["bun run check"] },
@@ -160,22 +163,27 @@ const ask = {
   request: { type: "takeover.requested" as const, takeover_id: "t-1", reason: "Sign in." },
 }
 
-const nothingLacking: LineSetupDescription = {
-  browser: false,
-  commands: [],
-  logins: [],
-  secrets: [],
-  values: [],
-  workbench: [],
-}
-
-const field = (name: string, label: string) => ({
+const field = (
+  name: string,
+  label: string,
+  more: { kind?: "secret" | "config"; required?: boolean; default?: string } = {},
+) => ({
   name,
   label,
   description: "",
   kind: "secret" as const,
   type: "text" as const,
   required: true,
+  ...more,
+})
+
+const login = (id: string, label: string) => ({
+  id,
+  label,
+  description: "",
+  command: [],
+  prompt_pattern: "",
+  volume: id,
 })
 
 /** How the hub answers with the fixture's factories, lines, workbenches and runs. */
@@ -210,14 +218,32 @@ export const answers: Answers = {
     attempts: [{ ...attempt, ask: run_id === "r-asking" ? ask : null }],
     earlier_steps: [],
   }),
-  "line.setup.describe": ({ workbench_id }) =>
-    workbench_id === undefined
-      ? {
-          ...nothingLacking,
-          commands: ["setup", "checks", "lint"],
-          secrets: [field("GH_TOKEN", "GitHub token"), field("NPM_TOKEN", "npm token")],
-        }
-      : { ...nothingLacking, commands: ["lint"], secrets: [field("NPM_TOKEN", "npm token")] },
+  // As the hub does, it refuses to describe a new line where the factory has one already.
+  "line.setup.describe": ({ workbench_id }) => {
+    if (workbench_id != null) {
+      throw new CallError({
+        code: "INVALID_SETUP",
+        message: "The factory is set up on the workbench already.",
+        retryable: false,
+      })
+    }
+    return {
+      browser: true,
+      commands: ["setup", "checks", "lint"],
+      logins: [login("claude", "Claude Code"), login("codex", "Codex")],
+      secrets: [
+        field("GH_TOKEN", "GitHub token"),
+        field("NPM_TOKEN", "npm token"),
+        field("SENTRY_DSN", "Sentry address", { required: false }),
+      ],
+      values: [
+        field("REPOSITORY", "Repository", { kind: "config" }),
+        field("BRANCH", "Default branch", { kind: "config", default: "main" }),
+        field("LABEL", "Issue label", { kind: "config" }),
+      ],
+      workbench: [],
+    }
+  },
 }
 
 /** A hub that answers as `answers` says, and as `more` says over it. */

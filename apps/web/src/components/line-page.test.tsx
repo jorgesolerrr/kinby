@@ -60,9 +60,15 @@ describe("a line's page", () => {
     expect(requires.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "GitHub tokenHeld",
       "npm tokenMissing",
+      "RepositoryHeld",
+      "Default branchHeld",
+      "Issue labelMissing",
       "setup commandsHeld",
       "checks commandsHeld",
       "lint commandsMissing",
+      "Claude CodeHeld",
+      "CodexMissing",
+      "BrowserMissing",
     ])
     const others = within(screen.getByRole("region", { name: "Other lines on kinby" }))
     await user.click(others.getByRole("link", { name: "course" }))

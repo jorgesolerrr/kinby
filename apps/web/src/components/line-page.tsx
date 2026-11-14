@@ -25,7 +25,7 @@ import { useRead } from "@/hooks/use-read"
 import { when } from "@/lib/config-changes"
 import { workItem } from "@/lib/factory-runs"
 import { shownState, STATES } from "@/lib/instances"
-import { dailyBudget, type LineOpened, lineName, readLine } from "@/lib/lines"
+import { dailyBudget, type LineOpened, lineName, readLine, requirements } from "@/lib/lines"
 import { type Followed, followOperation } from "@/lib/operation"
 import { FACTORIES_PATH, linePath, tabPath } from "@/lib/selection"
 
@@ -127,7 +127,7 @@ export function LinePage({
 function WorkbenchTab({
   caller,
   clock,
-  opened: { workbench, factory, others, required, lacking },
+  opened: { workbench, factory, others, required },
   onChanged,
 }: {
   caller: Caller
@@ -137,35 +137,7 @@ function WorkbenchTab({
 }) {
   const commandsId = useId()
   const othersId = useId()
-  const lacks = (names: string[], name: string) => names.includes(name)
-  const requirements = [
-    ...required.secrets.map(({ name, label }) => ({
-      label,
-      held: !lacks(
-        lacking.secrets.map((field) => field.name),
-        name,
-      ),
-    })),
-    ...required.values.map(({ name, label }) => ({
-      label,
-      held: !lacks(
-        lacking.values.map((field) => field.name),
-        name,
-      ),
-    })),
-    ...required.commands.map((name) => ({
-      label: `${name} commands`,
-      held: !lacks(lacking.commands, name),
-    })),
-    ...required.logins.map(({ id, label }) => ({
-      label,
-      held: !lacks(
-        lacking.logins.map((login) => login.id),
-        id,
-      ),
-    })),
-    ...(required.browser ? [{ label: "Browser", held: !lacking.browser }] : []),
-  ]
+  const asked = requirements(required, workbench)
   return (
     <div className="flex flex-col gap-6 text-sm">
       <dl className="grid grid-cols-2 gap-4">
@@ -203,11 +175,11 @@ function WorkbenchTab({
       </section>
       <section className="flex flex-col gap-2">
         <h2 className="font-medium">What {factory.name} requires</h2>
-        {requirements.length === 0 ? (
+        {asked.length === 0 ? (
           <p className="text-muted-foreground">Nothing but its image.</p>
         ) : (
           <ul aria-label={`What ${factory.name} requires`} className="flex flex-col gap-1">
-            {requirements.map(({ label, held }) => (
+            {asked.map(({ label, held }) => (
               <li key={label} className="flex items-center gap-2">
                 {label}
                 <Badge variant={held ? "outline" : "destructive"}>
