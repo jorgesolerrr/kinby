@@ -115,19 +115,22 @@ class GraphStore:
         *,
         after: date | None = None,
         before: date | None = None,
+        workbench: str | None = None,
     ) -> tuple[MemoryHit, ...]:
         """Find graph nodes holding any term of *query* within inclusive date bounds.
 
         Nodes holding more distinct terms come first, then the newest, and a query with no terms
         matches every node. Without a date bound only facts match, and episodes only when no fact
-        does (ADR 0074).
+        does (ADR 0074). Recall for a run on *workbench* finds only the nodes marked with it and
+        the unmarked; without one, nodes with any mark.
         """
         terms = set(query.casefold().split())
         scored = self._matched_terms(terms, after=after, before=before)
         matches = [
             memory
             for memory, matched in sorted(scored, key=lambda pair: pair[1], reverse=True)
-            if matched or not terms
+            if (matched or not terms)
+            and (workbench is None or memory.workbench in (None, workbench))
         ]
         if after is None and before is None:
             matches = [memory for memory in matches if isinstance(memory, Fact)] or matches
