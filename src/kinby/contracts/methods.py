@@ -143,6 +143,9 @@ from kinby.contracts.models import (
     LineOwnerSetCommand,
     LineRemoveCommand,
     LineSetupCommand,
+    LineSetupDescribeCommand,
+    LineSetupDescription,
+    LineSetupResult,
     LineUpdateCommand,
     ManifestGetCommand,
     ManifestResult,
@@ -611,7 +614,10 @@ WORKBENCH_PICKS_GET = Method(
 WORKBENCH_PICKS_SET = Method(
     "workbench.picks.set", Scope.HUB_ADMIN, WorkbenchPicksSetCommand, WorkbenchPicksResult
 )
-LINE_SETUP = Method("line.setup", Scope.HUB_ADMIN, LineSetupCommand, Line)
+LINE_SETUP = Method("line.setup", Scope.HUB_ADMIN, LineSetupCommand, LineSetupResult)
+LINE_SETUP_DESCRIBE = Method(
+    "line.setup.describe", Scope.HUB_READ, LineSetupDescribeCommand, LineSetupDescription
+)
 LINE_LIST = Method("line.list", Scope.HUB_READ, LineListCommand, LineListResult)
 LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
 LINE_UPDATE = Method("line.update", Scope.HUB_ADMIN, LineUpdateCommand, Line)
@@ -926,6 +932,7 @@ METHODS = (
     WORKBENCH_PICKS_GET,
     WORKBENCH_PICKS_SET,
     LINE_SETUP,
+    LINE_SETUP_DESCRIBE,
     LINE_LIST,
     LINE_GET,
     LINE_UPDATE,

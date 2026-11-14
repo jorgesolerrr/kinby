@@ -3,7 +3,10 @@
 import asyncio
 from collections.abc import Awaitable
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
+
+import pytest
+from pydantic import SecretStr, ValidationError
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
@@ -14,6 +17,8 @@ from kinby.contracts import (
     LINE_LIST,
     LINE_REMOVE,
     LINE_SETUP,
+    LINE_SETUP_DESCRIBE,
+    WORKBENCH_LIST,
     WORKBENCH_LOGIN_START,
     ErrorCode,
     ErrorEnvelope,
@@ -29,9 +34,18 @@ from kinby.contracts import (
     LineListResult,
     LineRemoveCommand,
     LineSetupCommand,
+    LineSetupDescribeCommand,
+    LineSetupDescription,
+    LineSetupResult,
+    NewWorkbench,
     OperationState,
+    RepositoryCommandList,
+    SetupFieldKind,
     WorkbenchCreateCommand,
+    WorkbenchListCommand,
+    WorkbenchListResult,
     WorkbenchLoginStartCommand,
+    WorkbenchOperationResult,
 )
 from kinby.hub import Hub
 from tests.test_factory_templates import FILES as ROLE_FILES
@@ -94,9 +108,9 @@ async def _cec_backend(client: ContractClient) -> UUID:
 
 
 async def _set_up(client: ContractClient, command: LineSetupCommand) -> Line:
-    line = await client.call(LINE_SETUP, command)
-    assert isinstance(line, Line), line
-    return line
+    set_up = await client.call(LINE_SETUP, command)
+    assert isinstance(set_up, LineSetupResult), set_up
+    return set_up.line
 
 
 async def _refused(client: ContractClient, command: LineSetupCommand) -> dict[str, str]:
@@ -272,12 +286,8 @@ def test_a_workbench_has_no_browser_on_a_hub_that_runs_no_browser_service(tmp_pa
     asyncio.run(scenario())
 
 
-def test_setup_names_the_key_of_each_kinby_agent_steps_model_the_workbench_lacks(tmp_path):
-    hub = _hub(tmp_path)
-    write_factory(
-        tmp_path / "hub" / "factories" / "drafts",
-        {
-            "factory.yaml": """\
+DRAFTS = {
+    "factory.yaml": """\
 name: drafts
 requires: { image: coder }
 work_item: { issue: int }
@@ -287,9 +297,13 @@ steps:
   - { id: draft, kind: agent, engine: kinby, prompt: prompts/plan.md }
   - { id: review, kind: agent, engine: codex, prompt: prompts/plan.md }
 """,
-            "prompts/plan.md": "Plan the issue.\n",
-        },
-    )
+    "prompts/plan.md": "Plan the issue.\n",
+}
+
+
+def test_setup_names_the_key_of_each_kinby_agent_steps_model_the_workbench_lacks(tmp_path):
+    hub = _hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "drafts", DRAFTS)
     client = hub_client(hub)
 
     async def scenario() -> None:
@@ -503,7 +517,7 @@ def test_a_removal_racing_a_line_setup_refuses_once_the_line_is_set_up(tmp_path)
             client.call(LINE_SETUP, LineSetupCommand(factory="tickets", workbench_id=workbench_id)),
         )
 
-        assert isinstance(line, Line), line
+        assert isinstance(line, LineSetupResult), line
         assert isinstance(refused, ErrorEnvelope), refused
         assert refused.message.startswith('Factory "tickets" has lines on workbench')
 
@@ -533,3 +547,236 @@ def test_a_removal_racing_a_role_creation_refuses_once_the_instance_is_created(t
         assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
 
     asyncio.run(scenario())
+
+
+async def _described(
+    client: ContractClient, command: LineSetupDescribeCommand
+) -> LineSetupDescription:
+    described = await client.call(LINE_SETUP_DESCRIBE, command)
+    assert isinstance(described, LineSetupDescription), described
+    return described
+
+
+async def _workbenches(client: ContractClient) -> list[str]:
+    listed = await client.call(WORKBENCH_LIST, WorkbenchListCommand())
+    assert isinstance(listed, WorkbenchListResult), listed
+    return [workbench.name for workbench in listed.workbenches]
+
+
+def test_the_setup_on_a_chosen_workbench_asks_only_for_what_the_factory_requires_and_it_lacks(
+    tmp_path,
+):
+    hub = _hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "drafts", DRAFTS)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        bare = await created(client, WorkbenchCreateCommand(name="bare", recipe="coder"))
+        holding = await _cec_backend(client)
+
+        asked = [
+            await _described(
+                client, LineSetupDescribeCommand(factory="tickets", workbench_id=workbench_id)
+            )
+            for workbench_id in (bare.workbench_id, holding)
+        ]
+        keys = await _described(
+            client,
+            LineSetupDescribeCommand(factory="drafts", workbench_id=holding, model="openai:gpt-5"),
+        )
+
+        assert [field.name for field in asked[0].secrets] == ["GH_TOKEN"]
+        assert [field.name for field in asked[0].values] == ["MOODLE_URL"]
+        assert (asked[0].commands, asked[0].workbench) == (["checks"], [])
+        assert asked[1] == LineSetupDescription(
+            workbench=[], secrets=[], values=[], commands=[], logins=[], browser=False
+        )
+        assert [field.name for field in keys.secrets] == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+
+    asyncio.run(scenario())
+
+
+def test_the_setup_on_no_workbench_asks_for_all_the_factory_requires_and_a_workbench_needs(
+    tmp_path,
+):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        asked = await _described(client, LineSetupDescribeCommand(factory="tickets"))
+
+        assert [field.name for field in asked.workbench] == ["name", "workspace_source"]
+        assert [(field.name, field.kind) for field in asked.secrets] == [
+            ("GH_TOKEN", SetupFieldKind.SECRET)
+        ]
+        assert [(field.name, field.required) for field in asked.values] == [
+            ("MOODLE_URL", True),
+            ("MOODLE_COURSE", False),
+        ]
+        assert (asked.commands, asked.logins, asked.browser) == (["checks"], [], False)
+
+    asyncio.run(scenario())
+
+
+def test_the_setup_asks_for_each_login_to_sign_in_and_a_browser_the_workbench_lacks(tmp_path):
+    hub = _signing_hub(tmp_path, FakeRuntime())
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        bare = await created(client, WorkbenchCreateCommand(name="bare"))
+
+        chosen = await _described(
+            client, LineSetupDescribeCommand(factory="signing", workbench_id=bare.workbench_id)
+        )
+        new = await _described(client, LineSetupDescribeCommand(factory="signing"))
+
+        assert ([login.id for login in chosen.logins], chosen.browser) == (["editor"], True)
+        assert ([login.id for login in new.logins], new.browser) == (["editor"], False)
+
+    asyncio.run(scenario())
+
+
+def test_one_setup_creates_the_workbench_with_its_answers_and_the_line(tmp_path):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        home = await _home(hub)
+
+        set_up = await client.call(
+            LINE_SETUP,
+            LineSetupCommand(
+                factory="tickets",
+                workbench=NewWorkbench(
+                    name="landing", workspace_source="https://github.com/owner/landing.git"
+                ),
+                secrets={"GH_TOKEN": SecretStr("ghp-secret")},
+                values={"MOODLE_URL": "https://moodle.example.com"},
+                commands={"checks": ["uv run pytest"]},
+            ),
+        )
+        assert isinstance(set_up, LineSetupResult), set_up
+        assert set_up.operation_id is not None
+        creation = await finished(
+            client,
+            WorkbenchOperationResult(
+                operation_id=set_up.operation_id, workbench_id=set_up.line.workbench_id
+            ),
+        )
+        workbench = await got(client, set_up.line.workbench_id)
+
+        assert creation.state is OperationState.SUCCEEDED
+        assert (set_up.line.factory, set_up.line.owner_id) == ("tickets", home)
+        assert (workbench.name, workbench.recipe, workbench.workspace_source) == (
+            "landing",
+            "coder",
+            "https://github.com/owner/landing.git",
+        )
+        assert (workbench.values, workbench.secrets) == (
+            {"MOODLE_URL": "https://moodle.example.com"},
+            ["GH_TOKEN"],
+        )
+        assert workbench.repository_commands == [
+            RepositoryCommandList(name="checks", commands=["uv run pytest"])
+        ]
+        assert await _lines(client) == [set_up.line]
+
+    asyncio.run(scenario())
+
+
+def test_one_setup_stores_its_answers_on_a_chosen_workbench_and_sets_the_line_up(tmp_path):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        bare = await created(client, WorkbenchCreateCommand(name="bare", recipe="coder"))
+
+        set_up = await client.call(
+            LINE_SETUP,
+            LineSetupCommand(
+                factory="tickets",
+                workbench_id=bare.workbench_id,
+                secrets={"GH_TOKEN": SecretStr("ghp-secret")},
+                values={"MOODLE_URL": "https://moodle.example.com"},
+                commands={"checks": ["uv run pytest"]},
+            ),
+        )
+        assert isinstance(set_up, LineSetupResult), set_up
+        assert set_up.operation_id is not None
+        stored = await finished(
+            client,
+            WorkbenchOperationResult(
+                operation_id=set_up.operation_id, workbench_id=bare.workbench_id
+            ),
+        )
+        workbench = await got(client, bare.workbench_id)
+
+        assert stored.state is OperationState.SUCCEEDED
+        assert (workbench.values, workbench.secrets) == (
+            {"MOODLE_URL": "https://moodle.example.com"},
+            ["GH_TOKEN"],
+        )
+        assert [commands.name for commands in workbench.repository_commands] == ["checks"]
+        assert await _lines(client) == [set_up.line]
+
+    asyncio.run(scenario())
+
+
+def test_a_refused_setup_creates_neither_the_workbench_nor_the_line(tmp_path):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+
+        fields = await _refused(
+            client,
+            LineSetupCommand(
+                factory="tickets",
+                workbench=NewWorkbench(name="landing"),
+                hub_secrets={"GH_TOKEN": "github"},
+                values={"MOODLE_URL": "moodle"},
+                commands={"checks": ["uv run pytest"]},
+            ),
+        )
+
+        assert fields == {
+            "GH_TOKEN": 'The hub keeps no secret named "github".',
+            "MOODLE_URL": "Moodle address is not a URL with a scheme and a host, like "
+            "https://example.com.",
+        }
+        assert await _workbenches(client) == []
+        assert await _lines(client) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_setup_that_creates_a_workbench_names_what_its_answers_leave_lacking(tmp_path):
+    hub = _hub(tmp_path)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        await _cec_backend(client)
+
+        fields = await _refused(
+            client,
+            LineSetupCommand(factory="tickets", workbench=NewWorkbench(name="cec-backend")),
+        )
+
+        assert fields == {
+            "workbench.name": 'A workbench named "cec-backend" exists already.',
+            "workbench": 'Workbench "cec-backend" lacks what factory "tickets" requires: '
+            'secret "GH_TOKEN", value "MOODLE_URL", command list "checks".',
+        }
+        assert await _workbenches(client) == ["cec-backend"]
+
+    asyncio.run(scenario())
+
+
+def test_a_setup_names_one_workbench_chosen_or_new():
+    for named in ({}, {"workbench_id": uuid4(), "workbench": NewWorkbench(name="landing")}):
+        with pytest.raises(ValidationError, match="Choose a workbench or describe a new one"):
+            LineSetupCommand.model_validate({"factory": "tickets", **named})

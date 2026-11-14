@@ -1,6 +1,6 @@
 ---
 name: kinby-hub
-description: The parts of a kinby hub, what each is for, and how to read them with kinby hub read and change them with hub_write. Read it before you read or change the hub, another instance, the library or a factory.
+description: The parts of a kinby hub, what each is for, and how to read them with kinby hub read and change them with hub_write. Read it before you read or change the hub, another instance, the library, a factory or a line.
 ---
 
 You are the home instance. The hub created you and lets you, and no other instance, reach it on your hub route. You read the hub and every instance it manages with `kinby hub read` in bash, and you ask the hub for changes the user approves with `hub_write`.
@@ -14,6 +14,8 @@ You are the home instance. The hub created you and lets you, and no other instan
 - **Hub secret.** A named value the hub keeps for several instances. You see names only, through `hub.secret.list`. A secret's value never passes through you.
 - **Library.** The skills and factories an instance can pick, and the MCP servers the user or you add. kinby ships some, the user writes or adds others from git. A pick copies a skill or an MCP server's definition into one instance. Nothing in the library reaches an instance until it is picked.
 - **Factory.** A line of steps the hub runs to carry a work item, such as one issue, from start to finish across its instances. Each of its instances picked one of its factory roles at creation, such as `coder`, and keeps that role for life.
+- **Workbench.** The place a factory's steps run: an image, secrets, named values, a workspace with its lists of repository commands, logins and a browser. It is no instance: it has no persona, threads or memory.
+- **Line.** A factory set up on one workbench under an owning instance, you unless the user names another. The owner hands the line its work items and remembers what its runs learn.
 - **Factory run.** One work item's trip through a factory. A run that ran out of retries, or lacks what only the user can give, is needs human and waits for the user.
 - **Routine.** A prompt an instance runs on a schedule, on a signal, or by hand. It lives as `routines/<name>/ROUTINE.md` in that instance.
 - **Thread.** One conversation in one instance. Its status is running, awaiting approval, failed or idle. A thread awaiting approval carries the `approval` it waits on: the tool's `name`, its `arguments` and the gate `rule` that asked. Read it to tell the user what they are approving, or why the gate stopped a run.
@@ -39,6 +41,7 @@ The hub's own reads:
 - Setup: `image.describe`, `factory.describe`, `hub.secret.list`.
 - Library: `library.list`, `library.skill.read`, `library.skill.file.read`, `library.skill.check`, `library.git.preview`, `library.mcp_server.read`. A library skill's `SKILL.md` comes from `library.skill.read` and each of its other files from `library.skill.file.read`, by the path `library.skill.read` lists it under. Never fetch library content from the network, or from the hub's files with bash.
 - Factories: `factory.list`, `factory.get`, `factory.check`, `factory.run.list`, `factory.run.get`.
+- Lines and workbenches: `line.list`, `line.get`, `line.setup.describe`, `workbench.list`, `workbench.get`.
 - Usage: `stats.summary`.
 - Channels: `channel.list`, each channel with the instances it mutes.
 - Operations: `operation.get`. To follow one until it ends, run `kinby hub wait <operation_id>` instead. It prints the operation once it succeeded or failed, and exits nonzero unless it succeeded. When it times out, the operation is still going: run it again. Never poll with `sleep`.
@@ -59,9 +62,20 @@ Every write is one `hub_write` call: `operation` is one of the names below, and 
 - Work in another instance: `instance_ask` starts a turn there on a new thread. Use it for work that needs that instance's own judgment or memory, and give the user the link it returns as a Markdown link, `[a short label](<link>)`, never as code, so the web app opens the thread on a click.
 - Library: `library_skill_write` writes a skill's whole `SKILL.md`, whose frontmatter `name` is the skill's name. `library_git_add` takes the address and commit `library.git.preview` returned. `library_move` takes the hash, commit and diff `library.skill.check` returned, so the approval shows the user the diff. `library_mcp_server_write` writes an MCP server's definition, whose `include` names the tools of the server a turn is offered.
 - Factories: `factory_write`.
+- Lines: `line_setup`, as Setting a line up below runs it.
 - Channels: `channel_mute` and `channel_unmute` take a channel's `channel_id` from `channel.list` and an `instance_id`.
 
 A write that takes a `hash` takes the one its read returned: `instance.picks.get` for picks, `prompt.get` for a prompt, `routine.read` for a routine, `library.skill.read` for a skill, `library.mcp_server.read` for an MCP server, `factory.get` for a factory. A stale hash is refused. Read again, redo the change on what you read, and write again.
+
+## Setting a line up
+
+One `line_setup` call sets a factory up on a workbench the user chose, or creates the workbench and sets the factory up on it, so a first line takes one pass.
+
+1. Read `factory.list` and `workbench.list`. Settle with the user the factory, and the workbench or a new one. A factory that declares instances runs in them and takes no line.
+2. Read `line.setup.describe` with `factory`, the chosen `workbench_id` or none, and the line's `model` when the user wants one. It lists only what is left to answer: `workbench`, a new one's `name` and `workspace_source`, then `secrets`, `values` and `commands`, the lists of repository commands by name. Done when each required field it lists has an answer, and the user settled the model, the daily budget in `usd_per_day` and the owner in `owner_id`, left out for you.
+3. Put a hub secret's name in `hub_secrets` for each secret, by the variable it lists, as `{"GH_TOKEN": "github"}`. When no hub secret fits, the user adds one first. Never put a secret's value in the call.
+4. A login it lists, or `browser` true, is something no answer gives: the login is signed in on the workbench, and a browser comes with a workbench created with one. Name it, point the user to the web app, and set nothing up.
+5. Call `hub_write` with `line_setup` and these values. A refusal names each wrong field and creates nothing. When the result carries an `operation_id`, run `kinby hub wait` with it: it creates the new workbench, or stores the secrets on the chosen one. A new workbench is stopped until the user starts it.
 
 Some changes stay the user's, and no tool makes them:
 

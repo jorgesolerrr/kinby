@@ -25,6 +25,7 @@ from kinby.contracts import (
     Line,
     LineHandInCommand,
     LineSetupCommand,
+    LineSetupResult,
     OperationState,
     RunFolder,
     StepEnding,
@@ -105,8 +106,8 @@ async def _line(
     line = await client.call(
         LINE_SETUP, LineSetupCommand(factory=factory, workbench_id=workbench_id)
     )
-    assert isinstance(line, Line), line
-    return line
+    assert isinstance(line, LineSetupResult), line
+    return line.line
 
 
 async def _handed_in(client: ContractClient, line: Line, issue: int) -> FactoryRun:

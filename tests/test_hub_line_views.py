@@ -9,9 +9,9 @@ from kinby.contracts import (
     LINE_SETUP,
     FactoryRun,
     FactoryRunStatus,
-    Line,
     LineHandInCommand,
     LineSetupCommand,
+    LineSetupResult,
     StepEnding,
     StepResult,
     View,
@@ -42,10 +42,11 @@ DRAFTED = StepResult(
 async def _handed_in(owned: Owned) -> FactoryRun:
     """A task handed to a line of the tasks factory, which the home instance owns."""
     workbench_id = await _started_workbench(owned)
-    line = await owned.client.call(
+    set_up = await owned.client.call(
         LINE_SETUP, LineSetupCommand(factory="tasks", workbench_id=workbench_id)
     )
-    assert isinstance(line, Line), line
+    assert isinstance(set_up, LineSetupResult), set_up
+    line = set_up.line
     run = await owned.client.call(
         LINE_HAND_IN, LineHandInCommand(line_id=line.line_id, work_item={"task": "jobs"})
     )

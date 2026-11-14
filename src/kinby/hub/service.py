@@ -125,6 +125,7 @@ from kinby.contracts import (
     LINE_REMOVE,
     LINE_SCOPES,
     LINE_SETUP,
+    LINE_SETUP_DESCRIBE,
     LINE_UPDATE,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
@@ -262,6 +263,9 @@ from kinby.contracts import (
     LineOwnerSetCommand,
     LineRemoveCommand,
     LineSetupCommand,
+    LineSetupDescribeCommand,
+    LineSetupDescription,
+    LineSetupResult,
     LineUpdateCommand,
     LoginPrompt,
     LoginSetup,
@@ -290,6 +294,9 @@ from kinby.contracts import (
     RunStop,
     Scope,
     SearchSetup,
+    SetupField,
+    SetupFieldKind,
+    SetupFieldType,
     SetupValue,
     SkillName,
     StatsGetCommand,
@@ -375,7 +382,6 @@ from kinby.factories.file import (
     FactoryFile,
     InstanceName,
     RecipeName,
-    Requirements,
     WorkbenchAgentStep,
     WorkbenchFactory,
     WorkbenchIntake,
@@ -475,7 +481,13 @@ from kinby.plugins.hub import (
 )
 from kinby.plugins.intake import run_line_intake
 from kinby.plugins.mcp import failed_mcp_servers
-from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_search_key
+from kinby.setup import (
+    API_KEY_FIELD,
+    BEHAVIOR_PROMPT_FIELD,
+    MODEL_FIELD,
+    value_problem,
+    with_search_key,
+)
 from kinby.workbench import FACTORIES_MOUNT
 
 _logger = logging.getLogger(__name__)
@@ -638,31 +650,102 @@ def _image(recipe: RecipeName | None) -> str:
     return "kinby's base image" if recipe is None else f'image recipe "{recipe}"'
 
 
-def _lacking(
-    requires: Requirements,
-    workbench: WorkbenchSetup,
-    secrets: Collection[str],
-    signed_in: Collection[str],
-    *,
-    browser: bool,
-) -> list[str]:
-    """Each secret, named value, list of repository commands and login the factory requires and
-    the workbench does not hold, and the browser when it has none. A field with a default is
-    held, and a login only once it signed in."""
+@dataclass(frozen=True)
+class _Holding:
+    """What a workbench holds, by name, or will once a line setup's answers land on it."""
+
+    secrets: Collection[str] = ()
+    values: Collection[str] = ()
+    commands: Collection[str] = ()
+    signed_in: Collection[str] = ()
+    browser: bool = False
+
+    def answered(self, command: LineSetupCommand) -> _Holding:
+        """Blank text answers no secret, as a creation reads it."""
+        typed = (
+            name for name, value in command.secrets.items() if value.get_secret_value().strip()
+        )
+        return replace(
+            self,
+            secrets={*self.secrets, *typed, *command.hub_secrets},
+            values={*self.values, *command.values},
+            commands={*self.commands, *command.commands},
+        )
+
+
+#: What a new workbench needs beside what its factory requires, named as a line setup takes it.
+_NEW_WORKBENCH_FIELDS = (
+    SetupField(
+        name="name",
+        label="Name",
+        description="The workbench's name, short like a folder's.",
+        kind=SetupFieldKind.CONFIG,
+        type=SetupFieldType.TEXT,
+        required=True,
+    ),
+    SetupField(
+        name="workspace_source",
+        label="Repository",
+        description="The git URL its workspace is cloned from. Without one it keeps a plain "
+        "folder.",
+        kind=SetupFieldKind.CONFIG,
+        type=SetupFieldType.URL,
+        required=False,
+    ),
+)
+
+
+def _asked(
+    factory: WorkbenchFactory, model: str | None, holding: _Holding, *, new: bool
+) -> LineSetupDescription:
+    """What setting *factory* up on a workbench that holds *holding* asks for: each secret, named
+    value, list of repository commands and login the factory requires and it does not hold, and
+    the browser when it has none. A field with a default is held, and a login only once it signed
+    in. A *new* workbench is asked for its own fields and every field the factory declares."""
+    requires = factory.requires
+    declared = {field.name for field in requires.secrets}
+    secrets = [
+        *(field.setup_field(SetupFieldKind.SECRET) for field in requires.secrets),
+        *(
+            SetupField(
+                name=key,
+                label="API key",
+                description="The key of the model provider the kinby agent steps call.",
+                kind=SetupFieldKind.SECRET,
+                type=SetupFieldType.TEXT,
+                required=True,
+            )
+            for key in _model_keys(factory, model)
+            if key not in declared
+        ),
+    ]
+    values = [field.setup_field(SetupFieldKind.CONFIG) for field in requires.values]
+    return LineSetupDescription(
+        workbench=list(_NEW_WORKBENCH_FIELDS) if new else [],
+        secrets=[
+            field
+            for field in secrets
+            if new or (field.required and field.name not in holding.secrets)
+        ],
+        values=[
+            field
+            for field in values
+            if new
+            or (field.required and field.default is None and field.name not in holding.values)
+        ],
+        commands=[name for name in requires.commands if name not in holding.commands],
+        logins=[login for login in requires.logins if login.id not in holding.signed_in],
+        browser=requires.browser and not holding.browser,
+    )
+
+
+def _lacking(asked: LineSetupDescription) -> list[str]:
     return [
-        *(
-            f'secret "{field.name}"'
-            for field in requires.secrets
-            if field.required and field.name not in secrets
-        ),
-        *(
-            f'value "{field.name}"'
-            for field in requires.values
-            if field.required and field.default is None and field.name not in workbench.values
-        ),
-        *(f'command list "{name}"' for name in requires.commands if name not in workbench.commands),
-        *(f'login "{login.id}"' for login in requires.logins if login.id not in signed_in),
-        *(["a browser"] if requires.browser and not browser else []),
+        *(f'secret "{field.name}"' for field in asked.secrets),
+        *(f'value "{field.name}"' for field in asked.values),
+        *(f'command list "{name}"' for name in asked.commands),
+        *(f'login "{login.id}"' for login in asked.logins),
+        *(["a browser"] if asked.browser else []),
     ]
 
 
@@ -900,8 +983,10 @@ class Hub:
             )
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
-            #: Held while a line or a factory role's instance is added, and while a factory is
-            #: removed, so no removal misses a dependent added during it.
+            #: Held while a line, a workbench or a factory role's instance is added, and while a
+            #: factory is removed, so no removal misses a dependent added during it, and no
+            #: workbench takes the name of the one a line setup creates while its owner takes the
+            #: intake routine.
             self._factory_dependents = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
             #: The drain each operation is waiting on, whichever operation it is.
@@ -952,6 +1037,7 @@ class Hub:
         dispatcher.register(WORKBENCH_PICKS_GET, self.workbench_picks)
         dispatcher.register(WORKBENCH_PICKS_SET, self.set_workbench_picks)
         dispatcher.register(LINE_SETUP, self.set_up_line)
+        dispatcher.register(LINE_SETUP_DESCRIBE, self.describe_line_setup)
         dispatcher.register(LINE_LIST, self.list_lines)
         dispatcher.register(LINE_GET, self.get_line)
         dispatcher.register(LINE_UPDATE, self.update_line)
@@ -1187,6 +1273,8 @@ class Hub:
                 result = await self.library.write_mcp_server(write)
             case FactoryEditCommand():
                 result = await self.edit_factory(write)
+            case LineSetupCommand():
+                result = await self.set_up_line(write)
             case ChannelMute():
                 result = await self.channels.mute(write)
             case ChannelUnmute():
@@ -3419,20 +3507,16 @@ class Hub:
         names a variable, the hub keeps each hub secret it links and each login can sign in. Its
         image builds and its container is created in the background, with a volume for each
         login."""
+        async with self._factory_dependents:
+            return await self._create_workbench(command)
+
+    async def _create_workbench(self, command: WorkbenchCreateCommand) -> WorkbenchCreateResult:
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
-        kept = self.secrets.values()
-        errors = link_errors(secrets, command.hub_secrets, {}, kept)
+        errors = self._secret_errors(secrets, command.hub_secrets)
         if self._name_taken(command.name, workbench=True):
             errors["name"] = f'A workbench named "{command.name}" exists already.'
         if command.recipe is not None and not ships_recipe(command.recipe):
             errors["recipe"] = f'kinby does not ship image recipe "{command.recipe}".'
-        invalid = [
-            name
-            for name in secrets | command.hub_secrets
-            if ENVIRONMENT_NAME.fullmatch(name) is None
-        ]
-        if invalid:
-            errors["secrets"] = f'Invalid environment variable name: "{invalid[0]}".'
         if problems := list(login_declaration_problems(command.logins)):
             errors["logins"] = " ".join(problems)
         if errors:
@@ -3447,7 +3531,42 @@ class Hub:
                 browser=command.browser,
             ),
         )
-        secrets |= {variable: kept[name] for variable, name in command.hub_secrets.items()}
+        secrets = self._with_hub_secrets(secrets, command.hub_secrets)
+        return WorkbenchCreateResult(
+            operation_id=self._begin_workbench(record, secrets, command.hub_secrets),
+            workbench_id=record.instance_id,
+            workbench=await self._workbench(record, secrets),
+        )
+
+    def _secret_errors(
+        self, secrets: Mapping[str, str], hub_secrets: Mapping[str, HubSecretName]
+    ) -> dict[str, str]:
+        """What is wrong with each variable's hub secret, and the first variable no environment
+        variable can be named."""
+        errors = link_errors(secrets, hub_secrets, {}, self.secrets.values())
+        invalid = [
+            name for name in {**secrets, **hub_secrets} if ENVIRONMENT_NAME.fullmatch(name) is None
+        ]
+        if invalid:
+            errors["secrets"] = f'Invalid environment variable name: "{invalid[0]}".'
+        return errors
+
+    def _with_hub_secrets(
+        self, secrets: dict[str, str], hub_secrets: Mapping[str, HubSecretName]
+    ) -> dict[str, str]:
+        kept = self.secrets.values()
+        return secrets | {variable: kept[name] for variable, name in hub_secrets.items()}
+
+    def _begin_workbench(
+        self,
+        record: ManagedInstance,
+        secrets: dict[str, str],
+        hub_secrets: Mapping[str, HubSecretName],
+    ) -> UUID:
+        """Begin creating the workbench with *secrets*, linked to *hub_secrets*: its image builds
+        and its container is created in the background, with a volume for each login."""
+        assert record.workbench is not None
+        logins = record.workbench.logins
 
         async def write(
             operation_id: UUID, staging: Path, artifact: ImageArtifact
@@ -3457,15 +3576,11 @@ class Hub:
             self._write_secrets(
                 staging / ".env", secrets | {CONTROL_TOKEN_VARIABLE: new_control_token()}
             )
-            return command.logins
+            return logins
 
         operation_id = self._begin_create(record, write, secrets.values())
-        self.registry.link_secrets(record.instance_id, command.hub_secrets)
-        return WorkbenchCreateResult(
-            operation_id=operation_id,
-            workbench_id=record.instance_id,
-            workbench=await self._workbench(record, secrets),
-        )
+        self.registry.link_secrets(record.instance_id, hub_secrets)
+        return operation_id
 
     async def list_workbenches(self, command: WorkbenchListCommand) -> WorkbenchListResult:
         return WorkbenchListResult(
@@ -3699,56 +3814,112 @@ class Hub:
             browser=record.workbench.browser,
         )
 
-    async def set_up_line(self, command: LineSetupCommand) -> Line:
-        """Accept a line only once the factory passes its check and runs on a workbench, the
-        workbench holds all it requires on its own image, and the owner is an instance. The
-        home instance owns it unless the command names another."""
-        async with self._factory_dependents:
-            return await self._set_up_line(command)
-
-    async def _set_up_line(self, command: LineSetupCommand) -> Line:
+    async def describe_line_setup(self, command: LineSetupDescribeCommand) -> LineSetupDescription:
+        """What setting the factory up on the chosen workbench asks for, or with none, what the
+        factory and a new workbench ask for. A workbench the factory cannot run on is refused."""
+        factory = await self._workbench_factory(command.factory)
+        if command.workbench_id is None:
+            return _asked(factory, command.model, self._new_holding(), new=True)
         record = self._active_workbench(command.workbench_id)
-        assert record.workbench is not None
-        factory = await self.factories.checked(command.factory)
+        if errors := self._misfit(command.factory, factory, record):
+            raise InvalidSetup(errors)
+        return _asked(factory, command.model, self._holding(record), new=False)
+
+    async def _workbench_factory(self, name: FactoryName) -> WorkbenchFactory:
+        factory = await self.factories.checked(name)
         if isinstance(factory, FactoryFile):
             raise InvalidSetup(
                 {
-                    "factory": f'Factory "{command.factory}" declares instances, so its steps '
-                    "run in them. Only a factory that runs on a workbench is set up on one."
+                    "factory": f'Factory "{name}" declares instances, so its steps run in them. '
+                    "Only a factory that runs on a workbench is set up on one."
                 }
             )
-        errors: dict[str, str] = {}
+        return factory
+
+    def _misfit(
+        self, name: FactoryName, factory: WorkbenchFactory, record: ManagedInstance
+    ) -> dict[str, str]:
+        """Why the factory is no new line on the workbench, whatever the setup answers."""
+        assert record.workbench is not None
         if any(
-            line.factory == command.factory and line.workbench_id == command.workbench_id
+            line.factory == name and line.workbench_id == record.instance_id
             for line in self.registry.lines()
         ):
-            errors["factory"] = (
-                f'Factory "{command.factory}" is set up on workbench "{record.manifest_id}" '
+            return {
+                "factory": f'Factory "{name}" is set up on workbench "{record.manifest_id}" '
                 "already."
-            )
-        elif factory.requires.image != record.workbench.recipe:
-            errors["factory"] = (
-                f'Factory "{command.factory}" requires {_image(factory.requires.image)}, '
+            }
+        if factory.requires.image != record.workbench.recipe:
+            return {
+                "factory": f'Factory "{name}" requires {_image(factory.requires.image)}, '
                 f'and workbench "{record.manifest_id}" runs {_image(record.workbench.recipe)}.'
+            }
+        return {}
+
+    def _holding(self, record: ManagedInstance) -> _Holding:
+        """What the workbench holds. It has a browser when it was created with one and the hub
+        runs the browser service."""
+        assert record.workbench is not None
+        return _Holding(
+            secrets=self._environment(record.path).keys(),
+            values=record.workbench.values.keys(),
+            commands=record.workbench.commands.keys(),
+            signed_in=[
+                login_id
+                for login_id, state in self.registry.login_states(record.instance_id).items()
+                if state is LoginState.SIGNED_IN
+            ],
+            browser=Scope.BROWSER_OPEN in self._scopes(record, None),
+        )
+
+    def _new_holding(self) -> _Holding:
+        """What a new workbench holds: a browser, if the hub runs the browser service."""
+        return _Holding(browser=self._browsers is not None)
+
+    async def set_up_line(self, command: LineSetupCommand) -> LineSetupResult:
+        """Accept a line only once the factory passes its check and runs on a workbench, the
+        workbench holds all it requires on its own image once the setup's answers land, the
+        answers are sound, and the owner is an instance. The home instance owns it unless the
+        command names another. Then create the workbench when the command describes a new one,
+        or store the answers on the chosen one."""
+        async with self._factory_dependents:
+            return await self._set_up_line(command)
+
+    async def _set_up_line(self, command: LineSetupCommand) -> LineSetupResult:
+        factory = await self._workbench_factory(command.factory)
+        secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
+        errors = self._secret_errors(secrets, command.hub_secrets)
+        fields = {
+            field.name: field.setup_field(SetupFieldKind.CONFIG)
+            for field in factory.requires.values
+        }
+        for name, value in command.values.items():
+            if name in fields and (problem := value_problem(fields[name], value)) is not None:
+                errors[name] = f"{fields[name].label} {problem}."
+        if command.workbench is None:
+            assert command.workbench_id is not None
+            record = self._active_workbench(command.workbench_id)
+            errors |= self._misfit(command.factory, factory, record)
+            holding, field = self._holding(record), "workbench_id"
+        else:
+            record = self._new_record(
+                command.workbench.name,
+                workbench=WorkbenchSetup(
+                    recipe=factory.requires.image,
+                    workspace_source=command.workbench.workspace_source,
+                    values=dict(command.values),
+                    commands=dict(command.commands),
+                    browser=factory.requires.browser,
+                ),
             )
-        environment = self._environment(record.path)
-        signed_in = [
-            login_id
-            for login_id, state in self.registry.login_states(record.instance_id).items()
-            if state is LoginState.SIGNED_IN
-        ]
-        browser = Scope.BROWSER_OPEN in self._scopes(record, None)
-        lacking = [
-            *_lacking(factory.requires, record.workbench, environment, signed_in, browser=browser),
-            *(
-                f'secret "{key}"'
-                for key in _model_keys(factory, command.model)
-                if key not in environment
-            ),
-        ]
-        lacking = list(dict.fromkeys(lacking))
+            if self._name_taken(record.manifest_id, workbench=True):
+                errors["workbench.name"] = (
+                    f'A workbench named "{record.manifest_id}" exists already.'
+                )
+            holding, field = self._new_holding(), "workbench"
+        lacking = _lacking(_asked(factory, command.model, holding.answered(command), new=False))
         if lacking:
-            errors["workbench_id"] = (
+            errors[field] = (
                 f'Workbench "{record.manifest_id}" lacks what factory "{command.factory}" '
                 f"requires: {', '.join(lacking)}."
             )
@@ -3771,17 +3942,41 @@ class Hub:
             intake = RoutineName(f"{command.factory}-{record.manifest_id}")
             routine = _intake_routine(command.factory, record.manifest_id, factory.intake)
             await self._write_intake(owner, intake, routine)
+        if command.workbench is None:
+            operation_id = await self._store_answers(record, command)
+        else:
+            secrets = self._with_hub_secrets(secrets, command.hub_secrets)
+            operation_id = self._begin_workbench(record, secrets, command.hub_secrets)
         line = Line(
             line_id=uuid4(),
             factory=command.factory,
-            workbench_id=command.workbench_id,
+            workbench_id=record.instance_id,
             owner_id=owner.instance_id,
             model=command.model,
             usd_per_day=command.usd_per_day,
             intake=intake,
         )
         self.registry.add_line(line)
-        return line
+        return LineSetupResult(line=line, operation_id=operation_id)
+
+    async def _store_answers(
+        self, record: ManagedInstance, command: LineSetupCommand
+    ) -> UUID | None:
+        """Store the setup's values and lists of repository commands on the workbench, and start
+        the replacement of its secrets, whose operation this returns."""
+        self.registry.set_workbench_values(record.instance_id, command.values)
+        for name, commands in command.commands.items():
+            self.registry.set_workbench_commands(record.instance_id, name, commands)
+        if not command.secrets and not command.hub_secrets:
+            return None
+        replacing = await self.set_secrets(
+            InstanceSecretsSetCommand(
+                instance_id=record.instance_id,
+                secrets=command.secrets,
+                hub_secrets=command.hub_secrets,
+            )
+        )
+        return replacing.operation_id
 
     async def _write_intake(self, owner: ManagedInstance, name: RoutineName, content: str) -> None:
         """Create the line's intake routine in its owner, or refuse the setup with why the owner
