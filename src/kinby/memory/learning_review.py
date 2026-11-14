@@ -185,11 +185,17 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
         facts = {node.node: node for node in nodes if isinstance(node, Fact)}
         episodes = [node for node in nodes if isinstance(node, Episode)]
 
-        def matching(recaps: tuple[Episode, ...], started: datetime) -> tuple[Fact, ...]:
+        def matching(
+            recaps: tuple[Episode, ...], started: datetime, workbench: str | None = None
+        ) -> tuple[Fact, ...]:
             # A fact holds only the day it was learned, so one from the work's own day may have
             # come after it, and is left out.
             subjects = dict.fromkeys(subject for recap in recaps for subject in recap.subjects)
-            hits = dict.fromkeys(hit.node for subject in subjects for hit in graph.recall(subject))
+            hits = dict.fromkeys(
+                hit.node
+                for subject in subjects
+                for hit in graph.recall(subject, workbench=workbench)
+            )
             return tuple(
                 facts[node] for node in hits if node in facts and facts[node].date < started.date()
             )
@@ -230,7 +236,7 @@ def learning_review_step(graph: GraphStore, log: EventLog, *, today: Callable[[]
                     rating for turn in run.turns if (rating := turn.bad_rating) is not None
                 ),
                 episodes=recaps,
-                matching_facts=matching(recaps, run.started),
+                matching_facts=matching(recaps, run.started, run.workbench),
                 recalled_facts=recalled(
                     [*(node for turn in run.turns for node in turn.recalled), *run.recalled]
                 ),

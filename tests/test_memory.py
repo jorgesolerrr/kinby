@@ -588,6 +588,46 @@ def test_remember_writes_a_run_episode_and_a_fact_marked_with_their_workbench(
     ).read_text(encoding="utf-8")
 
 
+def _install_lessons(memory: Memory) -> dict[str | None, NodeId]:
+    """One install lesson marked with each of two workbenches, and one unmarked."""
+    return {
+        workbench: memory.remember(
+            Fact(
+                node=NodeId(f"2026-09-0{day}-install-lesson"),
+                date=date(2026, 9, day),
+                description=f"Install lesson {day}",
+                subjects=("install",),
+                body="Install before the checks.",
+                thread=None,
+                workbench=workbench,
+            )
+        )
+        for day, workbench in ((1, "landing"), (2, "cec-backend"), (3, None))
+    }
+
+
+def test_recall_for_a_run_returns_its_workbench_memory_and_the_unmarked(tmp_path: Path) -> None:
+    memory = _graph_store(tmp_path)
+    lessons = _install_lessons(memory)
+
+    memories = memory.recall("install", workbench="landing")
+
+    assert [hit.node for hit in memories] == [lessons[None], lessons["landing"]]
+
+
+def test_recall_in_the_owner_turn_returns_memory_with_any_mark(tmp_path: Path) -> None:
+    memory = _graph_store(tmp_path)
+    lessons = _install_lessons(memory)
+
+    memories = memory.recall("install")
+
+    assert [hit.node for hit in memories] == [
+        lessons[None],
+        lessons["cec-backend"],
+        lessons["landing"],
+    ]
+
+
 def test_remember_escapes_frontmatter_values(tmp_path: Path) -> None:
     node = NodeId("2026-09-01-frontmatter-shaped-fact")
     fact = Fact(
