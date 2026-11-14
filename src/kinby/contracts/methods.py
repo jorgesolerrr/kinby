@@ -83,6 +83,7 @@ from kinby.contracts.models import (
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
+    InstanceConvertCommand,
     InstanceCreateCommand,
     InstanceDeleteCommand,
     InstanceDeletePreviewCommand,
@@ -622,6 +623,7 @@ LINE_LIST = Method("line.list", Scope.HUB_READ, LineListCommand, LineListResult)
 LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
 LINE_UPDATE = Method("line.update", Scope.HUB_ADMIN, LineUpdateCommand, Line)
 LINE_OWNER_SET = Method("line.owner.set", Scope.HUB_ADMIN, LineOwnerSetCommand, Line)
+INSTANCE_CONVERT = Method("instance.convert", Scope.HUB_ADMIN, InstanceConvertCommand, Line)
 LINE_REMOVE = Method("line.remove", Scope.HUB_ADMIN, LineRemoveCommand, LineListResult)
 LINE_HAND_IN = Method("line.hand_in", Scope.HUB_ADMIN, LineHandInCommand, FactoryRun)
 LINE_INTAKE = Method("line.intake", Scope.LINE_INTAKE, LineIntakeCommand, LineIntakeResult)
@@ -937,6 +939,7 @@ METHODS = (
     LINE_GET,
     LINE_UPDATE,
     LINE_OWNER_SET,
+    INSTANCE_CONVERT,
     LINE_REMOVE,
     LINE_HAND_IN,
     LINE_INTAKE,

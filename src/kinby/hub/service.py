@@ -84,6 +84,7 @@ from kinby.contracts import (
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
+    INSTANCE_CONVERT,
     INSTANCE_CREATE,
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
@@ -215,6 +216,7 @@ from kinby.contracts import (
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
+    InstanceConvertCommand,
     InstanceCreateCommand,
     InstanceDeleteCommand,
     InstanceDeletePreviewCommand,
@@ -351,12 +353,14 @@ from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.errors import (
     AdoptionBlocked,
+    ConversionFailed,
     FactoryCheckFailed,
     FactoryInUse,
     FactoryNotFound,
     FactoryRunNotFound,
     HomeInstanceKept,
     ImageNotPrepared,
+    InstanceInUse,
     InstanceRefused,
     InstanceUnavailable,
     IntakeFailed,
@@ -461,7 +465,8 @@ from kinby.instance import (
 )
 from kinby.instance.code import declared_secrets, exposed_tools, packages
 from kinby.instance.config_changes import file_hash
-from kinby.instance.layout import SYSTEM_NAME
+from kinby.instance.layout import ENV_NAME, SYSTEM_NAME
+from kinby.instance.manifest import repository_commands
 from kinby.instance.read_only_tools import read_only_tools
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
@@ -644,6 +649,15 @@ def _instance_name(command: InstanceCreateCommand) -> str:
 
 def _quoted(names: Iterable[str]) -> str:
     return ", ".join(f'"{name}"' for name in names)
+
+
+def _named(runs: Iterable[FactoryRun]) -> str:
+    return "; ".join(
+        f"{run.factory} for "
+        + ", ".join(f"{name} {value}" for name, value in run.work_item.items())
+        + f" ({run.run_id})"
+        for run in runs
+    )
 
 
 def _image(recipe: RecipeName | None) -> str:
@@ -1042,6 +1056,7 @@ class Hub:
         dispatcher.register(LINE_GET, self.get_line)
         dispatcher.register(LINE_UPDATE, self.update_line)
         dispatcher.register(LINE_OWNER_SET, self.set_line_owner)
+        dispatcher.register(INSTANCE_CONVERT, self.convert_instance)
         dispatcher.register(LINE_REMOVE, self.remove_line)
         dispatcher.register(LINE_HAND_IN, self.hand_in)
         dispatcher.register(OPERATION_GET, self.operation)
@@ -1275,6 +1290,8 @@ class Hub:
                 result = await self.edit_factory(write)
             case LineSetupCommand():
                 result = await self.set_up_line(write)
+            case InstanceConvertCommand():
+                result = await self.convert_instance(write)
             case ChannelMute():
                 result = await self.channels.mute(write)
             case ChannelUnmute():
@@ -3698,16 +3715,14 @@ class Hub:
         """
         record = self._kept_workbench(command.workbench_id)
         unfinished = [
-            f"{run.factory} for "
-            + ", ".join(f"{name} {value}" for name, value in run.work_item.items())
-            + f" ({run.run_id})"
+            run
             for line in self.registry.lines()
             if line.workbench_id == record.instance_id
             for run in self.registry.runs(line.factory, UNFINISHED, line_id=line.line_id)
         ]
         if unfinished:
             raise WorkbenchInUse(
-                f'Workbench "{record.manifest_id}" has unfinished runs: {"; ".join(unfinished)}. '
+                f'Workbench "{record.manifest_id}" has unfinished runs: {_named(unfinished)}. '
                 "Finish or cancel them before deleting it."
             )
         record = self._claimed(record)
@@ -4093,6 +4108,161 @@ class Hub:
                 f'"{running[0].step}". Change the owner once the step ends.'
             )
 
+    async def convert_instance(self, command: InstanceConvertCommand) -> Line:
+        """Convert the stopped instance into a workbench and a line of its role's factory on it,
+        owned by the home instance, whose intake takes the deliveries to the instance's signal
+        path. The workbench keeps the instance's id, directory, volumes, secrets, logins, picks and
+        repository commands. Its memory moves to the home instance, marked with the workbench.
+
+        Each part done is undone when a later one fails, so a conversion that fails leaves the
+        instance as it was.
+        """
+        async with (
+            self._factory_dependents,
+            self._locks.setdefault(command.instance_id, asyncio.Lock()),
+        ):
+            record = self._not_signing_in(self._claimed(self._active_instance(command.instance_id)))
+            member = record.factory
+            if member is None:
+                raise InvalidSetup(
+                    {"instance_id": f'Instance "{record.manifest_id}" picked no factory role.'}
+                )
+            self._refuse_in_use(record, member)
+            factory = await self._workbench_factory(member.factory)
+            if factory.requires.image != member.recipe:
+                raise InvalidSetup(
+                    {
+                        "factory": f'Factory "{member.factory}" requires '
+                        f'{_image(factory.requires.image)}, and instance "{record.manifest_id}" '
+                        f"runs {_image(member.recipe)}."
+                    }
+                )
+            if self._name_taken(record.manifest_id, workbench=True):
+                raise InvalidSetup(
+                    {"instance_id": f'A workbench named "{record.manifest_id}" exists already.'}
+                )
+            home = next((other for other in self.registry.managed_instances() if other.home), None)
+            if home is None or not home.active:
+                raise InvalidSetup({"owner_id": "The hub has no home instance to own the line."})
+            manifest = inspect_instance(record.path).manifest
+            workbench = replace(
+                record,
+                factory=None,
+                storage=(*self._factories_mount(), *record.storage),
+                workbench=WorkbenchSetup(
+                    recipe=member.recipe,
+                    workspace_source=manifest.workspace.source,
+                    values={},
+                    commands=repository_commands(record.path),
+                    logins=tuple(member.setup.logins),
+                    browser=factory.requires.browser,
+                ),
+            )
+            model = manifest.models.main
+            lacking = _lacking(_asked(factory, model, self._holding(workbench), new=False))
+            if lacking:
+                raise InvalidSetup(
+                    {
+                        "instance_id": f'Instance "{record.manifest_id}" lacks what factory '
+                        f'"{member.factory}" requires: {", ".join(lacking)}.'
+                    }
+                )
+            line = Line(
+                line_id=uuid4(),
+                factory=member.factory,
+                workbench_id=record.instance_id,
+                owner_id=home.instance_id,
+                model=model,
+                usd_per_day=manifest.budgets.usd_per_day,
+                intake=(
+                    None
+                    if factory.intake is None
+                    else RoutineName(f"{member.factory}-{record.manifest_id}")
+                ),
+            )
+            await self._convert(record, workbench, line, factory.intake, home)
+            return line
+
+    def _refuse_in_use(self, record: ManagedInstance, member: FactoryMember) -> None:
+        """A running instance, or one a run or a line needs, is not converted, so nothing is cut
+        short or left with an owner that is no instance."""
+        if record.intended_state is not IntendedState.STOPPED:
+            raise InstanceInUse(
+                f'Instance "{record.manifest_id}" is running. Stop it before converting it.'
+            )
+        unfinished = [
+            run
+            for run in self.registry.runs(member.factory, UNFINISHED)
+            if run.line_id is None and self.runs.holder(run, member.name) == record.instance_id
+        ]
+        if unfinished:
+            raise InstanceInUse(
+                f'Instance "{record.manifest_id}" has unfinished runs: {_named(unfinished)}. '
+                "Finish or cancel them before converting it."
+            )
+        owned = [
+            f'"{line.factory}" on "{self._workbench_name(line.workbench_id)}"'
+            for line in self.registry.lines()
+            if line.owner_id == record.instance_id
+        ]
+        if owned:
+            raise InstanceInUse(
+                f'Instance "{record.manifest_id}" owns the lines {", ".join(owned)}. '
+                "Give them another owner before converting it."
+            )
+
+    async def _convert(
+        self,
+        record: ManagedInstance,
+        workbench: ManagedInstance,
+        line: Line,
+        intake: WorkbenchIntake | None,
+        home: ManagedInstance,
+    ) -> None:
+        """Move the memory and the intake to *home*, replace the instance's container with the
+        workbench's, and record the conversion, undoing each part done when a later one fails."""
+        source, target = GraphStore(record.path), GraphStore(home.path)
+        memory = source.as_marked(record.manifest_id)
+        environment = record.path / ENV_NAME
+        held = environment.read_text(encoding="utf-8")
+        assert record.image_id is not None
+        container = self._container(record, record.image_id, record.storage)
+        async with AsyncExitStack() as undo:
+            for node in target.take(memory):
+                undo.callback(target.prune, node)
+            if line.intake is not None and intake is not None:
+                routine = _intake_routine(line.factory, record.manifest_id, intake)
+                await self._write_intake(home, line.intake, routine)
+                undo.push_async_callback(self._remove_intake, line)
+            try:
+                undo.callback(environment.write_text, held, encoding="utf-8")
+                # Its hub route granted an instance's scopes, which a workbench holds none of.
+                self._write_secrets(
+                    environment,
+                    {
+                        name: value
+                        for name, value in self._environment(record.path).items()
+                        if name not in {HUB_URL_VARIABLE, HUB_SCOPES_VARIABLE}
+                    },
+                )
+                if (await self._runtime.status(record.runtime_id)).state != "absent":
+                    await self._runtime.remove(record.runtime_id)
+                    undo.push_async_callback(self._runtime.create, container)
+                self._write_hub_url(workbench)
+                await self._runtime.create(
+                    self._container(workbench, record.image_id, workbench.storage)
+                )
+                undo.push_async_callback(self._runtime.remove, record.runtime_id)
+                self.registry.convert_instance(workbench, line)
+            except Exception as exc:
+                raise ConversionFailed(
+                    f'Instance "{record.manifest_id}" was not converted: '
+                    f"{str(exc) or type(exc).__name__}"
+                ) from exc
+            undo.pop_all()
+        for node in memory:
+            source.prune(node)
+
     async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
         """Remove the line and its intake routine. Its workbench keeps its clone, its secrets and
         its command lists. An owner that cannot delete the routine keeps the line."""
@@ -4209,12 +4379,20 @@ class Hub:
             instance_id=instance_id, url=address, control_token=ControlToken(token)
         )
 
-    async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable:
-        """Reach the instance that kept the public webhook URL it was registered with."""
-        alias = self.registry.signal_alias()
-        if alias is None:
+    async def signal_endpoint(
+        self, routine: RoutineName, instance_id: UUID | None = None
+    ) -> tuple[InstanceEndpoint, RoutineName] | InstanceUnreachable:
+        """Reach where a delivery to the instance's signal path goes, or without one, to the
+        public path of the instance that kept the webhook URL it was registered with: the
+        instance's routine, or the intake of the line it was converted into."""
+        target = self.registry.signal_alias() if instance_id is None else instance_id
+        if target is None:
             return InstanceUnreachable.MISSING
-        return await self.endpoint(alias)
+        line_id = self.registry.signal_line(target)
+        if line_id is not None:
+            return await self.intake_endpoint(line_id)
+        endpoint = await self.endpoint(target)
+        return endpoint if isinstance(endpoint, InstanceUnreachable) else (endpoint, routine)
 
     async def intake_endpoint(
         self, line_id: UUID

@@ -1,5 +1,6 @@
 """A workbench's runtime: the server its container runs for the hub, which runs the steps of
-factory runs. It has no persona, threads or memory."""
+factory runs. It has no persona, threads or memory. One converted from an instance answers the
+reads of the threads that instance left."""
 
 from __future__ import annotations
 
@@ -16,19 +17,30 @@ from kinby.contracts import (
     RUN_FOLDER_REMOVE,
     RUN_TRANSCRIPT_READ,
     STEP_RUN,
+    THREAD_LIST,
+    THREAD_SUBSCRIBE,
     WORKSPACE_COMMAND_RUN,
     WORKSPACE_DIRECTORY_LIST,
     WORKSPACE_FILE_READ,
     ControlToken,
     DrainState,
+    Event,
     InstanceDrainCommand,
     InstanceDrainResult,
     InstanceProbeCommand,
     InstanceProbeResult,
+    Stream,
+    ThreadListCommand,
+    ThreadListResult,
+    ThreadSubscribeCommand,
 )
 from kinby.core.contract_server import ContractServer
+from kinby.core.events import EventLog
 from kinby.core.routing import Dispatcher, instance_capabilities
+from kinby.core.threads import ThreadStore, thread_list
 from kinby.instance import Serve
+from kinby.instance.database import DATABASE_NAME
+from kinby.instance.permissions import SHIPPED_POLICY
 from kinby.workbench.steps import FACTORIES_MOUNT, WorkbenchSteps
 
 
@@ -43,9 +55,12 @@ def prepare_workspace(workspace: Path, source: str | None) -> None:
 
 def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
     """The hub's probe, a drain with no accepted work to wait for, the steps of runs, the
-    transcripts of their agent steps, the removal of their folders, the intakes of lines, and the
-    reads of the workspace its lines' owners send."""
+    transcripts of their agent steps, the removal of their folders, the intakes of lines, the
+    reads of the workspace its lines' owners send, and the reads of the threads an instance
+    converted into it left."""
     dispatcher = Dispatcher()
+    if (steps.state / DATABASE_NAME).is_file():
+        _serve_threads(dispatcher, steps.state)
 
     async def probe(command: InstanceProbeCommand) -> InstanceProbeResult:
         return InstanceProbeResult(
@@ -65,6 +80,22 @@ def _dispatcher(steps: WorkbenchSteps) -> Dispatcher:
     dispatcher.register(WORKSPACE_DIRECTORY_LIST, steps.list_directory)
     dispatcher.register(WORKSPACE_COMMAND_RUN, steps.run_command)
     return dispatcher
+
+
+def _serve_threads(dispatcher: Dispatcher, state: Path) -> None:
+    """Answer the reads of the threads the instance converted into this workbench kept in
+    *state*: their list, and each one's events."""
+    store, log = ThreadStore(state), EventLog(state)
+
+    async def list_threads(command: ThreadListCommand) -> ThreadListResult:
+        with log.reader() as reader:
+            return thread_list(store.threads(), reader, SHIPPED_POLICY, command)
+
+    async def subscribe(command: ThreadSubscribeCommand) -> Stream[Event]:
+        return await log.subscribe(command.thread_id, command.after_sequence)
+
+    dispatcher.register(THREAD_LIST, list_threads)
+    dispatcher.register_subscription(THREAD_SUBSCRIBE, subscribe)
 
 
 class WorkbenchServer:

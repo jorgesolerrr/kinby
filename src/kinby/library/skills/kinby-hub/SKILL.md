@@ -63,6 +63,7 @@ Every write is one `hub_write` call: `operation` is one of the names below, and 
 - Library: `library_skill_write` writes a skill's whole `SKILL.md`, whose frontmatter `name` is the skill's name. `library_git_add` takes the address and commit `library.git.preview` returned. `library_move` takes the hash, commit and diff `library.skill.check` returned, so the approval shows the user the diff. `library_mcp_server_write` writes an MCP server's definition, whose `include` names the tools of the server a turn is offered.
 - Factories: `factory_write`.
 - Lines: `line_setup`, as Setting a line up below runs it.
+- Conversion: `instance_convert` turns a stopped instance that picked a factory role into a workbench and a line of that factory you own, once the factory runs on a workbench. The workbench keeps the instance's id, clone, secrets and picks, and is stopped until the user starts it. A refusal names what stands in the way: a running instance, its unfinished runs, the lines it owns, or what the factory requires and it lacks.
 - Channels: `channel_mute` and `channel_unmute` take a channel's `channel_id` from `channel.list` and an `instance_id`.
 
 A write that takes a `hash` takes the one its read returned: `instance.picks.get` for picks, `prompt.get` for a prompt, `routine.read` for a routine, `library.skill.read` for a skill, `library.mcp_server.read` for an MCP server, `factory.get` for a factory. A stale hash is refused. Read again, redo the change on what you read, and write again.
