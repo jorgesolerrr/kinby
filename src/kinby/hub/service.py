@@ -146,6 +146,10 @@ from kinby.contracts import (
     WORKBENCH_DELETE,
     WORKBENCH_GET,
     WORKBENCH_LIST,
+    WORKBENCH_OWNED_COMMAND_RUN,
+    WORKBENCH_OWNED_COMMANDS_SET,
+    WORKBENCH_OWNED_DIRECTORY_LIST,
+    WORKBENCH_OWNED_FILE_READ,
     WORKBENCH_PICKS_GET,
     WORKBENCH_PICKS_SET,
     WORKBENCH_RECREATE,
@@ -155,6 +159,9 @@ from kinby.contracts import (
     WORKBENCH_START,
     WORKBENCH_STOP,
     WORKBENCH_UPDATE,
+    WORKSPACE_COMMAND_RUN,
+    WORKSPACE_DIRECTORY_LIST,
+    WORKSPACE_FILE_READ,
     AcceptedResult,
     ApprovalDecision,
     AuthoredTool,
@@ -168,6 +175,7 @@ from kinby.contracts import (
     Capability,
     ChannelKindName,
     ContainerOwner,
+    ContractModel,
     ControlToken,
     DeclaredSetup,
     DefaultTool,
@@ -250,6 +258,7 @@ from kinby.contracts import (
     LineUpdateCommand,
     LoginPrompt,
     McpServerFailed,
+    Method,
     NewerVersion,
     OperationGetCommand,
     OperationGetResult,
@@ -297,10 +306,13 @@ from kinby.contracts import (
     VaultEntryListResult,
     WaitingApproval,
     Workbench,
+    WorkbenchCommandRunCommand,
     WorkbenchCommandsSetCommand,
     WorkbenchCreateCommand,
     WorkbenchCreateResult,
     WorkbenchDeleteCommand,
+    WorkbenchDirectoryListCommand,
+    WorkbenchFileReadCommand,
     WorkbenchGetCommand,
     WorkbenchListCommand,
     WorkbenchListResult,
@@ -340,6 +352,7 @@ from kinby.core.errors import (
     PermissionDenied,
     WorkbenchInUse,
     WorkbenchNotFound,
+    WorkspaceReadFailed,
 )
 from kinby.core.routing import Dispatcher
 from kinby.factories import SHIPPED_FACTORIES, ships_recipe
@@ -451,6 +464,10 @@ from kinby.setup import API_KEY_FIELD, BEHAVIOR_PROMPT_FIELD, MODEL_FIELD, with_
 from kinby.workbench import FACTORIES_MOUNT
 
 _logger = logging.getLogger(__name__)
+
+type _WorkspaceRead = (
+    WorkbenchFileReadCommand | WorkbenchDirectoryListCommand | WorkbenchCommandRunCommand
+)
 
 #: Fills a record's directory as its creation writes it, and names the logins it declares.
 type _Write = Callable[[UUID, Path, ImageArtifact], Awaitable[Sequence[SubscriptionLogin]]]
@@ -1024,6 +1041,18 @@ class Hub:
         if Scope.LINE_OWNER in scopes:
             dispatcher.register(LINE_OWNED_LIST, partial(self.owned_lines, instance_id))
             dispatcher.register(LINE_OWNED_HAND_IN, partial(self.owned_hand_in, instance_id))
+            for owned, workspace in (
+                (WORKBENCH_OWNED_FILE_READ, WORKSPACE_FILE_READ),
+                (WORKBENCH_OWNED_DIRECTORY_LIST, WORKSPACE_DIRECTORY_LIST),
+                (WORKBENCH_OWNED_COMMAND_RUN, WORKSPACE_COMMAND_RUN),
+            ):
+                dispatcher.register(
+                    owned, partial(self.read_owned_workspace, instance_id, workspace)
+                )
+            dispatcher.register(
+                WORKBENCH_OWNED_COMMANDS_SET,
+                partial(self.set_owned_workbench_commands, instance_id),
+            )
         if Scope.BROWSER_OPEN in scopes:
             browsers = self._browsers
             assert browsers is not None
@@ -3762,6 +3791,34 @@ class Hub:
         if line is None or line.owner_id != instance_id:
             raise PermissionDenied(f'Line "{command.line_id}" is no line of this instance.')
         return await self.runs.hand_in(line, command.work_item)
+
+    async def read_owned_workspace[Command: _WorkspaceRead, Result: ContractModel](
+        self, instance_id: UUID, method: Method[Command, Result], command: Command
+    ) -> Result:
+        """Answer the instance's read of the workspace of a workbench one of its lines is on, on
+        that workbench."""
+        self._owns_a_line_on(instance_id, command.workbench_id)
+        try:
+            endpoint = await self._endpoint(self._active_workbench(command.workbench_id))
+            return await self._control.read_workspace(endpoint, method, command)
+        except (ControlUnreachable, IncompatibleLifecycleEndpoint) as exc:
+            raise WorkspaceReadFailed(
+                f'Workbench "{self._workbench_name(command.workbench_id)}" answered no read: {exc}'
+            ) from exc
+
+    async def set_owned_workbench_commands(
+        self, instance_id: UUID, command: WorkbenchCommandsSetCommand
+    ) -> Workbench:
+        """Set a list of repository commands of a workbench one of the instance's lines is on."""
+        self._owns_a_line_on(instance_id, command.workbench_id)
+        return await self.set_workbench_commands(command)
+
+    def _owns_a_line_on(self, instance_id: UUID, workbench_id: UUID) -> None:
+        if not any(
+            (line.owner_id, line.workbench_id) == (instance_id, workbench_id)
+            for line in self.registry.lines()
+        ):
+            raise PermissionDenied(f'Workbench "{workbench_id}" carries no line of this instance.')
 
     async def line_intake(self, instance_id: UUID, command: LineIntakeCommand) -> LineIntakeResult:
         """Run the intake of the instance's line whose intake is this routine on the line's

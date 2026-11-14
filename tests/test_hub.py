@@ -41,6 +41,7 @@ from kinby.contracts import (
     AcceptedResult,
     Capability,
     ContainerOwner,
+    ContractModel,
     ControlToken,
     DeclaredSetup,
     DrainState,
@@ -65,6 +66,7 @@ from kinby.contracts import (
     IntakeRunResult,
     IntendedState,
     LifecycleOperationResult,
+    Method,
     OperationGetCommand,
     OperationGetResult,
     OperationKind,
@@ -413,6 +415,10 @@ class FakeControl:
         self.intakes: list[tuple[ControlEndpoint, IntakeRunCommand]] = []
         #: What the next intakes find, in order. An intake past them finds no work item.
         self.found: list[list[dict[str, StepValue]]] = []
+        #: Each read of a workbench's workspace the hub sent, and the endpoint it sent it to.
+        self.workspace_reads: list[tuple[ControlEndpoint, ContractModel]] = []
+        #: What the next reads of a workspace answer, in order.
+        self.workspace_answers: list[ContractModel] = []
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -479,6 +485,14 @@ class FakeControl:
     ) -> IntakeRunResult:
         self.intakes.append((endpoint, command))
         return IntakeRunResult(work_items=self.found.pop(0) if self.found else [])
+
+    async def read_workspace[Command: ContractModel, Result: ContractModel](
+        self, endpoint: ControlEndpoint, method: Method[Command, Result], command: Command
+    ) -> Result:
+        self.workspace_reads.append((endpoint, command))
+        answer = self.workspace_answers.pop(0)
+        assert isinstance(answer, method.result), answer
+        return answer
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

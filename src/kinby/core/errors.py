@@ -137,6 +137,17 @@ class IntakeFailed(CoreError):
     no work item."""
 
 
+class WorkspaceReadFailed(CoreError):
+    """A read of a workbench's workspace did not reach the workbench, or found nothing to read."""
+
+
+class WorkspaceReadRefused(WorkspaceReadFailed):
+    """A read of a workbench's workspace named a path outside it, or a command that is no shell
+    read."""
+
+    code = ErrorCode.PERMISSION_DENIED
+
+
 class RepositoryCommandsMissing(CoreError):
     """The instance lacks lists of repository commands its factory role's steps name, so no run
     started."""

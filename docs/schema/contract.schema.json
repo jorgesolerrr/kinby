@@ -13074,6 +13074,39 @@
       "title": "Workbench",
       "type": "object"
     },
+    "WorkbenchCommandRunCommand": {
+      "additionalProperties": false,
+      "description": "Run one shell read in a workbench's workspace: a bash command whose programs only read, on\npaths inside the workspace (ADR 0119). Any other command is refused.",
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id",
+        "command"
+      ],
+      "title": "WorkbenchCommandRunCommand",
+      "type": "object"
+    },
+    "WorkbenchCommandRunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "output"
+      ],
+      "title": "WorkbenchCommandRunResult",
+      "type": "object"
+    },
     "WorkbenchCommandsSetCommand": {
       "additionalProperties": false,
       "description": "Set one workbench's list of repository commands *name* to *commands*, replacing the whole\nlist. The result is the workbench's record.",
@@ -13194,6 +13227,75 @@
         "workbench_id"
       ],
       "title": "WorkbenchDeleteCommand",
+      "type": "object"
+    },
+    "WorkbenchDirectoryListCommand": {
+      "additionalProperties": false,
+      "description": "List one directory of a workbench's workspace.",
+      "properties": {
+        "path": {
+          "default": ".",
+          "minLength": 1,
+          "type": "string"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id"
+      ],
+      "title": "WorkbenchDirectoryListCommand",
+      "type": "object"
+    },
+    "WorkbenchDirectoryListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "WorkbenchDirectoryListResult",
+      "type": "object"
+    },
+    "WorkbenchFileReadCommand": {
+      "additionalProperties": false,
+      "description": "Read one UTF-8 text file of a workbench's workspace.",
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workbench_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workbench_id",
+        "path"
+      ],
+      "title": "WorkbenchFileReadCommand",
+      "type": "object"
+    },
+    "WorkbenchFileReadResult": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "WorkbenchFileReadResult",
       "type": "object"
     },
     "WorkbenchGetCommand": {
@@ -16102,6 +16204,70 @@
           ],
           "type": "object"
         },
+        "workbench.owned.command.run": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchCommandRunCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchCommandRunResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.owned.commands.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchCommandsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Workbench"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.owned.directory.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchDirectoryListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchDirectoryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.owned.file.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchFileReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchFileReadResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "workbench.picks.get": {
           "additionalProperties": false,
           "properties": {
@@ -16245,6 +16411,54 @@
             "result"
           ],
           "type": "object"
+        },
+        "workspace.command.run": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchCommandRunCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchCommandRunResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workspace.directory.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchDirectoryListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchDirectoryListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workspace.file.read": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchFileReadCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkbenchFileReadResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -16278,6 +16492,9 @@
         "run.stopped",
         "run.folder.remove",
         "intake.run",
+        "workspace.file.read",
+        "workspace.directory.list",
+        "workspace.command.run",
         "run.transcript.read",
         "thread.ask",
         "routine.list",
@@ -16355,6 +16572,10 @@
         "line.intake",
         "line.owned.list",
         "line.owned.hand_in",
+        "workbench.owned.file.read",
+        "workbench.owned.directory.list",
+        "workbench.owned.command.run",
+        "workbench.owned.commands.set",
         "operation.get",
         "image.prepare",
         "image.describe",

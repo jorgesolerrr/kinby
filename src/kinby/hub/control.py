@@ -107,6 +107,10 @@ class InstanceControl(Protocol):
         self, endpoint: ControlEndpoint, command: IntakeRunCommand
     ) -> IntakeRunResult: ...
 
+    async def read_workspace[Command: ContractModel, Result: ContractModel](
+        self, endpoint: ControlEndpoint, method: Method[Command, Result], command: Command
+    ) -> Result: ...
+
 
 class HttpInstanceControl:
     """Speak the contract to an instance over its own HTTP server, one connection per call."""
@@ -162,6 +166,12 @@ class HttpInstanceControl:
     ) -> IntakeRunResult:
         """Have the workbench run a line's intake tool and wait for the work items it found."""
         return await _call(endpoint, INTAKE_RUN, command, "the intake")
+
+    async def read_workspace[Command: ContractModel, Result: ContractModel](
+        self, endpoint: ControlEndpoint, method: Method[Command, Result], command: Command
+    ) -> Result:
+        """Have the workbench answer one of its owner's reads of its workspace."""
+        return await _call(endpoint, method, command, "the read")
 
 
 async def _call[Command: ContractModel, Result: ContractModel](
