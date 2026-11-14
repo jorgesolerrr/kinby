@@ -83,7 +83,14 @@ from kinby.plugins.defaults.web import REFUSED_HEADER, public_address
 from kinby.plugins.hub import HUB_URL_VARIABLE
 from kinby.plugins.hub_browser import HubBrowser
 from tests.test_hub import finished_operation, hub_client
-from tests.test_hub_browser import BrowserHub, browser_hub, browser_on, error, result
+from tests.test_hub_browser import (
+    BrowserHub,
+    browser_hub,
+    browser_on,
+    error,
+    result,
+    started_workbench,
+)
 from tests.test_hub_routing import instance_served
 from tests.test_hub_server import frame
 
@@ -1188,6 +1195,29 @@ def test_a_cookie_the_site_renews_during_a_turn_is_in_the_profile_after_it(
             return await turn(browser, "Site", f"http://site.test:{port}/cookies")
 
     assert asyncio.run(scenario()) == f"session: {_SESSION}-renewed"
+
+
+@pytest.mark.browser
+def test_a_site_signed_in_to_in_one_turn_of_a_workbench_is_signed_in_in_its_next(
+    browser_server,
+) -> None:
+    async def turn(browser: HubBrowser, url: str) -> str:
+        turn = uuid4()
+        await browser.open(turn)
+        try:
+            await browser.run(turn, Navigate(url))
+            return (await browser.text(turn, None)).text
+        finally:
+            await browser.close(turn)
+
+    async def scenario() -> str:
+        async with site() as port, proxy(port) as address, browsers(browser_server, address) as hub:
+            workbench_id = await started_workbench(hub, name="course", browser=True)
+            with as_instance(hub, workbench_id) as browser:
+                await turn(browser, f"http://site.test:{port}/sign-in")
+                return await turn(browser, f"http://site.test:{port}/cookies")
+
+    assert asyncio.run(scenario()) == f"session: {_SESSION}"
 
 
 @pytest.mark.browser

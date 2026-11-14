@@ -192,7 +192,7 @@ def _instances(
 def _declarations(name: InstanceName, declared: InstanceDeclaration) -> Iterator[str]:
     for problem in (
         *_field_declaration_problems(declared.setup_fields),
-        *_login_declaration_problems(declared.logins),
+        *login_declaration_problems(declared.logins),
     ):
         yield f'Instance "{name}": {problem}'
 
@@ -233,7 +233,7 @@ def _requirements(factory: WorkbenchFactory) -> Iterator[str]:
         else:
             seen.add(field.name)
             yield from _field_failures(field)
-    yield from _login_declaration_problems(required.logins)
+    yield from login_declaration_problems(required.logins)
 
 
 def _workbench_steps(
@@ -318,7 +318,7 @@ def _override_failures(field: SetupField, built_in: SetupField) -> Iterator[str]
         )
 
 
-def _login_declaration_problems(logins: Iterable[SubscriptionLogin]) -> Iterator[str]:
+def login_declaration_problems(logins: Iterable[SubscriptionLogin]) -> Iterator[str]:
     seen: set[str] = set()
     for login in logins:
         if login.id in seen:

@@ -14,6 +14,7 @@ from kinby.contracts import (
     LINE_LIST,
     LINE_REMOVE,
     LINE_SETUP,
+    WORKBENCH_LOGIN_START,
     ErrorCode,
     ErrorEnvelope,
     FactoryListCommand,
@@ -30,14 +31,18 @@ from kinby.contracts import (
     LineSetupCommand,
     OperationState,
     WorkbenchCreateCommand,
+    WorkbenchLoginStartCommand,
 )
 from kinby.hub import Hub
 from tests.test_factory_templates import FILES as ROLE_FILES
 from tests.test_factory_templates import created_roles, factory_hub
 from tests.test_hub import FakeRuntime, created_instance, finished_operation, hub_client
+from tests.test_hub_browser import FakeBrowserRuntime
 from tests.test_hub_factories import write_factory
+from tests.test_hub_logins import EDITOR
+from tests.test_hub_workbench_logins import SIGNED
 from tests.test_hub_workbench_workspace import _commands_set
-from tests.test_hub_workbenches import CEC_BACKEND, created, got
+from tests.test_hub_workbenches import CEC_BACKEND, created, finished, got
 
 TICKETS = """\
 name: tickets
@@ -168,6 +173,101 @@ def test_setup_names_each_secret_value_and_command_list_the_workbench_lacks(tmp_
             'secret "GH_TOKEN", value "MOODLE_URL", command list "checks".'
         }
         assert await _lines(client) == []
+
+    asyncio.run(scenario())
+
+
+SIGNING = """\
+name: signing
+requires:
+  logins:
+    - { id: editor, label: Editor account, description: Signs the editor in.,
+        command: [editor, login], volume: /root/.editor,
+        prompt_pattern: 'Open (?P<url>https://\\S+) and enter (?P<code>[A-Z0-9-]+)' }
+  browser: true
+work_item: { issue: int }
+steps:
+  - { id: review, kind: approve, summary: Review it. }
+"""
+
+
+def _signing_hub(tmp_path: Path, runtime: FakeRuntime) -> Hub:
+    hub = factory_hub(tmp_path, runtime=runtime, browser=FakeBrowserRuntime("ws://nowhere"))
+    write_factory(tmp_path / "hub" / "factories" / "signing", {"factory.yaml": SIGNING})
+    return hub
+
+
+def test_setup_names_each_login_not_signed_in_and_a_browser_the_workbench_lacks(tmp_path):
+    runtime = FakeRuntime()
+    hub = _signing_hub(tmp_path, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        bare = await created(client, WorkbenchCreateCommand(name="bare"))
+        holding = await created(
+            client, WorkbenchCreateCommand(name="holding", logins=[EDITOR], browser=True)
+        )
+
+        fields = [
+            await _refused(client, LineSetupCommand(factory="signing", workbench_id=workbench_id))
+            for workbench_id in (bare.workbench_id, holding.workbench_id)
+        ]
+
+        assert fields == [
+            {
+                "workbench_id": 'Workbench "bare" lacks what factory "signing" requires: '
+                'login "editor", a browser.'
+            },
+            {
+                "workbench_id": 'Workbench "holding" lacks what factory "signing" requires: '
+                'login "editor".'
+            },
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_workbench_with_its_login_signed_in_and_a_browser_takes_a_line(tmp_path):
+    runtime = FakeRuntime()
+    hub = _signing_hub(tmp_path, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        signed = SIGNED.model_copy(update={"recipe": None, "browser": True})
+        workbench_id = (await created(client, signed)).workbench_id
+        runtime.setup_exits.set()
+        login = await client.call(
+            WORKBENCH_LOGIN_START,
+            WorkbenchLoginStartCommand(workbench_id=workbench_id, login_id="editor"),
+        )
+        assert (await finished(client, login)).state is OperationState.SUCCEEDED
+
+        line = await _set_up(client, LineSetupCommand(factory="signing", workbench_id=workbench_id))
+
+        assert line.workbench_id == workbench_id
+
+    asyncio.run(scenario())
+
+
+def test_a_workbench_has_no_browser_on_a_hub_that_runs_no_browser_service(tmp_path):
+    hub = factory_hub(tmp_path)
+    browsing = "name: browsing\nrequires: { browser: true }\n" + REVIEWS.split("\n", 2)[2]
+    write_factory(tmp_path / "hub" / "factories" / "browsing", {"factory.yaml": browsing})
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        eager = await created(client, WorkbenchCreateCommand(name="eager", browser=True))
+
+        fields = await _refused(
+            client, LineSetupCommand(factory="browsing", workbench_id=eager.workbench_id)
+        )
+
+        assert fields == {
+            "workbench_id": 'Workbench "eager" lacks what factory "browsing" requires: a browser.'
+        }
 
     asyncio.run(scenario())
 

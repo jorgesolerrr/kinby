@@ -1,5 +1,6 @@
-"""Browser profiles: each instance's named signed-in states. The hub keeps them and opens its
-browsers with them, so not one cookie of a profile enters the instance (ADR 0113)."""
+"""Browser profiles: each instance's named signed-in states, and the one session each workbench's
+turns share. The hub keeps them and opens its browsers with them, so not one cookie of a profile
+enters the instance or the workbench (ADR 0113)."""
 
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ class _Kept:
 
 
 _KEPT = TypeAdapter(dict[BrowserProfileName, _Kept])
+_STATE = TypeAdapter(StorageState)
 
 
 class BrowserProfiles:
@@ -73,6 +75,17 @@ class BrowserProfiles:
         del profiles[name]
         self._write(instance_id, profiles)
         return self.list(instance_id)
+
+    def session(self, workbench_id: UUID) -> StorageState | None:
+        """The state the workbench's last turn left its browser in, or None before one closed."""
+        path = self._directory / f"{workbench_id}.session.json"
+        return _STATE.validate_json(path.read_bytes()) if path.exists() else None
+
+    def keep_session(self, workbench_id: UUID, state: StorageState) -> None:
+        """Keep *state* for the workbench's next turn to open its browser in."""
+        self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._directory / f"{workbench_id}.session.json"
+        replace_protected(path, _STATE.dump_json(state).decode())
 
     def _profile(self, profiles: dict[BrowserProfileName, _Kept], name: str) -> _Kept:
         if name not in profiles:
