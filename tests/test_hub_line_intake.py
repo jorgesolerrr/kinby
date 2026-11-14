@@ -14,6 +14,7 @@ from uuid import UUID
 
 import aiohttp
 import pytest
+from pydantic import SecretStr
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
@@ -21,6 +22,7 @@ from kinby.contracts import (
     LINE_INTAKE,
     LINE_REMOVE,
     LINE_SETUP,
+    WORKBENCH_LIST,
     WORKBENCH_START,
     ErrorCode,
     ErrorEnvelope,
@@ -31,10 +33,14 @@ from kinby.contracts import (
     LineIntakeCommand,
     LineRemoveCommand,
     LineSetupCommand,
+    LineSetupResult,
+    NewWorkbench,
     OperationState,
     RoutineListResult,
     RoutineSummary,
     WorkbenchCreateCommand,
+    WorkbenchListCommand,
+    WorkbenchListResult,
     WorkbenchStartCommand,
 )
 from kinby.core.dispatcher import (
@@ -173,11 +179,11 @@ async def _started_workbench(owned: Owned, workbench: WorkbenchCreateCommand = C
 
 async def _line(owned: Owned, workbench: WorkbenchCreateCommand = CEC_BACKEND) -> Line:
     workbench_id = await _started_workbench(owned, workbench)
-    line = await owned.client.call(
+    set_up = await owned.client.call(
         LINE_SETUP, LineSetupCommand(factory="tickets", workbench_id=workbench_id)
     )
-    assert isinstance(line, Line), line
-    return line
+    assert isinstance(set_up, LineSetupResult), set_up
+    return set_up.line
 
 
 async def _routines(owned: Owned) -> list[RoutineSummary]:
@@ -380,5 +386,29 @@ def test_an_intake_the_workbench_did_not_run_hands_the_line_no_work(tmp_path, mo
                 'The intake of line "tickets" did not run on workbench "cec-backend": '
             )
             assert await _runs(hub, line) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_setup_whose_owner_cannot_take_the_intake_routine_creates_no_workbench(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            monkeypatch.delenv("WEBHOOK_SECRET")
+
+            refused = await hub.client.call(
+                LINE_SETUP,
+                LineSetupCommand(
+                    factory="tickets",
+                    workbench=NewWorkbench(name="landing"),
+                    secrets={"GH_TOKEN": SecretStr("ghp-secret")},
+                ),
+            )
+            listed = await hub.client.call(WORKBENCH_LIST, WorkbenchListCommand())
+
+            assert isinstance(refused, ErrorEnvelope), refused
+            assert refused.fields["owner_id"].endswith("Signal secret WEBHOOK_SECRET is unset.")
+            assert listed == WorkbenchListResult(workbenches=[])
 
     asyncio.run(scenario())

@@ -31,6 +31,7 @@ from kinby.contracts import (
     LibraryGitAddResult,
     LibrarySkillCheckResult,
     LifecycleOperationResult,
+    LineSetupResult,
     McpServer,
     NewerVersion,
     OperationKind,
@@ -74,7 +75,7 @@ from tests.test_hub_channels import (
     next_sent,
     paired_channel,
 )
-from tests.test_hub_factories import FILES, renamed
+from tests.test_hub_factories import FILES, renamed, write_factory
 from tests.test_hub_home_reads import answers, as_the_home_instance, error_code, result_of
 from tests.test_hub_library_git import commit, head, repository, skill
 from tests.test_hub_replies import next_edit, replied
@@ -661,6 +662,35 @@ def test_kinby_writes_a_factory_that_passes_the_check_and_never_one_that_fails_i
     asyncio.run(scenario())
 
 
+def test_kinby_sets_a_line_up_on_a_new_workbench_once_the_user_approves(tmp_path, monkeypatch):
+    def script(_: UUID) -> list[AIMessageChunk]:
+        return [
+            writing(
+                "line-1", "line_setup", {"factory": "reviews", "workbench": {"name": "landing"}}
+            ),
+            AIMessageChunk(content="The reviews line is set up."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            write_factory(
+                tmp_path / "hub" / "factories" / "reviews",
+                {
+                    "factory.yaml": "name: reviews\nwork_item: { pr: int }\nsteps:\n"
+                    "  - { id: review, kind: approve, summary: Review it. }\n"
+                },
+            )
+            payloads = await relayed_turn(kinby)
+
+        assert operations(payloads) == ["line_setup"]
+        [result] = [payload for payload in payloads if isinstance(payload, ToolResult)]
+        assert not result.error, result.output
+        set_up = LineSetupResult.model_validate_json(result.output)
+        assert (set_up.line.factory, set_up.line.owner_id) == ("reviews", kinby.home)
+
+    asyncio.run(scenario())
+
+
 def test_kinby_writes_a_skill_into_the_library_once_the_user_approves(tmp_path, monkeypatch):
     def script(_: UUID) -> list[AIMessageChunk]:
         grill = {"name": "grill", "content": skill("grill"), "hash": None}
@@ -1037,9 +1067,14 @@ def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
             {"model": "openai:gpt-5", "save_to_hub": {"api_key": "openai"}},
             ["save_to_hub: "],
         ),
+        (
+            "line_setup",
+            {"factory": "reviews", "workbench_id": str(uuid4()), "secrets": {"GH_TOKEN": "sk-bob"}},
+            ["secrets: "],
+        ),
         ("instance_destroy", {}, ['"instance_destroy"']),
     ],
-    ids=["lifecycle", "relayed", "move", "secret", "saved-secret", "unknown"],
+    ids=["lifecycle", "relayed", "move", "secret", "saved-secret", "line-secret", "unknown"],
 )
 def test_an_invalid_hub_write_names_each_wrong_field_without_asking(
     tmp_path, monkeypatch, operation, arguments, named

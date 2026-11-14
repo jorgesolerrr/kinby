@@ -28,6 +28,7 @@ from kinby.contracts import (
     LifecycleOperationResult,
     Line,
     LineSetupCommand,
+    LineSetupResult,
     OperationState,
     RunFolder,
     StepEnding,
@@ -127,8 +128,8 @@ async def _beside(hub: Hub, line: Line, factory: str) -> Line:
     second = await hub_client(hub).call(
         LINE_SETUP, LineSetupCommand(factory=factory, workbench_id=line.workbench_id)
     )
-    assert isinstance(second, Line), second
-    return second
+    assert isinstance(second, LineSetupResult), second
+    return second.line
 
 
 def test_two_runs_on_two_lines_of_one_workbench_never_run_a_step_at_once(tmp_path):
