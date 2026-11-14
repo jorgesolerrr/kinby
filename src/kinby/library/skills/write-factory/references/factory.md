@@ -207,7 +207,7 @@ kinby cuts a folder for each run when its first step starts: a run worktree on a
 
 ## A worked example
 
-A factory that implements issues of a repository: it finds issues labeled `ready-for-agent`, has Claude Code implement one, runs the repository's checks and sends a failure back, has a kinby turn title the change, and asks the user before it opens the pull request. The kinby turn runs on the line's model, so setting the line up asks for that provider's key. A tool runs outside the run folder, so `gh` finds the repository in `GH_REPO`.
+A factory that implements issues of a repository: it finds issues labeled `ready-for-agent`, has Claude Code implement one, runs the repository's checks and sends a failure back, has a kinby turn title the change, and asks the user before it opens the pull request. Opening it takes the label off the issue, since the intake finds every labeled issue again and only an unfinished run matches one. The kinby turn runs on the line's model, so setting the line up asks for that provider's key. A tool runs outside the run folder, so `gh` finds the repository in `GH_REPO`.
 
 `factory.yaml`:
 
@@ -268,6 +268,7 @@ steps:
     run:
       - git push --set-upstream origin HEAD
       - gh pr create --title {{title}} --body "Closes #{{issue}}."
+      - gh issue edit {{issue}} --remove-label ready-for-agent
 done_requires: [commit, title]
 needs_human: { call: label_needs_human }
 ```
