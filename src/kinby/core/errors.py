@@ -215,6 +215,12 @@ class LineNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class LineBusy(CoreError):
+    """A run of the line is running a step, so the line keeps its owner."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class WorkbenchInUse(CoreError):
     """A line on the workbench has unfinished runs, so the workbench stays."""
 

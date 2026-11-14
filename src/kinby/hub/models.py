@@ -108,6 +108,11 @@ class InstanceRouting(Protocol):
 
     async def signal_endpoint(self) -> InstanceEndpoint | InstanceUnreachable: ...
 
+    async def intake_endpoint(
+        self, line_id: UUID
+    ) -> tuple[InstanceEndpoint, RoutineName] | InstanceUnreachable:
+        """The instance that owns the line now, and the routine of the line's intake there."""
+
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
         """The instance authenticated the signal and recorded it as a new delivery."""
 
