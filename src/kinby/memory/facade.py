@@ -82,6 +82,7 @@ class Memory(Protocol):
         *,
         after: date | None = None,
         before: date | None = None,
+        workbench: str | None = None,
     ) -> tuple[MemoryHit, ...]: ...
 
     def open(self, node: NodeId) -> MemoryNode: ...
