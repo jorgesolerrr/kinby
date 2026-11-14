@@ -23,7 +23,7 @@ Every `factory.yaml` field, what each step kind does, where a run goes next, and
 
 ### requires
 
-A factory may declare `requires` in place of `instances` and `intake`. Its steps then run on a workbench, and the file is read in that form:
+A factory may declare `requires` in place of `instances`. Its steps then run on a workbench, and the file is read in that form:
 
 - `requires`: what a workbench must provide. Each field may be left out.
   - `image`: one of the image recipes kinby ships, as under `instances`.
@@ -32,6 +32,11 @@ A factory may declare `requires` in place of `instances` and `intake`. Its steps
   - `commands`: the names of the workbench's lists of repository commands the steps run. A `command` step's `{ commands: <name> }` names one of them.
   - `logins`: as under `instances`. See Logins.
   - `browser`: `true` when the steps need a browser.
+- `intake`: optional. Setting up a line creates the line's intake routine in its owner from it, and removing the line deletes it. The line's `intake` names that routine.
+  - `call`: a tool of the factory's folder, run on the workbench. Its `signal` parameter receives the delivery that fired it, or `{}`. It returns a list of work items, each a mapping of the `work_item` values, or `None` for none, and the hub hands each to the line.
+  - `schedule`: a cron expression with five fields, as a routine's.
+  - `delivery`: deliveries fire it at `/instances/<owner_id>/signals/<intake>`, one address per line. `secret` names the owner's secret they are signed with, which setting up the line needs the owner to hold. `auth`, `signature_header` and `delivery_header` are as for a routine's `signal`.
+  - It takes a `schedule`, a `delivery` or both.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
 - An `agent` step runs a model on the workbench, in the run's folder:
   - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. The step's `check` runs once the turn ends.
@@ -43,7 +48,7 @@ A factory may declare `requires` in place of `instances` and `intake`. Its steps
   - The client is offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Its transcript is kept on the workbench, one per attempt.
 - An `agent`, `command` or `code` step may name a `check`: a hook of the factory's folder, as `hooks/<file>.py`, which runs however the step ended, though not while its kinby turn waits on an ask. See Hooks. kinby's default hooks are no check.
 - `needs_human` and `ended` take only `call`.
-- Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `needs_human` or `ended` calls one of them.
+- Tools live in the factory's folder, as `tools/<file>.py`, and a `code` step, `intake`, `needs_human` or `ended` calls one of them.
 
 ### Setup fields
 

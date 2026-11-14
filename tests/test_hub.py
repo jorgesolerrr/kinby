@@ -61,6 +61,8 @@ from kinby.contracts import (
     InstanceStartCommand,
     InstanceStatusCommand,
     InstanceStopCommand,
+    IntakeRunCommand,
+    IntakeRunResult,
     IntendedState,
     LifecycleOperationResult,
     OperationGetCommand,
@@ -80,6 +82,7 @@ from kinby.contracts import (
     StepEnding,
     StepResult,
     StepRunCommand,
+    StepValue,
     StorageItem,
     StorageKind,
     WorkbenchOperationResult,
@@ -406,6 +409,10 @@ class FakeControl:
         self.transcript = FactoryRunTranscript(events=[], cursor=None)
         #: Each transcript the hub read, and the endpoint it read it from.
         self.transcripts_read: list[tuple[ControlEndpoint, FactoryRunTranscriptCommand]] = []
+        #: Each intake the hub ran on a workbench, and the endpoint it ran it on.
+        self.intakes: list[tuple[ControlEndpoint, IntakeRunCommand]] = []
+        #: What the next intakes find, in order. An intake past them finds no work item.
+        self.found: list[list[dict[str, StepValue]]] = []
 
     async def probe(self, endpoint: ControlEndpoint) -> InstanceProbeResult:
         self.endpoints.append(endpoint)
@@ -466,6 +473,12 @@ class FakeControl:
     ) -> FactoryRunTranscript:
         self.transcripts_read.append((endpoint, command))
         return self.transcript
+
+    async def run_intake(
+        self, endpoint: ControlEndpoint, command: IntakeRunCommand
+    ) -> IntakeRunResult:
+        self.intakes.append((endpoint, command))
+        return IntakeRunResult(work_items=self.found.pop(0) if self.found else [])
 
     async def stats(self, endpoint: ControlEndpoint, command: StatsGetCommand) -> StatsGetResult:
         self.stats_asked.append(command)

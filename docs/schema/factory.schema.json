@@ -780,6 +780,50 @@
       "title": "Intake",
       "type": "object"
     },
+    "IntakeDelivery": {
+      "additionalProperties": false,
+      "description": "Deliveries that fire the intake, each authenticated as a routine's signal is.",
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/SignalAuth",
+          "default": "token"
+        },
+        "delivery_header": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Header"
+        },
+        "secret": {
+          "minLength": 1,
+          "title": "Secret",
+          "type": "string"
+        },
+        "signature_header": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature Header"
+        }
+      },
+      "required": [
+        "secret"
+      ],
+      "title": "IntakeDelivery",
+      "type": "object"
+    },
     "NeedsHumanCall": {
       "additionalProperties": false,
       "description": "An instance tool the hub calls each time a run stops as needs human.\n\nThe tool's parameters named like a value of the run receive that value, ``step`` the step\nthe run stopped at, and ``summary`` the summary of that step's last attempt.",
@@ -1132,6 +1176,14 @@
           "type": "string"
         }
       ]
+    },
+    "SignalAuth": {
+      "enum": [
+        "token",
+        "hmac-sha256"
+      ],
+      "title": "SignalAuth",
+      "type": "string"
     },
     "SignalField": {
       "pattern": "^(routine|headers\\.[A-Za-z0-9-]+|body(\\.[^.]+)+)$",
@@ -1764,6 +1816,17 @@
           ],
           "default": null
         },
+        "intake": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkbenchIntake"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "name": {
           "$ref": "#/$defs/FactoryName"
         },
@@ -1806,6 +1869,43 @@
         "work_item"
       ],
       "title": "WorkbenchFactory",
+      "type": "object"
+    },
+    "WorkbenchIntake": {
+      "additionalProperties": false,
+      "description": "What fires a line's intake routine in its owner, a schedule, deliveries or both, and the\ntool of the factory's folder that finds the work items on the line's workbench.\n\nThe tool's ``signal`` parameter receives the delivery that fired it, or an empty mapping. Each\nmapping in the list it returns is a work item for the line.",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntakeDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schedule"
+        }
+      },
+      "required": [
+        "call"
+      ],
+      "title": "WorkbenchIntake",
       "type": "object"
     },
     "WorkbenchStep": {

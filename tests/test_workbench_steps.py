@@ -18,6 +18,8 @@ from kinby.contracts import (
     FactoryRunOrigin,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    IntakeRunCommand,
+    IntakeRunResult,
     ReasoningEffort,
     RunFolder,
     RunFolderRemoveCommand,
@@ -26,6 +28,7 @@ from kinby.contracts import (
     StepRunCommand,
     UsageSource,
 )
+from kinby.core.errors import IntakeFailed
 from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_hub_factories import write_factory
 from tests.test_steps import CLAUDE_STREAM, recorded_calls, streaming, stub_client
@@ -445,3 +448,52 @@ def test_an_event_too_large_for_a_page_reads_as_cut_with_its_size(tmp_path, monk
     assert first.events[0] == {"type": "cut", "bytes": len(json.dumps(huge))}
     assert len(first.model_dump_json()) < 1024 * 1024
     assert first.events[1:] == CLAUDE_STREAM
+
+
+SCAN = """\
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def scan_issues(signal: dict[str, object]) -> list[dict[str, int]] | None:
+    \"\"\"Find the issues the delivery labeled.\"\"\"
+    body = signal.get("body")
+    if not isinstance(body, dict):
+        return None
+    return [{"issue": number} for number in body["labeled"]]
+"""
+
+
+def test_an_intake_runs_the_factorys_tool_with_its_delivery_and_returns_its_work_items(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"tools/scan.py": SCAN})
+    delivered = {"headers": {"x-github-event": "issues"}, "body": {"labeled": [12, 13]}}
+
+    found = asyncio.run(
+        workbench.intake(IntakeRunCommand(factory="tickets", call="scan_issues", signal=delivered))
+    )
+    scheduled = asyncio.run(
+        workbench.intake(IntakeRunCommand(factory="tickets", call="scan_issues"))
+    )
+
+    assert found == IntakeRunResult(work_items=[{"issue": 12}, {"issue": 13}])
+    assert scheduled == IntakeRunResult(work_items=[])
+
+
+@pytest.mark.parametrize(
+    ("call", "refusal"),
+    [
+        ("close_issue", 'Tool "close_issue" is not one of factory "tickets"\'s tools.'),
+        ("scan_issues", "Tool \"scan_issues\" failed: KeyError: 'labeled'"),
+    ],
+    ids=["missing", "raises"],
+)
+def test_an_intake_whose_tool_is_missing_or_raises_fails_and_says_why(tmp_path, call, refusal):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"tools/scan.py": SCAN})
+    command = IntakeRunCommand(factory="tickets", call=call, signal={"body": {}})
+
+    with pytest.raises(IntakeFailed) as failed:
+        asyncio.run(workbench.intake(command))
+
+    assert str(failed.value) == refusal

@@ -15,6 +15,7 @@ from kinby.frontmatter import parse_frontmatter, required_string
 from kinby.instance import Budgets, Instance
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
 from kinby.instance.permissions import GatePolicy, constrain_mode, load_permissions
+from kinby.plugins.intake import intake_tools
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot, load_tool_file
 from kinby.plugins.tools import Tool
 
@@ -154,7 +155,8 @@ def _signal_code_step(code_step: SharedCodeStep | Tool | None, instance: Instanc
     if isinstance(code_step, Tool):
         return code_step
     snapshot, _ = ToolRegistry(instance.path, tools=instance.manifest.tools).refresh()
-    return resolve_code_step(code_step, snapshot)
+    # A routine's code step may also be one of the intake tools the instance's hub grants it.
+    return resolve_code_step(code_step, ToolSnapshot((*snapshot.tools, *intake_tools())))
 
 
 def load_routine_file(path: Path, policy: GatePolicy, instance: Instance) -> Routine:
