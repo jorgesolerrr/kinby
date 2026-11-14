@@ -880,6 +880,22 @@ export interface Contract {
       command: WorkbenchListCommand;
       result: WorkbenchListResult;
     };
+    "workbench.owned.command.run": {
+      command: WorkbenchCommandRunCommand;
+      result: WorkbenchCommandRunResult;
+    };
+    "workbench.owned.commands.set": {
+      command: WorkbenchCommandsSetCommand;
+      result: Workbench;
+    };
+    "workbench.owned.directory.list": {
+      command: WorkbenchDirectoryListCommand;
+      result: WorkbenchDirectoryListResult;
+    };
+    "workbench.owned.file.read": {
+      command: WorkbenchFileReadCommand;
+      result: WorkbenchFileReadResult;
+    };
     "workbench.picks.get": {
       command: WorkbenchPicksGetCommand;
       result: WorkbenchPicksResult;
@@ -915,6 +931,18 @@ export interface Contract {
     "workbench.update": {
       command: WorkbenchUpdateCommand;
       result: WorkbenchOperationResult;
+    };
+    "workspace.command.run": {
+      command: WorkbenchCommandRunCommand;
+      result: WorkbenchCommandRunResult;
+    };
+    "workspace.directory.list": {
+      command: WorkbenchDirectoryListCommand;
+      result: WorkbenchDirectoryListResult;
+    };
+    "workspace.file.read": {
+      command: WorkbenchFileReadCommand;
+      result: WorkbenchFileReadResult;
     };
   };
   server_frame: ServerFrame;
@@ -3621,6 +3649,37 @@ export interface WorkbenchListCommand {
 }
 export interface WorkbenchListResult {
   workbenches: Workbench[];
+}
+/**
+ * Run one shell read in a workbench's workspace: a bash command whose programs only read, on
+ * paths inside the workspace (ADR 0119). Any other command is refused.
+ */
+export interface WorkbenchCommandRunCommand {
+  command: string;
+  workbench_id: string;
+}
+export interface WorkbenchCommandRunResult {
+  output: string;
+}
+/**
+ * List one directory of a workbench's workspace.
+ */
+export interface WorkbenchDirectoryListCommand {
+  path?: string;
+  workbench_id: string;
+}
+export interface WorkbenchDirectoryListResult {
+  entries: string[];
+}
+/**
+ * Read one UTF-8 text file of a workbench's workspace.
+ */
+export interface WorkbenchFileReadCommand {
+  path: string;
+  workbench_id: string;
+}
+export interface WorkbenchFileReadResult {
+  text: string;
 }
 export interface WorkbenchPicksGetCommand {
   workbench_id: string;

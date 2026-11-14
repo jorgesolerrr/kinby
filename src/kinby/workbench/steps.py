@@ -34,9 +34,15 @@ from kinby.contracts import (
     StepUsage,
     StepValue,
     ValueName,
+    WorkbenchCommandRunCommand,
+    WorkbenchCommandRunResult,
+    WorkbenchDirectoryListCommand,
+    WorkbenchDirectoryListResult,
+    WorkbenchFileReadCommand,
+    WorkbenchFileReadResult,
 )
 from kinby.core.coding_clients import run_coding_client
-from kinby.core.errors import IntakeFailed
+from kinby.core.errors import IntakeFailed, WorkspaceReadFailed, WorkspaceReadRefused
 from kinby.core.held_results import HeldResults
 from kinby.core.prompt import render_client_message
 from kinby.core.run_worktrees import (
@@ -45,9 +51,12 @@ from kinby.core.run_worktrees import (
     remove_run_worktree,
     run_worktree,
 )
+from kinby.core.shell_reads import is_shell_read
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
+from kinby.plugins.defaults.files import workspace_path
+from kinby.plugins.defaults.shell import OUTPUT_CAP, run_capped
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hooks import load_hooks
 from kinby.plugins.registry import load_tool_file
@@ -69,6 +78,8 @@ _TRANSCRIPTS_DIR = "transcripts"
 _PAGE_BYTES = 1024 * 1024
 #: Where the kinby turns of agent steps keep their events and checkpoints, under the state.
 _TURNS_DIR = "turns"
+#: How long a shell read the owner runs may take, in seconds.
+_READ_SECONDS = 60
 _WORK_ITEMS = TypeAdapter(list[dict[ValueName, StepValue]])
 
 _logger = logging.getLogger(__name__)
@@ -137,6 +148,54 @@ class WorkbenchSteps:
             return IntakeRunResult(work_items=_WORK_ITEMS.validate_python(found or []))
         except Exception as exc:
             raise IntakeFailed(f'Tool "{command.call}" failed: {exception_message(exc)}') from exc
+
+    async def read_file(self, command: WorkbenchFileReadCommand) -> WorkbenchFileReadResult:
+        """The text of a file of the workspace, for the owner of one of its lines."""
+        path = self._inside(command.path)
+        try:
+            text = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise WorkspaceReadFailed(f'"{command.path}" cannot be read: {exc.strerror}') from exc
+        return WorkbenchFileReadResult(text=text[:OUTPUT_CAP])
+
+    async def list_directory(
+        self, command: WorkbenchDirectoryListCommand
+    ) -> WorkbenchDirectoryListResult:
+        """The entries of a directory of the workspace, for the owner of one of its lines."""
+        path = self._inside(command.path)
+        try:
+            entries = await asyncio.to_thread(lambda: sorted(path.iterdir()))
+        except OSError as exc:
+            raise WorkspaceReadFailed(f'"{command.path}" cannot be listed: {exc.strerror}') from exc
+        return WorkbenchDirectoryListResult(
+            entries=[entry.name + ("/" if entry.is_dir() else "") for entry in entries]
+        )
+
+    async def run_command(self, command: WorkbenchCommandRunCommand) -> WorkbenchCommandRunResult:
+        """Run a shell read in the workspace, for the owner of one of its lines, and refuse any
+        other command."""
+        if not is_shell_read(command.command, self._workspace):
+            raise WorkspaceReadRefused(
+                f'"{command.command}" is no shell read. A workbench runs for its owner only a '
+                "command whose programs read, on paths inside its workspace."
+            )
+        try:
+            _, output = await asyncio.to_thread(
+                run_capped,
+                ("bash", "-c", command.command),
+                cwd=self._workspace,
+                timeout_seconds=_READ_SECONDS,
+                label="The command",
+            )
+        except TimeoutError as exc:
+            raise WorkspaceReadFailed(str(exc)) from exc
+        return WorkbenchCommandRunResult(output=output)
+
+    def _inside(self, path: str) -> Path:
+        try:
+            return workspace_path(self._workspace, path)
+        except ValueError as exc:
+            raise WorkspaceReadRefused(str(exc)) from exc
 
     async def transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
         """One page of the attempt's transcript, from its *cursor*-th line, no larger than its
