@@ -750,6 +750,7 @@ def _asked(
         commands=[name for name in requires.commands if name not in holding.commands],
         logins=[login for login in requires.logins if login.id not in holding.signed_in],
         browser=requires.browser and not holding.browser,
+        suggested_picks=list(requires.suggested_picks),
     )
 
 

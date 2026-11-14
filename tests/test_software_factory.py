@@ -1,96 +1,74 @@
-"""The software factory kinby ships: its file on the hub, and its coder's tools and hooks."""
+"""The software factory kinby ships: its file on the hub, its runs on a line, and its tools and
+checks on a workbench."""
 
 import asyncio
 import json
-import logging
 import re
-import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
-from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_CHECK,
-    FACTORY_DESCRIBE,
     FACTORY_EDIT,
     FACTORY_GET,
-    FACTORY_RUN_INTAKE,
-    FACTORY_RUN_LIST,
-    INSTANCE_CREATE,
-    INSTANCE_START,
-    AcceptedResult,
+    LINE_HAND_IN,
+    LINE_SETUP,
+    LINE_SETUP_DESCRIBE,
+    WORKBENCH_START,
     ClientStepRun,
     CodeStepRun,
     CodingClient,
     CommandStepRun,
-    ErrorEnvelope,
-    Event,
     FactoryCheckCommand,
     FactoryCheckResult,
-    FactoryDescribeCommand,
-    FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
     FactoryResult,
-    FactoryRole,
     FactoryRun,
     FactoryRunDetail,
-    FactoryRunIntakeCommand,
-    FactoryRunListCommand,
-    FactoryRunListResult,
     FactoryRunOrigin,
     FactoryRunStatus,
-    InstanceCreateCommand,
-    InstanceStartCommand,
-    LifecycleOperationResult,
+    IntakeRunCommand,
+    Line,
+    LineHandInCommand,
+    LineSetupCommand,
+    LineSetupDescribeCommand,
+    LineSetupDescription,
+    LineSetupResult,
     OperationState,
     ReasoningEffort,
-    RepositoryCommands,
-    Scope,
+    RunFolder,
     StepEnding,
     StepResult,
     StepRunCommand,
     StepValue,
-    ToolResult,
-    TurnCompleted,
-    is_turn_closing,
+    WorkbenchCreateCommand,
+    WorkbenchStartCommand,
 )
-from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.core.run_worktrees import cut_run_worktree
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.hub import Hub
-from kinby.instance import Instance, inspect_instance, load_instance
-from kinby.plugins import defaults
-from tests.helpers import thread_events
-from tests.test_drain import call
-from tests.test_factory_runs import detail, intake_client, settled
+from kinby.workbench import WorkbenchSteps
+from tests.test_contract_server import served as instance_served
+from tests.test_factory_runs import detail, settled
 from tests.test_factory_waits import signalled
-from tests.test_hub import (
-    FakeControl,
-    FakeImages,
-    FakeRuntime,
-    finished_operation,
-    hub_client,
-    instance_environment,
-)
+from tests.test_hub import FakeControl, FakeImages, FakeRuntime, hub_client
+from tests.test_hub_line_stops import _started_home
+from tests.test_hub_routing import control_token
 from tests.test_hub_server import served, url
-from tests.test_hub_setup import setup_of
-from tests.test_hub_template_sync import _template_step, _update
-from tests.test_routines import RoutineModel, signal_runtime
-from tests.test_steps import (
-    CLAUDE_STREAM,
-    hold_commands,
-    recorded_calls,
-    streaming,
-    stub_client,
-)
+from tests.test_hub_workbench_workspace import _commands_set
+from tests.test_hub_workbenches import created, finished
+from tests.test_routines import RoutineModel, instance_at, signal_runtime
+from tests.test_steps import CLAUDE_STREAM, streaming, stub_client
 
+FACTORY = SHIPPED_FACTORIES / "software"
 SUGGESTED_PICKS = [
     "adversarial-review",
     "api-and-interface-design",
@@ -101,19 +79,15 @@ SUGGESTED_PICKS = [
     "tdd",
     "unslop",
 ]
-#: The skills the coder's template supplies, beside its picks.
-TEMPLATE_SKILLS = {"implement-ticket", "repository-survey"}
-#: The repository commands a surveyed coder holds.
-SURVEYED = 'setup = ["uv sync --frozen"]\nchecks = ["bun run check"]\n'
-#: What the coder asks for at creation: the repository, GitHub, Claude Code and a commit identity.
-CODER_CREATE = InstanceCreateCommand(
-    factory_role=FactoryRole(factory="software", name="coder"),
-    model="anthropic:claude-sonnet-5",
-    config={"repository": "https://github.com/owner/project.git"},
+#: The skills of the factory's own folder, which reach its agent steps beside the picks.
+FACTORY_SKILLS = {"implement-ticket", "repository-survey"}
+#: The workbench of the repository the factory works in, holding the secrets it requires.
+PROJECT = WorkbenchCreateCommand(
+    name="project",
+    recipe="coder",
+    workspace_source="https://github.com/owner/project.git",
     secrets={
-        "api_key": "sk-ant-test",
         "GH_TOKEN": "ghp-test",
-        "GITHUB_WEBHOOK_SECRET": "webhook-secret",
         "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
         "GIT_USER_NAME": "Software factory",
         "GIT_USER_EMAIL": "factory@example.com",
@@ -134,61 +108,48 @@ def fresh_hub(
     )
 
 
-async def created_coder(client: ContractClient) -> UUID:
-    """Create an instance that picks the coder role, with every pick the role suggests."""
-    described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="software"))
-    assert isinstance(described, FactoryDescription), described
-    accepted = await client.call(
-        INSTANCE_CREATE,
-        CODER_CREATE.model_copy(update={"picks": described.suggested_picks["coder"]}),
-    )
-    assert isinstance(accepted, LifecycleOperationResult), accepted
-    assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
-    return accepted.instance_id
-
-
-def test_the_software_factory_passes_the_factory_check_and_creates_a_coder_on_a_fresh_hub(
+def test_the_software_factory_passes_the_factory_check_in_the_file_that_requires_a_workbench(
     tmp_path,
 ):
-    hub = fresh_hub(tmp_path / "hub")
-    client = hub_client(hub)
-
-    async def scenario() -> None:
-        checked = await client.call(FACTORY_CHECK, FactoryCheckCommand(name="software"))
-        coder = await created_coder(client)
-
-        assert isinstance(checked, FactoryCheckResult)
-        assert checked.problems == []
-        instance = inspect_instance(hub.instances_directory / str(coder))
-        assert instance.manifest.workspace.source == "https://github.com/owner/project.git"
-        assert {
-            folder.name for folder in (instance.path / "skills").iterdir() if folder.is_dir()
-        } == {
-            *SUGGESTED_PICKS,
-            *TEMPLATE_SKILLS,
-        }
-        assert "`repository-survey`" in (instance.path / "SYSTEM.md").read_text(encoding="utf-8")
-
-    asyncio.run(scenario())
-
-
-def test_the_coder_role_suggests_the_eight_shipped_skills(tmp_path):
     client = hub_client(fresh_hub(tmp_path / "hub"))
 
-    async def scenario() -> FactoryDescription:
-        described = await client.call(FACTORY_DESCRIBE, FactoryDescribeCommand(name="software"))
-        assert isinstance(described, FactoryDescription)
+    async def scenario() -> FactoryCheckResult:
+        checked = await client.call(FACTORY_CHECK, FactoryCheckCommand(name="software"))
+        assert isinstance(checked, FactoryCheckResult)
+        return checked
+
+    assert asyncio.run(scenario()).problems == []
+    declared = (FACTORY / "factory.yaml").read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^\s*-? ?(instances|in|branch|hook):", declared)
+    assert not (FACTORY / "instances").exists()
+
+
+def test_the_factory_suggests_the_eight_shipped_skills_and_holds_its_own_two(tmp_path):
+    client = hub_client(fresh_hub(tmp_path / "hub"))
+
+    async def scenario() -> LineSetupDescription:
+        described = await client.call(
+            LINE_SETUP_DESCRIBE, LineSetupDescribeCommand(factory="software")
+        )
+        assert isinstance(described, LineSetupDescription), described
         return described
 
-    assert asyncio.run(scenario()).suggested_picks == {"coder": SUGGESTED_PICKS}
-    template = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills"
-    assert {folder.name for folder in template.iterdir() if folder.is_dir()} == TEMPLATE_SKILLS
+    described = asyncio.run(scenario())
+    assert described.suggested_picks == SUGGESTED_PICKS
+    assert [field.name for field in described.secrets] == [
+        "GH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GIT_USER_NAME",
+        "GIT_USER_EMAIL",
+    ]
+    assert described.commands == ["setup", "checks"]
+    skills = FACTORY / "skills"
+    assert {folder.name for folder in skills.iterdir() if folder.is_dir()} == FACTORY_SKILLS
 
 
-@pytest.mark.parametrize("name", sorted(TEMPLATE_SKILLS))
-def test_a_template_skill_names_no_skill_a_coder_may_not_have_picked(name):
-    skill = SHIPPED_FACTORIES / "software" / "instances" / "coder" / "skills" / name
-    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+@pytest.mark.parametrize("name", sorted(FACTORY_SKILLS))
+def test_a_factory_skill_names_no_skill_a_workbench_may_not_have_picked(name):
+    text = (FACTORY / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
 
     named = [
         name
@@ -199,32 +160,71 @@ def test_a_template_skill_names_no_skill_a_coder_may_not_have_picked(name):
     assert named == []
 
 
-async def started_coder(hub: Hub, runtime: FakeRuntime, commands: str | None = SURVEYED) -> UUID:
-    """Create the software factory's coder holding *commands*, its repository commands as a TOML
-    table body, and start it, which answers on its control endpoint. None holds no list."""
+def test_no_shipped_prompt_names_a_skill_but_implement_ticket():
+    skills = {*SUGGESTED_PICKS, *FACTORY_SKILLS}
+
+    for prompt in sorted((FACTORY / "prompts").glob("*.md")):
+        sent = prompt.read_text(encoding="utf-8")
+        named = {
+            name for name in skills if re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", sent)
+        }
+        assert named <= {"implement-ticket"}, prompt.name
+        assert "SKILL.md" not in sent, prompt.name
+
+
+async def software_line(hub: Hub, runtime: FakeRuntime) -> Line:
+    """The software factory set up under the home instance on a started workbench of the
+    project, which holds its setup and checks lists.
+
+    The home instance runs in this process while the setup writes the line's intake routine in
+    it, and a delivery later reaches a stand-in for it.
+    """
+    home = await _started_home(hub)
     client = hub_client(hub)
-    coder = await created_coder(client)
-    if commands is not None:
-        hold_commands(hub.instances_directory / str(coder), commands)
-    started = await client.call(INSTANCE_START, InstanceStartCommand(instance_id=coder))
-    assert isinstance(started, LifecycleOperationResult)
-    assert (await finished_operation(client, started)).state is OperationState.SUCCEEDED
-    runtime.addresses[str(coder)] = f"http://kinby-{coder}:8787"
-    return coder
+    workbench_id = (await created(client, PROJECT)).workbench_id
+    await _commands_set(client, workbench_id, "setup", ["uv sync --frozen"])
+    await _commands_set(client, workbench_id, "checks", ["bun run check"])
+    start = await client.call(WORKBENCH_START, WorkbenchStartCommand(workbench_id=workbench_id))
+    assert (await finished(client, start)).state is OperationState.SUCCEEDED
+    runtime.addresses[str(workbench_id)] = f"http://kinby-{workbench_id}:8787"
+    directory = hub.instances_directory.parent / "served-home"
+    directory.mkdir()
+    instance = instance_at(directory)
+    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    token = control_token(hub, str(home))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("KINBY_CONTROL_TOKEN", token)
+        patch.setenv("KINBY_HUB_SCOPES", ",".join(hub.instance_scopes(home)))
+        async with (
+            served(hub) as address,
+            instance_served(instance, dispatcher, token=token) as own,
+        ):
+            patch.setenv("KINBY_HUB_URL", url(address, f"/instances/{home}/hub"))
+            runtime.addresses[str(home)] = f"http://{own.host}:{own.port}"
+            set_up = await client.call(
+                LINE_SETUP, LineSetupCommand(factory="software", workbench_id=workbench_id)
+            )
+    assert isinstance(set_up, LineSetupResult), set_up
+    return set_up.line
 
 
-async def handed_in(hub: Hub, coder: UUID, issue: int) -> FactoryRun:
-    run = await intake_client(hub, coder).call(
-        FACTORY_RUN_INTAKE, FactoryRunIntakeCommand(routine="scan", work_item={"issue": issue})
+async def handed_in(hub: Hub, line: Line, issue: int) -> FactoryRun:
+    run = await hub_client(hub).call(
+        LINE_HAND_IN, LineHandInCommand(line_id=line.line_id, work_item={"issue": issue})
     )
     assert isinstance(run, FactoryRun), run
     return run
 
 
-#: What each step of a run that goes well hands back, in the order the steps run.
-PREPARED = StepResult(
-    ending=StepEnding.CLEAN, values={"branch": "agent/7-add-dark-mode", "base": "main"}
-)
+#: The agent branch the factory's worktree call names for issue 7, and the base it starts from.
+BRANCH = {"branch": "agent/7-add-dark-mode", "base": "main"}
+#: The folder the first step of a run asks its workbench to name and cut.
+NAMED = RunFolder(branch=None, named_by="agent_branch")
+#: The run worktree every later step works in.
+WORKTREE = RunFolder(branch="agent/7-add-dark-mode", base="main")
+#: What each step of a run that goes well hands back, in the order the steps run. The first
+#: step's carries the branch and base its workbench named for the run worktree.
+VETTED = StepResult(ending=StepEnding.CLEAN, values=BRANCH)
 IMPLEMENTED = StepResult(ending=StepEnding.CLEAN, summary="Added dark mode.", session="claude-1")
 #: The answer step before the pull request opens, with no review threads to answer yet.
 NOTHING_TO_ANSWER = StepResult(ending=StepEnding.CLEAN, summary="No review threads yet.")
@@ -233,7 +233,7 @@ SET_UP = CHECKED
 #: The fix step when no check failed: it changes nothing.
 NOTHING_TO_FIX = StepResult(ending=StepEnding.CLEAN, summary="Nothing failed.", session="claude-1")
 #: Every step up to the pull request, the checks passing at the first try.
-CHECKED_CHANGE = [PREPARED, SET_UP, IMPLEMENTED, NOTHING_TO_ANSWER, NOTHING_TO_FIX, CHECKED]
+CHECKED_CHANGE = [VETTED, SET_UP, IMPLEMENTED, NOTHING_TO_ANSWER, NOTHING_TO_FIX, CHECKED]
 OPENED = StepResult(ending=StepEnding.CLEAN, values={"pr": 42})
 #: A fix round: the trusted review threads on the pull request, then their answers, pushed.
 THREADS = json.dumps(
@@ -275,22 +275,22 @@ async def babysitting(hub: Hub, run_id: UUID, times: int = 1) -> FactoryRunDetai
             await asyncio.sleep(0.01)
 
 
-async def woken(hub: Hub, runtime: FakeRuntime, coder: UUID, body: bytes, event: str) -> None:
-    """Deliver a GitHub webhook to the coder's scan routine, which accepts it."""
-    status, _ = await signalled(hub, runtime, coder, body, routine="scan", event=event)
+async def woken(hub: Hub, runtime: FakeRuntime, line: Line, body: bytes, event: str) -> None:
+    """Deliver a GitHub webhook to the line's intake in its owner, which accepts it."""
+    assert line.intake is not None
+    status, _ = await signalled(hub, runtime, line.owner_id, body, routine=line.intake, event=event)
     assert status == 202
 
 
 def coding(step: str, minutes: int, resume: str | None = None) -> ClientStepRun:
-    """What the hub asks the coder to run for one of the factory's client steps."""
+    """What the hub asks the workbench to run for one of the factory's agent steps."""
     return ClientStepRun(
         client=CodingClient.CLAUDE,
-        prompt=(SHIPPED_FACTORIES / "software" / "prompts" / f"{step}.md").read_text(),
+        prompt=(FACTORY / "prompts" / f"{step}.md").read_text(),
         resume=resume,
         timeout_seconds=minutes * 60,
         model="claude-opus-5-5",
         effort=ReasoningEffort.HIGH,
-        branch="agent/7-add-dark-mode",
     )
 
 
@@ -303,12 +303,12 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         waiting = await babysitting(hub, run.run_id)
 
         assert [(attempt.step, attempt.ending) for attempt in waiting.attempts] == [
-            ("prepare", StepEnding.CLEAN),
+            ("ticket", StepEnding.CLEAN),
             ("setup", StepEnding.CLEAN),
             ("implement", StepEnding.CLEAN),
             ("answer", StepEnding.CLEAN),
@@ -317,80 +317,55 @@ def test_the_software_factory_carries_an_issue_from_intake_to_a_pull_request_it_
             ("publish", StepEnding.CLEAN),
             ("babysit", None),
         ]
-        prepare, setup, implement, answer, fix, checks, publish = (
+        ticket, setup, implement, answer, fix, checks, publish = (
             command for _, command in control.steps
         )
-        assert prepare.step == CodeStepRun(call="prepare_branch")
-        installs = [RepositoryCommands(commands="setup")]
-        assert setup.step == CommandStepRun(run=installs, branch="agent/7-add-dark-mode")
+        assert (ticket.step, ticket.folder) == (CodeStepRun(call="vet_ticket"), NAMED)
+        assert [
+            command.folder for command in (setup, implement, answer, fix, checks, publish)
+        ] == 6 * [WORKTREE]
+        assert setup.step == CommandStepRun(run=["uv sync --frozen"])
         assert implement.step == coding("implement", 60)
         assert implement.hook == "check_implementation"
-        assert implement.results == PREPARED.values
+        assert implement.results == BRANCH
         assert answer.step == coding("answer", 60, resume="claude-1")
         assert answer.hook == "check_answers"
         assert fix.step == coding("fix", 30, resume="claude-1")
         assert fix.hook == "check_implementation"
-        assert checks.step == CommandStepRun(
-            run=[*installs, RepositoryCommands(commands="checks")], branch="agent/7-add-dark-mode"
-        )
+        assert checks.step == CommandStepRun(run=["uv sync --frozen", "bun run check"])
         assert publish.step == CodeStepRun(call="publish_pull_request")
         assert publish.work_item == {"issue": 7}
-        assert publish.results == PREPARED.values
+        assert publish.results == BRANCH
         assert waiting.attempts[-2].values == {"pr": 42}
 
     asyncio.run(scenario())
 
 
-def test_a_coder_that_holds_no_repository_commands_has_both_pending_and_takes_no_work(tmp_path):
+def test_a_ticket_an_untrusted_author_wrote_stops_the_run_at_its_first_step(tmp_path):
+    control = FakeControl()
+    untrusted = StepResult(
+        ending=StepEnding.FAILED,
+        summary='Tool "vet_ticket" failed: UntrustedTicket: '
+        "Ticket text from untrusted authors needs a human: stranger.",
+        values=BRANCH,
+    )
+    control.step_results = [untrusted]
     runtime = FakeRuntime()
-    hub = fresh_hub(tmp_path / "hub", runtime=runtime)
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime, commands=None)
-        refused = await intake_client(hub, coder).call(
-            FACTORY_RUN_INTAKE, FactoryRunIntakeCommand(routine="scan", work_item={"issue": 7})
-        )
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        stopped = await settled(hub, run.run_id)
+        async with asyncio.timeout(5):
+            while len(control.steps) < 2:
+                await asyncio.sleep(0.01)
 
-        assert (await setup_of(hub, coder)).missing_commands == ["setup", "checks"]
-        assert isinstance(refused, ErrorEnvelope)
-        assert '"setup", "checks"' in refused.message
-
-    asyncio.run(scenario())
-
-
-def test_an_update_brings_the_repository_survey_to_a_coder_created_before_it(tmp_path):
-    older = tmp_path / "older"
-    shutil.copytree(SHIPPED_FACTORIES, older, ignore=shutil.ignore_patterns("__pycache__"))
-    template = older / "software" / "instances" / "coder"
-    shutil.rmtree(template / "skills" / "repository-survey")
-    system = template / "SYSTEM.md"
-    system.write_text(
-        "".join(
-            line
-            for line in system.read_text(encoding="utf-8").splitlines(keepends=True)
-            if "repository-survey" not in line
-        ),
-        encoding="utf-8",
-    )
-    before = Hub(
-        tmp_path / "hub",
-        runtime=FakeRuntime(),
-        images=FakeImages(),
-        control=FakeControl(),
-        shipped_factories=older,
-    )
-
-    async def scenario() -> None:
-        coder = await created_coder(hub_client(before))
-        before.close()
-
-        outcome = await _update(hub_client(fresh_hub(tmp_path / "hub")), coder)
-
-        assert _template_step(outcome) == "Wrote SYSTEM.md, skills/repository-survey/SKILL.md."
-        shipped = SHIPPED_FACTORIES / "software" / "instances" / "coder"
-        directory = tmp_path / "hub" / "instances" / str(coder)
-        for path in ("SYSTEM.md", "skills/repository-survey/SKILL.md"):
-            assert (directory / path).read_bytes() == (shipped / path).read_bytes()
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "ticket")
+        assert [attempt.step for attempt in stopped.attempts] == ["ticket"]
+        _, report = control.steps[-1]
+        assert report.step == CodeStepRun(call="report_needs_human", summary=untrusted.summary)
+        assert report.folder == WORKTREE
 
     asyncio.run(scenario())
 
@@ -402,7 +377,7 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
     wrote = {"title": "Add dark mode", "body": "Adds dark mode."}
     rewrote = {"title": "", "body": "Adds DARK_MODE."}
     control.step_results = [
-        PREPARED,
+        VETTED,
         SET_UP,
         IMPLEMENTED.model_copy(update={"values": wrote}),
         NOTHING_TO_ANSWER,
@@ -420,17 +395,17 @@ def test_a_review_wakes_the_run_for_a_fix_round_and_it_finishes_once_merge_ready
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await babysitting(hub, run.run_id)
-        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        await woken(hub, runtime, line, REVIEWED, "pull_request_review")
         await babysitting(hub, run.run_id, times=2)
-        await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
+        await woken(hub, runtime, line, CHECKS_DONE, "check_suite")
         finished = await settled(hub, run.run_id)
 
         assert finished.run.status is FactoryRunStatus.DONE
         assert [attempt.step for attempt in finished.attempts] == [
-            "prepare",
+            "ticket",
             "setup",
             "implement",
             "answer",
@@ -486,10 +461,10 @@ def test_a_check_repair_in_a_fix_round_keeps_its_replies_and_the_pull_request(tm
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await babysitting(hub, run.run_id)
-        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        await woken(hub, runtime, line, REVIEWED, "pull_request_review")
         waiting = await babysitting(hub, run.run_id, times=2)
 
         assert [attempt.step for attempt in waiting.attempts][-7:] == [
@@ -552,11 +527,11 @@ def test_a_check_that_failed_on_the_pull_request_is_repaired_and_pushed_to_it(
     waits = 1 + bool(rounds)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         for times in range(1, waits + 1):
             await babysitting(hub, run.run_id, times)
-            await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
+            await woken(hub, runtime, line, CHECKS_DONE, "check_suite")
         waiting = await babysitting(hub, run.run_id, waits + 1)
 
         assert [attempt.step for attempt in waiting.attempts][-3:] == [
@@ -582,11 +557,11 @@ def test_the_third_failed_check_on_the_pull_request_leaves_the_run_needs_human(t
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         for times in range(1, 4):
             await babysitting(hub, run.run_id, times)
-            await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
+            await woken(hub, runtime, line, CHECKS_DONE, "check_suite")
         stopped = await settled(hub, run.run_id)
 
         assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "assess")
@@ -610,12 +585,12 @@ def test_the_run_finishes_only_when_the_pull_request_is_merge_ready(tmp_path):
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await babysitting(hub, run.run_id)
-        await woken(hub, runtime, coder, CHECKS_DONE, "check_suite")
+        await woken(hub, runtime, line, CHECKS_DONE, "check_suite")
         again = await babysitting(hub, run.run_id, times=2)
-        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        await woken(hub, runtime, line, REVIEWED, "pull_request_review")
         stopped = await settled(hub, run.run_id)
 
         assert [attempt.step for attempt in again.attempts][-3:] == ["babysit", "assess", "babysit"]
@@ -635,10 +610,10 @@ def test_a_reply_on_a_review_thread_wakes_the_babysitting_run(tmp_path):
     replied = json.dumps({"action": "created", "pull_request": {"number": 42}}).encode()
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await babysitting(hub, run.run_id)
-        await woken(hub, runtime, coder, replied, "pull_request_review_comment")
+        await woken(hub, runtime, line, replied, "pull_request_review_comment")
         finished = await settled(hub, run.run_id)
 
         assert finished.run.status is FactoryRunStatus.DONE
@@ -668,10 +643,10 @@ def test_closing_the_pull_request_wakes_the_run_which_ends_done_once_merged_or_e
     closed = json.dumps({"action": "closed", "pull_request": {"number": 42}}).encode()
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await babysitting(hub, run.run_id)
-        await woken(hub, runtime, coder, closed, "pull_request")
+        await woken(hub, runtime, line, closed, "pull_request")
         finished = await settled(hub, run.run_id)
 
         assert finished.run.status is status
@@ -692,13 +667,13 @@ def test_the_round_limit_stops_the_run_as_needs_human_and_reports_it_on_the_issu
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         for round_number in range(1, 4):
             await babysitting(hub, run.run_id, times=round_number)
-            await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+            await woken(hub, runtime, line, REVIEWED, "pull_request_review")
         await babysitting(hub, run.run_id, times=4)
-        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        await woken(hub, runtime, line, REVIEWED, "pull_request_review")
         stopped = await settled(hub, run.run_id)
         async with asyncio.timeout(5):
             # Seven steps to the pull request, three fix rounds of five, the last assess, and
@@ -715,6 +690,7 @@ def test_the_round_limit_stops_the_run_as_needs_human_and_reports_it_on_the_issu
         assert report.step == CodeStepRun(
             call="report_needs_human", summary=stopped.attempts[-1].summary
         )
+        assert report.folder == WORKTREE
 
     asyncio.run(scenario())
 
@@ -732,8 +708,8 @@ def test_opening_the_pull_request_is_never_retried_and_needs_human_reports_on_th
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         stopped = await settled(hub, run.run_id)
         async with asyncio.timeout(5):
             while len(control.steps) < 8:
@@ -745,6 +721,7 @@ def test_opening_the_pull_request_is_never_retried_and_needs_human_reports_on_th
         assert report.step == CodeStepRun(call="report_needs_human", summary=refused.summary)
         assert (report.origin.run_id, report.origin.step) == (run.run_id, "publish")
         assert report.work_item == {"issue": 7}
+        assert report.results == BRANCH
         assert report.hook is None
 
     asyncio.run(scenario())
@@ -777,22 +754,24 @@ def test_finished_work_ends_a_run_that_needs_human_and_makes_the_ended_call(
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await babysitting(hub, run.run_id)
-        await woken(hub, runtime, coder, REVIEWED, "pull_request_review")
+        await woken(hub, runtime, line, REVIEWED, "pull_request_review")
         stopped = await settled(hub, run.run_id)
-        await woken(hub, runtime, coder, json.dumps(body).encode(), event)
+        await woken(hub, runtime, line, json.dumps(body).encode(), event)
         async with asyncio.timeout(5):
-            while control.steps[-1][1].step != CodeStepRun(call="report_ended"):
+            while not control.removed_folders:
                 await asyncio.sleep(0.01)
         finished = await detail(hub, run.run_id)
 
         assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "assess")
         assert finished.run.status is status
         _, ended = control.steps[-1]
+        assert ended.step == CodeStepRun(call="report_ended")
         assert ended.origin.run_id == run.run_id
         assert ended.results["pr"] == 42
+        assert [command.folder for _, command in control.removed_folders] == [WORKTREE]
 
     asyncio.run(scenario())
 
@@ -806,13 +785,13 @@ def test_an_implement_with_no_change_ends_the_run_cancelled_and_makes_the_ended_
     unchanged = StepResult(
         ending=StepEnding.CLEAN, outcome="no-change", values={"no_change": NO_CHANGE_REASON}
     )
-    control.step_results = [PREPARED, SET_UP, unchanged]
+    control.step_results = [VETTED, SET_UP, unchanged]
     runtime = FakeRuntime()
     hub = fresh_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         finished = await settled(hub, run.run_id)
         async with asyncio.timeout(5):
             while len(control.steps) < 4:
@@ -825,7 +804,74 @@ def test_an_implement_with_no_change_ends_the_run_cancelled_and_makes_the_ended_
         _, ended = control.steps[-1]
         assert ended.step == CodeStepRun(call="report_ended")
         assert (ended.origin.run_id, ended.origin.step) == (run.run_id, "implement")
-        assert ended.results == {**PREPARED.values, "no_change": NO_CHANGE_REASON}
+        assert ended.results == {**BRANCH, "no_change": NO_CHANGE_REASON}
+
+    asyncio.run(scenario())
+
+
+def with_review(factory: str) -> str:
+    """The software factory's file with its review step uncommented."""
+    return re.sub(r"(?m)^  # (?=- |  )", "  ", factory)
+
+
+def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implementers_session(
+    tmp_path,
+):
+    control = FakeControl()
+    idle = StepResult(ending=StepEnding.CLEAN, summary="Nothing to fix yet.", session="claude-1")
+    changes = StepResult(ending=StepEnding.CLEAN, outcome="changes", values={"reviewed": True})
+    fixed = StepResult(ending=StepEnding.CLEAN, summary="Fixed the finding.", session="claude-1")
+    clean = StepResult(ending=StepEnding.CLEAN, outcome="clean", values={"reviewed": True})
+    control.step_results = [
+        VETTED,
+        SET_UP,
+        IMPLEMENTED,
+        NOTHING_TO_ANSWER,
+        idle,
+        changes,
+        fixed,
+        clean,
+        CHECKED,
+        OPENED,
+    ]
+    runtime = FakeRuntime()
+    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        shipped = await client.call(FACTORY_GET, FactoryGetCommand(name="software"))
+        assert isinstance(shipped, FactoryResult)
+        edited = await client.call(
+            FACTORY_EDIT,
+            FactoryEditCommand(
+                name="software",
+                files={"factory.yaml": with_review(shipped.files["factory.yaml"])},
+                hash=shipped.hash,
+            ),
+        )
+        assert isinstance(edited, FactoryResult), edited
+        line = await software_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        waiting = await babysitting(hub, run.run_id)
+
+        assert [attempt.step for attempt in waiting.attempts] == [
+            "ticket",
+            "setup",
+            "implement",
+            "answer",
+            "fix",
+            "review",
+            "fix",
+            "review",
+            "checks",
+            "publish",
+            "babysit",
+        ]
+        fix = coding("fix", 30, resume="claude-1")
+        fixes = [command.step for _, command in control.steps if command.origin.step == "fix"]
+        assert fixes == [fix, fix]
+        _, publish = control.steps[-1]
+        assert publish.results["reviewed"] is True
 
     asyncio.run(scenario())
 
@@ -892,26 +938,42 @@ def git(directory: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
-def coder_at(tmp_path: Path) -> Instance:
-    """The software factory's coder as a fresh hub creates it, its workspace a clone of origin.
+@dataclass(frozen=True)
+class Bench:
+    """A workbench a line of the software factory runs on, in its directory."""
 
-    origin's main holds one commit.
-    """
-    hub = fresh_hub(tmp_path / "hub")
-    coder = asyncio.run(created_coder(hub_client(hub)))
-    hub.close()
-    instance = load_instance(hub.instances_directory / str(coder))
+    path: Path
+    steps: WorkbenchSteps
+
+    @property
+    def workspace(self) -> Path:
+        """Its workspace, a clone of the repository."""
+        return self.path / "workspace"
+
+
+def coder_at(tmp_path: Path) -> Bench:
+    """A workbench of the software factory, its workspace a clone of origin, whose main holds
+    one commit."""
     origin = tmp_path / "origin.git"
     seed = tmp_path / "seed"
     subprocess.run(("git", "init", "--bare", "-b", "main", str(origin)), check=True)
     subprocess.run(("git", "clone", str(origin), str(seed)), check=True, capture_output=True)
     commit(seed, "README.md", "The project.\n")
     git(seed, "push", "origin", "main")
-    workspace = instance.manifest.workspace.path
+    bench = Bench(
+        tmp_path / "workbench",
+        WorkbenchSteps(tmp_path / "workbench", tmp_path / "factories", SHIPPED_FACTORIES),
+    )
+    workspace = bench.workspace
     subprocess.run(("git", "clone", str(origin), str(workspace)), check=True, capture_output=True)
     git(workspace, "config", "user.name", "Software factory")
     git(workspace, "config", "user.email", "factory@example.com")
-    return instance
+    return bench
+
+
+def cut(bench: Bench, branch: str = BRANCH["branch"]) -> Path:
+    """The run worktree of *branch*, cut fresh from origin's main as the workbench cuts it."""
+    return cut_run_worktree(bench.path, bench.workspace, branch, "origin/main", str(uuid4()))
 
 
 def commit(directory: Path, name: str, content: str) -> None:
@@ -929,18 +991,24 @@ def commit(directory: Path, name: str, content: str) -> None:
     )
 
 
-async def run_in(dispatcher: ScheduledDispatcher, command: StepRunCommand) -> StepResult:
-    """Run the step through the instance's dispatcher, as the hub's step.run does."""
-    result = await call(dispatcher, "step.run", **command.model_dump(mode="json"))
-    assert isinstance(result, StepResult), result
-    return result
+async def run_in(dispatcher: WorkbenchSteps, command: StepRunCommand) -> StepResult:
+    """Run the step on the workbench in the folder the hub would name: the run worktree of the
+    branch and base the run holds, or else a directory named for the run."""
+    if command.folder is None:
+        branch, base = command.results.get("branch"), command.results.get("base")
+        folder = (
+            RunFolder(branch=branch, base=base)
+            if isinstance(branch, str) and isinstance(base, str)
+            else RunFolder(branch=None)
+        )
+        command = command.model_copy(update={"folder": folder})
+    return await dispatcher.run(command)
 
 
 def origin(step: str) -> FactoryRunOrigin:
     return FactoryRunOrigin(factory="software", run_id=uuid4(), step=step)
 
 
-BRANCH = {"branch": "agent/7-add-dark-mode", "base": "main"}
 #: What a pull request's body ends with when no adversarial review ran before it opened.
 REVIEW_NOT_RUN = (
     "\n\n## Review status\n\nAdversarial review was not run. Review happens on this pull request."
@@ -948,7 +1016,7 @@ REVIEW_NOT_RUN = (
 
 
 async def reported(
-    dispatcher: ScheduledDispatcher,
+    dispatcher: WorkbenchSteps,
     run: FactoryRunOrigin,
     summary: str,
     results: Mapping[str, StepValue] = BRANCH,
@@ -987,13 +1055,13 @@ def stop_comments(github: FakeGitHub) -> list[str]:
 def test_needs_human_pushes_a_branch_ahead_of_its_base_and_leaves_its_run_worktree_untouched(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_prepare(github, 7, "Add dark mode")
     answer_blocked_behind(github)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    worktree = run_worktree(instance)
+    dispatcher = bench.steps
+    worktree = run_worktree(bench)
 
     async def scenario() -> None:
         await prepared(dispatcher, 7)
@@ -1027,15 +1095,15 @@ def test_needs_human_pushes_a_branch_ahead_of_its_base_and_leaves_its_run_worktr
 def test_needs_human_pushes_nothing_without_commits_ahead_of_the_base(
     tmp_path, monkeypatch, results
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     git(workspace, "switch", "-c", BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_blocked_behind(github)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
-        result = await reported(dispatcher, origin("prepare"), "GitHub is down.", results)
+        result = await reported(dispatcher, origin("ticket"), "GitHub is down.", results)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert len(stop_comments(github)) == 1
@@ -1046,12 +1114,12 @@ def test_needs_human_pushes_nothing_without_commits_ahead_of_the_base(
 
 
 def test_needs_human_pushes_a_branch_whose_merged_base_is_gone_from_origin(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    stacked_on_a_merged_blocker(instance, github)
+    stacked_on_a_merged_blocker(bench, github)
     answer_blocked_behind(github)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
@@ -1061,20 +1129,21 @@ def test_needs_human_pushes_a_branch_whose_merged_base_is_gone_from_origin(tmp_p
         [stopped] = stop_comments(github)
         assert "Pushing" not in stopped
         pushed = git(workspace, "ls-remote", "origin", BRANCH["branch"]).split()
-        assert pushed == [git(workspace, "rev-parse", "HEAD"), f"refs/heads/{BRANCH['branch']}"]
+        head = git(workspace, "rev-parse", BRANCH["branch"])
+        assert pushed == [head, f"refs/heads/{BRANCH['branch']}"]
 
     asyncio.run(scenario())
 
 
 def test_needs_human_reports_a_push_that_failed_in_its_comment(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     git(workspace, "switch", "-c", BRANCH["branch"])
     commit(workspace, "theme.py", "DARK = True\n")
     git(workspace, "remote", "set-url", "--push", "origin", str(tmp_path / "gone.git"))
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_blocked_behind(github)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await reported(dispatcher, origin("publish"), "GitHub is down.")
@@ -1090,18 +1159,18 @@ def test_needs_human_reports_a_push_that_failed_in_its_comment(tmp_path, monkeyp
 def test_each_stop_of_a_run_comments_its_step_cause_run_id_retry_and_the_issues_blocked_behind(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     git(workspace, "switch", "-c", BRANCH["branch"])
     commit(workspace, "theme.py", "DARK = True\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_blocked_behind(github)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
     run = origin("implement")
 
     async def scenario() -> None:
         await reported(dispatcher, run, "The session ran out of time.")
-        commit(workspace, "picker.py", "PICKER = True\n")
+        commit(run_worktree(bench), "picker.py", "PICKER = True\n")
         retried = await reported(
             dispatcher,
             run.model_copy(update={"step": "checks"}),
@@ -1123,13 +1192,13 @@ def test_each_stop_of_a_run_comments_its_step_cause_run_id_retry_and_the_issues_
             ]
         ]
         pushed = git(workspace, "ls-remote", "origin", BRANCH["branch"]).split()[0]
-        assert pushed == git(workspace, "rev-parse", "HEAD")
+        assert pushed == git(run_worktree(bench), "rev-parse", "HEAD")
 
     asyncio.run(scenario())
 
 
 async def ended(
-    dispatcher: ScheduledDispatcher,
+    dispatcher: WorkbenchSteps,
     results: Mapping[str, StepValue],
     run: FactoryRunOrigin | None = None,
     number: int = 7,
@@ -1184,20 +1253,11 @@ HUMAN_LABEL_OFF = ["issue", "edit", "7", "--remove-label", "ready-for-human"]
 def test_the_ended_call_takes_ready_for_human_off_and_says_why_a_run_made_no_change(
     tmp_path, monkeypatch, results, labels, calls
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
     run = origin("implement")
-    cut_run_worktree(
-        instance.path,
-        instance.manifest.workspace.path,
-        BRANCH["branch"],
-        "origin/main",
-        str(run.run_id),
-    )
-    (run_worktree(instance) / "notes.md").write_text("Half done.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode", labels=labels))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await ended(dispatcher, results, run)
@@ -1205,30 +1265,6 @@ def test_the_ended_call_takes_ready_for_human_off_and_says_why_a_run_made_no_cha
         assert result.ending is StepEnding.CLEAN, result.summary
         # The issue is never closed: only these writes reach it.
         assert [arguments for arguments in github.calls if arguments[0] == "issue"] == calls
-        removed = "branch" in results
-        assert run_worktree(instance).exists() is not removed
-        assert (git(workspace, "branch", "--list", BRANCH["branch"]) == "") is removed
-
-    asyncio.run(scenario())
-
-
-def test_an_earlier_runs_ended_call_never_removes_a_later_runs_run_worktree(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    async def scenario() -> None:
-        await prepared(dispatcher, 7)
-        later = await prepared(dispatcher, 7)
-        (run_worktree(instance) / "notes.md").write_text("Half done.\n")
-        result = await ended(dispatcher, BRANCH)
-
-        assert later.ending is StepEnding.CLEAN, later.summary
-        assert result.ending is StepEnding.CLEAN, result.summary
-        assert (run_worktree(instance) / "notes.md").is_file()
-        assert git(workspace, "branch", "--list", BRANCH["branch"]) != ""
 
     asyncio.run(scenario())
 
@@ -1289,11 +1325,10 @@ MALFORMED = 'print(\'{"type": "result", "subt\')\n'
 def test_the_implement_hook_passes_only_committed_work_and_records_the_words_the_client_wrote(
     tmp_path, monkeypatch, then, ending, reason, words
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    git(workspace, "switch", "-c", BRANCH["branch"], "origin/main")
+    bench = coder_at(tmp_path)
+    workspace = cut(bench)
     stub_client(tmp_path, monkeypatch, "claude", then)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await run_in(
@@ -1315,7 +1350,7 @@ def test_the_implement_hook_passes_only_committed_work_and_records_the_words_the
         assert not any((workspace / ".scratch").glob("pr-*"))
         if reason is not None:
             assert result.summary.endswith(
-                f'Hook "check_implementation" failed: UncommittedWork: {reason}'
+                f'Check "check_implementation" failed: UncommittedWork: {reason}'
             )
 
     asyncio.run(scenario())
@@ -1329,13 +1364,13 @@ def test_the_implement_hook_passes_only_committed_work_and_records_the_words_the
 def test_the_implement_hook_counts_commits_past_a_merged_base_gone_from_origin(
     tmp_path, monkeypatch, moved, ending
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    stacked_on_a_merged_blocker(instance, github)
+    stacked_on_a_merged_blocker(bench, github)
     if moved:
         git(workspace, "reset", "--hard", "origin/main")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await run_in(
@@ -1359,9 +1394,8 @@ def test_the_implement_hook_counts_commits_past_a_merged_base_gone_from_origin(
 
 
 def test_the_implement_hook_names_a_few_uncommitted_paths_and_counts_the_rest(tmp_path):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    git(workspace, "switch", "-c", BRANCH["branch"], "origin/main")
+    bench = coder_at(tmp_path)
+    workspace = cut(bench)
     commit(workspace, "theme.py", "DARK = True\n")
     store = workspace / ".pnpm-store"
     store.mkdir()
@@ -1369,7 +1403,7 @@ def test_the_implement_hook_names_a_few_uncommitted_paths_and_counts_the_rest(tm
         (store / f"package-{number:04}.tgz").write_text("")
     for number in range(30):
         (workspace / f"loose-{number:02}.md").write_text("")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await run_in(
@@ -1393,13 +1427,12 @@ def test_the_implement_hook_names_a_few_uncommitted_paths_and_counts_the_rest(tm
 
 
 def test_the_implement_hook_fails_on_an_untracked_file_git_is_set_to_hide(tmp_path):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    git(workspace, "switch", "-c", BRANCH["branch"], "origin/main")
+    bench = coder_at(tmp_path)
+    workspace = cut(bench)
     commit(workspace, "theme.py", "DARK = True\n")
     git(workspace, "config", "status.showUntrackedFiles", "no")
     (workspace / "notes.md").write_text("Half done.\n")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await run_in(
@@ -1462,11 +1495,10 @@ WRITES_NO_CHANGE = (
 def test_the_implement_hook_passes_a_branch_with_no_commits_only_under_no_change(
     tmp_path, monkeypatch, then, ending, outcome, values, reason
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    git(workspace, "switch", "-c", BRANCH["branch"], "origin/main")
+    bench = coder_at(tmp_path)
+    workspace = cut(bench)
     stub_client(tmp_path, monkeypatch, "claude", then)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await run_in(
@@ -1490,22 +1522,8 @@ def test_the_implement_hook_passes_a_branch_with_no_commits_only_under_no_change
     asyncio.run(scenario())
 
 
-def run_worktree(instance: Instance, branch: str = BRANCH["branch"]) -> Path:
-    return instance.path / "worktrees" / branch
-
-
-async def fixed(dispatcher: ScheduledDispatcher) -> StepResult:
-    """Run 7's fix with nothing failed, as the hub asks for it."""
-    return await run_in(
-        dispatcher,
-        StepRunCommand(
-            step=coding("fix", 30, resume="claude-1"),
-            hook="check_implementation",
-            origin=origin("fix"),
-            work_item={"issue": 7},
-            results=BRANCH,
-        ),
-    )
+def run_worktree(bench: Bench, branch: str = BRANCH["branch"]) -> Path:
+    return bench.path / "worktrees" / branch
 
 
 def answer_prepare(github: FakeGitHub, number: int, title: str) -> None:
@@ -1513,339 +1531,6 @@ def answer_prepare(github: FakeGitHub, number: int, title: str) -> None:
     answer_issue(github, issue(number, title))
     github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blockers())
     github.answer("repo", "view", output=REPOSITORY)
-
-
-def test_a_step_that_names_a_branch_runs_in_its_run_worktree_and_its_hook_reads_it(
-    tmp_path, monkeypatch
-):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    calls = stub_client(
-        tmp_path, monkeypatch, "claude", COMMITS + WRITES_WORDS + streaming(CLAUDE_STREAM)
-    )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    async def scenario() -> None:
-        assert (await prepared(dispatcher, 7)).values == BRANCH
-        implemented = await run_in(
-            dispatcher,
-            StepRunCommand(
-                step=coding("implement", 60),
-                hook="check_implementation",
-                origin=origin("implement"),
-                work_item={"issue": 7},
-                results=BRANCH,
-            ),
-        )
-        set_up = await run_in(
-            dispatcher,
-            StepRunCommand(
-                step=CommandStepRun(run=["touch installed"], branch=BRANCH["branch"]),
-                origin=origin("checks"),
-                work_item={"issue": 7},
-                results=BRANCH,
-            ),
-        )
-        unlisted = await run_in(
-            dispatcher,
-            StepRunCommand(
-                step=CommandStepRun(run=["touch shared"]),
-                origin=origin("setup"),
-                work_item={"issue": 7},
-            ),
-        )
-
-        assert (implemented.ending, implemented.values) == (StepEnding.CLEAN, WORDS)
-        assert set_up.ending is StepEnding.CLEAN, set_up.summary
-        assert (run_worktree(instance) / "installed").is_file()
-        assert [called.cwd for called in recorded_calls(calls)] == [str(run_worktree(instance))]
-        assert git(run_worktree(instance), "log", "-1", "--format=%s") == "Add dark mode"
-        assert unlisted.ending is StepEnding.CLEAN, unlisted.summary
-        assert (workspace / "shared").is_file()
-        assert git(workspace, "branch", "--show-current") == "main"
-        assert not (workspace / "theme.py").exists()
-        assert not (workspace / "installed").exists()
-
-    asyncio.run(scenario())
-
-
-async def implementing(
-    dispatcher: ScheduledDispatcher, number: int = 7, results: Mapping[str, StepValue] = BRANCH
-) -> StepResult:
-    """Run the implement step of issue *number*'s run, as the hub asks for it."""
-    return await run_in(
-        dispatcher,
-        StepRunCommand(
-            step=coding("implement", 60).model_copy(update={"branch": results["branch"]}),
-            hook="check_implementation",
-            origin=origin("implement"),
-            work_item={"issue": number},
-            results=results,
-        ),
-    )
-
-
-def test_another_runs_steps_never_touch_the_run_worktree_of_a_run_that_needs_human(
-    tmp_path, monkeypatch
-):
-    instance = coder_at(tmp_path)
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    answer_prepare(github, 8, "Add light mode")
-    answer_blocked_behind(github)
-    stub_client(
-        tmp_path, monkeypatch, "claude", COMMITS + LEAVES_CHANGES + streaming(CLAUDE_STREAM)
-    )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    other = {"branch": "agent/8-add-light-mode", "base": "main"}
-    run = origin("implement")
-    stopped = run_worktree(instance)
-
-    async def scenario() -> None:
-        await prepared(dispatcher, 7)
-        assert (await implementing(dispatcher)).ending is StepEnding.FAILED
-        await reported(dispatcher, origin("implement"), "The workspace has changes.")
-        (stopped / ".scratch").mkdir()
-        (stopped / ".scratch" / "pr-title.txt").write_text("Add a dark mode toggle\n")
-        head = git(stopped, "rev-parse", "HEAD")
-        stub_client(tmp_path, monkeypatch, "claude", COMMITS + streaming(CLAUDE_STREAM))
-        assert (await prepared(dispatcher, 8, run)).values == other
-        implemented = await implementing(dispatcher, 8, other)
-        checked = await run_in(
-            dispatcher,
-            StepRunCommand(
-                step=CommandStepRun(run=["touch installed"], branch=other["branch"]),
-                origin=origin("checks"),
-                work_item={"issue": 8},
-                results=other,
-            ),
-        )
-        commits = git(
-            run_worktree(instance, other["branch"]), "rev-list", "--count", "origin/main.."
-        )
-        finished = await ended(dispatcher, other, run, 8)
-
-        assert (implemented.ending, implemented.values) == (StepEnding.CLEAN, {})
-        assert checked.ending is StepEnding.CLEAN, checked.summary
-        assert commits == "1"
-        assert finished.ending is StepEnding.CLEAN, finished.summary
-        assert not run_worktree(instance, other["branch"]).exists()
-        assert git(stopped, "branch", "--show-current") == BRANCH["branch"]
-        assert git(stopped, "rev-parse", "HEAD") == head
-        assert git(stopped, "status", "--porcelain", "--untracked-files=all") == "?? notes.md"
-        assert (stopped / "notes.md").read_text() == "Half done.\n"
-        assert (stopped / ".scratch" / "pr-title.txt").is_file()
-
-    asyncio.run(scenario())
-
-
-#: What the stub client runs to commit the notes an earlier attempt left uncommitted.
-COMMITS_NOTES = (
-    "import subprocess\n"
-    "subprocess.run(['git', 'add', 'notes.md'], check=True, capture_output=True)\n"
-    "subprocess.run(['git', 'commit', '-m', 'Add notes'], check=True, capture_output=True)\n"
-)
-
-
-def test_a_retried_client_step_continues_in_its_run_worktree_with_its_commits_and_changes(
-    tmp_path, monkeypatch
-):
-    instance = coder_at(tmp_path)
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    answer_blocked_behind(github)
-    stub_client(
-        tmp_path, monkeypatch, "claude", COMMITS + LEAVES_CHANGES + streaming(CLAUDE_STREAM)
-    )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    worktree = run_worktree(instance)
-
-    async def scenario() -> None:
-        await prepared(dispatcher, 7)
-        stopped = await implementing(dispatcher)
-        await reported(dispatcher, origin("implement"), stopped.summary)
-        calls = stub_client(
-            tmp_path, monkeypatch, "claude", COMMITS_NOTES + streaming(CLAUDE_STREAM)
-        )
-        retried = await implementing(dispatcher)
-
-        assert stopped.ending is StepEnding.FAILED
-        assert retried.ending is StepEnding.CLEAN, retried.summary
-        assert [called.cwd for called in recorded_calls(calls)] == [str(worktree)] * 2
-        assert git(worktree, "log", "--format=%s", "origin/main..") == "Add notes\nAdd dark mode"
-        assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
-
-    asyncio.run(scenario())
-
-
-def test_send_back_to_prepare_starts_over_from_the_base_and_publish_pushes_over_the_old_branch(
-    tmp_path, monkeypatch
-):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    remote = tmp_path / "origin.git"
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    answer_blocked_behind(github)
-    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
-    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    worktree = run_worktree(instance)
-
-    async def scenario() -> None:
-        await prepared(dispatcher, 7)
-        commit(worktree, "theme.py", "DARK = True\n")
-        (worktree / "notes.md").write_text("Half done.\n")
-        (worktree / ".scratch").mkdir()
-        (worktree / ".scratch" / "pr-body.md").write_text("The first body.\n")
-        await reported(dispatcher, origin("checks"), "`bun run check` exited with code 1.")
-        first = git(worktree, "rev-parse", "HEAD")
-        sent_back = await prepared(dispatcher, 7)
-
-        assert sent_back.ending is StepEnding.CLEAN, sent_back.summary
-        assert git(worktree, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
-        assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
-        assert not (worktree / ".scratch").exists()
-        assert git(remote, "rev-parse", BRANCH["branch"]) == first
-
-        commit(worktree, "theme.py", "DARK = 1\n")
-        published = await opened(dispatcher, 7, BRANCH | BODY)
-
-        assert published.ending is StepEnding.CLEAN, published.summary
-        assert git(remote, "rev-parse", BRANCH["branch"]) == git(worktree, "rev-parse", "HEAD")
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("held", ["on-the-workspace", "pushed-only"])
-def test_a_step_whose_run_worktree_is_missing_gets_one_from_its_branch(tmp_path, monkeypatch, held):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
-    if held == "pushed-only":
-        git(workspace, "push", "origin", BRANCH["branch"])
-        git(workspace, "switch", "main")
-        git(workspace, "branch", "-D", BRANCH["branch"])
-    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    result = asyncio.run(fixed(dispatcher))
-
-    assert result.ending is StepEnding.CLEAN, result.summary
-    assert [called.cwd for called in recorded_calls(calls)] == [str(run_worktree(instance))]
-    assert git(run_worktree(instance), "log", "-1", "--format=%s") == "Write theme.py"
-    if held == "on-the-workspace":
-        assert git(workspace, "branch", "--show-current") == ""
-        assert git(workspace, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/HEAD")
-
-
-def test_a_missing_run_worktree_is_never_cut_from_changes_the_workspace_holds_on_its_branch(
-    tmp_path, monkeypatch
-):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
-    (workspace / "theme.py").write_text("DARK = False\n")
-    (workspace / "notes.md").write_text("Half done.\n")
-    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    result = asyncio.run(fixed(dispatcher))
-
-    assert result.ending is StepEnding.FAILED
-    assert result.summary == (
-        f"The workspace is on {BRANCH['branch']} with changes no commit holds, so no run worktree "
-        f"is cut from it:\n M theme.py\n?? notes.md"
-    )
-    assert not calls.exists()
-    assert git(workspace, "branch", "--show-current") == BRANCH["branch"]
-    assert (workspace / "theme.py").read_text() == "DARK = False\n"
-    assert (workspace / "notes.md").exists()
-
-
-def test_a_step_fails_when_its_run_worktree_is_off_its_branch(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    async def scenario() -> None:
-        await prepared(dispatcher, 7)
-        git(run_worktree(instance), "switch", "--detach")
-        result = await fixed(dispatcher)
-
-        assert result.ending is StepEnding.FAILED
-        assert result.summary == f"The run worktree of {BRANCH['branch']} is on no branch."
-        assert not calls.exists()
-
-    asyncio.run(scenario())
-
-
-def client_step(prompt: str, step: str = "implement") -> StepRunCommand:
-    return StepRunCommand(
-        step=ClientStepRun(client=CodingClient.CLAUDE, prompt=prompt, timeout_seconds=30),
-        origin=origin(step),
-        work_item={"issue": 7},
-        results=BRANCH,
-    )
-
-
-def test_a_client_steps_prompt_ends_with_the_skills_catalogue_each_skill_from_its_highest_tier(
-    tmp_path, monkeypatch
-):
-    instance = coder_at(tmp_path)
-    hidden = instance.manifest.workspace.path / ".agents" / "skills" / "tdd" / "SKILL.md"
-    hidden.parent.mkdir(parents=True)
-    hidden.write_text("---\nname: tdd\ndescription: Test last.\n---\nWrite the tests last.\n")
-    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    async def scenario() -> None:
-        await run_in(dispatcher, client_step("Implement it."))
-
-        [called] = recorded_calls(calls)
-        _, catalogue = called.stdin.split("\n\n# Skills\n")
-        listed = {line.split(" ")[1] for line in catalogue.splitlines() if line.startswith("- ")}
-        carried = {skill.parent.name for skill in (instance.path / "skills").glob("*/SKILL.md")}
-        assert carried <= listed
-        assert [line for line in catalogue.splitlines() if line.startswith("- tdd ")] == [
-            f"- tdd ({instance.path / 'skills' / 'tdd' / 'SKILL.md'}): Test-driven development. "
-            'Use when the user wants to build features or fix bugs test-first, mentions "red-green'
-            '-refactor", or wants integration tests.'
-        ]
-        assert called.stdin.endswith(
-            f"\n- write-routine ({defaults.SKILLS / 'write-routine' / 'SKILL.md'}): "
-            "Draft kinby routine files for recurring or manual work."
-            f"\n- write-view ({defaults.SKILLS / 'write-view' / 'SKILL.md'}): "
-            "Compose a view's spec and data from the view catalogue. Use when creating or "
-            "reshaping a view."
-        )
-
-    asyncio.run(scenario())
-
-
-def test_no_shipped_prompt_names_a_skill_but_implement_ticket(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    carried = {skill.name for skill in (instance.path / "skills").iterdir()}
-    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    prompts = sorted((SHIPPED_FACTORIES / "software" / "prompts").glob("*.md"))
-
-    async def scenario() -> None:
-        for prompt in prompts:
-            await run_in(dispatcher, client_step(prompt.read_text(), prompt.stem))
-
-    asyncio.run(scenario())
-    for prompt, called in zip(prompts, recorded_calls(calls), strict=True):
-        sent, _ = called.stdin.split("# Skills\n")
-        named = {
-            name for name in carried if re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", sent)
-        }
-        assert named <= {"implement-ticket"}, prompt.name
-        assert "SKILL.md" not in sent, prompt.name
 
 
 ISSUE = "repos/{{owner}}/{{repo}}/issues/{number}"
@@ -1930,29 +1615,37 @@ def answer_issue(
 
 
 async def prepared(
-    dispatcher: ScheduledDispatcher, number: int, run: FactoryRunOrigin | None = None
+    dispatcher: WorkbenchSteps,
+    number: int,
+    run: FactoryRunOrigin | None = None,
+    *,
+    fresh: bool = False,
 ) -> StepResult:
+    """Run the first step of issue *number*'s run, as the hub sends it: in a run worktree the
+    factory's worktree call names first, cut again when *fresh*."""
     return await run_in(
         dispatcher,
         StepRunCommand(
-            step=CodeStepRun(call="prepare_branch"),
-            origin=run or origin("prepare"),
+            step=CodeStepRun(call="vet_ticket"),
+            origin=run or origin("ticket"),
             work_item={"issue": number},
+            folder=NAMED,
+            fresh_folder=fresh,
         ),
     )
 
 
-def test_prepare_cuts_a_run_worktree_from_the_default_branch_and_leaves_the_workspace_on_it(
+def test_the_first_step_works_in_the_agent_branch_cut_from_the_default_branch_scratch_excluded(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode!"), [comment("helper", "COLLABORATOR")])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    worktree = run_worktree(instance)
+    dispatcher = bench.steps
+    worktree = run_worktree(bench)
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 7)
@@ -1970,119 +1663,39 @@ def test_prepare_cuts_a_run_worktree_from_the_default_branch_and_leaves_the_work
     asyncio.run(scenario())
 
 
-#: The branch of a run worktree an earlier run left behind.
-LEFTOVER = "agent/5-drop-the-light-theme"
-
-
-def left_over(instance: Instance, branch: str = LEFTOVER) -> Path:
-    """A run worktree an earlier run left on *branch*, with one commit it pushed."""
-    worktree = cut_run_worktree(
-        instance.path, instance.manifest.workspace.path, branch, "origin/main", str(uuid4())
-    )
-    commit(worktree, "theme.py", "LIGHT = False\n")
-    git(worktree, "push", "origin", branch)
-    return worktree
-
-
-def test_prepare_removes_a_clean_pushed_run_worktree_whose_issue_is_closed_and_its_branch(
+def test_a_run_sent_back_to_its_first_step_starts_over_from_the_base_named_again(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    worktree = left_over(instance)
-    (worktree / ".scratch").mkdir()
-    (worktree / ".scratch" / "pr-body.md").write_text("The earlier run's body.\n")
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
+    remote = tmp_path / "origin.git"
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_prepare(github, 7, "Add dark mode")
-    github.answer(ISSUE.format(number=5), output={**issue(5, "Drop it"), "state": "closed"})
-    github.answer("repos/{owner}/{repo}/pulls", output=[[pull_request(43, "agent/6-other", 6)]])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
+    worktree = run_worktree(bench)
+    run = origin("ticket")
 
-    result = asyncio.run(prepared(dispatcher, 7))
-
-    assert result.ending is StepEnding.CLEAN, result.summary
-    assert not worktree.exists()
-    assert git(workspace, "branch", "--list", LEFTOVER) == ""
-    assert str(worktree) not in git(workspace, "worktree", "list")
-    assert run_worktree(instance).is_dir()
-
-
-@pytest.mark.parametrize(
-    ("leaves", "why"),
-    [
-        ("open", None),
-        ("pull-request", None),
-        ("changes", "it holds changes no commit holds."),
-        ("commits", "its branch holds commits origin lacks."),
-    ],
-)
-def test_prepare_keeps_a_run_worktree_whose_run_may_go_on_or_that_holds_work_nowhere_else(
-    tmp_path, monkeypatch, caplog, leaves, why
-):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    worktree = left_over(instance)
-    if leaves == "changes":
+    async def scenario() -> None:
+        await prepared(dispatcher, 7, run)
+        commit(worktree, "theme.py", "DARK = True\n")
+        git(worktree, "push", "origin", BRANCH["branch"])
         (worktree / "notes.md").write_text("Half done.\n")
-    if leaves == "commits":
-        commit(worktree, "picker.py", "PICKER = True\n")
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    state = "open" if leaves == "open" else "closed"
-    github.answer(ISSUE.format(number=5), output={**issue(5, "Drop it"), "state": state})
-    # A run babysitting its pull request goes on after its issue closed.
-    pulls = [pull_request(42, LEFTOVER, 5)] if leaves == "pull-request" else []
-    github.answer("repos/{owner}/{repo}/pulls", output=[pulls])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+        sent_back = await prepared(dispatcher, 7, run, fresh=True)
 
-    with caplog.at_level(logging.INFO):
-        result = asyncio.run(prepared(dispatcher, 7))
+        assert sent_back.values == BRANCH
+        assert git(worktree, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
+        assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
+        assert git(remote, "rev-parse", BRANCH["branch"]) != git(worktree, "rev-parse", "HEAD")
 
-    assert result.ending is StepEnding.CLEAN, result.summary
-    assert git(worktree, "branch", "--show-current") == LEFTOVER
-    assert git(workspace, "branch", "--list", LEFTOVER) != ""
-    logged = [record.getMessage() for record in caplog.records]
-    assert [message for message in logged if LEFTOVER in message] == (
-        [] if why is None else [f"The run worktree of {LEFTOVER} stays: {why}"]
-    )
-
-
-def test_prepare_keeps_a_run_worktree_whose_branch_names_no_issue(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    worktree = left_over(instance, "agent/dark-mode-spike")
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    result = asyncio.run(prepared(dispatcher, 7))
-
-    assert result.ending is StepEnding.CLEAN, result.summary
-    assert git(worktree, "branch", "--show-current") == "agent/dark-mode-spike"
-
-
-def test_a_sweep_that_fails_leaves_prepare_to_go_on(tmp_path, monkeypatch, caplog):
-    instance = coder_at(tmp_path)
-    worktree = left_over(instance)
-    github = FakeGitHub(tmp_path / "github", monkeypatch)
-    answer_prepare(github, 7, "Add dark mode")
-    github.answer(ISSUE.format(number=5), error="GitHub is down.")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-
-    result = asyncio.run(prepared(dispatcher, 7))
-
-    assert result.ending is StepEnding.CLEAN, result.summary
-    assert result.values == BRANCH
-    assert git(run_worktree(instance), "branch", "--show-current") == BRANCH["branch"]
-    assert worktree.is_dir()
-    assert "The sweep of run worktrees whose issue is closed failed." in caplog.text
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("written_by", ["issue", "comment", "parent"])
-def test_prepare_fails_on_ticket_text_an_untrusted_author_wrote_before_any_branch(
+def test_the_first_step_fails_on_ticket_text_an_untrusted_author_wrote(
     tmp_path, monkeypatch, written_by
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     trusted = comment("helper", "MEMBER")
     stranger = comment("stranger", "NONE")
@@ -2095,29 +1708,29 @@ def test_prepare_fails_on_ticket_text_an_untrusted_author_wrote_before_any_branc
             answer_issue(github, issue(7, "Add dark mode", parent=5), [trusted])
             answer_issue(github, issue(5, "Themes", author="stranger", association="CONTRIBUTOR"))
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 7)
 
         assert result.ending is StepEnding.FAILED
         assert result.summary == (
-            'Tool "prepare_branch" failed: UntrustedTicket: '
+            'Tool "vet_ticket" failed: UntrustedTicket: '
             "Ticket text from untrusted authors needs a human: stranger."
         )
         assert git(workspace, "branch", "--show-current") == "main"
-        assert not (instance.path / "worktrees").exists()
 
     asyncio.run(scenario())
 
 
-def test_prepare_trusts_a_comment_linears_github_app_wrote(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
+def test_the_first_step_trusts_a_comment_linears_github_app_wrote(tmp_path, monkeypatch):
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"), [comment("linear-code[bot]", "NONE", "Bot")])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 7)
@@ -2129,21 +1742,22 @@ def test_prepare_trusts_a_comment_linears_github_app_wrote(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize(("author", "kind"), [("dependabot[bot]", "Bot"), ("linear-code", "User")])
-def test_prepare_fails_on_a_comment_by_another_bot_or_a_user_named_like_linears_app(
+def test_the_first_step_fails_on_a_comment_by_another_bot_or_a_user_named_like_linears_app(
     tmp_path, monkeypatch, author, kind
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"), [comment(author, "NONE", kind)])
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    github.answer(ISSUE.format(number=7) + "/dependencies/blocked_by", output=blockers())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 7)
 
         assert result.ending is StepEnding.FAILED
         assert result.summary == (
-            'Tool "prepare_branch" failed: UntrustedTicket: '
+            'Tool "vet_ticket" failed: UntrustedTicket: '
             f"Ticket text from untrusted authors needs a human: {author}."
         )
 
@@ -2180,35 +1794,56 @@ def answer_sub_issue(
     github.answer("repo", "view", output=REPOSITORY)
 
 
-def test_prepare_starts_a_sub_issue_with_no_open_blocker_from_the_default_branch(
+def test_a_ticket_whose_blocker_has_an_open_agent_pull_request_starts_from_its_branch(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    pushed(bench.workspace, 7)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(8, "Dark theme"))
+    github.answer(ISSUE.format(number=8) + "/dependencies/blocked_by", output=blockers(7))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[pull_request(47, "agent/7-step", 7)]])
+    github.answer("repo", "view", output=REPOSITORY)
+
+    result = asyncio.run(prepared(bench.steps, 8))
+
+    assert result.ending is StepEnding.CLEAN, result.summary
+    assert result.values == {"branch": "agent/8-dark-theme", "base": "agent/7-step"}
+    worktree = run_worktree(bench, "agent/8-dark-theme")
+    assert git(worktree, "log", "-1", "--format=%s") == "Write step7.py"
+
+
+def test_the_worktree_call_starts_a_sub_issue_with_no_open_blocker_from_the_default_branch(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     pushed(workspace, 7)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_sub_issue(github, 8, (), 7)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 8)
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"branch": "agent/8-dark-theme", "base": "main"}
-        assert git(run_worktree(instance, "agent/8-dark-theme"), "rev-parse", "HEAD") == git(
+        assert git(run_worktree(bench, "agent/8-dark-theme"), "rev-parse", "HEAD") == git(
             workspace, "rev-parse", "origin/main"
         )
 
     asyncio.run(scenario())
 
 
-def test_prepare_stacks_a_sub_issue_on_the_top_of_its_blockers_linear_stack(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+def test_the_worktree_call_stacks_a_sub_issue_on_the_top_of_its_blockers_linear_stack(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     pushed(workspace, 8, pushed(workspace, 7))
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_sub_issue(github, 9, (7, 8), 7, 8)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 9)
@@ -2216,7 +1851,7 @@ def test_prepare_stacks_a_sub_issue_on_the_top_of_its_blockers_linear_stack(tmp_
         assert result.ending is StepEnding.CLEAN, result.summary
         assert result.values == {"branch": "agent/9-dark-theme", "base": "agent/8-step"}
         assert (
-            git(run_worktree(instance, "agent/9-dark-theme"), "log", "--format=%s")
+            git(run_worktree(bench, "agent/9-dark-theme"), "log", "--format=%s")
             == "Write step8.py\nWrite step7.py\nWrite README.md"
         )
 
@@ -2231,31 +1866,33 @@ def forked(workspace: Path) -> None:
     pushed(workspace, 3, pushed(workspace, 2, first))
 
 
-def test_prepare_hands_a_human_blockers_on_a_forked_stack_no_branch_holds(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+def test_the_worktree_call_hands_a_human_blockers_on_a_forked_stack_no_branch_holds(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     forked(workspace)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_sub_issue(github, 6, (3, 4), 1, 4, 5, 2, 3)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 6)
 
         assert result.ending is StepEnding.FAILED
         assert result.summary == (
-            'Tool "prepare_branch" failed: DivergedBlockers: No agent branch holds every open '
+            'Tool "agent_branch" failed: DivergedBlockers: No agent branch holds every open '
             "blocker's agent branch, so a human picks the base: agent/3-step, agent/4-step."
         )
 
     asyncio.run(scenario())
 
 
-def test_prepare_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
+def test_the_worktree_call_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     forked(workspace)
     git(workspace, "switch", "-c", "agent/7-step", "origin/agent/3-step")
     git(workspace, "merge", "--no-edit", "origin/agent/4-step")
@@ -2263,7 +1900,7 @@ def test_prepare_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
     git(workspace, "switch", "main")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_sub_issue(github, 6, (3, 4), 1, 4, 5, 2, 3, 7)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await prepared(dispatcher, 6)
@@ -2274,13 +1911,14 @@ def test_prepare_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
     asyncio.run(scenario())
 
 
-def implemented(workspace: Path, branch: str, base: str = "main") -> None:
-    """The workspace as the implement step leaves it: a commit on the branch, its base on
-    origin."""
+def implemented(bench: Bench, branch: str, base: str = "main") -> Path:
+    """The run worktree of *branch* as the implement step leaves it: a commit on origin's main,
+    its base on origin."""
     if base != "main":
-        git(workspace, "push", "origin", f"origin/main:refs/heads/{base}")
-    git(workspace, "switch", "-c", branch, "origin/main")
-    commit(workspace, "theme.py", "DARK = True\n")
+        git(bench.workspace, "push", "origin", f"origin/main:refs/heads/{base}")
+    worktree = cut(bench, branch)
+    commit(worktree, "theme.py", "DARK = True\n")
+    return worktree
 
 
 #: The body the implement step recorded for its pull request.
@@ -2288,7 +1926,7 @@ BODY = {"body": "Adds dark mode."}
 
 
 async def opened(
-    dispatcher: ScheduledDispatcher, number: int, results: Mapping[str, StepValue]
+    dispatcher: WorkbenchSteps, number: int, results: Mapping[str, StepValue]
 ) -> StepResult:
     return await run_in(
         dispatcher,
@@ -2314,15 +1952,14 @@ def created_pull_request(github: FakeGitHub) -> list[str]:
 def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
     tmp_path, monkeypatch, reviewed, review_status
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    workspace = implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         closing = {"body": "Closes #7\n\nAdds dark mode."}
@@ -2352,32 +1989,32 @@ def test_publish_pushes_the_branch_and_opens_its_pull_request_closing_the_issue(
 def test_publish_pushes_a_branch_deleted_from_origin_after_the_workspace_fetched_it(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     remote = tmp_path / "origin.git"
     git(workspace, "push", "origin", f"origin/main:refs/heads/{BRANCH['branch']}")
     git(workspace, "fetch", "origin")
     git(remote, "branch", "-D", BRANCH["branch"])
-    implemented(workspace, BRANCH["branch"])
+    worktree = implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | BODY)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert git(remote, "rev-parse", BRANCH["branch"]) == git(workspace, "rev-parse", "HEAD")
+        assert git(remote, "rev-parse", BRANCH["branch"]) == git(worktree, "rev-parse", "HEAD")
 
     asyncio.run(scenario())
 
 
 def test_publish_never_pushes_over_a_branch_someone_else_moved_on_origin(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     remote = tmp_path / "origin.git"
     git(workspace, "push", "origin", f"origin/main:refs/heads/{BRANCH['branch']}")
     git(workspace, "fetch", "origin")
@@ -2387,12 +2024,12 @@ def test_publish_never_pushes_over_a_branch_someone_else_moved_on_origin(tmp_pat
     commit(other, "other.py", "OTHER = True\n")
     git(other, "push", "origin", BRANCH["branch"])
     theirs = git(other, "rev-parse", "HEAD")
-    implemented(workspace, BRANCH["branch"])
+    implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | BODY)
@@ -2415,9 +2052,8 @@ def test_publish_never_pushes_over_a_branch_someone_else_moved_on_origin(tmp_pat
 def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
     tmp_path, monkeypatch, stack, registered
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme", "agent/7-light-theme")
+    bench = coder_at(tmp_path)
+    implemented(bench, "agent/8-dark-theme", "agent/7-light-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -2430,7 +2066,7 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
     )
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(
@@ -2456,9 +2092,8 @@ def test_publish_stacks_a_sub_issues_pull_request_on_its_siblings(
 
 
 def test_publish_stacks_on_a_blocker_whose_issue_was_handed_to_a_human(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme", "agent/7-light-theme")
+    bench = coder_at(tmp_path)
+    implemented(bench, "agent/8-dark-theme", "agent/7-light-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -2467,7 +2102,7 @@ def test_publish_stacks_on_a_blocker_whose_issue_was_handed_to_a_human(tmp_path,
     )
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         branch = {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
@@ -2483,9 +2118,8 @@ def test_publish_stacks_on_a_blocker_whose_issue_was_handed_to_a_human(tmp_path,
 def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme")
+    bench = coder_at(tmp_path)
+    implemented(bench, "agent/8-dark-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -2498,7 +2132,7 @@ def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
     )
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         branch = {"branch": "agent/8-dark-theme", "base": "main"}
@@ -2510,11 +2144,11 @@ def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
     asyncio.run(scenario())
 
 
-def stacked_on_a_merged_blocker(instance: Instance, github: FakeGitHub, *on_main: str) -> None:
+def stacked_on_a_merged_blocker(bench: Bench, github: FakeGitHub, *on_main: str) -> None:
     """The run's branch, one commit on blocker 6's branch, once 6's pull request squash-merged
     into main and took its branch from origin. Main also holds a theme.py of each of *on_main*.
     GitHub answers with the merged pull request."""
-    workspace = instance.manifest.workspace.path
+    workspace = bench.workspace
     blocker = pushed(workspace, 6)
     head = git(workspace, "rev-parse", f"origin/{blocker}")
     git(workspace, "switch", "-c", BRANCH["branch"], f"origin/{blocker}")
@@ -2535,14 +2169,14 @@ def stacked_on_a_merged_blocker(instance: Instance, github: FakeGitHub, *on_main
 def test_publish_opens_on_where_a_merged_base_landed_with_only_the_runs_commits(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    stacked_on_a_merged_blocker(instance, github)
+    stacked_on_a_merged_blocker(bench, github)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
@@ -2559,12 +2193,12 @@ def test_publish_opens_on_where_a_merged_base_landed_with_only_the_runs_commits(
 def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_landed(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    stacked_on_a_merged_blocker(instance, github, "DARK = False\n")
+    stacked_on_a_merged_blocker(bench, github, "DARK = False\n")
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
@@ -2575,7 +2209,7 @@ def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_lan
             'Tool "publish_pull_request" failed: LostBase: '
             f"Branch {BRANCH['branch']} does not rebase onto main:"
         )
-        worktree = instance.path / "worktrees" / BRANCH["branch"]
+        worktree = bench.path / "worktrees" / BRANCH["branch"]
         assert git(worktree, "status", "--porcelain") == ""
         assert git(worktree, "rev-parse", "HEAD^") != git(worktree, "rev-parse", "origin/main")
         assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
@@ -2586,18 +2220,18 @@ def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_lan
 def test_publish_replays_only_the_runs_commits_of_a_branch_moved_onto_where_its_base_landed(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     # Main writes theme.py twice, so replaying main's own commits on main would conflict.
-    stacked_on_a_merged_blocker(instance, github, "LIGHT = True\n", "LIGHT = False\n")
+    stacked_on_a_merged_blocker(bench, github, "LIGHT = True\n", "LIGHT = False\n")
     git(workspace, "reset", "--hard", "origin/main")
     commit(workspace, "report.py", "REPORT = True\n")
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
@@ -2612,13 +2246,12 @@ def test_publish_replays_only_the_runs_commits_of_a_branch_moved_onto_where_its_
 
 
 def test_publish_hands_a_human_a_base_gone_with_no_merged_pull_request(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("pr", "list", "--state", "merged", output=[])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
@@ -2637,15 +2270,14 @@ def test_publish_hands_a_human_a_base_gone_with_no_merged_pull_request(tmp_path,
 def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to_a_human(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode", labels=["ready-for-human"]))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | BODY)
@@ -2657,15 +2289,14 @@ def test_publish_takes_ready_for_human_off_an_issue_an_earlier_failure_handed_to
 
 
 def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | WORDS)
@@ -2680,15 +2311,14 @@ def test_publish_titles_the_pull_request_with_the_title_the_session_wrote(tmp_pa
 def test_publish_run_twice_opens_one_pull_request_and_updates_it_the_second_time(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    workspace = implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
     github.answer("repo", "view", output=REPOSITORY)
     github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         first = await opened(dispatcher, 7, BRANCH | BODY)
@@ -2726,15 +2356,15 @@ def test_publish_run_twice_opens_one_pull_request_and_updates_it_the_second_time
 def test_publish_run_again_asks_the_maintainer_for_a_review_an_earlier_run_never_asked_for(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
-    implemented(instance.manifest.workspace.path, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    implemented(bench, BRANCH["branch"])
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer(
         "repos/{owner}/{repo}/pulls", output=[[pull_request(43, BRANCH["branch"], closes=7)]]
     )
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | BODY)
@@ -2758,9 +2388,8 @@ def test_publish_run_again_asks_the_maintainer_for_a_review_an_earlier_run_never
 def test_publish_run_again_moves_and_stacks_its_pull_request_only_when_it_is_in_no_stack(
     tmp_path, monkeypatch, stack, base, rebased, stacks
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, "agent/8-dark-theme", "agent/7-light-theme")
+    bench = coder_at(tmp_path)
+    implemented(bench, "agent/8-dark-theme", "agent/7-light-theme")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(8, "Dark theme", parent=5))
     github.answer(
@@ -2773,7 +2402,7 @@ def test_publish_run_again_moves_and_stacks_its_pull_request_only_when_it_is_in_
         ],
     )
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         branch = {"branch": "agent/8-dark-theme", "base": "agent/7-light-theme"}
@@ -2797,16 +2426,15 @@ def test_publish_run_again_moves_and_stacks_its_pull_request_only_when_it_is_in_
 
 
 def test_publish_pushes_nothing_when_the_session_wrote_no_pull_request_body(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
-    # Another run's body, left in the workspace the runs share.
+    bench = coder_at(tmp_path)
+    workspace = implemented(bench, BRANCH["branch"])
+    # A body left in the run worktree, which publish never reads.
     (workspace / ".scratch").mkdir()
     (workspace / ".scratch" / "pr-body.md").write_text("Adds a light mode.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repo", "view", output=REPOSITORY)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH)
@@ -2828,49 +2456,19 @@ def blockers(*numbers: int) -> list[list[dict[str, object]]]:
 
 
 async def scanned(
-    hub: Hub, monkeypatch: pytest.MonkeyPatch, delivery: Mapping[str, object] | None = None
-) -> tuple[list[FactoryRun], list[ToolResult]]:
-    """Fire the coder's scan routine, with *delivery* as its signal, against the served hub.
-
-    Returns the hub's runs of the software factory, and what the scan's code step answered.
-    """
-    [coder] = hub.registry.factory_members("software")
-    environment = instance_environment(hub, coder.instance_id)
-    monkeypatch.setenv("KINBY_CONTROL_TOKEN", environment["KINBY_CONTROL_TOKEN"])
-    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", environment["GITHUB_WEBHOOK_SECRET"])
-    instance = load_instance(hub.instances_directory / str(coder.instance_id))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
-    payload = (
-        None
-        if delivery is None
-        else {"body": json.dumps(delivery), "content_type": "application/json"}
+    dispatcher: WorkbenchSteps, delivery: Mapping[str, object] | None = None
+) -> list[dict[str, StepValue]]:
+    """Run the factory's intake on the workbench, with *delivery* as its signal's body, and the
+    work items it finds."""
+    signal = {} if delivery is None else {"body": dict(delivery)}
+    found = await dispatcher.intake(
+        IntakeRunCommand(factory="software", call="scan_ready_issues", signal=signal)
     )
-    events = []
-    async with served(hub) as address:
-        monkeypatch.setenv("KINBY_HUB_URL", url(address, f"/instances/{coder.instance_id}/hub"))
-        monkeypatch.setenv("KINBY_HUB_SCOPES", "factory:intake")
-        accepted = await call(dispatcher, "routine.run", name="scan", payload=payload)
-        assert isinstance(accepted, AcceptedResult), accepted
-        await dispatcher.scheduler.tick()
-        stream = await thread_events(dispatcher, {"thread_id": accepted.thread_id}, set(Scope))
-        async with asyncio.timeout(10):
-            async for event in stream:
-                assert isinstance(event, Event)
-                events.append(event.payload)
-                if is_turn_closing(event.payload):
-                    break
-        await stream.aclose()
-    assert isinstance(events[-1], TurnCompleted), events[-1]
-    listed = await hub_client(hub).call(FACTORY_RUN_LIST, FactoryRunListCommand(factory="software"))
-    assert isinstance(listed, FactoryRunListResult)
-    return listed.runs, [event for event in events if isinstance(event, ToolResult)]
+    return found.work_items
 
 
-def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_path, monkeypatch):
-    control = FakeControl()
-    control.step_release.clear()
-    runtime = FakeRuntime()
-    hub = fresh_hub(tmp_path / "hub", control, runtime)
+def test_the_scan_finds_the_oldest_eligible_issue(tmp_path, monkeypatch):
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     github.answer(
         "repos/{owner}/{repo}/issues",
@@ -2899,16 +2497,13 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
         github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blocking)
     github.answer(ISSUE.format(number=2), output=issue(2, "Back from a human"))
     github.answer(ISSUE.format(number=6), output=issue(6, "Eligible"))
+    dispatcher = bench.steps
 
-    async def scenario() -> None:
-        await started_coder(hub, runtime)
-        runs, [answered] = await scanned(hub, monkeypatch)
+    found = asyncio.run(scanned(dispatcher))
 
-        assert [run.work_item for run in runs] == [{"issue": 6}]
-        assert answered.error is False, answered.output
-        assert not any(arguments[-1:] == [ISSUE.format(number=8)] for arguments in github.calls)
-
-    asyncio.run(scenario())
+    assert found == [{"issue": 6}]
+    assert not any(arguments[-1:] == [ISSUE.format(number=8)] for arguments in github.calls)
+    assert not any(arguments[:2] == ["issue", "edit"] for arguments in github.calls)
 
 
 @pytest.mark.parametrize(
@@ -2916,13 +2511,10 @@ def test_the_scan_hands_the_oldest_eligible_issue_to_the_software_factory(tmp_pa
     [[], [pull_request(30, "agent/6-relabeled", 6)]],
     ids=["no-pull-request", "pull-request-open"],
 )
-def test_a_relabel_retries_the_run_that_needs_human_takes_its_label_off_and_holds_no_scan(
+def test_the_scan_finds_an_issue_relabeled_ready_for_agent_takes_its_label_off_and_holds_none(
     tmp_path, monkeypatch, pulls
 ):
-    control = FakeControl()
-    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="GitHub is down.")]
-    runtime = FakeRuntime()
-    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     relabeled = issue(6, "Relabeled", labels=("ready-for-agent", "ready-for-human"))
     github.answer("repos/{owner}/{repo}/issues", output=[[relabeled, issue(8, "Younger")]])
@@ -2931,37 +2523,20 @@ def test_a_relabel_retries_the_run_that_needs_human_takes_its_label_off_and_hold
         number = found["number"]
         github.answer(ISSUE.format(number=number) + "/dependencies/blocked_by", output=blockers())
         github.answer(ISSUE.format(number=number), output=found)
+    dispatcher = bench.steps
 
-    async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 6)
-        stopped = await settled(hub, run.run_id)
-        async with asyncio.timeout(5):
-            while len(control.steps) < 2:
-                await asyncio.sleep(0.01)
-        control.step_release.clear()
-        runs, _ = await scanned(hub, monkeypatch)
+    found = asyncio.run(scanned(dispatcher))
 
-        assert stopped.run.status is FactoryRunStatus.NEEDS_HUMAN
-        by_issue = {found.work_item["issue"]: found for found in runs}
-        assert set(by_issue) == {6, 8}
-        assert by_issue[6].run_id == run.run_id
-        assert by_issue[6].status is not FactoryRunStatus.NEEDS_HUMAN
-        assert by_issue[6].step == "prepare"
-        assert [arguments for arguments in github.calls if arguments[:2] == ["issue", "edit"]] == [
-            ["issue", "edit", "6", "--remove-label", "ready-for-human"]
-        ]
-
-    asyncio.run(scenario())
+    assert found == [{"issue": 6}, {"issue": 8}]
+    assert [arguments for arguments in github.calls if arguments[:2] == ["issue", "edit"]] == [
+        ["issue", "edit", "6", "--remove-label", "ready-for-human"]
+    ]
 
 
 def test_the_scan_reads_an_issue_just_labeled_that_the_issue_list_does_not_show_yet(
     tmp_path, monkeypatch
 ):
-    control = FakeControl()
-    control.step_release.clear()
-    runtime = FakeRuntime()
-    hub = fresh_hub(tmp_path / "hub", control, runtime)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     github.answer("repos/{owner}/{repo}/issues", output=[[issue(8, "Listed")]])
     github.answer("repos/{owner}/{repo}/pulls", output=[[]])
@@ -2973,14 +2548,9 @@ def test_the_scan_reads_an_issue_just_labeled_that_the_issue_list_does_not_show_
         "label": {"name": "ready-for-agent"},
         "issue": {"number": 5},
     }
+    dispatcher = bench.steps
 
-    async def scenario() -> None:
-        await started_coder(hub, runtime)
-        runs, _ = await scanned(hub, monkeypatch, labeled)
-
-        assert [run.work_item for run in runs] == [{"issue": 5}]
-
-    asyncio.run(scenario())
+    assert asyncio.run(scanned(dispatcher, labeled)) == [{"issue": 5}]
 
 
 @pytest.mark.parametrize(
@@ -2996,88 +2566,15 @@ def test_the_scan_reads_an_issue_just_labeled_that_the_issue_list_does_not_show_
     ],
     ids=["comment", "review", "check-suite"],
 )
-def test_a_signal_that_cannot_change_which_issue_is_eligible_hands_nothing_and_asks_nothing(
+def test_a_signal_that_cannot_change_which_issue_is_eligible_finds_nothing_and_asks_nothing(
     tmp_path, monkeypatch, delivery
 ):
-    runtime = FakeRuntime()
-    hub = fresh_hub(tmp_path / "hub", runtime=runtime)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
+    dispatcher = bench.steps
 
-    async def scenario() -> None:
-        await started_coder(hub, runtime)
-        runs, _ = await scanned(hub, monkeypatch, delivery)
-
-        assert runs == []
-        assert github.calls == []
-
-    asyncio.run(scenario())
-
-
-def with_review(factory: str) -> str:
-    """The software factory's file with its fix and review steps uncommented."""
-    return re.sub(r"(?m)^  # (?=- |  )", "  ", factory)
-
-
-def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implementers_session(
-    tmp_path,
-):
-    control = FakeControl()
-    idle = StepResult(ending=StepEnding.CLEAN, summary="Nothing to fix yet.", session="claude-1")
-    changes = StepResult(ending=StepEnding.CLEAN, outcome="changes", values={"reviewed": True})
-    fixed = StepResult(ending=StepEnding.CLEAN, summary="Fixed the finding.", session="claude-1")
-    clean = StepResult(ending=StepEnding.CLEAN, outcome="clean", values={"reviewed": True})
-    control.step_results = [
-        PREPARED,
-        SET_UP,
-        IMPLEMENTED,
-        NOTHING_TO_ANSWER,
-        idle,
-        changes,
-        fixed,
-        clean,
-        CHECKED,
-        OPENED,
-    ]
-    runtime = FakeRuntime()
-    hub = fresh_hub(tmp_path / "hub", control, runtime)
-    client = hub_client(hub)
-
-    async def scenario() -> None:
-        shipped = await client.call(FACTORY_GET, FactoryGetCommand(name="software"))
-        assert isinstance(shipped, FactoryResult)
-        edited = await client.call(
-            FACTORY_EDIT,
-            FactoryEditCommand(
-                name="software",
-                files={"factory.yaml": with_review(shipped.files["factory.yaml"])},
-                hash=shipped.hash,
-            ),
-        )
-        assert isinstance(edited, FactoryResult), edited
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
-        waiting = await babysitting(hub, run.run_id)
-
-        assert [attempt.step for attempt in waiting.attempts] == [
-            "prepare",
-            "setup",
-            "implement",
-            "answer",
-            "fix",
-            "review",
-            "fix",
-            "review",
-            "checks",
-            "publish",
-            "babysit",
-        ]
-        fix = coding("fix", 30, resume="claude-1")
-        fixes = [command.step for _, command in control.steps if command.origin.step == "fix"]
-        assert fixes == [fix, fix]
-        _, publish = control.steps[-1]
-        assert publish.results["reviewed"] is True
-
-    asyncio.run(scenario())
+    assert asyncio.run(scanned(dispatcher, delivery)) == []
+    assert github.calls == []
 
 
 @pytest.mark.parametrize(
@@ -3093,13 +2590,12 @@ def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implemen
 def test_the_review_hook_reads_the_verdict_the_reviewer_wrote_never_what_it_said(
     tmp_path, monkeypatch, verdict, ending, outcome
 ):
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
+    bench = coder_at(tmp_path)
+    workspace = implemented(bench, BRANCH["branch"])
     (workspace / ".scratch").mkdir()
     writes = "" if verdict is None else f"open('.scratch/review.md', 'w').write({verdict!r})\n"
     stub_client(tmp_path, monkeypatch, "claude", writes + streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await run_in(
@@ -3226,7 +2722,7 @@ def answer_pull_request(
     github.answer("repo", "view", output=REPOSITORY)
 
 
-async def assessed(dispatcher: ScheduledDispatcher, *, quiet: bool = False) -> StepResult:
+async def assessed(dispatcher: WorkbenchSteps, *, quiet: bool = False) -> StepResult:
     """What assess answers, after a wait that moved on by itself when *quiet*."""
     return await run_in(
         dispatcher,
@@ -3250,7 +2746,7 @@ def created_labels(github: FakeGitHub) -> list[list[str]]:
 def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_merge_ready(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
@@ -3260,7 +2756,7 @@ def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_me
         ],
         reviews=[submitted("greptile-apps[bot]", "NONE")],
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3281,10 +2777,10 @@ def test_assess_labels_a_pull_request_a_trusted_reviewer_reviewed_on_its_head_me
 def test_assess_creates_the_merge_ready_label_only_when_the_repository_lacks_it(
     tmp_path, monkeypatch, labels, created
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, reviews=[submitted("owner", "OWNER")], labels=labels)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3301,14 +2797,14 @@ def test_assess_creates_the_merge_ready_label_only_when_the_repository_lacks_it(
 def test_assess_whose_label_create_fails_goes_on_only_once_the_label_exists(
     tmp_path, monkeypatch, appeared
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     github.answer("repos/{owner}/{repo}/labels", output=[[]], once=True)
     github.answer("label", "create", error="label with name already exists")
     answer_pull_request(
         github, reviews=[submitted("owner", "OWNER")], labels=("merge-ready",) if appeared else ()
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3347,10 +2843,10 @@ def test_assess_whose_label_create_fails_goes_on_only_once_the_label_exists(
 def test_assess_waits_until_a_trusted_reviewer_reviews_the_head_and_no_check_runs(
     tmp_path, monkeypatch, checks, reviews
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, checks=checks, reviews=reviews)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3374,10 +2870,10 @@ def test_assess_waits_until_a_trusted_reviewer_reviews_the_head_and_no_check_run
 def test_assess_takes_a_trusted_review_apps_successful_check_run_on_the_head_as_a_review(
     tmp_path, monkeypatch, app, conclusion, outcome
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, runs=[check_run("completed", app, conclusion)])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3397,10 +2893,10 @@ def test_assess_takes_a_trusted_review_apps_successful_check_run_on_the_head_as_
 def test_assess_after_a_quiet_wait_stops_waiting_for_a_reviewer_once_no_check_runs(
     tmp_path, monkeypatch, checks, outcome
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, checks=checks)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher, quiet=True)
@@ -3422,10 +2918,10 @@ def test_assess_after_a_quiet_wait_stops_waiting_for_a_reviewer_once_no_check_ru
 def test_assess_run_twice_comments_creates_the_label_labels_and_asks_for_the_review_once(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, labels=())
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         await assessed(dispatcher, quiet=True)
@@ -3466,14 +2962,14 @@ def test_assess_run_twice_comments_creates_the_label_labels_and_asks_for_the_rev
 def test_assess_sends_a_check_that_failed_on_the_head_back_for_repair(
     tmp_path, monkeypatch, conclusion, reviews, quiet
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
         runs=[check_run("completed", conclusion=conclusion, name="pytest")],
         reviews=reviews,
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher, quiet=quiet)
@@ -3505,14 +3001,14 @@ def test_assess_sends_a_check_that_failed_on_the_head_back_for_repair(
 def test_assess_waits_on_a_check_no_coding_session_can_repair_and_passes_one_that_did_not_fail(
     tmp_path, monkeypatch, conclusion, outcome
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
         runs=[check_run("completed", conclusion=conclusion)],
         reviews=[submitted("owner", "OWNER")],
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher, quiet=True)
@@ -3583,10 +3079,10 @@ REPLACED = [
     ],
 )
 def test_assess_judges_only_the_newest_run_of_each_check(tmp_path, monkeypatch, runs, outcome):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, checks=(), runs=runs, reviews=[submitted("owner", "OWNER")])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3601,10 +3097,10 @@ def test_assess_judges_only_the_newest_run_of_each_check(tmp_path, monkeypatch, 
 def test_assess_after_a_quiet_wait_passes_a_check_whose_replaced_run_was_cancelled(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, checks=(), runs=REPLACED)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher, quiet=True)
@@ -3641,10 +3137,10 @@ def test_assess_after_a_quiet_wait_passes_a_check_whose_replaced_run_was_cancell
 def test_assess_sends_back_the_newest_run_of_a_check_that_failed(
     tmp_path, monkeypatch, runs, failed
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, checks=(), runs=runs, reviews=[submitted("owner", "OWNER")])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3660,14 +3156,14 @@ def test_assess_sends_back_the_newest_run_of_a_check_that_failed(
 
 
 def test_assess_answers_review_threads_before_it_repairs_a_failed_check(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
         runs=[check_run("completed", conclusion="failure")],
         threads=[review_thread("T1", ("owner", "OWNER"))],
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3686,10 +3182,10 @@ def test_assess_answers_review_threads_before_it_repairs_a_failed_check(tmp_path
 def test_assess_ends_the_run_of_a_pull_request_that_was_merged_or_closed(
     tmp_path, monkeypatch, merged, outcome, values
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, pull=PULL | {"state": "closed", "merged": merged})
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3704,7 +3200,7 @@ def test_assess_ends_the_run_of_a_pull_request_that_was_merged_or_closed(
 def test_assess_hands_a_fix_round_every_actionable_thread_trusted_authors_wrote(
     tmp_path, monkeypatch
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
@@ -3717,7 +3213,7 @@ def test_assess_hands_a_fix_round_every_actionable_thread_trusted_authors_wrote(
         ],
         reviews=[submitted("owner", "OWNER")],
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3749,14 +3245,14 @@ def test_assess_hands_a_fix_round_every_actionable_thread_trusted_authors_wrote(
 
 
 def test_assess_answers_the_codex_review_app_like_a_trusted_reviewer(tmp_path, monkeypatch):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(
         github,
         threads=[review_thread("T1", ("chatgpt-codex-connector[bot]", "NONE"))],
         reviews=[submitted("chatgpt-codex-connector[bot]", "NONE")],
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3785,10 +3281,10 @@ def test_assess_answers_the_codex_review_app_like_a_trusted_reviewer(tmp_path, m
 def test_feedback_from_an_untrusted_author_starts_no_fix_round_and_needs_a_human(
     tmp_path, monkeypatch, thread, author
 ):
-    instance = coder_at(tmp_path)
+    bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
     answer_pull_request(github, threads=[thread], reviews=[submitted("owner", "OWNER")])
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await assessed(dispatcher)
@@ -3804,15 +3300,14 @@ def test_feedback_from_an_untrusted_author_starts_no_fix_round_and_needs_a_human
     asyncio.run(scenario())
 
 
-def pushed_branch(tmp_path: Path) -> Instance:
-    """The coder with its workspace on the run's branch, which origin holds, and scratch files
-    excluded as the prepare step leaves them."""
-    instance = coder_at(tmp_path)
-    workspace = instance.manifest.workspace.path
-    implemented(workspace, BRANCH["branch"])
-    git(workspace, "push", "-u", "origin", BRANCH["branch"])
-    (workspace / ".git" / "info" / "exclude").write_text(".scratch/\n")
-    return instance
+def pushed_branch(tmp_path: Path) -> Bench:
+    """The workbench with the run worktree of the run's branch, which origin holds, and scratch
+    files excluded as the first step leaves them."""
+    bench = coder_at(tmp_path)
+    worktree = implemented(bench, BRANCH["branch"])
+    git(worktree, "push", "-u", "origin", BRANCH["branch"])
+    (bench.workspace / ".git" / "info" / "exclude").write_text(".scratch/\n")
+    return bench
 
 
 def writes_replies(replies: object) -> str:
@@ -3839,7 +3334,7 @@ def fixed_by(commit: str) -> dict[str, dict[str, object]]:
 FIXED_T1 = fixed_by("HEAD")
 
 
-async def answered(dispatcher: ScheduledDispatcher, results: Mapping[str, StepValue]) -> StepResult:
+async def answered(dispatcher: WorkbenchSteps, results: Mapping[str, StepValue]) -> StepResult:
     return await run_in(
         dispatcher,
         StepRunCommand(
@@ -3929,8 +3424,8 @@ async def answered(dispatcher: ScheduledDispatcher, results: Mapping[str, StepVa
 def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_committed(
     tmp_path, monkeypatch, then, results, ending, reason
 ):
-    instance = pushed_branch(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = pushed_branch(tmp_path)
+    workspace = run_worktree(bench)
     # A commit on no branch, after the branch's head.
     git(
         workspace,
@@ -3939,7 +3434,7 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
         git(workspace, "commit-tree", "-p", "HEAD", "-m", "Stray", "HEAD^{tree}"),
     )
     stub_client(tmp_path, monkeypatch, "claude", then + streaming(CLAUDE_STREAM))
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await answered(dispatcher, results)
@@ -3947,7 +3442,7 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
         assert result.ending is ending, result.summary
         assert not (workspace / ".scratch" / "review-replies.json").exists()
         if reason is not None:
-            assert f'Hook "check_answers" failed: {reason}' in result.summary
+            assert f'Check "check_answers" failed: {reason}' in result.summary
         elif "feedback" in results:
             replies = json.loads(str(result.values.pop("replies")))
             assert set(replies) == {"T1"}
@@ -3965,8 +3460,8 @@ def test_the_answer_hook_records_a_reply_for_every_thread_once_its_fixes_are_com
 def test_the_answer_hook_takes_a_fix_an_already_pushed_commit_holds_by_its_full_sha(
     tmp_path, monkeypatch
 ):
-    instance = pushed_branch(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = pushed_branch(tmp_path)
+    workspace = run_worktree(bench)
     pushed = git(workspace, "rev-parse", "HEAD")
     stub_client(
         tmp_path,
@@ -3974,7 +3469,7 @@ def test_the_answer_hook_takes_a_fix_an_already_pushed_commit_holds_by_its_full_
         "claude",
         writes_replies(fixed_by(pushed[:7])) + streaming(CLAUDE_STREAM),
     )
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await answered(dispatcher, {"feedback": THREADS})
@@ -3988,8 +3483,8 @@ def test_the_answer_hook_takes_a_fix_an_already_pushed_commit_holds_by_its_full_
 def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answered(
     tmp_path, monkeypatch
 ):
-    instance = pushed_branch(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = pushed_branch(tmp_path)
+    workspace = run_worktree(bench)
     pushed = git(workspace, "rev-parse", "HEAD")
     commit(workspace, "theme.py", "DARK_MODE = True\n")
     head = git(workspace, "rev-parse", "HEAD")
@@ -3999,7 +3494,7 @@ def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answe
         "T2": {"fixed": True, "commit": pushed, "reply": "Added it before."},
         "T3": {"fixed": False, "reply": "DARK is the house style."},
     }
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
 
     async def scenario() -> None:
         result = await opened(dispatcher, 7, BRANCH | {"pr": 42, "replies": json.dumps(replies)})
@@ -4036,15 +3531,15 @@ def test_publish_after_a_fix_round_pushes_it_and_replies_on_each_thread_it_answe
 def test_publish_after_a_fix_round_applies_only_the_title_and_body_the_round_recorded(
     tmp_path, monkeypatch
 ):
-    instance = pushed_branch(tmp_path)
-    workspace = instance.manifest.workspace.path
+    bench = pushed_branch(tmp_path)
+    workspace = run_worktree(bench)
     commit(workspace, "theme.py", "DARK_MODE = True\n")
-    # Another run's words, left in the workspace the runs share.
+    # Words left in the run worktree, which publish never reads.
     (workspace / ".scratch").mkdir()
     (workspace / ".scratch" / "pr-title.txt").write_text("Add a light mode\n")
     (workspace / ".scratch" / "pr-body.md").write_text("Adds a light mode.\n")
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    dispatcher, _ = signal_runtime(instance, RoutineModel())
+    dispatcher = bench.steps
     fix_round = BRANCH | {"pr": 42, "replies": json.dumps(FIXED_T1)}
     rewrote = {"title": "Add a dark mode named DARK_MODE", "body": "Closes #7\n\nAdds DARK_MODE."}
 

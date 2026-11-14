@@ -71,6 +71,7 @@ requires:
     - { name: MOODLE_COURSE, label: Course, description: The course to fill., type: text,
         required: false }
   commands: [checks]
+  suggested_picks: [tdd]
 work_item: { issue: int }
 steps:
   - id: checks
@@ -590,7 +591,13 @@ def test_the_setup_on_a_chosen_workbench_asks_only_for_what_the_factory_requires
         assert [field.name for field in asked[0].values] == ["MOODLE_URL"]
         assert (asked[0].commands, asked[0].workbench) == (["checks"], [])
         assert asked[1] == LineSetupDescription(
-            workbench=[], secrets=[], values=[], commands=[], logins=[], browser=False
+            workbench=[],
+            secrets=[],
+            values=[],
+            commands=[],
+            logins=[],
+            browser=False,
+            suggested_picks=["tdd"],
         )
         assert [field.name for field in keys.secrets] == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
 
@@ -615,6 +622,7 @@ def test_the_setup_on_no_workbench_asks_for_all_the_factory_requires_and_a_workb
             ("MOODLE_COURSE", False),
         ]
         assert (asked.commands, asked.logins, asked.browser) == (["checks"], [], False)
+        assert asked.suggested_picks == ["tdd"]
 
     asyncio.run(scenario())
 

@@ -172,6 +172,159 @@ def test_removing_a_run_worktree_removes_it_and_its_branch(tmp_path):
     assert _git(workspace, "branch", "--list", "tickets/issue-12") == ""
 
 
+NAMING = """\
+import subprocess
+from pathlib import Path
+
+from kinby.plugins.tools import tool
+
+
+@tool(write=False)
+def agent_branch(issue: int, workspace: str) -> dict[str, str]:
+    \"\"\"Name the issue's branch, stacked on the newest feature branch.\"\"\"
+    subprocess.run(["git", "fetch", "--quiet", "origin"], cwd=workspace, check=True)
+    (Path(workspace) / "named").write_text(str(issue))
+    return {"branch": f"agent/{issue}-dark-mode", "base": "feature"}
+
+
+@tool(write=False)
+def no_branch(issue: int) -> dict[str, str]:
+    \"\"\"Name nothing.\"\"\"
+    return {"base": "main"}
+
+
+@tool(write=False)
+def blocked(issue: int) -> dict[str, str]:
+    \"\"\"Refuse to pick a base.\"\"\"
+    raise RuntimeError("No agent branch holds every open blocker's agent branch.")
+"""
+
+
+def _featured(tmp_path: Path) -> Path:
+    """The seed, with a branch feature one commit past main."""
+    seed = _seed(tmp_path)
+    _git(seed, "switch", "--quiet", "-c", "feature")
+    (seed / "feature.md").write_text("Stacked.\n", encoding="utf-8")
+    _git(seed, "add", "feature.md")
+    _git(seed, "-c", "user.name=kinby", "-c", "user.email=kinby@example.com", "commit", "-qm", "f")
+    _git(seed, "switch", "--quiet", "main")
+    return seed
+
+
+def test_a_factorys_worktree_call_names_the_run_worktrees_branch_and_the_base_it_is_cut_from(
+    tmp_path,
+):
+    workbench = _workbench(tmp_path, str(_featured(tmp_path)))
+    write_factory(tmp_path / "factories" / "tickets", {"tools/branch.py": NAMING})
+    run_id = uuid4()
+    named = RunFolder(branch=None, named_by="agent_branch")
+
+    first = asyncio.run(workbench.run(_command(run_id, CommandStepRun(run=["touch a"]), named)))
+    kept = RunFolder(branch="agent/12-dark-mode", base="feature")
+    second = asyncio.run(
+        workbench.run(_command(run_id, CommandStepRun(run=["test -f a"]), kept, 2))
+    )
+
+    worktree = tmp_path / "workbench" / "worktrees" / "agent" / "12-dark-mode"
+    assert first == StepResult(
+        ending=StepEnding.CLEAN,
+        summary=first.summary,
+        values={"branch": "agent/12-dark-mode", "base": "feature"},
+    )
+    assert second.ending is StepEnding.CLEAN
+    assert second.values == {}
+    assert (worktree / "feature.md").is_file()
+    assert _git(worktree, "branch", "--show-current") == "agent/12-dark-mode"
+    assert (tmp_path / "workbench" / "workspace" / "named").read_text() == "12"
+
+
+def test_a_fresh_folder_is_named_again_and_cut_again_from_the_base(tmp_path):
+    workbench = _workbench(tmp_path, str(_featured(tmp_path)))
+    write_factory(tmp_path / "factories" / "tickets", {"tools/branch.py": NAMING})
+    run_id = uuid4()
+    named = RunFolder(branch=None, named_by="agent_branch")
+    asyncio.run(workbench.run(_command(run_id, CommandStepRun(run=["touch draft.md"]), named)))
+
+    again = asyncio.run(
+        workbench.run(_command(run_id, CommandStepRun(run=["true"]), named, 2, fresh=True))
+    )
+
+    worktree = tmp_path / "workbench" / "worktrees" / "agent" / "12-dark-mode"
+    assert again.values == {"branch": "agent/12-dark-mode", "base": "feature"}
+    assert sorted(path.name for path in worktree.iterdir()) == [".git", "NOTES.md", "feature.md"]
+
+
+@pytest.mark.parametrize(
+    ("call", "summary"),
+    [
+        ("no_branch", 'Tool "no_branch" named no branch and base for the run worktree.'),
+        (
+            "blocked",
+            'Tool "blocked" failed: RuntimeError: No agent branch holds every open blocker\'s '
+            "agent branch.",
+        ),
+    ],
+    ids=["unnamed", "raises"],
+)
+def test_a_step_whose_folder_is_not_named_fails_before_it_starts(tmp_path, call, summary):
+    workbench = _workbench(tmp_path, str(_seed(tmp_path)))
+    write_factory(tmp_path / "factories" / "tickets", {"tools/branch.py": NAMING})
+    run_id = uuid4()
+    step = CommandStepRun(run=["touch started"])
+
+    result = asyncio.run(
+        workbench.run(_command(run_id, step, RunFolder(branch=None, named_by=call)))
+    )
+
+    assert result == StepResult(ending=StepEnding.FAILED, summary=summary)
+    assert not (tmp_path / "workbench" / "worktrees").exists()
+
+
+PLACES = """\
+from kinby.plugins.tools import tool
+
+
+@tool(write=False)
+def places(workspace: str, folder: str) -> dict[str, str]:
+    \"\"\"Say where the call runs.\"\"\"
+    return {"workspace": workspace, "folder": folder}
+
+
+@tool(write=False)
+def scan_places(workspace: str) -> list[dict[str, str]]:
+    \"\"\"Find the workspace as a work item.\"\"\"
+    return [{"workspace": workspace}]
+"""
+
+
+def test_a_factorys_tool_takes_the_workspace_and_the_run_folder_by_name(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"tools/places.py": PLACES})
+    run_id = uuid4()
+
+    called = asyncio.run(workbench.run(_command(run_id, CodeStepRun(call="places"), PLAIN)))
+    found = asyncio.run(workbench.intake(IntakeRunCommand(factory="tickets", call="scan_places")))
+
+    workspace = str(tmp_path / "workbench" / "workspace")
+    assert called.values == {
+        "workspace": workspace,
+        "folder": str(tmp_path / "workbench" / "runs" / str(run_id)),
+    }
+    assert found == IntakeRunResult(work_items=[{"workspace": workspace}])
+
+
+def test_removing_a_run_worktree_removes_a_directory_named_for_the_run_beside_it(tmp_path):
+    workbench = _workbench(tmp_path, str(_seed(tmp_path)))
+    run_id = uuid4()
+    asyncio.run(workbench.run(_command(run_id, CommandStepRun(run=["true"]), PLAIN)))
+    asyncio.run(workbench.run(_command(run_id, CommandStepRun(run=["true"]), BRANCH)))
+
+    asyncio.run(workbench.remove_folder(RunFolderRemoveCommand(run_id=run_id, folder=BRANCH)))
+
+    assert not (tmp_path / "workbench" / "runs" / str(run_id)).exists()
+    assert not (tmp_path / "workbench" / "worktrees" / "tickets" / "issue-12").exists()
+
+
 def test_on_a_plain_workspace_a_run_works_in_a_directory_named_for_it_until_it_goes(tmp_path):
     workbench = _workbench(tmp_path, None)
     run_id = uuid4()
