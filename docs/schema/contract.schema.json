@@ -5035,10 +5035,29 @@
     },
     "LineSetupCommand": {
       "additionalProperties": false,
-      "description": "Set a factory up on a workbench under an owning instance. The result is the line.",
+      "description": "Set a factory up on a chosen workbench, or on a new one it creates, under an owning\ninstance, in one pass: the answers land on the workbench and the line is set up, or the hub\nrefuses the setup, names each wrong or missing answer, and creates neither.",
       "properties": {
+        "commands": {
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/CommandListName"
+          },
+          "type": "object"
+        },
         "factory": {
           "$ref": "#/$defs/FactoryName"
+        },
+        "hub_secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HubSecretName"
+          },
+          "type": "object"
         },
         "model": {
           "anyOf": [
@@ -5064,6 +5083,14 @@
           ],
           "default": null
         },
+        "secrets": {
+          "additionalProperties": {
+            "format": "password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "type": "object"
+        },
         "usd_per_day": {
           "anyOf": [
             {
@@ -5076,16 +5103,152 @@
           ],
           "default": null
         },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SetupValue"
+          },
+          "type": "object"
+        },
+        "workbench": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NewWorkbench"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "workbench_id": {
-          "format": "uuid",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
-        "factory",
-        "workbench_id"
+        "factory"
       ],
       "title": "LineSetupCommand",
+      "type": "object"
+    },
+    "LineSetupDescribeCommand": {
+      "additionalProperties": false,
+      "description": "Read what setting a factory up on a workbench asks for. It changes nothing.",
+      "properties": {
+        "factory": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workbench_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "factory"
+      ],
+      "title": "LineSetupDescribeCommand",
+      "type": "object"
+    },
+    "LineSetupDescription": {
+      "additionalProperties": false,
+      "description": "What a line setup asks for: on a chosen workbench, only what the factory requires and the\nworkbench lacks; on a new one, all the factory requires and what a workbench needs.",
+      "properties": {
+        "browser": {
+          "type": "boolean"
+        },
+        "commands": {
+          "items": {
+            "$ref": "#/$defs/CommandListName"
+          },
+          "type": "array"
+        },
+        "logins": {
+          "items": {
+            "$ref": "#/$defs/SubscriptionLogin"
+          },
+          "type": "array"
+        },
+        "secrets": {
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "type": "array"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "type": "array"
+        },
+        "workbench": {
+          "items": {
+            "$ref": "#/$defs/SetupField"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "workbench",
+        "secrets",
+        "values",
+        "commands",
+        "logins",
+        "browser"
+      ],
+      "title": "LineSetupDescription",
+      "type": "object"
+    },
+    "LineSetupResult": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "$ref": "#/$defs/Line"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "line",
+        "operation_id"
+      ],
+      "title": "LineSetupResult",
       "type": "object"
     },
     "LineUpdateCommand": {
@@ -6353,6 +6516,33 @@
         "output"
       ],
       "title": "NewModelPrice",
+      "type": "object"
+    },
+    "NewWorkbench": {
+      "additionalProperties": false,
+      "description": "The workbench a line setup creates, built from the recipe its factory requires.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspace_source": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "NewWorkbench",
       "type": "object"
     },
     "NewerVersion": {
@@ -15240,7 +15430,23 @@
               "$ref": "#/$defs/LineSetupCommand"
             },
             "result": {
-              "$ref": "#/$defs/Line"
+              "$ref": "#/$defs/LineSetupResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "line.setup.describe": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineSetupDescribeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/LineSetupDescription"
             }
           },
           "required": [
@@ -16795,6 +17001,7 @@
         "workbench.picks.get",
         "workbench.picks.set",
         "line.setup",
+        "line.setup.describe",
         "line.list",
         "line.get",
         "line.update",

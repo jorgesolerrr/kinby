@@ -1624,6 +1624,17 @@ class HubRegistry:
                 (json.dumps({**json.loads(held), name: commands}), str(workbench_id)),
             )
 
+    def set_workbench_values(self, workbench_id: UUID, values: Mapping[str, SetupValue]) -> None:
+        """Set the workbench's named *values*, keeping its others."""
+        with self._transaction() as connection:
+            (held,) = connection.execute(
+                "SELECT named_values FROM workbenches WHERE instance_id = ?", (str(workbench_id),)
+            ).fetchone()
+            connection.execute(
+                "UPDATE workbenches SET named_values = ? WHERE instance_id = ?",
+                (json.dumps({**json.loads(held), **values}), str(workbench_id)),
+            )
+
     def add_line(self, line: Line) -> None:
         with self._transaction() as connection:
             connection.execute(

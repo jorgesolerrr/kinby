@@ -598,7 +598,11 @@ export interface Contract {
     };
     "line.setup": {
       command: LineSetupCommand;
-      result: Line;
+      result: LineSetupResult;
+    };
+    "line.setup.describe": {
+      command: LineSetupDescribeCommand;
+      result: LineSetupDescription;
     };
     "line.update": {
       command: LineUpdateCommand;
@@ -2352,14 +2356,60 @@ export interface LineRemoveCommand {
   line_id: string;
 }
 /**
- * Set a factory up on a workbench under an owning instance. The result is the line.
+ * Set a factory up on a chosen workbench, or on a new one it creates, under an owning
+ * instance, in one pass: the answers land on the workbench and the line is set up, or the hub
+ * refuses the setup, names each wrong or missing answer, and creates neither.
  */
 export interface LineSetupCommand {
+  commands?: {
+    [k: string]: string[];
+  };
   factory: FactoryName;
+  hub_secrets?: {
+    [k: string]: HubSecretName;
+  };
   model?: string | null;
   owner_id?: string | null;
+  secrets?: {
+    [k: string]: string;
+  };
   usd_per_day?: number | null;
-  workbench_id: string;
+  values?: {
+    [k: string]: SetupValue;
+  };
+  workbench?: NewWorkbench | null;
+  workbench_id?: string | null;
+}
+/**
+ * The workbench a line setup creates, built from the recipe its factory requires.
+ */
+export interface NewWorkbench {
+  name: string;
+  workspace_source?: string | null;
+}
+export interface LineSetupResult {
+  line: Line;
+  operation_id: string | null;
+}
+/**
+ * Read what setting a factory up on a workbench asks for. It changes nothing.
+ */
+export interface LineSetupDescribeCommand {
+  factory: FactoryName;
+  model?: string | null;
+  workbench_id?: string | null;
+}
+/**
+ * What a line setup asks for: on a chosen workbench, only what the factory requires and the
+ * workbench lacks; on a new one, all the factory requires and what a workbench needs.
+ */
+export interface LineSetupDescription {
+  browser: boolean;
+  commands: CommandListName[];
+  logins: SubscriptionLogin[];
+  secrets: SetupField[];
+  values: SetupField[];
+  workbench: SetupField[];
 }
 /**
  * Set one line's model and daily budget, replacing both. The result is the line.
