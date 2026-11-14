@@ -1670,6 +1670,17 @@ class HubRegistry:
                 (line.model, line.usd_per_day, str(line.line_id)),
             )
 
+    def set_line_owner(self, line_id: UUID, owner_id: UUID) -> None:
+        """Give the line and every run of it to *owner_id*."""
+        with self._transaction() as connection:
+            connection.execute(
+                "UPDATE lines SET owner_id = ? WHERE id = ?", (str(owner_id), str(line_id))
+            )
+            connection.execute(
+                "UPDATE factory_runs SET instance_id = ? WHERE line_id = ?",
+                (str(owner_id), str(line_id)),
+            )
+
     def line_cost(self, line_id: UUID, day: date) -> float:
         """What the attempts of the line's runs that ended on the UTC *day* cost on the API."""
         start = datetime.combine(day, time(), UTC)

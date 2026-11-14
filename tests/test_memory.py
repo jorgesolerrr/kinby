@@ -628,6 +628,51 @@ def test_recall_in_the_owner_turn_returns_memory_with_any_mark(tmp_path: Path) -
     ]
 
 
+def test_the_memory_marked_with_a_workbench_moves_to_another_graph_forgotten_facts_too(
+    tmp_path: Path,
+) -> None:
+    source, target = GraphStore(tmp_path / "home"), GraphStore(tmp_path / "teammate")
+    lessons = _install_lessons(source)
+    forgotten = source.remember(
+        Fact(
+            node=NodeId("2026-09-04-pnpm-lesson"),
+            date=date(2026, 9, 4),
+            description="Use pnpm",
+            subjects=("pnpm",),
+            body="Install with pnpm.",
+            thread=None,
+            workbench="landing",
+        )
+    )
+    source.forget(forgotten, _FORGOTTEN_ON)
+
+    documents = source.marked("landing")
+    written = target.take(documents)
+    for node in documents:
+        source.prune(node)
+
+    assert sorted(written) == sorted([lessons["landing"], forgotten])
+    assert [hit.node for hit in target.recall("install")] == [lessons["landing"]]
+    assert [gone.fact.node for gone in target.forgotten_facts()] == [forgotten]
+    assert [hit.node for hit in source.recall("install")] == [
+        lessons[None],
+        lessons["cec-backend"],
+    ]
+    assert source.forgotten_facts() == []
+
+
+def test_a_graph_takes_no_node_it_holds_already(tmp_path: Path) -> None:
+    source, target = GraphStore(tmp_path / "home"), GraphStore(tmp_path / "teammate")
+    node = _install_lessons(source)["landing"]
+    target.take(source.marked("landing"))
+    target.forget(node, _FORGOTTEN_ON)
+
+    written = target.take(source.marked("landing"))
+
+    assert written == []
+    assert target.recall("install") == ()
+
+
 def test_remember_escapes_frontmatter_values(tmp_path: Path) -> None:
     node = NodeId("2026-09-01-frontmatter-shaped-fact")
     fact = Fact(

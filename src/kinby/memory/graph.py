@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -239,6 +239,23 @@ class GraphStore:
     def prune(self, node: NodeId) -> None:
         """Delete *node*'s file, leaving no tombstone (ADR 0074)."""
         self._node_path(node).unlink(missing_ok=True)
+
+    def marked(self, workbench: str) -> dict[NodeId, str]:
+        """The file of each node marked with *workbench*, by node. A forgotten fact's comes too,
+        so a graph that takes it never learns the fact back."""
+        return {
+            memory.node: self._node_path(memory.node).read_text(encoding="utf-8")
+            for memory, _ in self._read_all()
+            if memory.workbench == workbench
+        }
+
+    def take(self, files: Mapping[NodeId, str]) -> list[NodeId]:
+        """Write each node file this graph holds no node of yet, and answer which it wrote."""
+        self._path.mkdir(parents=True, exist_ok=True)
+        written = [node for node in files if not self._node_path(node).exists()]
+        for node in written:
+            _write_node(self._node_path(node), files[node])
+        return written
 
     def _node_path(self, node: NodeId) -> Path:
         relative = Path(f"{node}.md")
