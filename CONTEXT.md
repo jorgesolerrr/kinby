@@ -547,7 +547,7 @@ The instance's list of command patterns the **gate** refuses or escalates regard
 
 ### Shell read
 
-A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace, even through a link. Reading the current **turn**'s **saved outputs** and a **hub read** through the CLI count too. A command the gate cannot tell is a shell read asks like any other bash.
+A bash command the **gate** treats as a read under ask and auto: simple commands from a fixed allowlist of programs that only read, joined by pipes and command lists, naming no path outside the workspace, even through a link. Reading the current **turn**'s **saved outputs** and a **hub read** through the CLI count too. A command the gate cannot tell is a shell read asks like any other bash. A **workbench** runs a shell read in its workspace for the owner of one of its **lines**, and no other command.
 
 ### Contract
 
@@ -834,7 +834,7 @@ _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
 
-The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops, recreates, updates, removes, restores and deletes it with an instance's **lifecycle operations**. Its workspace is cloned from its git source at its first start, or is a plain folder, and keeps the clone and its installs between starts and recreations. Its named values read back in its record, and its secrets never do. Its secrets behave as **instance secrets** do: a secret may take a **hub secret**, and a replaced one reaches the container through a **container recreation**, which its record shows as a **recreate reason** until then. A **factory run** works on exactly one workbench, in a folder of its own there. Steps run on a workbench one at a time, across all its **lines**, so two runs never install or build over each other. A workbench whose lines have unfinished runs is never deleted.
+The durable place a **factory**'s **steps** run in: an image, secrets, named values, a **workspace** with its **repository commands**, its **picks**, and a browser session. It is not an **instance**: it has no persona, no threads and no memory. The **hub** runs it as a container on one image, built from one recipe, and starts, stops, recreates, updates, removes, restores and deletes it with an instance's **lifecycle operations**. Its workspace is cloned from its git source at its first start, or is a plain folder, and keeps the clone and its installs between starts and recreations. Its named values read back in its record, and its secrets never do. Its secrets behave as **instance secrets** do: a secret may take a **hub secret**, and a replaced one reaches the container through a **container recreation**, which its record shows as a **recreate reason** until then. A **factory run** works on exactly one workbench, in a folder of its own there. Steps run on a workbench one at a time, across all its **lines**, so two runs never install or build over each other. A workbench whose lines have unfinished runs is never deleted. The owner of one of its lines reads its workspace through the **hub**: a file, a directory, or a **shell read** run there. It writes nothing there but its repository commands. The hub refuses each read and write from an instance that owns no line on it.
 _Avoid_: environment, sandbox, site, station
 
 ### Line
@@ -935,12 +935,12 @@ _Avoid_: fix round (that answers review threads)
 
 ### Repository commands
 
-The commands an **instance** or a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. The instance records them through the **instance tool**, and a workbench's record holds them, each list replaced whole through the **hub**. They belong to the instance or the workbench, never to the **factory** or the repository, so two instances of one **factory role**, or two workbenches, each hold their own.
+The commands an **instance** or a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. The instance records them through the **instance tool**, and a workbench's record holds them, each list replaced whole through the **hub** by the user, or by the owner of one of its **lines** in a write the **gate** holds. They belong to the instance or the workbench, never to the **factory** or the repository, so two instances of one **factory role**, or two workbenches, each hold their own.
 _Avoid_: onboarding, environment, the repository's gate
 
 ### Repository survey
 
-An **instance** reading its repository to propose its **repository commands**, when the user asks for it. It proposes commands only, and reports a toolchain or service the image lacks as text.
+An **instance** reading its repository to propose its **repository commands**, or the owner of a **line** reading the line's **workbench** to propose the workbench's, when the user asks for it. It proposes commands only, and reports a toolchain or service the image lacks as text. The instance tries each command first; the owner runs only **shell reads** on a workbench, so it proposes commands it has not tried.
 _Avoid_: onboarding, environment setup
 
 ### Babysitting
