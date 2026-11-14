@@ -2,6 +2,7 @@
 workspace, and a command from the shell reads, run there."""
 
 import asyncio
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -94,3 +95,21 @@ def test_any_other_command_is_refused_and_never_runs(tmp_path, command):
         )
 
     assert (tmp_path / "workbench" / "workspace" / "README.md").is_file()
+
+
+def test_a_shell_read_runs_the_systems_programs_never_one_the_checkout_supplies(
+    tmp_path, monkeypatch
+):
+    workbench = _seeded(tmp_path)
+    workspace = tmp_path / "workbench" / "workspace"
+    planted = workspace / "ls"
+    planted.write_text("#!/bin/sh\ntouch pwned\n", encoding="utf-8")
+    planted.chmod(0o755)
+    monkeypatch.setenv("PATH", f".:{os.environ['PATH']}")
+
+    ran = asyncio.run(
+        workbench.run_command(WorkbenchCommandRunCommand(workbench_id=WORKBENCH, command="ls"))
+    )
+
+    assert ran.output == "README.md\nls\nsrc\n"
+    assert not (workspace / "pwned").exists()

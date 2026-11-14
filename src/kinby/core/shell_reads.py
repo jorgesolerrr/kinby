@@ -25,9 +25,10 @@ _FIND_UNSAFE = frozenset(
     {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
     | {"-L", "-follow"}
 )
-#: The short flags and long flag prefixes that make a program write, run another program, follow
-#: links while it walks a directory, or read its input's names or its own program from a file. Long
-#: flags are prefixes because GNU tools accept any unambiguous abbreviation.
+#: The short flags and long flag prefixes that make a program write, set a shell variable such as
+#: PATH, run another program, follow links while it walks a directory, or read its input's names or
+#: its own program from a file. Long flags are prefixes because GNU tools accept any unambiguous
+#: abbreviation.
 _UNSAFE_FLAGS: dict[str, tuple[str, tuple[str, ...]]] = {
     "sort": ("o", ("--o", "--co", "--fi")),
     "tree": ("oRl", ("--o",)),
@@ -38,6 +39,7 @@ _UNSAFE_FLAGS: dict[str, tuple[str, tuple[str, ...]]] = {
     "du": ("L", ("--de",)),
     "diff": ("r", ("--rec",)),
     "jq": ("f", ("--f",)),
+    "printf": ("v", ()),
 }
 #: Characters that start an expansion, a subshell, a group or an input redirection.
 _UNSUPPORTED = frozenset("$`(){}<")

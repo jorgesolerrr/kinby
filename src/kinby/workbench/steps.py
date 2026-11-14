@@ -80,6 +80,9 @@ _PAGE_BYTES = 1024 * 1024
 _TURNS_DIR = "turns"
 #: How long a shell read the owner runs may take, in seconds.
 _READ_SECONDS = 60
+#: The only environment of a shell read the owner runs. Its programs come from the image, never
+#: from the checkout, and the workbench's secrets stay out of its reach.
+_READ_ENVIRONMENT = {"PATH": "/usr/local/bin:/usr/bin:/bin"}
 _WORK_ITEMS = TypeAdapter(list[dict[ValueName, StepValue]])
 
 _logger = logging.getLogger(__name__)
@@ -186,6 +189,7 @@ class WorkbenchSteps:
                 cwd=self._workspace,
                 timeout_seconds=_READ_SECONDS,
                 label="The command",
+                env=_READ_ENVIRONMENT,
             )
         except TimeoutError as exc:
             raise WorkspaceReadFailed(str(exc)) from exc
