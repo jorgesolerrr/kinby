@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 from uuid import UUID
 
 from kinby.contracts import (
@@ -43,6 +44,7 @@ from kinby.contracts import (
     BrowserWait,
     ContractModel,
     Method,
+    Scope,
     VaultEntryListResult,
 )
 from kinby.plugins.browser import (
@@ -60,7 +62,13 @@ from kinby.plugins.browser import (
     Upload,
     Wait,
 )
-from kinby.plugins.hub import call_hub
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, call_hub
+
+
+def lends_a_browser() -> bool:
+    """Whether the hub grants browser.open on this instance's or workbench's hub route."""
+    granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
+    return bool(os.environ.get(HUB_URL_VARIABLE)) and Scope.BROWSER_OPEN in granted
 
 
 class HubBrowser:

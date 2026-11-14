@@ -12,6 +12,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from pydantic import TypeAdapter
+
 from kinby.contracts import (
     DEFAULT_AVATAR,
     Avatar,
@@ -53,8 +55,10 @@ from kinby.contracts import (
     StepValue,
     StorageItem,
     StorageKind,
+    SubscriptionLogin,
     ValueName,
     WaitingApproval,
+    WaitingTakeover,
 )
 from kinby.factories.file import InstanceName
 from kinby.hub.models import ChannelNotification, ChannelUser, ImageArtifact, SentRef
@@ -96,6 +100,8 @@ class WorkbenchSetup:
     values: dict[str, SetupValue]
     #: Its lists of repository commands, by name.
     commands: dict[CommandListName, list[str]] = field(default_factory=dict)
+    logins: tuple[SubscriptionLogin, ...] = ()
+    browser: bool = False
 
 
 @dataclass(frozen=True)
@@ -334,7 +340,9 @@ class HubRegistry:
                     recipe TEXT,
                     workspace_source TEXT,
                     named_values TEXT NOT NULL,
-                    commands TEXT NOT NULL DEFAULT '{}'
+                    commands TEXT NOT NULL DEFAULT '{}',
+                    logins TEXT NOT NULL DEFAULT '[]',
+                    browser INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS lines (
                     id TEXT PRIMARY KEY,
@@ -510,6 +518,11 @@ class HubRegistry:
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
             self._add_columns(connection, "workbenches", {"commands": "TEXT NOT NULL DEFAULT '{}'"})
+            self._add_columns(
+                connection,
+                "workbenches",
+                {"logins": "TEXT NOT NULL DEFAULT '[]'", "browser": "INTEGER NOT NULL DEFAULT 0"},
+            )
             # The owner's routine that runs the line's intake. Null when its factory declares none.
             self._add_columns(connection, "lines", {"intake": "TEXT"})
             self._add_columns(
@@ -840,9 +853,11 @@ class HubRegistry:
             if workbench is not None:
                 connection.execute(
                     """
-                    INSERT INTO workbenches
-                        (instance_id, recipe, workspace_source, named_values, commands)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO workbenches (
+                        instance_id, recipe, workspace_source, named_values, commands, logins,
+                        browser
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(instance.instance_id),
@@ -850,6 +865,8 @@ class HubRegistry:
                         workbench.workspace_source,
                         json.dumps(workbench.values),
                         json.dumps(workbench.commands),
+                        _LOGINS.dump_json(workbench.logins).decode(),
+                        workbench.browser,
                     ),
                 )
             self._insert_operation(
@@ -1816,7 +1833,7 @@ class HubRegistry:
                     ),
                     factory, name, factory_members.recipe, setup, baseline,
                     workbenches.instance_id IS NOT NULL, workbenches.recipe, workspace_source,
-                    named_values, commands
+                    named_values, commands, logins, browser
                 FROM instances
                 LEFT JOIN factory_members ON factory_members.instance_id = instances.id
                 LEFT JOIN workbenches ON workbenches.instance_id = instances.id
@@ -2432,7 +2449,7 @@ class HubRegistry:
                 summary=summary,
                 session=session,
                 usage=StepUsage.model_validate_json(usage) if usage is not None else None,
-                ask=WaitingApproval.model_validate_json(ask) if ask is not None else None,
+                ask=_ASK.validate_json(ask) if ask is not None else None,
                 answer=StepAnswer.model_validate_json(answer) if answer is not None else None,
                 views=json.loads(views),
                 started_at=datetime.fromisoformat(started_at),
@@ -2937,6 +2954,8 @@ _CHANNEL_COLUMNS = (
     "id, name, kind, settings, enabled, paired_user, pairing_code, pairing_expires_at, "
     "last_sent_at, last_error, last_error_at"
 )
+_LOGINS = TypeAdapter(tuple[SubscriptionLogin, ...])
+_ASK = TypeAdapter(WaitingApproval | WaitingTakeover)
 #: The statuses a run never leaves.
 _FINISHED = (FactoryRunStatus.DONE.value, FactoryRunStatus.CANCELLED.value)
 #: The statuses of a run that is not finished.
@@ -3003,6 +3022,8 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
         workspace_source,
         named_values,
         commands,
+        logins,
+        browser,
     ) = row
     return ManagedInstance(
         instance_id=UUID(instance_id),
@@ -3048,6 +3069,8 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
                 workspace_source=workspace_source,
                 values=json.loads(named_values),
                 commands=json.loads(commands),
+                logins=_LOGINS.validate_json(logins),
+                browser=bool(browser),
             )
             if workbench
             else None
