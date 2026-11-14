@@ -45,6 +45,7 @@ from kinby.contracts import (
     LibraryMcpServerWriteCommand,
     LibrarySkillMoveCommand,
     LibrarySkillWriteCommand,
+    LineSetupCommand,
     Method,
     ResultFrame,
     Scope,
@@ -98,6 +99,7 @@ class HubWriteOperation(StrEnum):
     LIBRARY_MOVE = "library_move"
     LIBRARY_MCP_SERVER_WRITE = "library_mcp_server_write"
     FACTORY_WRITE = "factory_write"
+    LINE_SETUP = "line_setup"
     CHANNEL_MUTE = "channel_mute"
     CHANNEL_UNMUTE = "channel_unmute"
 
@@ -130,7 +132,7 @@ async def hub_write(operation: str, arguments: dict[str, JsonValue], context: To
     instance_prompt_set, instance_routine_write, instance_routine_set_enabled,
     instance_routine_run, instance_routine_delete, instance_ask, image_prepare,
     library_skill_write, library_git_add, library_move, library_mcp_server_write, factory_write,
-    channel_mute and channel_unmute. `kinby hub help <operation>` prints its arguments.
+    line_setup, channel_mute and channel_unmute. `kinby hub help <operation>` prints its arguments.
     """
     write = home_write(operation, arguments)
     if context.approval_id is None:
@@ -201,6 +203,7 @@ type HomeWrite = (
     | LibraryMove
     | LibraryMcpServerWriteCommand
     | FactoryEditCommand
+    | LineSetupCommand
     | ChannelMute
     | ChannelUnmute
 )
@@ -242,6 +245,7 @@ _HUB_RUN_WRITES: Mapping[str, type[ContractModel]] = {
     HubWriteOperation.LIBRARY_MOVE: LibraryMove,
     HubWriteOperation.LIBRARY_MCP_SERVER_WRITE: LibraryMcpServerWriteCommand,
     HubWriteOperation.FACTORY_WRITE: FactoryEditCommand,
+    HubWriteOperation.LINE_SETUP: LineSetupCommand,
     HubWriteOperation.CHANNEL_MUTE: ChannelMute,
     HubWriteOperation.CHANNEL_UNMUTE: ChannelUnmute,
 }
@@ -260,6 +264,8 @@ def write_arguments(operation: HubWriteOperation) -> dict[str, FieldInfo]:
         fields["setup"] = fields.pop("config")
         for refused in ("secrets", "save_to_hub"):
             del fields[refused]
+    if operation is HubWriteOperation.LINE_SETUP:
+        del fields["secrets"]
     return fields
 
 
@@ -313,6 +319,11 @@ def home_write(operation: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                 return LibraryMcpServerWriteCommand.model_validate(arguments)
             case HubWriteOperation.FACTORY_WRITE:
                 return FactoryEditCommand.model_validate(arguments)
+            case HubWriteOperation.LINE_SETUP:
+                setup = LineSetupCommand.model_validate(arguments)
+                if setup.secrets:
+                    raise _refused(operation, {"secrets": _NO_SECRET_VALUES})
+                return setup
             case HubWriteOperation.CHANNEL_MUTE:
                 return ChannelMute.model_validate(arguments)
             case HubWriteOperation.CHANNEL_UNMUTE:

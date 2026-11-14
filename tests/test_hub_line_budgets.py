@@ -24,6 +24,7 @@ from kinby.contracts import (
     Line,
     LineGetCommand,
     LineSetupCommand,
+    LineSetupResult,
     LineUpdateCommand,
     StatsRunsCommand,
     StatsRunsResult,
@@ -102,8 +103,8 @@ async def _also(
         factory=factory, workbench_id=line.workbench_id, usd_per_day=usd_per_day
     )
     added = await client.call(LINE_SETUP, command)
-    assert isinstance(added, Line), added
-    return added
+    assert isinstance(added, LineSetupResult), added
+    return added.line
 
 
 async def _updated(

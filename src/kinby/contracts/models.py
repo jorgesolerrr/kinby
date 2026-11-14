@@ -1845,17 +1845,84 @@ class WorkbenchCreateResult(WorkbenchOperationResult):
     workbench: Workbench
 
 
-class LineSetupCommand(ContractModel):
-    """Set a factory up on a workbench under an owning instance. The result is the line."""
+class LineSetupDescribeCommand(ContractModel):
+    """Read what setting a factory up on a workbench asks for. It changes nothing."""
 
     factory: FactoryName
-    workbench_id: UUID
+    #: The chosen workbench. None asks for a new one.
+    workbench_id: UUID | None = None
+    #: The line's model, whose key a kinby agent step that names no model needs.
+    model: Annotated[str, Field(min_length=1)] | None = None
+
+
+class LineSetupDescription(ContractModel):
+    """What a line setup asks for: on a chosen workbench, only what the factory requires and the
+    workbench lacks; on a new one, all the factory requires and what a workbench needs."""
+
+    #: What a new workbench needs beside the factory's requirements. Empty for a chosen one.
+    workbench: list[SetupField]
+    #: By the variable each lands in, the key of each kinby agent step's model among them.
+    secrets: list[SetupField]
+    #: The named values.
+    values: list[SetupField]
+    #: The lists of repository commands, by name.
+    commands: list[CommandListName]
+    #: The logins to sign in on the workbench, through workbench.login.start. A setup waits for
+    #: each one, since no answer signs one in.
+    logins: list[SubscriptionLogin]
+    #: Whether the factory requires a browser the workbench lacks. A new workbench takes one when
+    #: the hub runs the browser service, and a chosen one has one only if it was created with it.
+    browser: bool
+
+
+class NewWorkbench(ContractModel):
+    """The workbench a line setup creates, built from the recipe its factory requires."""
+
+    name: Annotated[str, Field(min_length=1)]
+    #: The git URL its workspace is cloned from. None keeps a plain folder.
+    workspace_source: Annotated[str, Field(min_length=1)] | None = None
+
+
+class LineSetupCommand(ContractModel):
+    """Set a factory up on a chosen workbench, or on a new one it creates, under an owning
+    instance, in one pass: the answers land on the workbench and the line is set up, or the hub
+    refuses the setup, names each wrong or missing answer, and creates neither."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    factory: FactoryName
+    workbench_id: UUID | None = None
+    workbench: NewWorkbench | None = None
     #: None is the home instance.
     owner_id: UUID | None = None
     #: The model its agent steps take when a step names none, as ``provider:model``.
     model: Annotated[str, Field(min_length=1)] | None = None
     #: Its daily budget in US dollars. Off when absent.
     usd_per_day: Annotated[float, Field(gt=0)] | None = None
+    #: Secrets for the workbench, by the variable each lands in. They never read back.
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    #: The hub secret each variable takes and stays linked to, by variable.
+    hub_secrets: dict[str, HubSecretName] = Field(default_factory=dict)
+    #: Named values for the workbench, by name.
+    values: dict[str, SetupValue] = Field(default_factory=dict)
+    #: Lists of repository commands for the workbench, by name, each replacing the one it names.
+    commands: dict[
+        CommandListName,
+        list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]],
+    ] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _names_one_workbench(self) -> Self:
+        if (self.workbench_id is None) == (self.workbench is None):
+            raise ValueError(
+                "Choose a workbench or describe a new one: name workbench_id or workbench, "
+                "not both."
+            )
+        return self
+
+    @field_serializer("secrets", when_used="json")
+    def serialize_secrets(self, secrets: dict[str, SecretStr]) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in secrets.items()}
 
 
 class Line(ContractModel):
@@ -1871,6 +1938,13 @@ class Line(ContractModel):
     #: ``/lines/<line_id>/signals`` whichever instance owns the line. None when the factory
     #: declares no intake.
     intake: RoutineName | None
+
+
+class LineSetupResult(ContractModel):
+    line: Line
+    #: What stores the setup's answers on the workbench, read through `operation.get`: its
+    #: creation, or the replacement of its secrets. None when nothing waits.
+    operation_id: UUID | None
 
 
 class LineListCommand(ContractModel):
