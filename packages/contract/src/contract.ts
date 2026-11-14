@@ -432,6 +432,10 @@ export interface Contract {
       command: InstanceAdoptPreviewCommand;
       result: InstanceAdoptPreviewResult;
     };
+    "instance.convert": {
+      command: InstanceConvertCommand;
+      result: Line;
+    };
     "instance.create": {
       command: InstanceCreateCommand;
       result: LifecycleOperationResult;
@@ -1799,6 +1803,33 @@ export interface StorageItem {
   source: string;
   writable: boolean;
 }
+/**
+ * Convert a stopped instance that picked a factory role into a workbench, and a line of the
+ * role's factory on it owned by the home instance. The factory must run on a workbench by then.
+ * The result is the line, whose workbench is stopped.
+ *
+ * The workbench keeps the instance's id, name, directory and volumes: its clone and installs,
+ * secrets, logins, picks and lists of repository commands. The instance's memory moves to the
+ * home instance, marked with the workbench, and its threads and runs still read through the hub.
+ * A delivery to the instance's signal path reaches the line's intake. Refused while the instance
+ * runs, a run needs it or it owns a line. A conversion that fails part way leaves the instance as
+ * it was.
+ */
+export interface InstanceConvertCommand {
+  instance_id: string;
+}
+/**
+ * A factory set up on one workbench under an owning instance.
+ */
+export interface Line {
+  factory: FactoryName;
+  intake: string | null;
+  line_id: string;
+  model: string | null;
+  owner_id: string;
+  usd_per_day: number | null;
+  workbench_id: string;
+}
 export interface InstanceCreateCommand {
   avatar?: Avatar;
   config?: {
@@ -2284,18 +2315,6 @@ export interface LibrarySkillWriteCommand {
 }
 export interface LineGetCommand {
   line_id: string;
-}
-/**
- * A factory set up on one workbench under an owning instance.
- */
-export interface Line {
-  factory: FactoryName;
-  intake: string | null;
-  line_id: string;
-  model: string | null;
-  owner_id: string;
-  usd_per_day: number | null;
-  workbench_id: string;
 }
 /**
  * Hand a work item to a line, which starts a run on its workbench. The result is the run.

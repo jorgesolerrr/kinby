@@ -1983,6 +1983,22 @@ class LineOwnerSetCommand(ContractModel):
     owner_id: UUID
 
 
+class InstanceConvertCommand(ContractModel):
+    """Convert a stopped instance that picked a factory role into a workbench, and a line of the
+    role's factory on it owned by the home instance. The factory must run on a workbench by then.
+    The result is the line, whose workbench is stopped.
+
+    The workbench keeps the instance's id, name, directory and volumes: its clone and installs,
+    secrets, logins, picks and lists of repository commands. The instance's memory moves to the
+    home instance, marked with the workbench, and its threads and runs still read through the hub.
+    A delivery to the instance's signal path reaches the line's intake. Refused while the instance
+    runs, a run needs it or it owns a line. A conversion that fails part way leaves the instance as
+    it was.
+    """
+
+    instance_id: UUID
+
+
 class LineRemoveCommand(ContractModel):
     """Remove one line. Its workbench stays as it is. The result lists the lines left."""
 
