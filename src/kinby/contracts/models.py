@@ -82,6 +82,9 @@ class Scope(StrEnum):
     FACTORY_INTAKE = "factory:intake"
     #: Run the intake of a line the instance owns. Every instance holds it, on its hub route.
     LINE_INTAKE = "line:intake"
+    #: Hand work to the lines the instance owns, and list them. Every instance holds it, on its
+    #: hub route.
+    LINE_OWNER = "line:owner"
     #: Read another instance through the hub, and run the hub writes the user approved. Only the
     #: home instance holds it, on its hub route.
     HUB_HOME = "hub:home"
@@ -115,7 +118,7 @@ HOME_SCOPES = frozenset({Scope.HUB_READ, Scope.HUB_HOME})
 #: What every instance holds on its hub route (ADR 0103).
 NOTIFICATION_SCOPES = frozenset({Scope.NOTIFICATION_RAISE})
 #: What every instance holds on its hub route, since any instance can own a line (ADR 0125).
-LINE_INTAKE_SCOPES = frozenset({Scope.LINE_INTAKE})
+LINE_SCOPES = frozenset({Scope.LINE_INTAKE, Scope.LINE_OWNER})
 #: What an instance whose manifest turns the browser on holds on its hub route (ADR 0113).
 BROWSER_SCOPES = frozenset({Scope.BROWSER_OPEN})
 #: What a client authenticated against the hub holds: a hub has one user.
@@ -1844,6 +1847,23 @@ class LineHandInCommand(ContractModel):
 
     line_id: UUID
     work_item: dict[ValueName, StepValue]
+
+
+class LineOwnedListCommand(ContractModel):
+    """List the lines this instance owns, each with its unfinished runs."""
+
+
+class OwnedLine(ContractModel):
+    line: Line
+    #: The name of its workbench.
+    workbench: str
+    #: Its runs not yet done or cancelled, oldest first.
+    runs: list[FactoryRun]
+
+
+class LineOwnedListResult(ContractModel):
+    #: In the order they were set up.
+    lines: list[OwnedLine]
 
 
 class LineIntakeCommand(ContractModel):

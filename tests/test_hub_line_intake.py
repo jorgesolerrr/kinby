@@ -45,7 +45,7 @@ from kinby.core.dispatcher import (
 )
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
-from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turn_runner import ChatModel, LangGraphRunner
 from kinby.hub import Hub
 from kinby.instance import Instance
 from tests.test_contract_server import served as instance_served
@@ -123,7 +123,10 @@ class Owned:
 
 
 @asynccontextmanager
-async def owned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Owned]:
+async def owned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: ChatModel | None = None
+) -> AsyncIterator[Owned]:
+    """The served hub, whose home instance answers with *model*, or says it is done."""
     control = FakeControl()
     runtime = FakeRuntime()
     write_factory(tmp_path / "hub" / "factories" / "tickets", TICKETS)
@@ -137,7 +140,8 @@ async def owned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
     instance = instance_at(tmp_path / "home")
     clock = FakeClock(BEFORE_NINE)
     log = EventLog(instance.manifest.state_dir, clock=clock)
-    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: RoutineModel())
+    answering = model or RoutineModel()
+    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: answering)
     dispatcher = build_dispatcher(
         instance.manifest.state_dir,
         event_log=log,
