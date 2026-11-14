@@ -4323,6 +4323,9 @@ class RunStop(ContractModel):
     generation: int
     #: The attempts since the run's previous stop, in the order they started.
     attempts: list[StepAttempt]
+    #: The name of the workbench a line's run works on, which marks what the owner remembers
+    #: of it. None for a run of a factory written the older way.
+    workbench: str | None = None
 
 
 class FactoryRunIntakeCommand(ContractModel):

@@ -61,6 +61,7 @@ class _FactFrontmatter(_NodeFrontmatter):
     source: Literal["user"] | None = None
     #: Written only on a fact dreaming learned from episodes.
     sources: tuple[NodeId, ...] = ()
+    workbench: str | None = None
     tombstone: bool = False
     #: Absent on a tombstone written before a forget recorded its day.
     forgotten: date | None = None
@@ -71,6 +72,7 @@ class _TurnEpisodeFrontmatter(_NodeFrontmatter):
     thread: UUID
     turn: UUID
     tools: tuple[str, ...]
+    workbench: str | None = None
     tombstone: bool = False
     forgotten: date | None = None
 
@@ -80,6 +82,7 @@ class _RunEpisodeFrontmatter(_NodeFrontmatter):
     run: UUID
     generation: int
     tools: tuple[str, ...]
+    workbench: str | None = None
     tombstone: bool = False
     forgotten: date | None = None
 
@@ -263,11 +266,17 @@ def _render_node(memory: MemoryNode) -> str:
         if isinstance(memory, Fact) and memory.sources
         else ""
     )
+    workbench = (
+        ""
+        if memory.workbench is None
+        else f"workbench: {render_frontmatter_value(memory.workbench)}\n"
+    )
     body = memory.body.rstrip("\r\n")
     return (
         "---\n"
         f"date: {memory.date.isoformat()}\n"
         f"{_origin(memory)}"
+        f"{workbench}"
         f"description: {description}\n"
         f"subjects: {subjects}\n"
         f"{tools}"
@@ -309,6 +318,7 @@ def _parse_node(path: Path) -> tuple[MemoryNode, _Frontmatter]:
             thread=frontmatter.thread,
             added_by_user=frontmatter.source == "user",
             sources=frontmatter.sources,
+            workbench=frontmatter.workbench,
         )
         return fact, frontmatter
     recaps = (
@@ -324,5 +334,6 @@ def _parse_node(path: Path) -> tuple[MemoryNode, _Frontmatter]:
         body=body,
         recaps=recaps,
         tools=frontmatter.tools,
+        workbench=frontmatter.workbench,
     )
     return episode, frontmatter

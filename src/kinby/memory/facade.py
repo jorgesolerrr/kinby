@@ -39,6 +39,8 @@ class Fact(_MemoryNode):
     added_by_user: bool = False
     #: The episodes dreaming learned the fact from. Empty on a fact remembered or added.
     sources: tuple[NodeId, ...] = ()
+    #: The workbench its sources all came from. None on any other fact.
+    workbench: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,8 @@ class Episode(_MemoryNode):
 
     recaps: RecappedTurn | RecappedRun
     tools: tuple[str, ...]
+    #: The workbench of the line whose run it recaps. None on a turn's or an older run's.
+    workbench: str | None = None
 
 
 type MemoryNode = Fact | Episode

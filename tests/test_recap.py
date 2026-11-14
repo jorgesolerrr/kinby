@@ -1761,6 +1761,26 @@ def test_a_run_stop_writes_one_episode_with_its_sections_subjects_and_run(tmp_pa
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("policy", ["every-turn", "off"])
+def test_the_episode_of_a_line_runs_stop_is_marked_with_its_workbench(
+    tmp_path: Path, policy: str
+) -> None:
+    async def scenario() -> None:
+        event_log = EventLog(tmp_path / ".state")
+        model = ScriptedRecapModel(_RUN_DRAFT, input_tokens=3, output_tokens=1)
+        recap, dispatcher = _run_recap(tmp_path, event_log, policy, model)
+
+        await _tell(dispatcher, _REVIEWED_RUN.model_copy(update={"workbench": "cec-backend"}))
+        await asyncio.wait_for(recap.drain(), timeout=1)
+
+        [marker] = _run_markers(event_log)
+        assert isinstance(marker.payload, MemoryRecapped)
+        assert marker.payload.node is not None
+        assert GraphStore(tmp_path).open(marker.payload.node).workbench == "cec-backend"
+
+    asyncio.run(scenario())
+
+
 def test_the_run_recap_frame_holds_the_record_its_send_backs_and_review(tmp_path: Path) -> None:
     async def scenario() -> None:
         event_log = EventLog(tmp_path / ".state")

@@ -2753,6 +2753,7 @@ export interface RunStop {
   work_item: {
     [k: string]: StepValue;
   };
+  workbench?: string | null;
 }
 /**
  * Copy the skill the model reads into the instance, where it can be edited.

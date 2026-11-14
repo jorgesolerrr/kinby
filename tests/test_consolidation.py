@@ -113,6 +113,7 @@ def episode(
     description: str,
     recorded_on: date = _DAY,
     subjects: tuple[str, ...] = ("billing",),
+    workbench: str | None = None,
 ) -> NodeId:
     return GraphStore(instance.path).remember(
         Episode(
@@ -123,6 +124,7 @@ def episode(
             body=f"## What happened\n{description}.",
             recaps=RecappedTurn(uuid4(), uuid4()),
             tools=(),
+            workbench=workbench,
         )
     )
 
@@ -236,6 +238,32 @@ def test_a_consolidation_writes_cited_facts_and_covers_the_whole_batch(tmp_path:
     assert learned_fact.thread == events[0].thread_id
     assert [hit.node for hit in memory.recall("invoices")] == [written]
     assert completed(fire(instance, ConsolidatingModel())).outcome is CompletionOutcome.NO_WORK
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "mark"),
+    [
+        ("cec-backend", "cec-backend", "cec-backend"),
+        ("cec-backend", None, None),
+        ("cec-backend", "landing", None),
+        (None, None, None),
+    ],
+)
+def test_a_fact_learned_from_one_workbenchs_episodes_carries_its_mark(
+    tmp_path: Path, first: str | None, second: str | None, mark: str | None
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    monday = episode(instance, "Sent the invoices late on Monday", workbench=first)
+    thursday = episode(
+        instance, "Sent the invoices late on Thursday", _DAY + timedelta(days=3), workbench=second
+    )
+
+    events = fire(instance, ConsolidatingModel([learned("Invoices go out late", monday, thursday)]))
+
+    [covering] = consolidated(events)
+    [written] = covering.facts
+    assert GraphStore(instance.path).open(written).workbench == mark
 
 
 def test_the_frame_groups_the_batch_by_subject_with_the_facts_on_it(tmp_path: Path) -> None:
