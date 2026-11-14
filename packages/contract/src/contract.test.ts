@@ -8,10 +8,14 @@ import type {
   EndFrame,
   ErrorFrame,
   Event,
+  FactoryRunDetail,
+  FactoryRunListResult,
   FactoryRunOrigin,
   HomeInstanceOrigin,
   InstanceListResult,
   ItemFrame,
+  Line,
+  LineListResult,
   OriginUse,
   PermissionMode,
   PlanLimit,
@@ -30,6 +34,8 @@ import type {
   ThreadSummary,
   UsageSource,
   UserOrigin,
+  Workbench,
+  WorkbenchListResult,
 } from "./index"
 
 test("the committed types are a fresh generation of the contract schema", async () => {
@@ -72,6 +78,28 @@ test("a server frame narrows to one frame on its type", () => {
 
 test("a method's result type follows from its name", () => {
   expectTypeOf<Contract["methods"]["instance.list"]["result"]>().toEqualTypeOf<InstanceListResult>()
+})
+
+test("lines and workbenches list and get one of each by id", () => {
+  type Methods = Contract["methods"]
+
+  expectTypeOf<Methods["line.list"]["result"]>().toEqualTypeOf<LineListResult>()
+  expectTypeOf<Methods["line.get"]["command"]>().toEqualTypeOf<{ line_id: string }>()
+  expectTypeOf<Methods["line.get"]["result"]>().toEqualTypeOf<Line>()
+  expectTypeOf<Methods["workbench.list"]["result"]>().toEqualTypeOf<WorkbenchListResult>()
+  expectTypeOf<Methods["workbench.get"]["command"]>().toEqualTypeOf<{ workbench_id: string }>()
+  expectTypeOf<Methods["workbench.get"]["result"]>().toEqualTypeOf<Workbench>()
+})
+
+test("factory.run.list lists a line's runs by the line alone, and each run names its line", () => {
+  type List = Contract["methods"]["factory.run.list"]
+
+  expectTypeOf<{ line_id: string }>().toExtend<List["command"]>()
+  expectTypeOf<List["result"]>().toEqualTypeOf<FactoryRunListResult>()
+  expectTypeOf<List["result"]["runs"][number]["line_id"]>().toEqualTypeOf<
+    string | null | undefined
+  >()
+  expectTypeOf<Contract["methods"]["factory.run.get"]["result"]>().toEqualTypeOf<FactoryRunDetail>()
 })
 
 test("an event payload narrows to a delegated run on its type", () => {

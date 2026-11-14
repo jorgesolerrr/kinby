@@ -4428,8 +4428,9 @@ class FactoryRunIntakeCommand(ContractModel):
 
 
 class FactoryRunListCommand(ContractModel):
-    factory: FactoryName
-    #: Only the runs in this status. None lists every run of the factory.
+    #: Only the runs of this factory. None lists every factory's, as a line's runs need.
+    factory: FactoryName | None = None
+    #: Only the runs in this status. None lists the runs in every status.
     status: FactoryRunStatus | None = None
     #: Only the runs this instance handed in. None lists every instance's.
     instance_id: UUID | None = None

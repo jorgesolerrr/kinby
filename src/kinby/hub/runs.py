@@ -346,7 +346,7 @@ class FactoryRuns:
         return run
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
-        """One page of the factory's runs the command's filters match, oldest first."""
+        """One page of the runs the command's filters match, oldest first."""
         runs = self._registry.runs(
             command.factory,
             None if command.status is None else (command.status,),
