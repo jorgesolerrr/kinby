@@ -39,7 +39,7 @@ A factory may declare `requires` in place of `instances`. Its steps then run on 
   - It takes a `schedule`, a `delivery` or both.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
 - An `agent` step runs a model on the workbench, in the run's folder:
-  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. The step's `check` runs once the turn ends.
+  - `engine`: `claude` or `codex`, a coding client, or `kinby`, a kinby turn. A kinby turn has bash and the file tools, in the run's folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. It goes through kinby's default gate policy. When the gate asks about a call, the run parks and the user gets a notification that names it. Their answer resumes the turn. The step's `check` runs once the turn ends.
   - `prompt`: a file of the factory's folder, as for an `agent` step in an instance.
   - `model`: the client's model, such as `claude-opus-5-5`. Left out, the line's model when the engine runs its provider's models, `anthropic` for `claude` and `openai` for `codex`, and the client's default otherwise.
     For `kinby`, a `provider:model`, such as `anthropic:claude-opus-5-5`, and left out, the line's model. The workbench must hold that provider's `<PROVIDER>_API_KEY`, and setting up the line refuses one without it. List it under `requires.secrets`.

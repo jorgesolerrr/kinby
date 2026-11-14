@@ -9679,6 +9679,12 @@
             "$ref": "#/$defs/ValueName"
           },
           "type": "object"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/ViewId"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -9804,6 +9810,12 @@
             "$ref": "#/$defs/ValueName"
           },
           "type": "object"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/View"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -12903,6 +12915,36 @@
         "component"
       ],
       "title": "ViewText",
+      "type": "object"
+    },
+    "ViewWriteCommand": {
+      "additionalProperties": false,
+      "description": "Create or replace a view, whole, as a step of a run the instance owns wrote it.",
+      "properties": {
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        },
+        "spec": {
+          "$ref": "#/$defs/ViewSpec"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "spec",
+        "data"
+      ],
+      "title": "ViewWriteCommand",
       "type": "object"
     },
     "WaitingApproval": {
@@ -16124,6 +16166,22 @@
           ],
           "type": "object"
         },
+        "view.write": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ViewWriteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/ViewListResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "workbench.commands.set": {
           "additionalProperties": false,
           "properties": {
@@ -16530,6 +16588,7 @@
         "tool.read_only.set",
         "view.list",
         "view.get",
+        "view.write",
         "view.delete",
         "instance.create",
         "instance.start",

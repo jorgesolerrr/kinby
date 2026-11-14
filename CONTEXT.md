@@ -756,7 +756,7 @@ What an **instance** can do beyond its workspace: its **default tools** on or of
 
 ### View
 
-A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
+A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. A view a kinby **agent step** of a **line**'s run writes belongs to the line's owner, and the run's attempt names it. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
 _Avoid_: artifact, widget, dashboard, surface
 
 ### View catalogue
@@ -844,7 +844,7 @@ _Avoid_: install, binding, assignment
 
 ### Agent step
 
-A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
+A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. It can write a **view** whole, which the **hub** writes among the views of the line's owner, and it reads, patches and deletes none. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
 _Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
 
 ### Engine

@@ -1,4 +1,4 @@
-"""Answer a client's reads of the instance's views."""
+"""Answer a client's reads of the instance's views, its deletions, and the hub's writes."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ from kinby.contracts import (
     ViewListCommand,
     ViewListResult,
     ViewSubscribeCommand,
+    ViewWriteCommand,
 )
 from kinby.core.errors import ViewNotFound
 from kinby.instance import Instance
-from kinby.instance.views import delete_view, list_views, read_view, watch_view
+from kinby.instance.views import delete_view, list_views, read_view, watch_view, write_view
 
 
 class InstanceViews:
@@ -50,6 +51,12 @@ class InstanceViews:
                 yield view
 
         return Stream(0, items(), _close=stop)
+
+    async def write(self, command: ViewWriteCommand) -> ViewListResult:
+        """Write a view a step of one of the instance's runs wrote on its workbench. No turn of
+        the instance made it, so no thread records it."""
+        write_view(self._instance, command.id, command.title, command.spec, command.data)
+        return await self.list(ViewListCommand())
 
     async def delete(self, command: ViewDeleteCommand) -> ViewListResult:
         """Delete a view for a client. No turn made it, so no thread records it."""

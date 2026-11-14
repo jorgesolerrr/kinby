@@ -141,6 +141,7 @@ from kinby.contracts import (
     THREAD_TAKEOVER_RESUME,
     THREAD_TAKEOVER_START,
     THREAD_TURN_START,
+    VIEW_WRITE,
     WORKBENCH_COMMANDS_SET,
     WORKBENCH_CREATE,
     WORKBENCH_DELETE,
@@ -304,6 +305,8 @@ from kinby.contracts import (
     VaultEntryEditCommand,
     VaultEntryListCommand,
     VaultEntryListResult,
+    View,
+    ViewWriteCommand,
     WaitingApproval,
     Workbench,
     WorkbenchCommandRunCommand,
@@ -850,6 +853,7 @@ class Hub:
                 self._tell_stop,
                 self.outbox,
                 self._remove_run_folder,
+                self._write_view,
             )
             self.replies = Replies(
                 self.registry,
@@ -1303,6 +1307,10 @@ class Hub:
     ) -> RunFolderRemoveResult:
         endpoint = await self._endpoint(self._active_workbench(workbench_id))
         return await self._control.remove_run_folder(endpoint, command)
+
+    async def _write_view(self, instance_id: UUID, view: View) -> None:
+        command = ViewWriteCommand(id=view.id, title=view.title, spec=view.spec, data=view.data)
+        await self._relayed(instance_id, VIEW_WRITE.name, command.model_dump(mode="json"))
 
     async def run_transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
         """Read one page of the attempt's transcript from the workbench of the run's line."""
