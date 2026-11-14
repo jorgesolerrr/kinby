@@ -5,15 +5,16 @@ import re
 from dataclasses import fields
 
 import pytest
+import yaml
 
 import kinby.core  # noqa: F401  kinby.plugins.core needs kinby.core imported first.
 from kinby.contracts import HUB_READS, RELAYED_READS, Scope, StepEnding
 from kinby.contracts.methods import METHODS
 from kinby.factories import RECIPES_DIRECTORY
+from kinby.factories.check import check_factory
 from kinby.factories.schema import factory_schema
 from kinby.instance import init_instance, inspect_instance
 from kinby.instance.layout import SKILL_FILE
-from kinby.instance.manifest import RawManifest
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.plugins import defaults, hub
 from kinby.plugins.core import core_tools
@@ -24,7 +25,6 @@ from kinby.plugins.hub import (
     HubWriteOperation,
     write_arguments,
 )
-from kinby.plugins.intake import hand_over
 from kinby.plugins.skills import load_skill_file
 from kinby.plugins.tools import Tool, tool
 
@@ -33,6 +33,8 @@ _METHOD = re.compile(r"[a-z]+(\.[a-z_]+)+")
 _FILE = re.compile(r".+\.(md|yaml|toml|py|json|txt)")
 _SNAKE = re.compile(r"[a-z]+(_[a-z]+)+")
 _WORD_BREAK = re.compile(r"[\s=]+")
+#: A file of a worked example: its path in code, a colon, and its text in a fenced block.
+_EXAMPLE_FILE = re.compile(r"^`([^`\n]+)`:\n\n```[a-z]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 FACTORY_REFERENCE = "references/factory.md"
 
 READS = HUB_READS | RELAYED_READS
@@ -156,21 +158,30 @@ def test_the_factory_reference_names_every_factory_yaml_field():
     assert FACTORY_REFERENCE in _cited("write-factory")
 
 
-def test_the_factory_reference_names_what_a_templates_code_and_kinby_toml_use():
-    """A new step ending, hook field, tool argument, kinby.toml table or key, or image recipe
-    fails this until the factory reference names it."""
+def test_the_factory_reference_names_what_a_factorys_code_uses():
+    """A new step ending, hook field, tool argument or image recipe fails this until the factory
+    reference names it."""
     names = (
         {ending.value for ending in StepEnding}
         | {field.name for model in (StepEnd, HookResult) for field in fields(model)}
         | set(inspect.signature(tool).parameters)
-        | set(inspect.signature(hand_over).parameters)
-        | {each.__module__ for each in (hook, tool, hand_over)}
-        | _schema_fields(RawManifest.model_json_schema(by_alias=True))
+        | {each.__module__ for each in (hook, tool)}
         | {recipe.stem for recipe in RECIPES_DIRECTORY.glob("*.Dockerfile")}
     )
     reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
 
     assert names <= _words(reference.read_text(encoding="utf-8"))
+
+
+def test_the_factory_references_worked_example_passes_the_factory_check(tmp_path):
+    reference = SHIPPED_SKILLS / "write-factory" / FACTORY_REFERENCE
+    files = dict(_EXAMPLE_FILE.findall(reference.read_text(encoding="utf-8")))
+    folder = tmp_path / yaml.safe_load(files["factory.yaml"])["name"]
+    for path, text in files.items():
+        (folder / path).parent.mkdir(parents=True, exist_ok=True)
+        (folder / path).write_text(text, encoding="utf-8")
+
+    assert check_factory(folder) == ()
 
 
 def test_write_routine_names_every_hub_tool_a_routine_lacks():

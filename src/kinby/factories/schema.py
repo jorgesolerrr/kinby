@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import JsonValue, TypeAdapter
 
 from kinby.checkout import checkout_path
-from kinby.factories.file import FactoryFile, WorkbenchFactory
+from kinby.factories.file import WorkbenchFactory
 
 
 def checkout_schema_path() -> Path:
@@ -17,8 +17,9 @@ def checkout_schema_path() -> Path:
 
 
 def factory_schema() -> dict[str, JsonValue]:
-    """Return the JSON Schema the factory file's declarations make, for both its forms."""
-    schema: dict[str, JsonValue] = TypeAdapter(WorkbenchFactory | FactoryFile).json_schema()
+    """Return the JSON Schema of the factory file that runs on a workbench. A file that declares
+    instances still reads, though the schema refuses it."""
+    schema: dict[str, JsonValue] = TypeAdapter(WorkbenchFactory).json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     return schema
 
