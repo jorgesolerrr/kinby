@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
@@ -335,7 +335,7 @@ def _write(
     thread_id: UUID,
     learned_on: date,
 ) -> tuple[NodeId, ...]:
-    episodes = {node.node: node.date for node in graph.nodes() if isinstance(node, Episode)}
+    episodes = {node.node: node for node in graph.nodes() if isinstance(node, Episode)}
     forgotten = graph.forgotten_facts()
     refusals: list[str] = []
     for fact in facts:
@@ -366,13 +366,21 @@ def _write(
                 body=fact.body,
                 thread=thread_id,
                 sources=fact.sources,
+                workbench=_shared_workbench(episodes[source] for source in fact.sources),
             )
         )
         for fact in facts
     )
 
 
-def _writes_back(fact: LearnedFact, gone: ForgottenFact, episodes: dict[NodeId, date]) -> bool:
+def _shared_workbench(sources: Iterable[Episode]) -> str | None:
+    """The workbench every one of *sources* came from, or None when they came from several or
+    from none."""
+    workbenches = {source.workbench for source in sources}
+    return workbenches.pop() if len(workbenches) == 1 else None
+
+
+def _writes_back(fact: LearnedFact, gone: ForgottenFact, episodes: dict[NodeId, Episode]) -> bool:
     """Whether *fact* relearns *gone* from its sources with nothing recorded since the forget.
 
     A tombstone with no forget day lets no episode count as recorded after it.
@@ -382,6 +390,6 @@ def _writes_back(fact: LearnedFact, gone: ForgottenFact, episodes: dict[NodeId, 
     return not any(
         gone.forgotten_on is not None
         and source in episodes
-        and episodes[source] > gone.forgotten_on
+        and episodes[source].date > gone.forgotten_on
         for source in fact.sources
     )

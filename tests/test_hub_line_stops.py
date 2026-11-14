@@ -317,6 +317,26 @@ def test_a_run_that_needs_a_human_tells_the_lines_owner_once_for_that_stop(tmp_p
     asyncio.run(scenario())
 
 
+def test_the_stop_the_lines_owner_is_told_names_the_lines_workbench(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        home = await _started_home(hub)
+        runtime.addresses[str(home)] = f"http://kinby-{home}:8787"
+        line = await _line(client, runtime)
+
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+
+        [stop] = await told(control, 1)
+        assert (stop.run_id, stop.workbench) == (run.run_id, "cec-backend")
+
+    asyncio.run(scenario())
+
+
 def test_a_run_that_ends_calls_the_factorys_ended_tool_on_its_workbench_then_loses_its_folder(
     tmp_path,
 ):

@@ -511,6 +511,7 @@ def _run_episode(
                 for tool in digest.tools
             )
         ),
+        workbench=stop.workbench,
     )
 
 
