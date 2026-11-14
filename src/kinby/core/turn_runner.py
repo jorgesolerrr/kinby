@@ -169,6 +169,7 @@ from kinby.plugins.routines import (
 )
 from kinby.plugins.skills import Skill, load_skills, skill_tool
 from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
+from kinby.plugins.views import view_write
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +357,8 @@ class LangGraphRunner:
 
         With *workbench_skills* the turn runs on a workbench, where no instance's files hold its
         manifest or its skills: *instance* is never read again, its skills are those, and the
-        skill tool is its only core tool.
+        skill tool and view_write are its only core tools. The views it writes are handed to the
+        run's owner, so it reads, patches and deletes none.
         """
         self._instance = instance
         self._workbench_skills = workbench_skills
@@ -442,7 +444,7 @@ class LangGraphRunner:
 
     def _core_tools(self, skills: tuple[Skill, ...]) -> tuple[Tool, ...]:
         if self._workbench_skills is not None:
-            return (skill_tool(skills),)
+            return (skill_tool(skills), view_write)
         return core_tools(self._instance, skills, today=self._today)
 
     def routine_mode(self, name: RoutineName) -> PermissionMode | None:

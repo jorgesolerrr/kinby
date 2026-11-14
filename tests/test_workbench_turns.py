@@ -25,6 +25,7 @@ from kinby.contracts import (
 )
 from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_hub_factories import write_factory
+from tests.test_views import BOARD, DATA
 from tests.test_workbench_steps import CHECK
 from tests.test_workbench_workspace import _seed
 
@@ -53,10 +54,8 @@ class TurnModel:
         yield response
 
 
-def _calling(name: str, **arguments: str) -> AIMessageChunk:
-    return AIMessageChunk(
-        content="", tool_calls=[{"name": name, "args": arguments, "id": "call-1"}]
-    )
+def _calling(name: str, *, call: str = "call-1", **arguments: object) -> AIMessageChunk:
+    return AIMessageChunk(content="", tool_calls=[{"name": name, "args": arguments, "id": call}])
 
 
 def _run(
@@ -210,6 +209,31 @@ def test_a_failed_kinby_turns_attempt_spends_what_its_model_calls_cost(tmp_path)
     assert result.ending is StepEnding.FAILED
     assert result.usage is not None and result.usage.api is not None
     assert result.usage.api.cost == 0.006
+
+
+def test_a_kinby_turn_hands_back_each_view_it_wrote_as_it_last_wrote_it(tmp_path):
+    model = TurnModel(
+        _calling("view_write", id="board", title="Applications", spec=BOARD, data=DATA),
+        _calling("view_write", call="call-2", id="board", title="Jobs", spec=BOARD, data=DATA),
+        AIMessageChunk(content="The board is up."),
+    )
+
+    result = _run(tmp_path, model)
+
+    [view] = result.views
+    assert (view.id, view.title, view.data) == ("board", "Jobs", DATA)
+
+
+def test_a_failed_kinby_turn_still_hands_back_the_views_it_wrote(tmp_path):
+    model = TurnModel(
+        _calling("view_write", id="board", title="Applications", spec=BOARD, data=DATA),
+        RuntimeError("The provider went away."),
+    )
+
+    result = _run(tmp_path, model)
+
+    assert result.ending is StepEnding.FAILED
+    assert [view.id for view in result.views] == ["board"]
 
 
 def test_a_kinby_agent_steps_check_runs_when_its_turn_ends(tmp_path):

@@ -4221,6 +4221,8 @@ class StepResult(ContractModel):
     usage: StepUsage | None = None
     #: The approval an asked step's turn parked on. Only an asked step has one.
     ask: WaitingApproval | None = None
+    #: Each view a kinby turn wrote, as it stands, which the hub writes to the run's owner.
+    views: list[View] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _resets_at_only_when_limited(self) -> Self:
@@ -4279,6 +4281,8 @@ class StepAttempt(ContractModel):
     ask: WaitingApproval | None = None
     #: The user's answer to that ask, once they gave it.
     answer: StepAnswer | None = None
+    #: The views the attempt wrote among the views of the run's instance.
+    views: list[ViewId] = Field(default_factory=list)
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
 
@@ -4660,6 +4664,15 @@ class ViewSubscribeCommand(ContractModel):
     is deleted."""
 
     id: ViewId
+
+
+class ViewWriteCommand(ContractModel):
+    """Create or replace a view, whole, as a step of a run the instance owns wrote it."""
+
+    id: ViewId
+    title: Annotated[str, Field(min_length=1)]
+    spec: ViewSpec
+    data: dict[str, JsonValue]
 
 
 class ViewDeleteCommand(ContractModel):
