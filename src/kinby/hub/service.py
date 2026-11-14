@@ -4249,10 +4249,11 @@ class Hub:
                     await self._runtime.remove(record.runtime_id)
                     undo.push_async_callback(self._runtime.create, container)
                 self._write_hub_url(workbench)
+                # A create can raise after Docker made the container, which holds the name then.
+                undo.push_async_callback(self._remove_if_there, record.runtime_id)
                 await self._runtime.create(
                     self._container(workbench, record.image_id, workbench.storage)
                 )
-                undo.push_async_callback(self._runtime.remove, record.runtime_id)
                 self.registry.convert_instance(workbench, line)
             except Exception as exc:
                 raise ConversionFailed(
@@ -4262,6 +4263,10 @@ class Hub:
             undo.pop_all()
         for node in memory:
             source.prune(node)
+
+    async def _remove_if_there(self, runtime_id: str) -> None:
+        if (await self._runtime.status(runtime_id)).state != "absent":
+            await self._runtime.remove(runtime_id)
 
     async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
         """Remove the line and its intake routine. Its workbench keeps its clone, its secrets and

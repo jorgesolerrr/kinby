@@ -486,8 +486,9 @@ def test_a_conversion_whose_owner_refuses_the_intake_leaves_the_instance_as_it_w
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("made", [False, True], ids=["refused", "made-then-raised"])
 def test_a_conversion_whose_workbench_container_fails_leaves_the_instance_as_it_was(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, made
 ):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
@@ -497,7 +498,13 @@ def test_a_conversion_whose_workbench_container_fails_leaves_the_instance_as_it_
             create = hub.runtime.create
 
             async def no_workbench(spec):
+                """As Docker: a name in use is refused, and a create can raise after it made the
+                container."""
+                if spec.instance_id in hub.runtime.states:
+                    raise RuntimeError(f'The container name "{spec.instance_id}" is in use.')
                 if spec.command[0] == "workbench":
+                    if made:
+                        await create(spec)
                     raise RuntimeError("Docker refused the container.")
                 await create(spec)
 
