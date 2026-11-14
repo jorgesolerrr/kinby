@@ -91,6 +91,8 @@ from kinby.core.errors import (
     TakeoverNotFound,
 )
 from kinby.factories.file import (
+    BASE,
+    BRANCH,
     FAILURE,
     NOTES,
     QUIET,
@@ -790,8 +792,10 @@ class FactoryRuns:
 
         A command step's lists of repository commands are the workbench's lists now. The first
         step that works in the folder has it cut again once the run went back to it from a later
-        one, so the run starts over from the base. A retry of that step keeps the folder. An agent
-        step fails once what the line's runs cost today reached its daily budget.
+        one, so the run starts over from the base. A retry of that step keeps the folder. A
+        factory's worktree call names the run worktree's branch and base again for that cut, and
+        first for a run that holds none yet. An agent step fails once what the line's runs cost
+        today reached its daily budget.
         """
         line, placed = self._line(run), self._workbench(run)
         if line is None or placed is None:
@@ -828,6 +832,14 @@ class FactoryRuns:
                 asked = CommandStepRun(run=commands, timeout_seconds=timeout)
             case WorkbenchCodeStep():
                 asked = CodeStepRun(call=step.call)
+        fresh = step is _first_at_work(factory) and self._went_on(run.run_id, step.id)
+        naming = factory.worktree if isinstance(factory, WorkbenchFactory) else None
+        if (
+            naming is not None
+            and workbench.workbench.workspace_source is not None
+            and (fresh or folder.branch is None)
+        ):
+            folder = RunFolder(branch=None, named_by=naming.call)
         command = StepRunCommand(
             step=asked,
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step.id),
@@ -835,7 +847,7 @@ class FactoryRuns:
             work_item=run.work_item,
             results=results,
             folder=folder,
-            fresh_folder=step is _first_at_work(factory) and self._went_on(run.run_id, step.id),
+            fresh_folder=fresh,
         )
         return workbench.instance_id, _QueuedStep(run.run_id, step.id, command)
 
@@ -850,9 +862,11 @@ class FactoryRuns:
     def _workbench(self, run: FactoryRun) -> tuple[ManagedInstance, RunFolder] | None:
         """The workbench of the run's line and the run's folder there, or None without either.
 
-        On a workbench whose workspace is a git clone the folder is the run worktree of a branch
-        named for the factory, the work item and the run, since two work items can read alike once
-        lowercased. On any other it is a directory named for the run.
+        On a workbench whose workspace is a git clone the folder is the run worktree of the branch
+        the factory's worktree call last named, from the base it named. Before it named one, it is
+        a directory named for the run. A factory with no worktree call has the branch named for the
+        factory, the work item and the run, since two work items can read alike once lowercased.
+        On any other workbench the folder is a directory named for the run.
         """
         line = self._line(run)
         workbench = self._registry.instance(line.workbench_id) if line is not None else None
@@ -860,6 +874,12 @@ class FactoryRuns:
             return None
         if workbench.workbench.workspace_source is None:
             return workbench, RunFolder(branch=None)
+        factory = self._file(run.factory)
+        if isinstance(factory, WorkbenchFactory) and factory.worktree is not None:
+            named = self._named(run.run_id, factory)
+            if not named:
+                return workbench, RunFolder(branch=None)
+            return workbench, RunFolder(branch=str(named[BRANCH]), base=str(named[BASE]))
         words = [
             word
             for name, value in run.work_item.items()
@@ -1016,7 +1036,8 @@ class FactoryRuns:
         with the work to the step it went back to, as if that step's pass held them. Trying a
         step again after an attempt at it that recorded nothing drops nothing, so a retry holds
         what the attempt before it held. A failed attempt that runs its step again under
-        ``failed`` adds what it recorded. The notes the user last sent the run back with are
+        ``failed`` adds what it recorded. The branch and base the factory's worktree call last
+        named are ``branch`` and ``base``, and the notes the user last sent the run back with are
         ``notes``.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
@@ -1046,8 +1067,20 @@ class FactoryRuns:
         if starting is not None:
             start(starting)
         results = {name: value for name, (_, value) in recorded.items()}
+        results |= self._named(run_id, factory)
         notes = self._registry.run_notes(run_id)
         return results if notes is None else results | {NOTES: notes}
+
+    def _named(self, run_id: UUID, factory: _Factory) -> dict[ValueName, StepValue]:
+        """The ``branch`` and ``base`` the factory's worktree call last named for the run, however
+        that attempt ended, or none before it named them."""
+        if not isinstance(factory, WorkbenchFactory) or factory.worktree is None:
+            return {}
+        for attempt in reversed(self._registry.attempts(run_id)):
+            branch, base = attempt.values.get(BRANCH), attempt.values.get(BASE)
+            if isinstance(branch, str) and isinstance(base, str):
+                return {BRANCH: branch, BASE: base}
+        return {}
 
     async def _work(self, instance_id: UUID, queue: asyncio.Queue[_Queued]) -> None:
         """Run the instance's queued work one at a time, in the order it was queued."""

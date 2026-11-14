@@ -15,6 +15,7 @@ A factory runs on a workbench: the place with the image, the secrets, the worksp
 - `needs_human`: a tool the hub calls each time a run stops for the user. See Needs human.
 - `ended`: a tool the hub calls once when a run ends done or cancelled. See Ended.
 - `closing`: the signals that end a run that needs the user, once its work finished elsewhere. See Closing.
+- `worktree`: a tool that names the branch of each run's run worktree and the base it is cut from. See The run folder.
 
 ## Requires
 
@@ -27,6 +28,7 @@ Each field may be left out.
 - `commands`: the names of the workbench's lists of repository commands the steps run, such as `setup` and `checks`. A `command` step's `{ commands: <name> }` names one of them. The workbench holds the commands themselves, so the factory names no repository's commands.
 - `logins`: the sign-ins the workbench runs, which it keeps through a recreation. Setting up a line refuses a workbench whose login of that `id` has not signed in. See Logins.
 - `browser`: `true` when the steps need a browser. Setting up a line refuses a workbench created without one. Its browser session stays between runs, so a site a step signed in to is still signed in at the next run.
+- `suggested_picks`: skills of kinby's shipped library the factory suggests the workbench picks, by name. Setting up a line offers them, and the user may decline them.
 
 ### Fields
 
@@ -181,7 +183,9 @@ A check is a function in the factory's folder's `hooks/`, decorated with `hook`.
 
 ## Tools
 
-A tool is a function in the factory's folder's `tools/`, decorated with `tool` from `kinby.plugins.tools`. Its name is the function's, its description the docstring, and its parameters, with their type hints, are its arguments. It may be `async def`. A `code` step, `intake`, `needs_human` or `ended` calls it, on the workbench, where the workbench's secrets are its environment variables.
+A tool is a function in the factory's folder's `tools/`, decorated with `tool` from `kinby.plugins.tools`. Its name is the function's, its description the docstring, and its parameters, with their type hints, are its arguments. It may be `async def`. A `code` step, `intake`, `needs_human`, `ended` or `worktree` calls it, on the workbench, where the workbench's secrets are its environment variables.
+
+A tool runs outside the run folder. A parameter named `workspace` receives the path of the workbench's workspace, its clone or plain folder, and one named `folder` the path of the run folder, for a call made in one: a `code` step's, `needs_human`'s or `ended`'s. Either may be typed `Path`.
 
 The decorator's arguments, all by keyword:
 
@@ -203,7 +207,9 @@ Nothing copies the folder into a workbench: each step reads it as it is then, so
 
 ## The run folder
 
-kinby cuts a folder for each run when its first step starts: a run worktree on a branch it names for the factory, the work item and the run when the workspace is a git clone, and a directory named for the run otherwise. Every step runs in it. A stop for the user, a retry and a park leave it as it is. It goes when the run ends done or cancelled, after the `ended` call. No step cuts or removes it.
+kinby cuts a folder for each run when its first step starts: a run worktree when the workspace is a git clone, and a directory named for the run otherwise. Every step runs in it. A stop for the user, a retry and a park leave it as it is. It goes when the run ends done or cancelled, after the `ended` call. No step cuts or removes it.
+
+Without `worktree`, the run worktree is on a branch kinby names for the factory, the work item and the run, cut from origin's default branch. With it, kinby first calls `worktree`'s `call` in the workspace, with the run values and `workspace` as a tool's parameters receive them. It returns the `branch` and the `base`, a branch of origin the run worktree is cut from, and the run holds both as values. A call that raises, or returns no branch or base, fails the step before it starts. Sent back to its first step, the run calls it again and starts over from the new base.
 
 ## A worked example
 

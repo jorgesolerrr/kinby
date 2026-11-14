@@ -2,106 +2,87 @@
 # and answers their reviews until they are merge-ready.
 # kinby ships it as a starting point. Edit it on your hub to make it your own.
 name: software
-instances:
-  coder:
-    image: coder
-    suggested_picks:
-      - adversarial-review
-      - api-and-interface-design
-      - codebase-design
-      - no-comments
-      - ponytail
-      - pr
-      - tdd
-      - unslop
-    setup_fields:
-      - name: repository
-        label: Repository
-        description: >-
-          The git URL of the repository the factory clones and works in, like
-          https://github.com/<owner>/<repository>.git.
-        kind: config
-        type: url
-        required: true
-        target: { file: kinby.toml, key: workspace.source }
-      - name: model
-        label: Model
-        description: The model the instance calls, as provider:model.
-        kind: config
-        type: text
-        required: true
-        default: anthropic:claude-sonnet-5
-      - name: GH_TOKEN
-        label: GitHub token
-        description: A token with repo scope. gh, git push, issues and pull requests run as it.
-        kind: secret
-        type: text
-        required: true
-      - name: GITHUB_WEBHOOK_SECRET
-        label: Webhook secret
-        description: >-
-          The shared secret of the repository webhook that signs each delivery. Generate one
-          with `openssl rand -hex 32`.
-        kind: secret
-        type: text
-        required: true
-      - name: CLAUDE_CODE_OAUTH_TOKEN
-        label: Claude Code token
-        description: >-
-          Claude Code's subscription token. Run `claude setup-token` on your own machine and
-          paste the token it prints.
-        kind: secret
-        type: text
-        required: true
-      - name: GIT_USER_NAME
-        label: Commit author name
-        description: The name on the commits the coding clients make.
-        kind: secret
-        type: text
-        required: true
-      - name: GIT_USER_EMAIL
-        label: Commit author email
-        description: >-
-          The email on the commits the coding clients make. Use one GitHub links to the
-          token's account, so the commits show as its own.
-        kind: secret
-        type: text
-        required: true
-intake: { instance: coder, routine: scan }
+# A workbench whose workspace is a clone of the repository the factory works in. A workbench that
+# holds no setup or checks list takes no line: ask its line's owner for a repository survey.
+requires:
+  image: coder
+  secrets:
+    - name: GH_TOKEN
+      label: GitHub token
+      description: A token with repo scope. gh, git push, issues and pull requests run as it.
+      type: text
+      required: true
+    - name: CLAUDE_CODE_OAUTH_TOKEN
+      label: Claude Code token
+      description: >-
+        Claude Code's subscription token. Run `claude setup-token` on your own machine and paste
+        the token it prints.
+      type: text
+      required: true
+    - name: GIT_USER_NAME
+      label: Commit author name
+      description: The name on the commits the coding clients make.
+      type: text
+      required: true
+    - name: GIT_USER_EMAIL
+      label: Commit author email
+      description: >-
+        The email on the commits the coding clients make. Use one GitHub links to the token's
+        account, so the commits show as its own.
+      type: text
+      required: true
+  commands: [setup, checks]
+  suggested_picks:
+    - adversarial-review
+    - api-and-interface-design
+    - codebase-design
+    - no-comments
+    - ponytail
+    - pr
+    - tdd
+    - unslop
+# Each hour, and on each delivery that can change which issue is eligible, finds the oldest
+# eligible issue and any issue a human labeled ready-for-agent again while it was ready-for-human.
+# The repository's webhook points at the line's address, signed with the owner's
+# GITHUB_WEBHOOK_SECRET.
+intake:
+  call: scan_ready_issues
+  schedule: 0 * * * *
+  delivery:
+    auth: hmac-sha256
+    secret: GITHUB_WEBHOOK_SECRET
+    signature_header: X-Hub-Signature-256
+    delivery_header: X-GitHub-Delivery
 work_item: { issue: int }
+# Names the run worktree's agent branch, agent/<issue>-<title words>, and its base: the branch
+# that holds every open blocker's agent branch, so the pull request stacks on their work, or the
+# default branch with no blocker open. Sent back to its first step, the run starts over from the
+# base, named again.
+worktree: { call: agent_branch }
 steps:
-  # Checks who wrote the ticket (ADR 0073), then cuts a fresh run worktree on an agent branch from
-  # its base. Sent back here, the run starts over from the base. The workspace only fetches.
-  - id: prepare
+  # Passes the ticket on only once a trusted author wrote all its text (ADR 0073).
+  - id: ticket
     kind: code
-    in: coder
-    call: prepare_branch
-    results: { branch: str, base: str }
-  # Runs the coder's setup list of repository commands in the run worktree, which has installs of
-  # its own. A coder that holds no setup or checks list takes no work: ask it in a thread for a
-  # repository survey.
+    call: vet_ticket
+  # Runs the workbench's setup list of repository commands in the run worktree, which has
+  # installs of its own.
   - id: setup
     kind: command
-    in: coder
-    branch: "{{branch}}"
-    requires: [branch]
     run:
       - { commands: setup }
-  # Every client step continues implement's session, so one coding session per issue writes the
+  # Every agent step continues implement's session, so one coding session per issue writes the
   # change, answers its reviews and repairs its checks. It writes the pull request's title, body
-  # and replies. Each step's hook records them as the run's values, and publish applies them
-  # (ADRs 0081 and 0083). Every client step runs in the run's own run worktree, so the session
+  # and replies. Each step's check records them as the run's values, and publish applies them
+  # (ADRs 0081 and 0083). Every agent step runs in the run's own run worktree, so the session
   # resumes from the directory it started in, and no other run's steps touch it. A ticket with
   # nothing to do ends the run cancelled with no commit, once the session wrote why as no_change.
   - id: implement
-    kind: client
-    in: coder
-    client: claude
+    kind: agent
+    engine: claude
     model: claude-opus-5-5
     effort: high
     prompt: prompts/implement.md
-    hook: check_implementation
-    branch: "{{branch}}"
+    check: check_implementation
     requires: [branch, base]
     results: { title: str, body: str, no_change: str }
     outcomes: { no-change: stop }
@@ -111,15 +92,13 @@ steps:
   # Work is only ever sent back, so it comes before the pull request opens, and finds no threads
   # to answer the first time or in a check repair.
   - id: answer
-    kind: client
-    in: coder
-    client: claude
+    kind: agent
+    engine: claude
     model: claude-opus-5-5
     effort: high
     resume: implement
     prompt: prompts/answer.md
-    hook: check_answers
-    branch: "{{branch}}"
+    check: check_answers
     requires: [branch, base]
     results: { replies: str, title: str, body: str }
     timeout: 60m
@@ -127,15 +106,13 @@ steps:
   # results.failure, and changes nothing when nothing failed. It comes after answer, so a repair
   # during babysitting keeps the round's replies, its feedback and the pull request.
   - id: fix
-    kind: client
-    in: coder
-    client: claude
+    kind: agent
+    engine: claude
     model: claude-opus-5-5
     effort: high
     resume: implement
     prompt: prompts/fix.md
-    hook: check_implementation
-    branch: "{{branch}}"
+    check: check_implementation
     requires: [branch, base]
     results: { title: str, body: str }
     timeout: 30m
@@ -143,26 +120,21 @@ steps:
   # on the pull request take its place. To turn it on, uncomment review. It sends changes back
   # to fix, which then reads its .scratch/review.md.
   # - id: review
-  #   kind: client
-  #   in: coder
-  #   client: claude
+  #   kind: agent
+  #   engine: claude
   #   model: claude-opus-5-5
   #   effort: high
   #   prompt: prompts/review.md
-  #   hook: read_review_verdict
-  #   branch: "{{branch}}"
+  #   check: read_review_verdict
   #   requires: [branch, base]
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
   #   timeout: 15m
-  # Runs the coder's setup list again in the run worktree, so a change to the dependencies is
+  # Runs the workbench's setup list again in the run worktree, so a change to the dependencies is
   # checked against fresh installs, then its checks list. A failure goes back to fix with the
   # failing command and the tail of its output, at most twice.
   - id: checks
     kind: command
-    in: coder
-    branch: "{{branch}}"
-    requires: [branch]
     run:
       - { commands: setup }
       - { commands: checks }
@@ -172,7 +144,6 @@ steps:
   # retried, so a pull request is never opened twice.
   - id: publish
     kind: code
-    in: coder
     call: publish_pull_request
     requires: [branch, base]
     results: { pr: int }
@@ -205,7 +176,6 @@ steps:
   # one count. Anything else waits for the next wake.
   - id: assess
     kind: code
-    in: coder
     call: assess_pull_request
     requires: [pr]
     results: { feedback: str, failure: str, pr: int, merge_ready: bool }
@@ -220,11 +190,11 @@ done_requires: [merge_ready]
 # Pushes the branch if it has commits ahead of its base, and leaves the run worktree as it is.
 # Then labels the issue ready-for-human and comments the step the run stopped at and why, the run
 # id, how to retry, and the open issues blocked behind it.
-needs_human: { in: coder, call: report_needs_human }
-# Once a run ends done or cancelled: removes its run worktree and local branch, and after no
-# change, comments why on the issue and takes ready-for-agent off. It never closes the issue
-# (ADR 0105).
-ended: { in: coder, call: report_ended }
+needs_human: { call: report_needs_human }
+# Once a run ends done or cancelled: takes ready-for-human off the issue, and after no change,
+# comments why and takes ready-for-agent off. It never closes the issue (ADR 0105). kinby then
+# removes the run worktree and its local branch.
+ended: { call: report_ended }
 # A run that needs human ends once its work finished elsewhere: done when its pull request is
 # merged, cancelled when its issue is closed or its pull request is closed unmerged. The ended call
 # then takes ready-for-human off the issue. The repository's webhook must send issues events.

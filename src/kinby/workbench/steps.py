@@ -33,6 +33,7 @@ from kinby.contracts import (
     StepRunCommand,
     StepUsage,
     StepValue,
+    ToolName,
     ValueName,
     WorkbenchCommandRunCommand,
     WorkbenchCommandRunResult,
@@ -54,6 +55,7 @@ from kinby.core.run_worktrees import (
 from kinby.core.shell_reads import is_shell_read
 from kinby.core.steps import recorded, run_commands, run_tool, step_failed
 from kinby.factories import SHIPPED_FACTORIES
+from kinby.factories.file import BASE, BRANCH
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, WORKSPACE_DIR
 from kinby.plugins.defaults.files import workspace_path
 from kinby.plugins.defaults.shell import OUTPUT_CAP, run_capped
@@ -81,6 +83,9 @@ _PAGE_BYTES = 1024 * 1024
 _TURNS_DIR = "turns"
 #: How long a shell read the owner runs may take, in seconds.
 _READ_SECONDS = 60
+#: The parameters of a factory's tool that take the workspace's path and the run folder's.
+_WORKSPACE = "workspace"
+_FOLDER = "folder"
 _WORK_ITEMS = TypeAdapter(list[dict[ValueName, StepValue]])
 
 _logger = logging.getLogger(__name__)
@@ -124,12 +129,12 @@ class WorkbenchSteps:
         return await self._held.answer(command, partial(self._run, command))
 
     async def remove_folder(self, command: RunFolderRemoveCommand) -> RunFolderRemoveResult:
-        """Remove the run's folder, and a run worktree's branch, whichever exist."""
+        """Remove the run's folder, and a run worktree's branch, whichever exist. A directory
+        named for the run goes too, which a call made before its run worktree was named ran in."""
+        directory = self._directory / _RUNS_DIR / str(command.run_id)
+        await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
         branch = command.folder.branch
-        if branch is None:
-            directory = self._directory / _RUNS_DIR / str(command.run_id)
-            await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
-        else:
+        if branch is not None:
             await asyncio.to_thread(
                 remove_run_worktree, self._directory, self._workspace, branch, str(command.run_id)
             )
@@ -153,6 +158,7 @@ class WorkbenchSteps:
                 f'Tool "{command.call}" takes a tool context, which a workbench lacks.'
             )
         arguments = {"signal": command.signal} if "signal" in tool.runnable.args else {}
+        arguments |= self._places(tool, None)
         try:
             found = await tool.runnable.ainvoke(arguments)
             return IntakeRunResult(work_items=_WORK_ITEMS.validate_python(found or []))
@@ -237,12 +243,48 @@ class WorkbenchSteps:
     async def _run(self, command: StepRunCommand) -> StepResult:
         if command.folder is None:
             return step_failed("The step names no run folder.")
+        place, named = command.folder, {}
+        if place.named_by is not None:
+            naming = await self._named(place.named_by, command)
+            if isinstance(naming, StepResult):
+                return naming
+            place, named = naming, {BRANCH: naming.branch, BASE: naming.base}
         try:
             folder = await asyncio.to_thread(
-                self._folder, command.origin.run_id, command.folder, fresh=command.fresh_folder
+                self._folder, command.origin.run_id, place, fresh=command.fresh_folder
             )
         except RunWorktreeError as exc:
             return step_failed(str(exc))
+        result = await self._in_folder(command, folder)
+        return result.model_copy(update={"values": result.values | named}) if named else result
+
+    async def _named(self, call: ToolName, command: StepRunCommand) -> RunFolder | StepResult:
+        """The run worktree's branch and base, as the factory's *call* names them in the
+        workspace, or the failed result of a call that names none."""
+        factory = command.origin.factory
+        try:
+            tool = self._tool(factory, call)
+        except Exception as exc:
+            # Tool files are user code. Whatever goes wrong loading them fails the step.
+            return step_failed(
+                f'The tools of factory "{factory}" cannot load: {exception_message(exc)}'
+            )
+        if tool is None:
+            return step_failed(f'Tool "{call}" is not one of factory "{factory}"\'s tools.')
+        named = await run_tool(
+            tool,
+            CodeStepRun(call=call),
+            command,
+            lambda arguments: tool.runnable.ainvoke(arguments | self._places(tool, None)),
+        )
+        if named.ending is not StepEnding.CLEAN:
+            return named
+        branch, base = named.values.get(BRANCH), named.values.get(BASE)
+        if not isinstance(branch, str) or not branch or not isinstance(base, str) or not base:
+            return step_failed(f'Tool "{call}" named no branch and base for the run worktree.')
+        return RunFolder(branch=branch, base=base)
+
+    async def _in_folder(self, command: StepRunCommand, folder: Path) -> StepResult:
         match command.step:
             case CommandStepRun(run=run, timeout_seconds=timeout):
                 # The hub puts each list of repository commands' commands in its place.
@@ -285,11 +327,12 @@ class WorkbenchSteps:
                 shutil.rmtree(directory, ignore_errors=True)
             directory.mkdir(parents=True, exist_ok=True)
             return directory
+        base = _BASE if folder.base is None else f"origin/{folder.base}"
         if fresh:
             return cut_run_worktree(
-                self._directory, self._workspace, folder.branch, _BASE, str(run_id)
+                self._directory, self._workspace, folder.branch, base, str(run_id)
             )
-        return run_worktree(self._directory, self._workspace, folder.branch, str(run_id), _BASE)
+        return run_worktree(self._directory, self._workspace, folder.branch, str(run_id), base)
 
     async def _agent(
         self, step: ClientStepRun, command: StepRunCommand, folder: Path
@@ -355,7 +398,8 @@ class WorkbenchSteps:
         return self._directory / _TRANSCRIPTS_DIR / str(run_id) / step / f"{attempt}.jsonl"
 
     async def _call(self, step: CodeStepRun, command: StepRunCommand, folder: Path) -> StepResult:
-        """Call the factory's tool, whose path parameters resolve in the run's folder."""
+        """Call the factory's tool, whose path parameters resolve in the run's folder, with the
+        places it names."""
         factory = command.origin.factory
         try:
             tool = self._tool(factory, step.call)
@@ -372,8 +416,16 @@ class WorkbenchSteps:
             tool,
             step,
             command,
-            lambda arguments: tool.runnable.ainvoke(tool.resolve_paths(arguments, folder)),
+            lambda arguments: tool.runnable.ainvoke(
+                tool.resolve_paths(arguments, folder) | self._places(tool, folder)
+            ),
         )
+
+    def _places(self, tool: Tool, folder: Path | None) -> dict[str, str]:
+        """The paths a factory's tool takes by name: ``workspace``, the workbench's clone or plain
+        folder, and ``folder``, the run's folder, for a call made in one."""
+        places = {_WORKSPACE: self._workspace} | ({_FOLDER: folder} if folder else {})
+        return {name: str(path) for name, path in places.items() if name in tool.runnable.args}
 
     async def _checked(
         self, name: HookName, result: StepResult, command: StepRunCommand, folder: Path

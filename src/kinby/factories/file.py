@@ -121,6 +121,8 @@ class Requirements:
     commands: tuple[CommandListName, ...] = ()
     logins: tuple[SubscriptionLogin, ...] = ()
     browser: bool = False
+    #: Skills of the shipped library the factory suggests a workbench picks, by name.
+    suggested_picks: tuple[SkillName, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -178,6 +180,9 @@ FAILURE: ValueName = "failure"
 QUIET: ValueName = "quiet"
 #: What the user wrote when they sent the run back, which the steps from there on read.
 NOTES: ValueName = "notes"
+#: The branch of a run worktree a factory's worktree call names, and the base it is cut from.
+BRANCH: ValueName = "branch"
+BASE: ValueName = "base"
 
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
@@ -417,8 +422,8 @@ class EndedCall:
 
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class ToolCall:
-    """A tool of the factory's folder the hub calls on the workbench, as ``needs_human`` or
-    ``ended``. The tool's parameters named like a value of the run receive that value."""
+    """A tool of the factory's folder the hub calls on the workbench, as ``needs_human``, ``ended``
+    or ``worktree``. The tool's parameters named like a value of the run receive that value."""
 
     call: ToolName
 
@@ -473,6 +478,10 @@ class WorkbenchFactory:
     #: Called once when a run ends done or cancelled.
     ended: ToolCall | None = None
     closing: Closing = Field(default_factory=Closing)
+    #: Called in the workspace before a run worktree is cut, to name its branch and the base it is
+    #: cut from as ``branch`` and ``base``. None has kinby name the branch for the factory, the
+    #: work item and the run, and cut it from origin's default branch.
+    worktree: ToolCall | None = None
 
 
 FACTORY_FILE_ADAPTER = TypeAdapter(FactoryFile)

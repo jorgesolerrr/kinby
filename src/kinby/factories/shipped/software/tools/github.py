@@ -1,31 +1,21 @@
 """The software factory's work on GitHub: the scan, the agent branch, the pull request, and
 babysitting it through review.
 
-Every command runs in the workspace, the repository's clone, which stays on the default branch.
-Each run works in its own run worktree of it, which shares its branches and remotes. gh runs as
-the GH_TOKEN the instance holds.
+Every command runs in the workspace, the repository's clone on the workbench, which stays on the
+default branch. Each run works in its own run worktree of it, which shares its branches and
+remotes. gh runs as the GH_TOKEN the workbench holds.
 """
 
-import asyncio
 import json
-import logging
 import re
 import subprocess
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from kinby.contracts import FactoryRunStatus
-from kinby.core.run_worktrees import (
-    cut_run_worktree,
-    remove_run_worktree,
-    run_worktree,
-    sweep_run_worktrees,
-)
 from kinby.factories.file import FAILURE
 from kinby.plugins.hooks import HookResult
-from kinby.plugins.intake import hand_over
-from kinby.plugins.tools import ToolContext, tool
+from kinby.plugins.tools import tool
 
 READY_LABEL = "ready-for-agent"
 READY_FOR_HUMAN_LABEL = "ready-for-human"
@@ -89,11 +79,8 @@ mutation($thread: ID!) {
   resolveReviewThread(input: {threadId: $thread}) { thread { id } }
 }
 """
-_AGENT_BRANCH = re.compile(rf"{AGENT_BRANCH_PREFIX}(\d+)-")
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
-
-_logger = logging.getLogger(__name__)
 
 
 class CommandFailed(RuntimeError):
@@ -172,69 +159,52 @@ class AgentPullRequest:
 
 
 @tool(write=True)
-async def scan_ready_issues(signal: dict[str, object], context: ToolContext) -> None:
-    """Hand the oldest eligible issue to the factory, after a wake that can change which it is.
+def scan_ready_issues(signal: dict[str, object], workspace: Path) -> list[dict[str, int]]:
+    """Find the oldest eligible issue for the factory, after a wake that can change which it is.
 
     An eligible issue is open and labeled ready-for-agent, has no agent pull request, and each
     open issue that blocks it has one in the same stack. The oldest stays eligible until its pull
-    request opens or it goes to a human, and handing it again returns its run, so the factory
+    request opens or it goes to a human, and finding it again returns its run, so the factory
     implements one issue at a time. Runs babysitting their pull requests go on meanwhile.
 
-    An issue a human labeled ready-for-agent again while it is still ready-for-human is handed
-    over too, which retries its run, and loses its ready-for-human label once the retry starts.
-    Its blockers must be as an eligible issue's, but it may have an agent pull request, since a
-    run can stop after opening one. It is never the oldest, so younger issues don't wait behind
-    it.
+    An issue a human labeled ready-for-agent again while it is still ready-for-human is found too,
+    which retries its run, and loses its ready-for-human label. Its blockers must be as an
+    eligible issue's, but it may have an agent pull request, since a run can stop after opening
+    one. It is never the oldest, so younger issues don't wait behind it.
     """
-    if context.routine is None:
-        raise ValueError("Only the factory's intake routine scans for its work.")
     if not _can_change_eligibility(signal):
-        return
-    workspace = context.workspace
-    relabeled, eligible = await asyncio.to_thread(
-        _eligible_issues, workspace, _labeled_issue(signal)
-    )
+        return []
+    relabeled, eligible = _eligible_issues(workspace, _labeled_issue(signal))
     for number in relabeled:
-        run = await hand_over(context.routine, {"issue": number})
-        if run.status is not FactoryRunStatus.NEEDS_HUMAN:
-            removed = ("--remove-label", READY_FOR_HUMAN_LABEL)
-            await asyncio.to_thread(_gh, workspace, "issue", "edit", str(number), *removed)
-    if eligible is not None:
-        await hand_over(context.routine, {"issue": eligible})
+        _gh(workspace, "issue", "edit", str(number), "--remove-label", READY_FOR_HUMAN_LABEL)
+    return [{"issue": number} for number in (*relabeled, *([] if eligible is None else [eligible]))]
 
 
 @tool(write=True)
-def prepare_branch(issue: int, run_id: str, context: ToolContext) -> dict[str, str]:
-    """Cut a fresh run worktree on the issue's agent branch, once a trusted author wrote all its
-    text.
-
-    The branch starts from one that holds every open blocker's agent branch, so its pull request
-    stacks on the blockers' work. With no blocker open, it starts from the default branch.
-    Whatever a run worktree already on the branch held goes. The workspace only fetches.
-
-    First it sweeps the run worktrees whose issue is closed and whose branch has no open pull
-    request, which an end of run missed. A sweep that fails is logged, and prepare goes on.
-    """
-    workspace = context.workspace
-    found = _issue(workspace, issue)
-    untrusted = _untrusted_authors(workspace, found)
+def vet_ticket(issue: int, workspace: Path) -> None:
+    """Pass the issue on only once a trusted author wrote all its text: the issue and its parent,
+    with their comments."""
+    untrusted = _untrusted_authors(workspace, _issue(workspace, issue))
     if untrusted:
         raise UntrustedTicket(
             f"Ticket text from untrusted authors needs a human: {', '.join(untrusted)}."
         )
+
+
+@tool(write=True)
+def agent_branch(issue: int, workspace: Path) -> dict[str, str]:
+    """Name the issue's agent branch and the base its run worktree is cut from, after a fetch.
+
+    The base is a branch that holds every open blocker's agent branch, so its pull request stacks
+    on the blockers' work. With no blocker open, it is the default branch. Scratch files stay out
+    of every commit.
+    """
+    found = _issue(workspace, issue)
     words = re.findall(r"[a-z0-9]+", found.title.lower())
-    branch = f"{AGENT_BRANCH_PREFIX}{issue}-{'-'.join(words) or 'issue'}"
     _exclude_scratch(workspace)
     _git(workspace, "fetch", "--prune", "origin")
-    try:
-        sweep_run_worktrees(
-            context.instance.path, context.workspace, lambda branch: _run_over(workspace, branch)
-        )
-    except Exception:
-        _logger.exception("The sweep of run worktrees whose issue is closed failed.")
-    base = _base(workspace, found)
-    cut_run_worktree(context.instance.path, context.workspace, branch, f"origin/{base}", run_id)
-    return {"branch": branch, "base": base}
+    branch = f"{AGENT_BRANCH_PREFIX}{issue}-{'-'.join(words) or 'issue'}"
+    return {"branch": branch, "base": _base(workspace, found)}
 
 
 @tool(write=True)
@@ -242,8 +212,8 @@ def publish_pull_request(
     issue: int,
     branch: str,
     base: str,
-    run_id: str,
-    context: ToolContext,
+    workspace: Path,
+    folder: Path,
     *,
     reviewed: bool = False,
     pr: int | None = None,
@@ -259,18 +229,17 @@ def publish_pull_request(
 
     A pull request opens on its base, or on where that base landed once it merged.
     """
-    workspace = context.workspace
     if pr is None:
         if not body:
             raise MissingPullRequestBody("The coding session wrote no pull request body.")
-        base = _landed_base(context, branch, base, run_id)
+        base = _landed_base(workspace, folder, branch, base)
         return _open_pull_request(workspace, issue, branch, base, title, body, reviewed=reviewed)
     answered = json.loads(replies or "{}")
     return _push_fix_round(workspace, issue, branch, pr, answered, title, body, reviewed=reviewed)
 
 
 @tool(write=True)
-def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -> HookResult:
+def assess_pull_request(pr: int, workspace: Path, *, quiet: bool = False) -> HookResult:
     """Read the pull request after a wake, and say what babysitting does next.
 
     Merged, the run is done; closed without a merge, it stops. Merge-ready, once a trusted
@@ -285,7 +254,6 @@ def assess_pull_request(pr: int, context: ToolContext, *, quiet: bool = False) -
 
     Only the newest run of each check on the head counts.
     """
-    workspace = context.workspace
     pull = _api(workspace, f"repos/{{owner}}/{{repo}}/pulls/{pr}")
     if pull["state"] == "closed":
         if pull["merged"]:
@@ -386,7 +354,7 @@ def report_needs_human(
     step: str,
     summary: str,
     run_id: str,
-    context: ToolContext,
+    workspace: Path,
     *,
     branch: str | None = None,
     base: str | None = None,
@@ -398,7 +366,6 @@ def report_needs_human(
     Uncommitted work stays uncommitted in the run worktree. A push that fails is said in the
     comment, so the report still reaches the human.
     """
-    workspace = context.workspace
     body = [
         f"The software factory stopped at step `{step}`: {summary}",
         f"Run `{run_id}`. Add `{READY_LABEL}` to retry this step; send back or cancel from the "
@@ -429,23 +396,12 @@ def report_needs_human(
 
 
 @tool(write=True)
-def report_ended(
-    issue: int,
-    run_id: str,
-    context: ToolContext,
-    *,
-    branch: str | None = None,
-    no_change: str | None = None,
-) -> None:
-    """Remove the run's run worktree and local branch, unless a later run cut them again, and
-    take ready-for-human off the issue. Then say on the issue why a run that ended made no change,
-    and take ready-for-agent off it.
+def report_ended(issue: int, workspace: Path, *, no_change: str | None = None) -> None:
+    """Take ready-for-human off the issue. Then say on the issue why a run that ended made no
+    change, and take ready-for-agent off it.
 
     The issue stays open: closing it is the maintainer's call.
     """
-    if branch is not None:
-        remove_run_worktree(context.instance.path, context.workspace, branch, run_id)
-    workspace = context.workspace
     if READY_FOR_HUMAN_LABEL in _issue(workspace, issue).labels:
         _gh(workspace, "issue", "edit", str(issue), "--remove-label", READY_FOR_HUMAN_LABEL)
     if no_change is None:
@@ -497,7 +453,7 @@ def _open_pull_request(
     return {"pr": number}
 
 
-def _landed_base(context: ToolContext, branch: str, base: str, run_id: str) -> str:
+def _landed_base(workspace: Path, worktree: Path, branch: str, base: str) -> str:
     """*base*, or the branch it landed on when its pull request merged and took it from origin.
 
     A blocker's pull request can merge while the run stacked on it is still coding. The run's
@@ -505,11 +461,10 @@ def _landed_base(context: ToolContext, branch: str, base: str, run_id: str) -> s
     into, then move onto that branch, as GitHub retargets a pull request already open. A base
     gone unmerged needs a human, and so do commits that conflict there.
     """
-    merged = _merged_base(context.workspace, base)
+    merged = _merged_base(workspace, base)
     if merged is None:
         return base
     head, landed = merged
-    worktree = run_worktree(context.instance.path, context.workspace, branch, run_id)
     past = (branch, f"^{head}", f"^origin/{landed}")
     own = _git(worktree, "rev-list", "--reverse", "--no-merges", *past).split()
     start = _git(worktree, "rev-parse", "HEAD").strip()
@@ -767,19 +722,6 @@ def _blocked_behind(workspace: Path, number: int) -> list[dict]:
                 found[blocked["number"]] = blocked
                 waiting.append(blocked["number"])
     return list(found.values())
-
-
-def _run_over(workspace: Path, branch: str) -> bool:
-    """Whether *branch* is an agent branch whose issue is closed and that has no open pull
-    request. A closed issue ends only a run that needs human, so one babysitting its pull request
-    goes on."""
-    named = _AGENT_BRANCH.match(branch)
-    if named is None:
-        return False
-    found = _api(workspace, f"repos/{{owner}}/{{repo}}/issues/{named[1]}")
-    if found["state"] != "closed":
-        return False
-    return all(pull.branch != branch for pull in _agent_pull_requests(workspace))
 
 
 def _ready_issue(workspace: Path, number: int) -> Issue | None:
