@@ -2705,7 +2705,15 @@
           "default": null
         },
         "factory": {
-          "$ref": "#/$defs/FactoryName"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FactoryName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "instance_id": {
           "anyOf": [
@@ -2755,9 +2763,6 @@
           "default": null
         }
       },
-      "required": [
-        "factory"
-      ],
       "title": "FactoryRunListCommand",
       "type": "object"
     },
