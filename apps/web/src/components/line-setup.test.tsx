@@ -217,6 +217,24 @@ describe("setting up a line", () => {
     expect(window.location.pathname).toBe("/factories")
   })
 
+  it("disables New workbench when the factory needs a login or a browser a new one lacks", async () => {
+    const user = userEvent.setup()
+    openSetup({
+      "line.setup.describe": ({ workbench_id }) =>
+        workbench_id === undefined ? asked({ logins: [claude], browser: true }) : asked({}),
+    })
+
+    await pickFactory(user, "software")
+
+    const fresh = await dialog().findByRole("button", { name: "New workbench" })
+    expect(fresh.hasAttribute("disabled")).toBe(true)
+    expect(
+      dialog().getByText(
+        "A new workbench has no browser, and is not signed in to Claude subscription.",
+      ),
+    ).toBeDefined()
+  })
+
   it("goes back to pick another workbench or factory", async () => {
     const user = userEvent.setup()
     openSetup()

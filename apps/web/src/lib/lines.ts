@@ -151,15 +151,13 @@ export async function readRun(caller: Caller, runId: string): Promise<RunOpened>
   return { detail, factory, line, workbench }
 }
 
-/** A workbench a line setup offers: what setting the factory up on it asks for, or why it cannot take the line. */
-type Fit =
-  | { workbench: Workbench; asked: LineSetupDescription }
-  | { workbench: Workbench; refused: string }
+/** What setting a factory up asks for on a workbench, or why it cannot take the line. */
+type Fit = { asked: LineSetupDescription } | { refused: string }
 
 /** What setting a factory up asks for on each workbench, and on a new one. */
 interface SetupAsks {
-  fits: Fit[]
-  fresh: LineSetupDescription
+  fits: (Fit & { workbench: Workbench })[]
+  fresh: Fit
 }
 
 /**
@@ -172,18 +170,13 @@ export async function readSetup(
   factory: string,
   workbenches: Workbench[],
 ): Promise<SetupAsks> {
-  const fit = async (workbench: Workbench): Promise<Fit> => {
+  const fit = async (workbench: Workbench) => {
     try {
       const asked = await caller.call("line.setup.describe", {
         factory,
         workbench_id: workbench.workbench_id,
       })
-      if (asked.browser) return { workbench, refused: "It has no browser." }
-      if (asked.logins.length > 0) {
-        const logins = asked.logins.map(({ label }) => label).join(", ")
-        return { workbench, refused: `It is not signed in to ${logins}.` }
-      }
-      return { workbench, asked }
+      return { workbench, ...answerable(asked, "It") }
     } catch (error) {
       if (!(error instanceof CallError) || error.code !== "INVALID_SETUP") throw error
       return { workbench, refused: Object.values(error.fields).join(" ") }
@@ -193,7 +186,17 @@ export async function readSetup(
     caller.call("line.setup.describe", { factory }),
     Promise.all(workbenches.map(fit)),
   ])
-  return { fits, fresh }
+  return { fits, fresh: answerable(fresh, "A new workbench") }
+}
+
+/** What the setup asks for, or why `subject` cannot take the line: it lacks the browser or a login. */
+function answerable(asked: LineSetupDescription, subject: string): Fit {
+  const logins = asked.logins.map(({ label }) => label).join(", ")
+  const lacks = [
+    ...(asked.browser ? ["has no browser"] : []),
+    ...(logins === "" ? [] : [`is not signed in to ${logins}`]),
+  ]
+  return lacks.length === 0 ? { asked } : { refused: `${subject} ${lacks.join(", and ")}.` }
 }
 
 /** A line as the user knows it, "software on kinby". */

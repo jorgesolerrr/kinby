@@ -72,7 +72,7 @@ export function SetUpLine({
         <PlusIcon data-icon="inline-start" />
         Set up a line
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-h-9/10 overflow-y-auto">
         <SetupFlow caller={caller} clock={clock} factories={factories} workbenches={workbenches} />
       </DialogContent>
     </Dialog>
@@ -140,7 +140,7 @@ function SetupFlow({
   )
 }
 
-/** Each workbench, one that cannot take the line disabled with why, and New workbench. */
+/** Each workbench and New workbench, one that cannot take the line disabled with why. */
 function WorkbenchPicks({
   caller,
   clock,
@@ -189,10 +189,15 @@ function WorkbenchPicks({
               })}
             </Picks>
           )}
-          <Button variant="secondary" onClick={() => onPick(undefined, asks.fresh)}>
+          <Button
+            variant="secondary"
+            disabled={"refused" in asks.fresh}
+            onClick={() => "asked" in asks.fresh && onPick(undefined, asks.fresh.asked)}
+          >
             <PlusIcon data-icon="inline-start" />
             New workbench
           </Button>
+          {"refused" in asks.fresh && <p className="text-muted-foreground">{asks.fresh.refused}</p>}
         </div>
       )}
       <DialogFooter>
