@@ -1619,10 +1619,11 @@ async def prepared(
     number: int,
     run: FactoryRunOrigin | None = None,
     *,
-    fresh: bool = False,
+    fresh: bool = True,
 ) -> StepResult:
     """Run the first step of issue *number*'s run, as the hub sends it: in a run worktree the
-    factory's worktree call names first, cut again when *fresh*."""
+    factory's worktree call names, cut fresh from its base. A retry of a step whose folder was
+    named sends no *fresh*."""
     return await run_in(
         dispatcher,
         StepRunCommand(
@@ -1661,6 +1662,26 @@ def test_the_first_step_works_in_the_agent_branch_cut_from_the_default_branch_sc
         assert git(workspace, "branch", "--show-current") == "main"
 
     asyncio.run(scenario())
+
+
+def test_a_new_run_starts_from_the_base_whatever_an_abandoned_run_left_on_its_branch(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    abandoned = cut(bench)
+    commit(abandoned, "theme.py", "DARK = None\n")
+    git(abandoned, "push", "origin", BRANCH["branch"])
+    git(bench.workspace, "worktree", "remove", "--force", str(abandoned))
+    git(bench.workspace, "branch", "-D", BRANCH["branch"])
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_prepare(github, 7, "Add dark mode")
+
+    result = asyncio.run(prepared(bench.steps, 7))
+
+    worktree = run_worktree(bench)
+    assert result.values == BRANCH
+    assert git(worktree, "rev-parse", "HEAD") == git(bench.workspace, "rev-parse", "origin/main")
+    assert not (worktree / "theme.py").exists()
 
 
 def test_a_run_sent_back_to_its_first_step_starts_over_from_the_base_named_again(
