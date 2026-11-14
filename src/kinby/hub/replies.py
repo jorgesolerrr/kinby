@@ -27,7 +27,7 @@ from kinby.core.errors import (
 )
 from kinby.hub.channels import Channels, ReceivingKind, Reply
 from kinby.hub.outbox import GIVE_UP_AFTER, Sleep
-from kinby.hub.registry import ChannelRecord, HubRegistry, ReceivedReply, RunStopRef
+from kinby.hub.registry import ChannelRecord, HubRegistry, ReceivedReply, RunAskRef, RunStopRef
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 _logger = logging.getLogger(__name__)
@@ -44,6 +44,8 @@ type StartTurn = Callable[[UUID, ThreadTurnStartCommand], Awaitable[object]]
 type AnswerApproval = Callable[[UUID, UUID, WaitingApproval, ApprovalDecision], Awaitable[bool]]
 #: Move a run on from its stop with one of its notification's options. None when it moved since.
 type AnswerStop = Callable[[RunStopRef, str], Awaitable[str | None]]
+#: Answer the ask a run's kinby turn parked on. False when the run no longer waits for it.
+type AnswerAsk = Callable[[RunAskRef, ApprovalDecision], Awaitable[bool]]
 
 
 class Replies:
@@ -51,9 +53,9 @@ class Replies:
 
     A reply to an instance's notification starts a user turn in the thread that raised it, one to
     an approval's answers that approval, one to a run that needs human retries, sends back or
-    cancels that run, and "Mute this instance" mutes the instance on the channel the reply came
-    through. One that answers something already settled changes nothing. Either way, the
-    channel's message is edited to show what came of it.
+    cancels that run, one to a run's ask answers it, and "Mute this instance" mutes the instance
+    on the channel the reply came through. One that answers something already settled changes
+    nothing. Either way, the channel's message is edited to show what came of it.
     """
 
     def __init__(
@@ -63,6 +65,7 @@ class Replies:
         start_turn: StartTurn,
         answer_approval: AnswerApproval,
         answer_stop: AnswerStop,
+        answer_ask: AnswerAsk,
         clock: Callable[[], datetime],
         sleep: Sleep,
     ) -> None:
@@ -71,6 +74,7 @@ class Replies:
         self._start_turn = start_turn
         self._answer_approval = answer_approval
         self._answer_stop = answer_stop
+        self._answer_ask = answer_ask
         self._clock = clock
         self._sleep = sleep
         self._applying = asyncio.Lock()
@@ -163,6 +167,11 @@ class Replies:
             if outcome is None:
                 return ReplyStatus.STALE, "The run already moved."
             return ReplyStatus.APPLIED, outcome
+        if reply.ask is not None:
+            decision = APPROVAL_OPTIONS[reply.option]
+            if not await self._answer_ask(reply.ask, decision):
+                return ReplyStatus.STALE, "No longer waiting."
+            return ReplyStatus.APPLIED, _DECIDED[decision]
         if reply.thread_id is None:
             return ReplyStatus.STALE, "No thread takes this answer."
         if self._registry.answered(reply.notification.notification_id):

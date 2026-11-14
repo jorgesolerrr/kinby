@@ -63,6 +63,7 @@ from kinby.contracts import (
     FACTORY_GET,
     FACTORY_LIST,
     FACTORY_REMOVE,
+    FACTORY_RUN_ANSWER,
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
@@ -321,7 +322,15 @@ from kinby.core.errors import (
 )
 from kinby.core.routing import Dispatcher
 from kinby.factories import SHIPPED_FACTORIES, ships_recipe
-from kinby.factories.file import FactoryFile, InstanceName, RecipeName, Requirements
+from kinby.factories.file import (
+    Engine,
+    FactoryFile,
+    InstanceName,
+    RecipeName,
+    Requirements,
+    WorkbenchAgentStep,
+    WorkbenchFactory,
+)
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
 from kinby.hub.approvals import HomeApprovals
@@ -389,6 +398,7 @@ from kinby.instance import (
     ManifestError,
     ModelName,
     Tools,
+    api_key_variable,
     init_from_template,
     init_instance,
     inspect_instance,
@@ -592,6 +602,17 @@ def _lacking(
     ]
 
 
+def _model_keys(factory: WorkbenchFactory, line_model: str | None) -> list[str]:
+    """The key each of the factory's agent steps on the kinby engine needs for its model, or for
+    *line_model* when it names none, in the order the steps come."""
+    models = (
+        step.model or line_model
+        for step in factory.steps
+        if isinstance(step, WorkbenchAgentStep) and step.engine is Engine.KINBY
+    )
+    return list(dict.fromkeys(api_key_variable(model) for model in models if model is not None))
+
+
 def _member(factory: FactoryName, template: InstanceTemplate) -> FactoryMember:
     """The role an instance written from *template* holds, with what the template supplied."""
     return FactoryMember(
@@ -758,6 +779,7 @@ class Hub:
                 self._start_turn,
                 self._answer_approval,
                 self.runs.answer_stop,
+                self.runs.answer_ask,
                 clock,
                 sleep,
             )
@@ -845,6 +867,7 @@ class Hub:
         dispatcher.register(FACTORY_RUN_RETRY, self.runs.retry)
         dispatcher.register(FACTORY_RUN_SEND_BACK, self.runs.send_back)
         dispatcher.register(FACTORY_RUN_APPROVE, self.runs.approve)
+        dispatcher.register(FACTORY_RUN_ANSWER, self.runs.answer)
         dispatcher.register(FACTORY_RUN_CANCEL, self.runs.cancel)
         dispatcher.register_subscription(FACTORY_RUN_SUBSCRIBE, self.runs.subscribe)
         dispatcher.register(LIBRARY_LIST, self.library.list)
@@ -3533,7 +3556,16 @@ class Hub:
                 f'Factory "{command.factory}" requires {_image(factory.requires.image)}, '
                 f'and workbench "{record.manifest_id}" runs {_image(record.workbench.recipe)}.'
             )
-        lacking = _lacking(factory.requires, record.workbench, self._environment(record.path))
+        environment = self._environment(record.path)
+        lacking = [
+            *_lacking(factory.requires, record.workbench, environment),
+            *(
+                f'secret "{key}"'
+                for key in _model_keys(factory, command.model)
+                if key not in environment
+            ),
+        ]
+        lacking = list(dict.fromkeys(lacking))
         if lacking:
             errors["workbench_id"] = (
                 f'Workbench "{record.manifest_id}" lacks what factory "{command.factory}" '

@@ -3,7 +3,8 @@
 The hub queues each step for the instance or the line's workbench it runs on. Each takes one step
 at a time, first in, first out, across every factory. A wait or approve step parks its run, which
 holds no instance until a signal, its quiet time, its deadline or the user moves it on. A client
-step the subscription's limit stopped parks its run until the plan window resets.
+step the subscription's limit stopped parks its run until the plan window resets. A kinby turn the
+gate asks about parks its run until the user answers, and the answer resumes the turn.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from pydantic import JsonValue
 
 from kinby.contracts import (
     AgentStepRun,
+    AnsweredAsk,
+    ApprovalDecision,
     ClientStepRun,
     CodeStepRun,
     CodingClient,
@@ -40,6 +43,7 @@ from kinby.contracts import (
     CommandStepRun,
     FactoryName,
     FactoryRun,
+    FactoryRunAnswerCommand,
     FactoryRunApproveCommand,
     FactoryRunCancelCommand,
     FactoryRunDetail,
@@ -57,6 +61,7 @@ from kinby.contracts import (
     RunFolder,
     RunFolderRemoveCommand,
     RunStop,
+    StepAnswer,
     StepAttempt,
     StepAttempts,
     StepEnding,
@@ -66,6 +71,7 @@ from kinby.contracts import (
     StepValue,
     Stream,
     ValueName,
+    WaitingApproval,
 )
 from kinby.core.coding_clients import own_tokens
 from kinby.core.errors import (
@@ -76,6 +82,7 @@ from kinby.core.errors import (
     NotAnEarlierStep,
     NotAnIntake,
     RepositoryCommandsMissing,
+    RunAwaitsNoAnswer,
     RunAwaitsNoApproval,
     RunNeedsNoHuman,
 )
@@ -121,9 +128,11 @@ from kinby.hub.registry import (
     FactoryMember,
     HubRegistry,
     ManagedInstance,
+    RunAskRef,
     RunStopRef,
 )
 from kinby.instance import ManifestError, repository_commands
+from kinby.plugins.notify import approval_notification
 
 if TYPE_CHECKING:
     from kinby.hub.outbox import Outbox
@@ -400,6 +409,35 @@ class FactoryRuns:
         approved = StepResult(ending=StepEnding.CLEAN, summary="The user approved it.")
         return self._advance(run.run_id, approved)
 
+    async def answer(self, command: FactoryRunAnswerCommand) -> FactoryRun:
+        """Resume the turn the run's kinby step parked on its ask with the user's answer, as the
+        step's next attempt on its workbench's queue."""
+        run = self._existing(command.run_id)
+        ask = self._parked_ask(run)
+        if ask is None or ask.request.approval_id != command.approval_id:
+            raise RunAwaitsNoAnswer(
+                f'Factory run "{run.run_id}" is {run.status.value}, and waits for no answer to '
+                f'ask "{command.approval_id}".'
+            )
+        moved = self._registry.answer_ask(run.run_id, command.answer)
+        self._publish(moved)
+        self._enqueue(moved)
+        return moved
+
+    async def answer_ask(self, ask: RunAskRef, decision: ApprovalDecision) -> bool:
+        """Answer the run's ask as the user's reply to its notification says. False when the run
+        no longer waits for that answer."""
+        command = FactoryRunAnswerCommand(
+            run_id=ask.run_id,
+            approval_id=ask.approval.request.approval_id,
+            answer=StepAnswer.model_validate({"decision": decision}),
+        )
+        try:
+            await self.answer(command)
+        except FactoryRunNotFound, RunAwaitsNoAnswer:
+            return False
+        return True
+
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
         """Move on each run of the instance's factory, or of the lines it owns, whose parked wait
         the signal matches.
@@ -500,8 +538,9 @@ class FactoryRuns:
 
         An attempt it left running is no attempt (ADR 0102), and its step is offered again. A
         run parked at a wait keeps its deadline, counted from when it parked, and one parked
-        until its plan window resets still wakes at the reset. A needs_human report, an ended
-        call or a run's stop queued but not delivered before the hub stopped is queued again.
+        until its plan window resets still wakes at the reset. One parked on an ask waits for the
+        answer. A needs_human report, an ended call or a run's stop queued but not delivered
+        before the hub stopped is queued again.
 
         The runs still unreported or uncalled and the stops still untold from before this pass
         are collected first, so a run that stops as it is queued below, which queues that fresh
@@ -592,6 +631,13 @@ class FactoryRuns:
         if member is None or factory is None:
             return None
         return member, factory
+
+    def _parked_ask(self, run: FactoryRun) -> WaitingApproval | None:
+        """The ask the run's kinby turn is parked on, or None when it is parked on none."""
+        last = self._registry.attempts(run.run_id)[-1:]
+        if run.status is not FactoryRunStatus.PARKED or not last:
+            return None
+        return last[0].ask if last[0].answer is None else None
 
     def _intake_instance(self, name: FactoryName) -> InstanceName | None:
         factory = self.factory(name)
@@ -725,7 +771,11 @@ class FactoryRuns:
                 limit, today = line.usd_per_day, datetime.now(UTC).date()
                 if limit is not None and self._registry.line_cost(line.line_id, today) >= limit:
                     return _Refused(step.id, str(BudgetExceeded("usd_per_day", limit)))
-                agent_run = self._client_run(run, factory, step, held, line.model)
+                agent_run = (
+                    self._kinby_run(run, step, line.model)
+                    if step.engine is Engine.KINBY
+                    else self._client_run(run, factory, step, held, line.model)
+                )
                 if isinstance(agent_run, _Refused):
                     return agent_run
                 asked = agent_run
@@ -832,10 +882,6 @@ class FactoryRuns:
         recorded no session, that step fails an attempt, as it would for a value it should have
         produced.
         """
-        if isinstance(step, WorkbenchAgentStep) and step.engine is Engine.KINBY:
-            return _Refused(
-                step.id, f'Step "{step.id}" runs on the kinby engine, which no workbench runs yet.'
-            )
         prompt = self._prompt(run, step)
         if isinstance(prompt, _Refused):
             return prompt
@@ -859,6 +905,32 @@ class FactoryRuns:
             effort=step.effort,
             branch=_branch(step, held) if isinstance(step, ClientStep) else None,
         )
+
+    def _kinby_run(
+        self, run: FactoryRun, step: WorkbenchAgentStep, line_model: str | None
+    ) -> AgentStepRun | _Refused:
+        """The turn the agent step asks its workbench to run, with its model or else its line's.
+        The kinby engine runs any provider's model, and keeps no timeout.
+
+        After the user answered the ask the step's last attempt parked on, the turn resumes with
+        that answer.
+        """
+        model = step.model or line_model
+        if model is None:
+            return _Refused(
+                step.id,
+                f'Step "{step.id}" runs on the kinby engine, and it and its line name no model.',
+            )
+        prompt = self._prompt(run, step)
+        if isinstance(prompt, _Refused):
+            return prompt
+        last = self._registry.attempts(run.run_id)[-1:]
+        answered = (
+            AnsweredAsk(ask=last[0].ask, answer=last[0].answer)
+            if last and last[0].ask is not None and last[0].answer is not None
+            else None
+        )
+        return AgentStepRun(prompt=prompt, model=model, answered=answered)
 
     def _session(self, run_id: UUID, factory: _Factory, step: StepId) -> CodingSessionId | None:
         """The newest coding client session recorded by any step that shares the step's session.
@@ -1133,7 +1205,7 @@ class FactoryRuns:
         A clean step goes where its outcome sends it, but fails when it records a value of
         another type than it declares. A failed one goes where the step sends its failures, or is
         tried again while its retries last, and leaves the run for a human after that. A limited
-        one parks the run until its plan window resets.
+        one parks the run until its plan window resets, and an asked one until the user answers.
         """
         run = self._registry.run(run_id)
         if run is None or run.step is None:
@@ -1141,6 +1213,11 @@ class FactoryRuns:
         if result.resets_at is not None:
             self._registry.end_attempt(run_id, result)
             return self._park_until(run_id, run.step, result.resets_at)
+        if result.ask is not None:
+            self._registry.end_attempt(run_id, result)
+            parked = self._move(run_id, FactoryRunStatus.PARKED, run.step)
+            self._notify_ask(parked, result.ask)
+            return parked
         factory = self._file(run.factory)
         step = _step(factory, run.step) if factory is not None else None
         if step is not None and result.ending is StepEnding.CLEAN:
@@ -1195,17 +1272,32 @@ class FactoryRuns:
         its stop, or cancel it."""
         if self._registry.instance(run.instance_id) is None:
             return
-        work_item = ", ".join(f"{name} {value}" for name, value in run.work_item.items())
         send_back = [f"{_SEND_BACK}{step}" for step in _earlier(factory, run.step)[-1:]]
         self._outbox.notify(
             run.instance_id,
             f"run_stop:{run.run_id}:{stop.generation}",
             source=run.factory,
             title="Needs human",
-            text=f'The run for {work_item} stopped at "{run.step}".',
+            text=f'The run for {_work_item(run)} stopped at "{run.step}".',
             page="/library",
             options=(_RETRY, *send_back, _CANCEL),
             stop=stop,
+        )
+
+    def _notify_ask(self, run: FactoryRun, ask: WaitingApproval) -> None:
+        """Ask the user to approve or deny the call the run's turn parked on."""
+        if self._registry.instance(run.instance_id) is None:
+            return
+        raised = approval_notification(run.factory, ask.turn_id, ask.request, in_routine=False)
+        self._outbox.notify(
+            run.instance_id,
+            f"run_ask:{run.run_id}:{ask.request.approval_id}",
+            source=run.factory,
+            title=raised.title,
+            text=f'The run for {_work_item(run)} asks at "{run.step}": {raised.text}',
+            page="/library",
+            options=tuple(raised.options),
+            ask=RunAskRef(run.run_id, ask),
         )
 
     def _put_stop(self, queued: _QueuedStop) -> None:
@@ -1311,6 +1403,11 @@ def _first_at_work(factory: _Factory) -> _AnyStep | None:
     return next(
         (step for step in factory.steps if not isinstance(step, WaitStep | ApproveStep)), None
     )
+
+
+def _work_item(run: FactoryRun) -> str:
+    """The run's work item, as a notification names the run."""
+    return ", ".join(f"{name} {value}" for name, value in run.work_item.items())
 
 
 def _needing_human(run: FactoryRun) -> FactoryRun:
@@ -1504,7 +1601,7 @@ def _tally(factory: _Factory, attempts: Iterable[StepAttempt]) -> _Tally:
                 tally.sent_back[attempt.step, outcome.back] += 1
         elif (failed_to := _failed_to(factory, attempt)) is not None:
             tally.sent_back[attempt.step, failed_to.back] += 1
-        elif attempt.ending not in (None, StepEnding.LIMITED):
+        elif attempt.ending not in (None, StepEnding.LIMITED, StepEnding.ASKED):
             tally.failures[attempt.step] += 1
     return tally
 

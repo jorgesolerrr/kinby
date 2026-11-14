@@ -44,6 +44,7 @@ from kinby.contracts import (
     RunStop,
     SetupValue,
     SkillName,
+    StepAnswer,
     StepAttempt,
     StepEnding,
     StepId,
@@ -179,6 +180,14 @@ class RunStopRef:
 
 
 @dataclass(frozen=True)
+class RunAskRef:
+    """An ask a factory run's kinby turn parked on: the run, and the approval it waits for."""
+
+    run_id: UUID
+    approval: WaitingApproval
+
+
+@dataclass(frozen=True)
 class ReceivedReply:
     """A reply recorded and not applied yet."""
 
@@ -201,6 +210,8 @@ class ReceivedReply:
     approval: WaitingApproval | None
     #: The run stop the notification asks the user to move on from, if it asks about one.
     stop: RunStopRef | None
+    #: The run's ask the notification asks the user to answer, if it asks about one.
+    ask: RunAskRef | None = None
 
 
 class HubRegistry:
@@ -487,6 +498,9 @@ class HubRegistry:
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             # What an attempt on a workbench spent, as JSON. Null for any other.
             self._add_columns(connection, "step_attempts", {"usage": "TEXT"})
+            # The approval an asked attempt's turn parked on, and the user's answer to it, as
+            # JSON. Null for any other.
+            self._add_columns(connection, "step_attempts", {"ask": "TEXT", "answer": "TEXT"})
             self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
@@ -2324,7 +2338,7 @@ class HubRegistry:
                 """
                 UPDATE step_attempts
                 SET ending = ?, outcome = ?, result_values = ?, summary = ?, session = ?,
-                    usage = ?, ended_at = ?
+                    usage = ?, ask = ?, ended_at = ?
                 WHERE run_id = ? AND ended_at IS NULL
                 """,
                 (
@@ -2334,10 +2348,28 @@ class HubRegistry:
                     result.summary,
                     result.session,
                     result.usage.model_dump_json() if result.usage is not None else None,
+                    result.ask.model_dump_json() if result.ask is not None else None,
                     _now(),
                     str(run_id),
                 ),
             )
+
+    def answer_ask(self, run_id: UUID, answer: StepAnswer) -> FactoryRun:
+        """Record the user's answer on the run's last attempt, the asked one, and queue the run
+        again at its step, for its next attempt to take the answer."""
+        with self._transaction() as connection:
+            connection.execute(
+                """
+                UPDATE step_attempts SET answer = ?
+                WHERE rowid = (SELECT MAX(rowid) FROM step_attempts WHERE run_id = ?)
+                """,
+                (answer.model_dump_json(), str(run_id)),
+            )
+            connection.execute(
+                "UPDATE factory_runs SET status = ?, updated_at = ? WHERE id = ?",
+                (FactoryRunStatus.QUEUED.value, _now(), str(run_id)),
+            )
+        return self._existing_run(run_id)
 
     def attempts(self, run_id: UUID) -> list[StepAttempt]:
         """Every attempt of the run, in the order they started."""
@@ -2360,7 +2392,7 @@ class HubRegistry:
                 """
                 SELECT
                     step, attempt, ending, outcome, result_values, summary, session, usage,
-                    started_at, ended_at
+                    ask, answer, started_at, ended_at
                 FROM step_attempts
                 WHERE run_id = ? AND rowid > ? AND (? IS NULL OR rowid <= ?)
                 ORDER BY rowid
@@ -2377,6 +2409,8 @@ class HubRegistry:
                 summary=summary,
                 session=session,
                 usage=StepUsage.model_validate_json(usage) if usage is not None else None,
+                ask=WaitingApproval.model_validate_json(ask) if ask is not None else None,
+                answer=StepAnswer.model_validate_json(answer) if answer is not None else None,
                 started_at=datetime.fromisoformat(started_at),
                 ended_at=datetime.fromisoformat(ended_at) if ended_at is not None else None,
             )
@@ -2389,6 +2423,8 @@ class HubRegistry:
                 summary,
                 session,
                 usage,
+                ask,
+                answer,
                 started_at,
                 ended_at,
             ) in rows
@@ -2552,9 +2588,16 @@ class HubRegistry:
         stop: RunStopRef | None,
         raised_at: datetime,
         deliveries: Mapping[UUID, DeliveryStatus],
+        ask: RunAskRef | None = None,
     ) -> UUID:
         """Record the notification with a delivery on each channel, unless the instance raised
-        *key* before. The id of the notification the key names."""
+        *key* before. The id of the notification the key names.
+
+        An *ask*'s notification keeps the run and the approval, and no stop generation.
+        """
+        if ask is not None:
+            approval = ask.approval
+        run_id = stop.run_id if stop is not None else ask.run_id if ask is not None else None
         with self._transaction() as connection:
             inserted = connection.execute(
                 """
@@ -2576,7 +2619,7 @@ class HubRegistry:
                     notification.link,
                     json.dumps(notification.options),
                     approval.model_dump_json() if approval is not None else None,
-                    str(stop.run_id) if stop is not None else None,
+                    str(run_id) if run_id is not None else None,
                     stop.generation if stop is not None else None,
                     raised_at.isoformat(),
                 ),
@@ -2826,7 +2869,12 @@ class HubRegistry:
                 approval=(
                     WaitingApproval.model_validate_json(row[14]) if row[14] is not None else None
                 ),
-                stop=RunStopRef(UUID(row[15]), row[16]) if row[15] is not None else None,
+                stop=RunStopRef(UUID(row[15]), row[16]) if row[16] is not None else None,
+                ask=(
+                    RunAskRef(UUID(row[15]), WaitingApproval.model_validate_json(row[14]))
+                    if row[15] is not None and row[16] is None and row[14] is not None
+                    else None
+                ),
             )
             for row in rows
         ]

@@ -19,7 +19,7 @@ from kinby.contracts import (
 from kinby.core.errors import ManagedInstanceNotFound, NotificationCapReached
 from kinby.hub.channels import Channels
 from kinby.hub.models import ChannelNotification
-from kinby.hub.registry import HubRegistry, ManagedInstance, PendingDelivery, RunStopRef
+from kinby.hub.registry import HubRegistry, ManagedInstance, PendingDelivery, RunAskRef, RunStopRef
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
 
 #: How long after a notification was raised the outbox stops trying a channel that fails.
@@ -114,11 +114,12 @@ class Outbox:
         thread_id: UUID | None = None,
         approval: WaitingApproval | None = None,
         stop: RunStopRef | None = None,
+        ask: RunAskRef | None = None,
     ) -> UUID:
         """Record the notification under the hub's header and a link to the web app's *page*, once
         per key, and deliver it. The id of the notification the key names. *thread_id* is the
-        thread it came from, if any, and *approval* or *stop* the approval or run stop its options
-        answer.
+        thread it came from, if any, and *approval*, *stop* or *ask* the approval, run stop or
+        run's ask its options answer.
 
         A channel that mutes the instance records it as muted and never sends it. Every channel
         that sends it offers to mute the instance, after the notification's own options.
@@ -142,7 +143,15 @@ class Outbox:
             if channel.sends
         }
         raised = self._registry.raise_notification(
-            instance_id, key, thread_id, notification, approval, stop, self._clock(), deliveries
+            instance_id,
+            key,
+            thread_id,
+            notification,
+            approval,
+            stop,
+            self._clock(),
+            deliveries,
+            ask,
         )
         if raised == notification.notification_id:
             self._deliver_all(self._registry.pending_deliveries(raised))
