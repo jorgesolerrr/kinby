@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type {
   Client,
   FactoryRun,
@@ -148,6 +149,51 @@ export async function readRun(caller: Caller, runId: string): Promise<RunOpened>
     readFactory(caller, name),
   ])
   return { detail, factory, line, workbench }
+}
+
+/** A workbench a line setup offers: what setting the factory up on it asks for, or why it cannot take the line. */
+type Fit =
+  | { workbench: Workbench; asked: LineSetupDescription }
+  | { workbench: Workbench; refused: string }
+
+/** What setting a factory up asks for on each workbench, and on a new one. */
+interface SetupAsks {
+  fits: Fit[]
+  fresh: LineSetupDescription
+}
+
+/**
+ * Read what setting `factory` up asks for on each of `workbenches` and on a new workbench. A
+ * workbench the hub refuses, or one that lacks a login or the browser, which no answer gives it,
+ * cannot take the line.
+ */
+export async function readSetup(
+  caller: Caller,
+  factory: string,
+  workbenches: Workbench[],
+): Promise<SetupAsks> {
+  const fit = async (workbench: Workbench): Promise<Fit> => {
+    try {
+      const asked = await caller.call("line.setup.describe", {
+        factory,
+        workbench_id: workbench.workbench_id,
+      })
+      if (asked.browser) return { workbench, refused: "It has no browser." }
+      if (asked.logins.length > 0) {
+        const logins = asked.logins.map(({ label }) => label).join(", ")
+        return { workbench, refused: `It is not signed in to ${logins}.` }
+      }
+      return { workbench, asked }
+    } catch (error) {
+      if (!(error instanceof CallError) || error.code !== "INVALID_SETUP") throw error
+      return { workbench, refused: Object.values(error.fields).join(" ") }
+    }
+  }
+  const [fresh, fits] = await Promise.all([
+    caller.call("line.setup.describe", { factory }),
+    Promise.all(workbenches.map(fit)),
+  ])
+  return { fits, fresh }
 }
 
 /** A line as the user knows it, "software on kinby". */
