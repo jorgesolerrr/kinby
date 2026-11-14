@@ -35,7 +35,7 @@ A factory may declare `requires` in place of `instances`. Its steps then run on 
 - `intake`: optional. Setting up a line creates the line's intake routine in its owner from it, and removing the line deletes it. The line's `intake` names that routine.
   - `call`: a tool of the factory's folder, run on the workbench. Its `signal` parameter receives the delivery that fired it, or `{}`. It returns a list of work items, each a mapping of the `work_item` values, or `None` for none, and the hub hands each to the line.
   - `schedule`: a cron expression with five fields, as a routine's.
-  - `delivery`: deliveries fire it at `/instances/<owner_id>/signals/<intake>`, one address per line. `secret` names the owner's secret they are signed with, which setting up the line needs the owner to hold. `auth`, `signature_header` and `delivery_header` are as for a routine's `signal`.
+  - `delivery`: deliveries fire it at `/lines/<line_id>/signals` on the hub, one address per line that a change of owner keeps. `secret` names the owner's secret they are signed with, which setting up the line, or giving it another owner, needs that owner to hold. `auth`, `signature_header` and `delivery_header` are as for a routine's `signal`.
   - It takes a `schedule`, a `delivery` or both.
 - Steps take no `in`, and a `command` step no `branch` or `hook`. Only `agent`, `command`, `code`, `wait` and `approve` steps.
 - An `agent` step runs a model on the workbench, in the run's folder:

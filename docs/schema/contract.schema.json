@@ -4998,6 +4998,26 @@
       "title": "LineOwnedListResult",
       "type": "object"
     },
+    "LineOwnerSetCommand": {
+      "additionalProperties": false,
+      "description": "Move one line to another owning instance, with its intake routine and the memory marked\nwith its workbench. The result is the line.\n\nRefused while a run of the line is running a step. A change that fails part way leaves all\nthree with the old owner. An old owner that keeps another line on the workbench keeps a copy\nof that memory.",
+      "properties": {
+        "line_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "owner_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id",
+        "owner_id"
+      ],
+      "title": "LineOwnerSetCommand",
+      "type": "object"
+    },
     "LineRemoveCommand": {
       "additionalProperties": false,
       "description": "Remove one line. Its workbench stays as it is. The result lists the lines left.",
@@ -15181,6 +15201,22 @@
           ],
           "type": "object"
         },
+        "line.owner.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/LineOwnerSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/Line"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "line.remove": {
           "additionalProperties": false,
           "properties": {
@@ -16762,6 +16798,7 @@
         "line.list",
         "line.get",
         "line.update",
+        "line.owner.set",
         "line.remove",
         "line.hand_in",
         "line.intake",

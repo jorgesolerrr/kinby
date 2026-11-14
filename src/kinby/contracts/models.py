@@ -1868,7 +1868,8 @@ class Line(ContractModel):
     model: str | None
     usd_per_day: float | None
     #: The owner's routine that runs the line's intake, which a delivery reaches at
-    #: ``/instances/<owner_id>/signals/<intake>``. None when the factory declares no intake.
+    #: ``/lines/<line_id>/signals`` whichever instance owns the line. None when the factory
+    #: declares no intake.
     intake: RoutineName | None
 
 
@@ -1893,6 +1894,19 @@ class LineUpdateCommand(ContractModel):
     model: Annotated[str, Field(min_length=1)] | None = None
     #: Its daily budget in US dollars. Off when absent.
     usd_per_day: Annotated[float, Field(gt=0)] | None = None
+
+
+class LineOwnerSetCommand(ContractModel):
+    """Move one line to another owning instance, with its intake routine and the memory marked
+    with its workbench. The result is the line.
+
+    Refused while a run of the line is running a step. A change that fails part way leaves all
+    three with the old owner. An old owner that keeps another line on the workbench keeps a copy
+    of that memory.
+    """
+
+    line_id: UUID
+    owner_id: UUID
 
 
 class LineRemoveCommand(ContractModel):

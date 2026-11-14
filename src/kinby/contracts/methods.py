@@ -140,6 +140,7 @@ from kinby.contracts.models import (
     LineListResult,
     LineOwnedListCommand,
     LineOwnedListResult,
+    LineOwnerSetCommand,
     LineRemoveCommand,
     LineSetupCommand,
     LineUpdateCommand,
@@ -614,6 +615,7 @@ LINE_SETUP = Method("line.setup", Scope.HUB_ADMIN, LineSetupCommand, Line)
 LINE_LIST = Method("line.list", Scope.HUB_READ, LineListCommand, LineListResult)
 LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
 LINE_UPDATE = Method("line.update", Scope.HUB_ADMIN, LineUpdateCommand, Line)
+LINE_OWNER_SET = Method("line.owner.set", Scope.HUB_ADMIN, LineOwnerSetCommand, Line)
 LINE_REMOVE = Method("line.remove", Scope.HUB_ADMIN, LineRemoveCommand, LineListResult)
 LINE_HAND_IN = Method("line.hand_in", Scope.HUB_ADMIN, LineHandInCommand, FactoryRun)
 LINE_INTAKE = Method("line.intake", Scope.LINE_INTAKE, LineIntakeCommand, LineIntakeResult)
@@ -927,6 +929,7 @@ METHODS = (
     LINE_LIST,
     LINE_GET,
     LINE_UPDATE,
+    LINE_OWNER_SET,
     LINE_REMOVE,
     LINE_HAND_IN,
     LINE_INTAKE,

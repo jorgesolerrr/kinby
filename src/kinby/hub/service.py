@@ -17,6 +17,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
@@ -120,6 +121,7 @@ from kinby.contracts import (
     LINE_LIST,
     LINE_OWNED_HAND_IN,
     LINE_OWNED_LIST,
+    LINE_OWNER_SET,
     LINE_REMOVE,
     LINE_SCOPES,
     LINE_SETUP,
@@ -191,6 +193,7 @@ from kinby.contracts import (
     FactoryResult,
     FactoryRole,
     FactoryRun,
+    FactoryRunStatus,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
     HubRouteMissing,
@@ -256,6 +259,7 @@ from kinby.contracts import (
     LineListResult,
     LineOwnedListCommand,
     LineOwnedListResult,
+    LineOwnerSetCommand,
     LineRemoveCommand,
     LineSetupCommand,
     LineUpdateCommand,
@@ -352,6 +356,7 @@ from kinby.core.errors import (
     InvalidSetup,
     LifecycleOperationInFlight,
     LifecycleOperationNotFound,
+    LineBusy,
     LineNotFound,
     LoginNotFound,
     ManagedInstanceNotFound,
@@ -454,6 +459,7 @@ from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.read_only_tools import read_only_tools
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
+from kinby.memory import GraphStore
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
 from kinby.plugins.hub import (
     HUB_SCOPES_VARIABLE,
@@ -949,6 +955,7 @@ class Hub:
         dispatcher.register(LINE_LIST, self.list_lines)
         dispatcher.register(LINE_GET, self.get_line)
         dispatcher.register(LINE_UPDATE, self.update_line)
+        dispatcher.register(LINE_OWNER_SET, self.set_line_owner)
         dispatcher.register(LINE_REMOVE, self.remove_line)
         dispatcher.register(LINE_HAND_IN, self.hand_in)
         dispatcher.register(OPERATION_GET, self.operation)
@@ -3831,6 +3838,66 @@ class Hub:
         self.registry.update_line(updated)
         return updated
 
+    async def set_line_owner(self, command: LineOwnerSetCommand) -> Line:
+        """Move the line, its runs, its intake routine and the memory marked with its workbench to
+        another instance, so the new owner hears the runs' stops and hands the line work.
+
+        Each part moved is put back when a later one fails, so a change that fails leaves them all
+        with the old owner. An old owner that keeps another line on the workbench keeps a copy of
+        the memory, since it holds that line's lessons too and nothing tells them apart.
+        """
+        async with self._factory_dependents:
+            line = await self.get_line(LineGetCommand(line_id=command.line_id))
+            owner = self.registry.instance(command.owner_id)
+            old = self.registry.instance(line.owner_id)
+            if owner is None or not owner.active or owner.workbench is not None:
+                raise InvalidSetup({"owner_id": f'Instance "{command.owner_id}" was not found.'})
+            if owner.instance_id == line.owner_id:
+                return line
+            assert old is not None
+            self._refuse_running(line)
+            moved = line.model_copy(update={"owner_id": owner.instance_id})
+            source, target = GraphStore(old.path), GraphStore(owner.path)
+            memory = source.marked(self._workbench_name(line.workbench_id))
+            async with AsyncExitStack() as undo:
+                for node in target.take(memory):
+                    undo.callback(target.prune, node)
+                if line.intake is not None:
+                    read = RoutineReadCommand(name=line.intake)
+                    held = RoutineFile.model_validate(
+                        await self._relayed(
+                            old.instance_id, ROUTINE_READ.name, read.model_dump(mode="json")
+                        )
+                    )
+                    await self._write_intake(owner, line.intake, held.content)
+                    undo.push_async_callback(self._remove_intake, moved)
+                    await self._remove_intake(line)
+                    undo.push_async_callback(self._write_intake, old, line.intake, held.content)
+                self._refuse_running(line)
+                if not any(
+                    other.line_id != line.line_id
+                    and (other.owner_id, other.workbench_id) == (old.instance_id, line.workbench_id)
+                    for other in self.registry.lines()
+                ):
+                    undo.callback(source.take, memory)
+                    for node in memory:
+                        source.prune(node)
+                self.registry.set_line_owner(line.line_id, owner.instance_id)
+                undo.pop_all()
+            return moved
+
+    def _refuse_running(self, line: Line) -> None:
+        """A step that ended part way through the change would write its views and tell its stop,
+        whose recap the owner remembers, to the old owner after the memory left it."""
+        running = self.registry.runs(
+            line.factory, (FactoryRunStatus.RUNNING,), line_id=line.line_id
+        )
+        if running:
+            raise LineBusy(
+                f'Factory run "{running[0].run_id}" of the line is running step '
+                f'"{running[0].step}". Change the owner once the step ends.'
+            )
+
     async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
         """Remove the line and its intake routine. Its workbench keeps its clone, its secrets and
         its command lists. An owner that cannot delete the routine keeps the line."""
@@ -3953,6 +4020,16 @@ class Hub:
         if alias is None:
             return InstanceUnreachable.MISSING
         return await self.endpoint(alias)
+
+    async def intake_endpoint(
+        self, line_id: UUID
+    ) -> tuple[InstanceEndpoint, RoutineName] | InstanceUnreachable:
+        """Reach the owner of the line, and the routine its deliveries go to there."""
+        line = next((line for line in self.registry.lines() if line.line_id == line_id), None)
+        if line is None or line.intake is None:
+            return InstanceUnreachable.MISSING
+        endpoint = await self.endpoint(line.owner_id)
+        return endpoint if isinstance(endpoint, InstanceUnreachable) else (endpoint, line.intake)
 
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
         """Wake the parked waits of the instance's factory that the signal matches."""
