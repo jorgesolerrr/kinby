@@ -45,6 +45,7 @@ export type StepValue = boolean | number | string;
 export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "needs-human" | "limited" | "asked";
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
+export type ViewId = string;
 export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -190,7 +191,6 @@ export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
  * What the gate does with a tool: its own rule in permissions.toml, or the mode's.
  */
 export type ToolRule = "allow" | "ask" | "deny" | "mode";
-export type ViewId = string;
 export type ViewComponent =
   ViewCard | ViewRow | ViewText | ViewLink | ViewTable | ViewBadge | ViewKanban | ViewStat | ViewChart | ViewChecklist;
 export type ViewComponentId = string;
@@ -860,6 +860,10 @@ export interface Contract {
       command: ViewListCommand;
       result: ViewListResult;
     };
+    "view.write": {
+      command: ViewWriteCommand;
+      result: ViewListResult;
+    };
     "workbench.commands.set": {
       command: WorkbenchCommandsSetCommand;
       result: Workbench;
@@ -1512,6 +1516,7 @@ export interface StepAttempt {
   values: {
     [k: string]: StepValue;
   };
+  views?: ViewId[];
 }
 /**
  * An approval a turn parked on, which a notification asks the user to answer.
@@ -3202,6 +3207,7 @@ export interface StepResult {
   values?: {
     [k: string]: StepValue;
   };
+  views?: ViewId[];
 }
 export interface ThreadApprovalRespondCommand {
   approval_id: string;
@@ -3578,6 +3584,17 @@ export interface ViewChecklist {
   label: TextProp;
 }
 export interface ViewListCommand {}
+/**
+ * Create or replace a view, whole, as a step of a run the instance owns wrote it.
+ */
+export interface ViewWriteCommand {
+  data: {
+    [k: string]: JsonValue;
+  };
+  id: ViewId;
+  spec: ViewSpec;
+  title: string;
+}
 /**
  * Set one workbench's list of repository commands *name* to *commands*, replacing the whole
  * list. The result is the workbench's record.

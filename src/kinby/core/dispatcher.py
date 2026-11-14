@@ -72,6 +72,7 @@ from kinby.contracts import (
     VIEW_GET,
     VIEW_LIST,
     VIEW_SUBSCRIBE,
+    VIEW_WRITE,
     AcceptedResult,
     Event,
     EventType,
@@ -468,6 +469,7 @@ def build_dispatcher(
         dispatcher.register(VIEW_LIST, views.list)
         dispatcher.register(VIEW_GET, views.get)
         dispatcher.register_subscription(VIEW_SUBSCRIBE, views.subscribe)
+        dispatcher.register(VIEW_WRITE, views.write)
         dispatcher.register(VIEW_DELETE, views.delete)
     if scheduler is not None:
         dispatcher.register(ROUTINE_LIST, scheduler.list)

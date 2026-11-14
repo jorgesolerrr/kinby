@@ -16,6 +16,7 @@ from kinby.contracts import (
     RUN_TRANSCRIPT_READ,
     STATS_GET,
     STEP_RUN,
+    VIEW_GET,
     AcceptedResult,
     CallFrame,
     Capability,
@@ -41,6 +42,8 @@ from kinby.contracts import (
     StatsGetResult,
     StepResult,
     StepRunCommand,
+    View,
+    ViewGetCommand,
     parse_server_frame,
 )
 
@@ -107,6 +110,8 @@ class InstanceControl(Protocol):
         self, endpoint: ControlEndpoint, command: IntakeRunCommand
     ) -> IntakeRunResult: ...
 
+    async def read_view(self, endpoint: ControlEndpoint, command: ViewGetCommand) -> View: ...
+
     async def read_workspace[Command: ContractModel, Result: ContractModel](
         self, endpoint: ControlEndpoint, method: Method[Command, Result], command: Command
     ) -> Result: ...
@@ -166,6 +171,10 @@ class HttpInstanceControl:
     ) -> IntakeRunResult:
         """Have the workbench run a line's intake tool and wait for the work items it found."""
         return await _call(endpoint, INTAKE_RUN, command, "the intake")
+
+    async def read_view(self, endpoint: ControlEndpoint, command: ViewGetCommand) -> View:
+        """Read a view an agent step wrote from the workbench that ran it."""
+        return await _call(endpoint, VIEW_GET, command, "the view read")
 
     async def read_workspace[Command: ContractModel, Result: ContractModel](
         self, endpoint: ControlEndpoint, method: Method[Command, Result], command: Command
