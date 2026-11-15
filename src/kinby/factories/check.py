@@ -24,6 +24,7 @@ from kinby.contracts import (
     SetupField,
     SetupFieldKind,
     SetupFieldType,
+    SignalAuth,
     SubscriptionLogin,
 )
 from kinby.factories import ships_recipe
@@ -273,6 +274,12 @@ def _workbench_steps(
     intake = factory.intake
     if intake is not None and intake.schedule is None and intake.delivery is None:
         yield "The intake declares no trigger: give it a schedule, a delivery or both."
+    delivery = None if intake is None else intake.delivery
+    if delivery is not None:
+        if _ENVIRONMENT_NAME.fullmatch(delivery.secret) is None:
+            yield f'The delivery secret "{delivery.secret}" is not an environment variable name.'
+        if delivery.auth is SignalAuth.HMAC_SHA256 and delivery.signature_header is None:
+            yield "An hmac-sha256 delivery names its signature_header."
     for key, call in (
         ("intake", intake),
         ("needs_human", factory.needs_human),

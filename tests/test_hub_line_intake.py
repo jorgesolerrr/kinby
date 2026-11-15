@@ -41,6 +41,7 @@ from kinby.contracts import (
     WorkbenchCreateCommand,
     WorkbenchListCommand,
     WorkbenchListResult,
+    WorkbenchOperationResult,
     WorkbenchStartCommand,
 )
 from kinby.core.dispatcher import (
@@ -60,6 +61,7 @@ from tests.test_hub import (
     FakeControl,
     FakeRuntime,
     created_instance,
+    finished_operation,
     hub_at,
     hub_client,
     instance_environment,
@@ -157,7 +159,6 @@ async def owned(
         ),
     )
     token = control_token(hub, str(home))
-    monkeypatch.setenv("WEBHOOK_SECRET", SECRET.decode())
     monkeypatch.setenv("KINBY_CONTROL_TOKEN", token)
     monkeypatch.setenv("KINBY_HUB_SCOPES", ",".join(hub.instance_scopes(home)))
     async with served(hub) as address, instance_served(instance, dispatcher, token=token) as own:
@@ -167,8 +168,17 @@ async def owned(
     hub.close()
 
 
-async def _started_workbench(owned: Owned, workbench: WorkbenchCreateCommand = CEC_BACKEND) -> UUID:
-    workbench_id = (await created(owned.client, workbench)).workbench_id
+def _signing(workbench: WorkbenchCreateCommand, secret: bytes) -> WorkbenchCreateCommand:
+    """The workbench, holding *secret* as the secret its line's deliveries are signed with."""
+    return workbench.model_copy(
+        update={"secrets": workbench.secrets | {"WEBHOOK_SECRET": SecretStr(secret.decode())}}
+    )
+
+
+async def _started_workbench(
+    owned: Owned, workbench: WorkbenchCreateCommand = CEC_BACKEND, secret: bytes = SECRET
+) -> UUID:
+    workbench_id = (await created(owned.client, _signing(workbench, secret))).workbench_id
     start = await owned.client.call(
         WORKBENCH_START, WorkbenchStartCommand(workbench_id=workbench_id)
     )
@@ -177,8 +187,10 @@ async def _started_workbench(owned: Owned, workbench: WorkbenchCreateCommand = C
     return workbench_id
 
 
-async def _line(owned: Owned, workbench: WorkbenchCreateCommand = CEC_BACKEND) -> Line:
-    workbench_id = await _started_workbench(owned, workbench)
+async def _line(
+    owned: Owned, workbench: WorkbenchCreateCommand = CEC_BACKEND, secret: bytes = SECRET
+) -> Line:
+    workbench_id = await _started_workbench(owned, workbench, secret)
     set_up = await owned.client.call(
         LINE_SETUP, LineSetupCommand(factory="tickets", workbench_id=workbench_id)
     )
@@ -200,10 +212,12 @@ async def _runs(owned: Owned, line: Line) -> list[FactoryRun]:
     return listed.runs
 
 
-async def _delivered(owned: Owned, line: Line, body: dict[str, object]) -> int:
-    """Post a signed delivery to the line's address on the hub."""
+async def _delivered(
+    owned: Owned, line: Line, body: dict[str, object], secret: bytes = SECRET
+) -> int:
+    """Post a delivery signed with *secret* to the line's address on the hub."""
     data = json.dumps(body).encode()
-    signature = hmac.new(SECRET, data, hashlib.sha256).hexdigest()
+    signature = hmac.new(secret, data, hashlib.sha256).hexdigest()
     async with (
         aiohttp.ClientSession() as session,
         session.post(
@@ -307,10 +321,59 @@ def test_the_owners_container_never_receives_the_workbenchs_secrets(tmp_path, mo
             await _delivered(hub, line, {"action": "labeled"})
             await hub.fired()
 
-            assert "GH_TOKEN" not in instance_environment(hub.hub, hub.home)
+            held = instance_environment(hub.hub, hub.home)
             owner = [spec for spec in hub.runtime.created if spec.instance_id == str(hub.home)]
             assert owner
-            assert all("GH_TOKEN" not in spec.env for spec in owner)
+            for secret in ("GH_TOKEN", "WEBHOOK_SECRET"):
+                assert secret not in held
+                assert all(secret not in spec.env for spec in owner)
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_rejects_a_delivery_not_signed_with_the_secret_of_the_lines_workbench(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            line = await _line(hub)
+
+            status = await _delivered(hub, line, {"action": "labeled"}, secret=b"another-secret")
+            await hub.fired()
+
+            assert status == 401
+            assert hub.control.intakes == []
+            assert await _runs(hub, line) == []
+
+    asyncio.run(scenario())
+
+
+def test_one_owner_takes_two_lines_of_a_factory_whose_deliveries_are_signed_apart(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            backend = await _line(hub, secret=b"backend-secret")
+            landing = await _line(hub, LANDING, secret=b"landing-secret")
+            hub.control.found = [[{"issue": 4}], [{"issue": 4}]]
+
+            statuses = [
+                await _delivered(hub, line, {"action": "labeled"}, secret=secret)
+                for line, secret in (
+                    (backend, b"landing-secret"),
+                    (landing, b"backend-secret"),
+                    (backend, b"backend-secret"),
+                    (landing, b"landing-secret"),
+                )
+            ]
+            # The owner runs one routine turn at a time: one tick for each line's intake.
+            await hub.fired()
+            await hub.fired()
+
+            assert (backend.owner_id, landing.owner_id) == (hub.home, hub.home)
+            assert statuses == [401, 401, 202, 202]
+            assert [run.work_item for run in await _runs(hub, backend)] == [{"issue": 4}]
+            assert [run.work_item for run in await _runs(hub, landing)] == [{"issue": 4}]
 
     asyncio.run(scenario())
 
@@ -328,11 +391,10 @@ def test_removing_the_line_removes_its_intake_routine(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_a_line_is_not_set_up_when_its_owner_cannot_take_the_intake_routine(tmp_path, monkeypatch):
+def test_a_line_is_not_set_up_on_a_workbench_without_its_delivery_secret(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
-            monkeypatch.delenv("WEBHOOK_SECRET")
-            workbench_id = await _started_workbench(hub)
+            workbench_id = (await created(hub.client)).workbench_id
 
             refused = await hub.client.call(
                 LINE_SETUP, LineSetupCommand(factory="tickets", workbench_id=workbench_id)
@@ -340,8 +402,39 @@ def test_a_line_is_not_set_up_when_its_owner_cannot_take_the_intake_routine(tmp_
 
             assert isinstance(refused, ErrorEnvelope), refused
             assert refused.code is ErrorCode.INVALID_SETUP
-            assert refused.fields["owner_id"].endswith("Signal secret WEBHOOK_SECRET is unset.")
+            assert refused.fields == {
+                "workbench_id": 'Workbench "cec-backend" lacks what factory "tickets" requires: '
+                'secret "WEBHOOK_SECRET".'
+            }
             assert await _routines(hub) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_line_set_up_with_its_delivery_secret_keeps_it_on_the_workbench(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            workbench_id = (await created(hub.client)).workbench_id
+
+            set_up = await hub.client.call(
+                LINE_SETUP,
+                LineSetupCommand(
+                    factory="tickets",
+                    workbench_id=workbench_id,
+                    secrets={"WEBHOOK_SECRET": SecretStr(SECRET.decode())},
+                ),
+            )
+            assert isinstance(set_up, LineSetupResult), set_up
+            assert set_up.operation_id is not None
+            await finished_operation(
+                hub.client,
+                WorkbenchOperationResult(
+                    operation_id=set_up.operation_id, workbench_id=workbench_id
+                ),
+            )
+
+            assert instance_environment(hub.hub, workbench_id)["WEBHOOK_SECRET"] == "webhook-secret"
+            assert "WEBHOOK_SECRET" not in instance_environment(hub.hub, hub.home)
 
     asyncio.run(scenario())
 
@@ -390,13 +483,9 @@ def test_an_intake_the_workbench_did_not_run_hands_the_line_no_work(tmp_path, mo
     asyncio.run(scenario())
 
 
-def test_a_setup_whose_owner_cannot_take_the_intake_routine_creates_no_workbench(
-    tmp_path, monkeypatch
-):
+def test_a_setup_without_the_delivery_secret_creates_no_workbench(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
-            monkeypatch.delenv("WEBHOOK_SECRET")
-
             refused = await hub.client.call(
                 LINE_SETUP,
                 LineSetupCommand(
@@ -408,7 +497,10 @@ def test_a_setup_whose_owner_cannot_take_the_intake_routine_creates_no_workbench
             listed = await hub.client.call(WORKBENCH_LIST, WorkbenchListCommand())
 
             assert isinstance(refused, ErrorEnvelope), refused
-            assert refused.fields["owner_id"].endswith("Signal secret WEBHOOK_SECRET is unset.")
+            assert refused.fields == {
+                "workbench": 'Workbench "landing" lacks what factory "tickets" requires: '
+                'secret "WEBHOOK_SECRET".'
+            }
             assert listed == WorkbenchListResult(workbenches=[])
 
     asyncio.run(scenario())

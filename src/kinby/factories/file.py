@@ -137,7 +137,7 @@ class Intake:
 class IntakeDelivery:
     """Deliveries that fire the intake, each authenticated as a routine's signal is."""
 
-    #: The environment variable of the line's owner that holds the deliveries' secret.
+    #: The secret of the line's workbench the hub checks each delivery with.
     secret: Annotated[str, Field(min_length=1)]
     auth: SignalAuth = SignalAuth.TOKEN
     signature_header: str | None = None

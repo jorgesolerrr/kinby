@@ -2,6 +2,8 @@
 checks on a workbench."""
 
 import asyncio
+import hashlib
+import hmac
 import json
 import re
 import subprocess
@@ -82,6 +84,8 @@ SUGGESTED_PICKS = [
 #: The skills of the factory's own folder, which reach its agent steps beside the picks.
 FACTORY_SKILLS = {"implement-ticket", "repository-survey"}
 #: The workbench of the repository the factory works in, holding the secrets it requires.
+#: The secret the project's GitHub webhook signs its deliveries with.
+WEBHOOK_SECRET = "webhook-secret"
 PROJECT = WorkbenchCreateCommand(
     name="project",
     recipe="coder",
@@ -91,6 +95,7 @@ PROJECT = WorkbenchCreateCommand(
         "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
         "GIT_USER_NAME": "Software factory",
         "GIT_USER_EMAIL": "factory@example.com",
+        "GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET,
     },
 )
 
@@ -141,6 +146,7 @@ def test_the_factory_suggests_the_eight_shipped_skills_and_holds_its_own_two(tmp
         "CLAUDE_CODE_OAUTH_TOKEN",
         "GIT_USER_NAME",
         "GIT_USER_EMAIL",
+        "GITHUB_WEBHOOK_SECRET",
     ]
     assert described.commands == ["setup", "checks"]
     skills = FACTORY / "skills"
@@ -193,7 +199,6 @@ async def software_line(hub: Hub, runtime: FakeRuntime) -> Line:
     dispatcher, _ = signal_runtime(instance, RoutineModel())
     token = control_token(hub, str(home))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
         patch.setenv("KINBY_CONTROL_TOKEN", token)
         patch.setenv("KINBY_HUB_SCOPES", ",".join(hub.instance_scopes(home)))
         async with (
@@ -277,9 +282,19 @@ async def babysitting(hub: Hub, run_id: UUID, times: int = 1) -> FactoryRunDetai
 
 
 async def woken(hub: Hub, runtime: FakeRuntime, line: Line, body: bytes, event: str) -> None:
-    """Deliver a GitHub webhook to the line's intake in its owner, which accepts it."""
+    """Deliver a GitHub webhook, signed with the workbench's secret, to the line's intake in its
+    owner, which accepts it."""
     assert line.intake is not None
-    status, _ = await signalled(hub, runtime, line.owner_id, body, routine=line.intake, event=event)
+    signature = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    status, _ = await signalled(
+        hub,
+        runtime,
+        line.owner_id,
+        body,
+        routine=line.intake,
+        event=event,
+        headers={"X-Hub-Signature-256": f"sha256={signature}"},
+    )
     assert status == 202
 
 

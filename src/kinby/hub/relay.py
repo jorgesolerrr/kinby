@@ -132,8 +132,10 @@ async def forward_signal(
     request: web.Request,
     endpoint: InstanceEndpoint,
     routine: str,
+    headers: Mapping[str, str],
 ) -> web.Response:
-    """Forward a webhook byte for byte. Only the instance that recorded it may acknowledge it."""
+    """Forward a webhook's body byte for byte, with *headers*. Only the instance that recorded it
+    may acknowledge it."""
     body = await request.read()
     try:
         async with (
@@ -144,7 +146,7 @@ async def forward_signal(
                 # Quoted, so a routine name can never walk out of the instance's signal path.
                 f"{endpoint.url}/signals/{quote(routine, safe='')}",
                 data=body,
-                headers=forwarded_headers(request.headers),
+                headers=headers,
             ) as answered,
         ):
             return web.Response(
