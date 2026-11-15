@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type {
   Client,
   FactoryRun,
@@ -148,6 +149,54 @@ export async function readRun(caller: Caller, runId: string): Promise<RunOpened>
     readFactory(caller, name),
   ])
   return { detail, factory, line, workbench }
+}
+
+/** What setting a factory up asks for on a workbench, or why it cannot take the line. */
+type Fit = { asked: LineSetupDescription } | { refused: string }
+
+/** What setting a factory up asks for on each workbench, and on a new one. */
+interface SetupAsks {
+  fits: (Fit & { workbench: Workbench })[]
+  fresh: Fit
+}
+
+/**
+ * Read what setting `factory` up asks for on each of `workbenches` and on a new workbench. A
+ * workbench the hub refuses, or one that lacks a login or the browser, which no answer gives it,
+ * cannot take the line.
+ */
+export async function readSetup(
+  caller: Caller,
+  factory: string,
+  workbenches: Workbench[],
+): Promise<SetupAsks> {
+  const fit = async (workbench: Workbench) => {
+    try {
+      const asked = await caller.call("line.setup.describe", {
+        factory,
+        workbench_id: workbench.workbench_id,
+      })
+      return { workbench, ...answerable(asked, "It") }
+    } catch (error) {
+      if (!(error instanceof CallError) || error.code !== "INVALID_SETUP") throw error
+      return { workbench, refused: Object.values(error.fields).join(" ") }
+    }
+  }
+  const [fresh, fits] = await Promise.all([
+    caller.call("line.setup.describe", { factory }),
+    Promise.all(workbenches.map(fit)),
+  ])
+  return { fits, fresh: answerable(fresh, "A new workbench") }
+}
+
+/** What the setup asks for, or why `subject` cannot take the line: it lacks the browser or a login. */
+function answerable(asked: LineSetupDescription, subject: string): Fit {
+  const logins = asked.logins.map(({ label }) => label).join(", ")
+  const lacks = [
+    ...(asked.browser ? ["has no browser"] : []),
+    ...(logins === "" ? [] : [`is not signed in to ${logins}`]),
+  ]
+  return lacks.length === 0 ? { asked } : { refused: `${subject} ${lacks.join(", and ")}.` }
 }
 
 /** A line as the user knows it, "software on kinby". */

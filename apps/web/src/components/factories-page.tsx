@@ -5,6 +5,7 @@ import { useCallback, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { InstanceAvatar } from "@/components/instance-avatar"
+import { SetUpLine } from "@/components/line-setup"
 import { PageColumn } from "@/components/page-column"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -44,7 +45,7 @@ const COLUMNS: { title: string; holds: (held: LineRun) => boolean }[] = [
 /**
  * The Factories area: a board of the lines' unfinished runs, in the columns Needs you, Running and
  * Waiting, over a card per factory with its steps and a table of its lines. A row of filters
- * narrows both to one factory. A run's card opens the run's page, and a line's row the line's. `instances`
+ * narrows both to one factory, and Set up a line sets a factory up on a workbench. A run's card opens the run's page, and a line's row the line's. `instances`
  * name the lines' owners.
  */
 export function FactoriesPage({
@@ -67,7 +68,17 @@ export function FactoriesPage({
 
   return (
     <PageColumn className="flex flex-col gap-6 py-6">
-      <h1 className="font-heading text-2xl font-semibold">Factories</h1>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="font-heading text-2xl font-semibold">Factories</h1>
+        {floor !== undefined && (
+          <SetUpLine
+            caller={caller}
+            clock={clock}
+            factories={floor.factories.filter(({ older }) => !older).map(({ name }) => name)}
+            workbenches={floor.workbenches}
+          />
+        )}
+      </div>
       {failure !== undefined && <Failure error={failure} />}
       {floor === undefined ? (
         failure === undefined && <Skeleton className="h-72 w-full" />

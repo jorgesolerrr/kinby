@@ -5,6 +5,7 @@ import { useCallback, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { Owner, PageLink, RunBadge } from "@/components/factories-page"
+import { LineMenu } from "@/components/line-changes"
 import { PageColumn } from "@/components/page-column"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -32,7 +33,8 @@ import { FACTORIES_PATH, linePath, runPath, tabPath } from "@/lib/selection"
 type Caller = Pick<Client, "call">
 
 /**
- * One line's page: its owner, model, daily budget and intake over two tabs. Runs lists every run
+ * One line's page: its owner, model, daily budget and intake over two tabs, and a menu that changes
+ * the first three or removes the line. Runs lists every run
  * of the line, each opening its page. Workbench shows the workbench's state with its lifecycle, its image, workspace and
  * repository commands, what the line's factory requires of it, and the other lines on it.
  * `instances` name the owner.
@@ -60,14 +62,24 @@ export function LinePage({
   const { line, runs, workbench } = opened
   return (
     <PageColumn className="flex flex-col gap-6 py-6">
-      <div className="flex flex-col gap-1">
-        <p className="text-sm text-muted-foreground">
-          <PageLink href={FACTORIES_PATH} className="hover:underline">
-            Factories
-          </PageLink>{" "}
-          / <span className="font-mono">{line.factory}</span>
-        </p>
-        <h1 className="font-heading text-2xl font-semibold">{lineName(line, [workbench])}</h1>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <p className="text-sm text-muted-foreground">
+            <PageLink href={FACTORIES_PATH} className="hover:underline">
+              Factories
+            </PageLink>{" "}
+            / <span className="font-mono">{line.factory}</span>
+          </p>
+          <h1 className="font-heading text-2xl font-semibold">{lineName(line, [workbench])}</h1>
+        </div>
+        <LineMenu
+          caller={caller}
+          line={line}
+          name={lineName(line, [workbench])}
+          workbench={workbench.name}
+          instances={instances}
+          onChanged={readAgain}
+        />
       </div>
       <dl className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
         <Detail term="Owner">
