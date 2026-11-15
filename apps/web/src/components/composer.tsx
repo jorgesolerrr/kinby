@@ -7,6 +7,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "@/components/ui/input-group"
+import { draft, keepDraft } from "@/lib/drafts"
 import { takeFocus } from "@/lib/focus"
 import { reason } from "@/lib/operation"
 import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
@@ -15,10 +16,12 @@ import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
  * One box where the user writes to an instance: the text, then a foot with `children` and Send.
  * Enter sends, and Shift+Enter starts a new line. While a turn runs, Send becomes Stop, and Escape
  * stops it too. Under the box, a note names `name`, the instance the message goes to. The message
- * stays in the box until `onSend` resolves, and when it resolves `false`.
+ * stays in the box until `onSend` resolves, and when it resolves `false`. An unsent message is kept
+ * as the draft under `draftKey`, and the box opens on it.
  */
 export function Composer({
   ref,
+  draftKey,
   label,
   placeholder,
   name,
@@ -33,6 +36,8 @@ export function Composer({
 }: {
   /** The text area, for a page that moves focus back to it. */
   ref?: Ref<HTMLTextAreaElement>
+  /** Where the unsent message is kept: a thread's id, or a key of the screen's own. */
+  draftKey: string
   label: string
   placeholder: string
   name: string | undefined
@@ -48,7 +53,7 @@ export function Composer({
   /** What the foot holds before Send. */
   children?: ReactNode
 }) {
-  const [message, setMessage] = useState("")
+  const [message, setMessage] = useState(() => draft(draftKey))
   const [sending, setSending] = useState(false)
   const [sendFailure, setSendFailure] = useState<string>()
   const field = useRef<HTMLTextAreaElement>(null)
@@ -61,7 +66,10 @@ export function Composer({
     if (text === "" || sending || running || !connected) return
     setSending(true)
     try {
-      if ((await onSend(text)) !== false) setMessage("")
+      if ((await onSend(text)) !== false) {
+        setMessage("")
+        keepDraft(draftKey, "")
+      }
       setSendFailure(undefined)
     } catch (error) {
       setSendFailure(reason(error))
@@ -87,7 +95,10 @@ export function Composer({
           disabled={disabled}
           value={message}
           aria-invalid={sendFailure !== undefined || undefined}
-          onChange={(event) => setMessage(event.target.value)}
+          onChange={(event) => {
+            setMessage(event.target.value)
+            keepDraft(draftKey, event.target.value)
+          }}
           onKeyDown={(event) => {
             if (event.key === "Escape" && running && !event.nativeEvent.isComposing) {
               event.preventDefault()

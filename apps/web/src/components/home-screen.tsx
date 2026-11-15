@@ -146,6 +146,7 @@ export function HomeScreen({
           stopped && <StoppedAlert name={instanceName(picked)} start={start} />
         )}
         <Composer
+          draftKey="home"
           label="Message"
           placeholder={
             needsSetup ? `Add ${instanceName(picked)}'s key to start` : "How can I help?"

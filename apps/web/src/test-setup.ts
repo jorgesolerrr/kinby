@@ -1,6 +1,8 @@
 import { cleanup } from "@testing-library/react"
 import { afterEach } from "vitest"
 
+import { forgetDrafts } from "@/lib/drafts"
+
 // jsdom has no matchMedia, and the theme and the sidebar read it. The fake screen is wide and light.
 window.matchMedia = (query) =>
   Object.assign(new EventTarget(), {
@@ -11,4 +13,7 @@ window.matchMedia = (query) =>
     removeListener: () => {},
   })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  forgetDrafts()
+})
