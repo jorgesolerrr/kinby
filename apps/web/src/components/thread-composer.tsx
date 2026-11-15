@@ -78,6 +78,7 @@ export function ThreadComposer({
   return (
     <Composer
       ref={ref}
+      draftKey={threadId}
       label={`Message ${name}`}
       placeholder={running ? `${name} is working…` : `Message ${name}`}
       name={name}

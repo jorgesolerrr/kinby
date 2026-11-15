@@ -1,8 +1,10 @@
 import { CallError, type Event, type PermissionMode } from "@kinby/contract"
-import { act, fireEvent, screen } from "@testing-library/react"
+import { type Answers, fakeClock } from "@kinby/contract/testing"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
+import { ThreadComposer } from "@/components/thread-composer"
 import {
   instanceClient,
   openThread,
@@ -217,6 +219,106 @@ describe("a thread's panel", () => {
       expect(screen.queryByRole("status", { name: "Changing the mode" })).toBeNull()
       expect(picker.hasAttribute("aria-readonly")).toBe(false)
       expect(picker.textContent).toContain("Ask")
+    })
+  })
+
+  describe("the draft", () => {
+    /** Open the composer of `threadId`, from a client that answers from `answers`. */
+    const open = (
+      threadId: string,
+      answers: Answers = {},
+      client = instanceClient({ "thread.list": listing(), ...answers }),
+    ) =>
+      render(
+        <ThreadComposer
+          client={client}
+          clock={fakeClock()}
+          threadId={threadId}
+          name="Ada"
+          running={false}
+          contextSize={undefined}
+          modelWindow={undefined}
+        />,
+      )
+    const box = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" })
+
+    it("keeps an unsent message once the thread closes and opens again", async () => {
+      const { unmount } = open("t1")
+      await userEvent.setup().type(box(), "Fix the")
+
+      unmount()
+      open("t1")
+
+      expect(box().value).toBe("Fix the")
+    })
+
+    it("keeps each thread's message apart", async () => {
+      const user = userEvent.setup()
+      const first = open("t1")
+      await user.type(box(), "Fix the")
+      first.unmount()
+
+      const second = open("t2")
+      expect(box().value).toBe("")
+      await user.type(box(), "Deploy it")
+      second.unmount()
+      open("t1")
+
+      expect(box().value).toBe("Fix the")
+    })
+
+    it("opens empty once the message is sent", async () => {
+      const { unmount } = open("t1", {
+        "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
+      })
+      await userEvent.setup().type(box(), "Fix the runtime{Enter}")
+
+      unmount()
+      open("t1")
+
+      expect(box().value).toBe("")
+    })
+
+    it("keeps what was typed after the thread opened again while the send was out", async () => {
+      let land = () => {}
+      const landed = new Promise<void>((resolve) => (land = resolve))
+      const answering = instanceClient({
+        "thread.list": listing(),
+        "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
+      })
+      const { unmount } = open(
+        "t1",
+        {},
+        {
+          ...answering,
+          call: async (method, params) => {
+            if (method === "thread.turn.start") await landed
+            return answering.call(method, params)
+          },
+        },
+      )
+      const user = userEvent.setup()
+      await user.type(box(), "Fix the{Enter}")
+      unmount()
+      const reopened = open("t1")
+      await user.type(box(), " runtime")
+
+      await act(async () => land())
+      reopened.unmount()
+      open("t1")
+
+      expect(box().value).toBe("Fix the runtime")
+    })
+
+    it("keeps the message when the send fails", async () => {
+      const { unmount } = open("t1")
+      await userEvent.setup().type(box(), "Fix the runtime{Enter}")
+      expect((await screen.findByRole("alert")).textContent).toContain("thread.turn.start")
+
+      unmount()
+      open("t1")
+
+      expect(box().value).toBe("Fix the runtime")
     })
   })
 })

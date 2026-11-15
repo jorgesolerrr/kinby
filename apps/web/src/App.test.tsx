@@ -1741,6 +1741,76 @@ describe("the home screen", () => {
     expect(await threadStarts(hub, "hub-kinby")).toEqual([])
   })
 
+  /** Open the Library and come back to the home screen from New thread. */
+  async function leaveAndReturn(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("link", { name: "Library" }))
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeDefined()
+    await user.click(screen.getByRole("link", { name: "New thread" }))
+  }
+
+  it("keeps an unsent message while another screen is open", async () => {
+    openApp({ signedIn: true, instances: [kinby, ada] })
+    const user = userEvent.setup()
+
+    await user.type(await message(), "What is on")
+    await leaveAndReturn(user)
+
+    expect((await message()) as HTMLTextAreaElement).toHaveProperty("value", "What is on")
+  })
+
+  it("keeps its unsent message apart from a thread's", async () => {
+    const { hub } = openApp({
+      signedIn: true,
+      instances: [kinby],
+      threads: { "hub-kinby": [thread({ id: "t1", title: "Deploy notes" })] },
+    })
+    const user = userEvent.setup()
+    const inThread = () => screen.findByRole("textbox", { name: "Message Kinby" })
+    /** Open the thread from its group, and replay its empty history. */
+    async function openNotes() {
+      await user.click(
+        await (await instanceGroup("Kinby")).findByRole("link", { name: "Deploy notes" }),
+      )
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      const socket = hub.sockets.findLast(
+        (socket) => socket.url === "ws://hub.test/instances/hub-kinby/ws",
+      )
+      const frame = socket?.sent.findLast(
+        (frame) => (frame as { type?: string }).type === "subscribe",
+      ) as { id: string } | undefined
+      act(() => socket?.receive({ type: "subscribed", id: frame?.id, head_sequence: 0 }))
+    }
+
+    await user.type(await message(), "What is on")
+    await openNotes()
+    expect((await inThread()) as HTMLTextAreaElement).toHaveProperty("value", "")
+    await user.type(await inThread(), "Ship it")
+    await user.click(screen.getByRole("link", { name: "New thread" }))
+
+    expect((await message()) as HTMLTextAreaElement).toHaveProperty("value", "What is on")
+    await openNotes()
+    expect((await inThread()) as HTMLTextAreaElement).toHaveProperty("value", "Ship it")
+  })
+
+  it("comes back empty once its message is sent", async () => {
+    openApp({ signedIn: true, instances: [kinby, ada] })
+    const user = userEvent.setup()
+
+    await user.type(await message(), "What is on today?")
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+        "false",
+      ),
+    )
+    await user.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/instances/hub-kinby/threads/thread-1"),
+    )
+    await user.click(screen.getByRole("link", { name: "New thread" }))
+
+    expect((await message()) as HTMLTextAreaElement).toHaveProperty("value", "")
+  })
+
   it("says under the composer that the instance picked can make mistakes", async () => {
     openApp({ signedIn: true, instances: [kinby, ada] })
     const user = userEvent.setup()
@@ -1811,6 +1881,8 @@ describe("the home screen", () => {
     ).toBe("false")
     expect(screen.getAllByText("The image is gone.")).toHaveLength(1)
     expect(window.location.pathname).toBe("/")
+    await leaveAndReturn(user)
+    expect((await message()) as HTMLTextAreaElement).toHaveProperty("value", "What is on today?")
   })
 
   it("forgets a failed start once another stopped instance is picked", async () => {
