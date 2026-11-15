@@ -224,10 +224,14 @@ describe("a thread's panel", () => {
 
   describe("the draft", () => {
     /** Open the composer of `threadId`, from a client that answers from `answers`. */
-    const open = (threadId: string, answers: Answers = {}) =>
+    const open = (
+      threadId: string,
+      answers: Answers = {},
+      client = instanceClient({ "thread.list": listing(), ...answers }),
+    ) =>
       render(
         <ThreadComposer
-          client={instanceClient({ "thread.list": listing(), ...answers })}
+          client={client}
           clock={fakeClock()}
           threadId={threadId}
           name="Ada"
@@ -273,6 +277,37 @@ describe("a thread's panel", () => {
       open("t1")
 
       expect(box().value).toBe("")
+    })
+
+    it("keeps what was typed after the thread opened again while the send was out", async () => {
+      let land = () => {}
+      const landed = new Promise<void>((resolve) => (land = resolve))
+      const answering = instanceClient({
+        "thread.list": listing(),
+        "thread.turn.start": () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" }),
+      })
+      const { unmount } = open(
+        "t1",
+        {},
+        {
+          ...answering,
+          call: async (method, params) => {
+            if (method === "thread.turn.start") await landed
+            return answering.call(method, params)
+          },
+        },
+      )
+      const user = userEvent.setup()
+      await user.type(box(), "Fix the{Enter}")
+      unmount()
+      const reopened = open("t1")
+      await user.type(box(), " runtime")
+
+      await act(async () => land())
+      reopened.unmount()
+      open("t1")
+
+      expect(box().value).toBe("Fix the runtime")
     })
 
     it("keeps the message when the send fails", async () => {

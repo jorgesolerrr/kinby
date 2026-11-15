@@ -65,10 +65,12 @@ export function Composer({
   const send = async () => {
     if (text === "" || sending || running || !connected) return
     setSending(true)
+    const sent = message
     try {
       if ((await onSend(text)) !== false) {
-        setMessage("")
-        keepDraft(draftKey, "")
+        // The box may have changed while the send was out, here or in a composer opened again.
+        setMessage((current) => (current === sent ? "" : current))
+        if (draft(draftKey) === sent) keepDraft(draftKey, "")
       }
       setSendFailure(undefined)
     } catch (error) {
