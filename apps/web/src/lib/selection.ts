@@ -15,6 +15,9 @@ const VIEWS = "views"
 export const CREATE_PATH = "/new"
 const LIBRARY = "library"
 export const LIBRARY_PATH = `/${LIBRARY}`
+const FACTORIES = "factories"
+export const FACTORIES_PATH = `/${FACTORIES}`
+const LINES = "lines"
 
 /** An instance's page holds these tabs, each at its own path under the instance but Overview. */
 const TABS = ["overview", CONFIG, ROUTINES, MEMORY, STATS] as const
@@ -112,9 +115,14 @@ export function viewPath(instanceId: string, viewId: string): string {
   return `${instancePath(instanceId)}/${VIEWS}/${encodeURIComponent(viewId)}`
 }
 
-function libraryPath(kind: LibraryKind): string {
+export function libraryPath(kind: LibraryKind): string {
   const segment = LIBRARY_TABS.find((tab) => tab.kind === kind)?.segment
   return segment === undefined ? LIBRARY_PATH : `${LIBRARY_PATH}/${segment}`
+}
+
+/** One line's page in the Factories area. */
+export function linePath(lineId: string): string {
+  return `${FACTORIES_PATH}/${LINES}/${encodeURIComponent(lineId)}`
 }
 
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
@@ -327,6 +335,16 @@ export function useLibraryTab(): LibraryKind | undefined {
   return useSyncExternalStore(subscribe, libraryTab)
 }
 
+/** Whether the URL opens the Factories area, on its own page or on a line's. */
+export function useFactoriesOpen(): boolean {
+  return useSyncExternalStore(subscribe, () => window.location.pathname.split("/")[1] === FACTORIES)
+}
+
+/** The line whose page the URL opens in the Factories area, if it names one. */
+export function useOpenLine(): string | undefined {
+  return useSyncExternalStore(subscribe, openedLine)
+}
+
 /** Whether the URL opens the Settings dialog, on a section or none. */
 export function useSettingsOpen(): boolean {
   return useSyncExternalStore(subscribe, () =>
@@ -417,6 +435,11 @@ function openedView(): string | undefined {
   return section === SECTION && instanceId && views === VIEWS && viewId
     ? decoded(viewId)
     : undefined
+}
+
+function openedLine(): string | undefined {
+  const [, root, lines, lineId] = window.location.pathname.split("/")
+  return root === FACTORIES && lines === LINES && lineId ? decoded(lineId) : undefined
 }
 
 function settingsSection(): SettingsSection | undefined {

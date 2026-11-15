@@ -98,6 +98,8 @@ function sidebar(
         selected={selected}
         creating={false}
         libraryOpen={false}
+        factoriesOpen={false}
+        waiting={0}
         client={hub}
         clock={clock}
         selectedClient={selectedClient}

@@ -4,9 +4,11 @@ import { cn } from "cn"
 import { useCallback, useLayoutEffect, useSyncExternalStore } from "react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { FactoriesPage } from "@/components/factories-page"
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { Onboarding } from "@/components/onboarding"
 import { LibraryPage } from "@/components/library-page"
+import { LinePage } from "@/components/line-page"
 import { MainPanel } from "@/components/main-panel"
 import { PageBoundary } from "@/components/page-boundary"
 import { SignIn } from "@/components/sign-in"
@@ -18,11 +20,14 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { useInstanceClient } from "@/hooks/use-instance-client"
 import { usePolled } from "@/hooks/use-polled"
 import { instanceName } from "@/lib/instances"
+import { needingYou, readFloor } from "@/lib/lines"
 import {
   replaceOldPath,
   useCreating,
+  useFactoriesOpen,
   useInstanceTab,
   useLibraryTab,
+  useOpenLine,
   usePath,
   useSelectedInstanceId,
   useSelectedThreadId,
@@ -58,6 +63,9 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const configOpen = tab === "config"
   const viewId = useViewOpen()
   const libraryOpen = useLibraryTab() !== undefined
+  const factoriesOpen = useFactoriesOpen()
+  const lineId = useOpenLine()
+  const waiting = useWaiting(client, clock, connected)
   const settingsOpen = useSettingsOpen()
   const settingsSection = useSettingsSection()
   const threadsOpen = useThreadsOpen()
@@ -87,6 +95,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
           selected={selected}
           creating={creating}
           libraryOpen={libraryOpen}
+          factoriesOpen={factoriesOpen}
+          waiting={waiting}
           client={client}
           clock={clock}
           selectedClient={instanceClient}
@@ -111,6 +121,16 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                   clock={clock}
                   home={instances?.find((instance) => instance.home)}
                 />
+              ) : lineId !== undefined ? (
+                <LinePage
+                  key={lineId}
+                  caller={client}
+                  clock={clock}
+                  lineId={lineId}
+                  instances={instances ?? []}
+                />
+              ) : factoriesOpen ? (
+                <FactoriesPage caller={client} clock={clock} instances={instances ?? []} />
               ) : (
                 <MainPanel
                   caller={client}
@@ -206,4 +226,10 @@ function useInstances(
     [client],
   )
   return usePolled(list, clock, connected, LIST_INTERVAL_MS)
+}
+
+/** How many runs of the lines wait on the user, read again as the instances are. */
+function useWaiting(client: Client, clock: Clock, connected: boolean): number {
+  const read = useCallback(() => readFloor(client).then(({ lines }) => needingYou(lines)), [client])
+  return usePolled(read, clock, connected, LIST_INTERVAL_MS)[0] ?? 0
 }

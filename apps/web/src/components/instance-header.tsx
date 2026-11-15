@@ -44,6 +44,7 @@ import {
   noticeTitle,
   observedState,
   shownState,
+  STATES,
 } from "@/lib/instances"
 import { type Followed, followOperation, reason } from "@/lib/operation"
 import { openConfig, openCore, openHome } from "@/lib/selection"
@@ -66,17 +67,6 @@ const UPDATE_ANSWERS: InstanceNotice["code"][] = [
   "template_behind",
   "hub_route_missing",
 ]
-
-const STATES: Record<ReturnType<typeof shownState>, string> = {
-  running: "Running",
-  starting: "Starting",
-  restarting: "Restarting",
-  stopped: "Stopped",
-  failed: "Failed",
-  created: "Created",
-  missing: "Missing",
-  unavailable: "Unavailable",
-}
 
 /**
  * The instance above its tabs: its avatar, its name, what the runtime saw it doing, and its

@@ -617,7 +617,7 @@ The initial behavior, configuration and **setup fields** a **factory** supplies 
 
 ### Factory role
 
-The part an **instance** plays in a **factory** written the older way. A factory has an **instance template** per role. An instance picks at most one role, at creation, and keeps it until a **conversion** turns it into a **workbench** and a **line**.
+The part an **instance** plays in a **factory** written the older way. A factory has an **instance template** per role. An instance picks at most one role, at creation, and keeps it until a **conversion** turns it into a **workbench** and a **line**. The web app's sidebar lists no instance with a role: its factory's entry in the **library** does.
 _Avoid_: member, slot
 
 ### Vanilla instance
