@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from aiohttp import web
+from multidict import CIMultiDict
 
 from kinby.contracts import (
     CONTRACT_VERSION,
@@ -30,6 +31,7 @@ from kinby.hub.relay import (
 )
 from kinby.hub.replies import Replies
 from kinby.instance import Serve
+from kinby.plugins.routines import signed, strip_signal_credentials
 
 _UNAUTHORIZED = "authentication failed"
 
@@ -203,9 +205,19 @@ class HubContractServer:
         """Forward the signal, then hand it on when the instance accepted it as a new delivery.
 
         The instance authenticates the signal, so one it rejects or has seen moves no run. A wait
-        matches only the headers the instance received.
+        matches only the headers the instance received. A delivery to a line's intake the hub
+        authenticates first, with the secret of the line's workbench, and hands on with the
+        owner's control token in place of the signature: the owner holds none of the line's
+        secrets.
         """
-        answer = await forward_signal(request, endpoint, routine)
+        headers = forwarded_headers(request.headers)
+        line = self._routing.line_delivery(endpoint.instance_id, routine)
+        if line is not None:
+            if not signed(line.signal, line.secret, headers, await request.read()):
+                raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
+            headers = CIMultiDict(strip_signal_credentials(line.signal, headers))
+            headers["Authorization"] = f"Bearer {endpoint.control_token}"
+        answer = await forward_signal(request, endpoint, routine, headers)
         if answer.status == web.HTTPAccepted.status_code:
             self._routing.signal_accepted(
                 endpoint.instance_id,

@@ -1,5 +1,6 @@
 """Load the instance's routine instructions at turn boundaries."""
 
+import hmac
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -77,6 +78,18 @@ class HmacSignalConfig:
 
 
 SignalConfig = TokenSignalConfig | HmacSignalConfig
+
+
+def signed(signal: SignalConfig, secret: str, headers: Mapping[str, str], body: bytes) -> bool:
+    """The request carries *secret* as the signal's auth asks: the bearer token itself, or the
+    body's HMAC under it. An empty secret signs nothing."""
+    if not secret:
+        return False
+    if isinstance(signal, TokenSignalConfig):
+        return hmac.compare_digest(headers.get("Authorization", ""), f"Bearer {secret}")
+    signature = headers.get(signal.signature_header, "").removeprefix("sha256=")
+    expected = hmac.digest(secret.encode(), body, "sha256").hex()
+    return hmac.compare_digest(signature, expected)
 
 
 def strip_signal_credentials(

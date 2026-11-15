@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 from collections.abc import Awaitable, Callable, Mapping
@@ -23,8 +22,8 @@ from kinby.instance import Instance, Serve
 from kinby.plugins.routines import (
     Routine,
     SignalConfig,
-    TokenSignalConfig,
     load_routine,
+    signed,
     strip_signal_credentials,
 )
 
@@ -59,17 +58,7 @@ async def _rejection_log(
 
 
 def verify(signal: SignalConfig, headers: Mapping[str, str], body: bytes) -> bool:
-    secret = os.environ[signal.secret_name]
-    if isinstance(signal, TokenSignalConfig):
-        return hmac.compare_digest(
-            headers.get("Authorization", ""),
-            f"Bearer {secret}",
-        )
-    signature = headers.get(signal.signature_header, "")
-    if signature.startswith("sha256="):
-        signature = signature.removeprefix("sha256=")
-    expected = hmac.digest(secret.encode(), body, "sha256").hex()
-    return hmac.compare_digest(signature, expected)
+    return signed(signal, os.environ.get(signal.secret_name, ""), headers, body)
 
 
 class Receiver:

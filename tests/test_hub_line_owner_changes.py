@@ -48,7 +48,13 @@ from kinby.memory import Fact, GraphStore, NodeId
 from tests.test_contract_server import served as instance_served
 from tests.test_factory_runs import detail, intake_client, settled, started, told
 from tests.test_factory_waits import awaiting_approval
-from tests.test_hub import FakeControl, FakeRuntime, created_instance, hub_client
+from tests.test_hub import (
+    FakeControl,
+    FakeRuntime,
+    created_instance,
+    hub_client,
+    instance_environment,
+)
 from tests.test_hub_line_intake import SECRET, Owned, owned
 from tests.test_hub_line_intake import _line as _intake_line
 from tests.test_hub_line_runs import _handed_in, _line
@@ -304,10 +310,13 @@ def test_the_intake_routine_moves_to_the_new_owner_and_keeps_its_delivery_addres
             await hub.fired()
 
             changed = await _owner_set(hub.client, line, teammate)
+            # Both instances run in this process, which holds one control token at a time.
+            monkeypatch.setenv("KINBY_CONTROL_TOKEN", control_token(hub.hub, str(teammate)))
             after = await _delivered(hub, line, "delivery-2")
 
             assert isinstance(changed, Line), changed
             assert (before, after) == (202, 202)
+            assert "WEBHOOK_SECRET" not in instance_environment(hub.hub, teammate)
             assert await _routine_names(hub.dispatcher) == []
             assert await _routine_names(dispatcher) == ["tickets_cec-backend"]
 

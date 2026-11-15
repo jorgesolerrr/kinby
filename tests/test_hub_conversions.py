@@ -82,6 +82,8 @@ instances:
     setup_fields:
       - { name: GITHUB_TOKEN, label: GitHub token, description: Opens pull requests., kind: secret,
           type: text, required: true }
+      - { name: WEBHOOK_SECRET, label: Webhook secret, description: Signs the deliveries.,
+          kind: secret, type: text, required: false }
 intake: { instance: coder, routine: scan }
 work_item: { issue: int }
 steps:
@@ -111,24 +113,26 @@ def _factory(owned: Owned, files: dict[str, str]) -> None:
     write_factory(folder, files)
 
 
-async def _coder(owned: Owned) -> UUID:
+async def _coder(owned: Owned, *, signed: bool = True) -> UUID:
     """An instance that picked the coder role of the tickets factory as it was, and the tdd skill,
     once the factory is rewritten to run on a workbench."""
-    coder = await _old_coder(owned)
+    coder = await _old_coder(owned, signed=signed)
     _factory(owned, NEW)
     return coder
 
 
-async def _old_coder(owned: Owned) -> UUID:
-    """The instance, while the factory still runs its steps in it."""
+async def _old_coder(owned: Owned, *, signed: bool = True) -> UUID:
+    """The instance, while the factory still runs its steps in it, holding the webhook's secret
+    when its deliveries are *signed*."""
     _factory(owned, OLD)
+    webhook = {"WEBHOOK_SECRET": SECRET.decode()} if signed else {}
     accepted = await owned.client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="cec-backend",
             factory_role=FactoryRole(factory="tickets", name="coder"),
             model="openai:gpt-5",
-            secrets={"api_key": "sk-test", "GITHUB_TOKEN": "ghp-test"},
+            secrets={"api_key": "sk-test", "GITHUB_TOKEN": "ghp-test", **webhook},
             picks=["tdd"],
         ),
     )
@@ -397,6 +401,27 @@ def test_a_delivery_to_the_instances_webhook_address_reaches_the_lines_intake(
             assert intake.signal["delivery_id"] == "delivery-1"
             assert isinstance(runs, FactoryRunListResult), runs
             assert [run.work_item for run in runs.runs] == [{"issue": 12}]
+
+    asyncio.run(scenario())
+
+
+def test_converting_an_instance_without_the_delivery_secret_refuses_and_names_it(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            coder = await _coder(hub, signed=False)
+
+            refused = await _converted(hub, coder)
+
+            assert isinstance(refused, ErrorEnvelope), refused
+            assert refused.code is ErrorCode.INVALID_SETUP
+            assert refused.fields == {
+                "instance_id": 'Instance "cec-backend" lacks what factory "tickets" requires: '
+                'secret "WEBHOOK_SECRET".'
+            }
+            assert await _instances(hub) == {hub.home, coder}
+            assert await _lines(hub) == []
 
     asyncio.run(scenario())
 

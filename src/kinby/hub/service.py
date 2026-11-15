@@ -300,6 +300,7 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
     SetupValue,
+    SignalAuth,
     SkillName,
     StatsGetCommand,
     StatsGetResult,
@@ -418,6 +419,7 @@ from kinby.hub.models import (
     InstanceSpec,
     InstanceUnreachable,
     LifecycleRecovery,
+    LineDelivery,
     RecoveredState,
     RuntimeStatus,
     SetupSpec,
@@ -487,6 +489,7 @@ from kinby.plugins.hub import (
 )
 from kinby.plugins.intake import run_line_intake
 from kinby.plugins.mcp import failed_mcp_servers
+from kinby.plugins.routines import HmacSignalConfig, TokenSignalConfig
 from kinby.setup import (
     API_KEY_FIELD,
     BEHAVIOR_PROMPT_FIELD,
@@ -713,14 +716,17 @@ def _asked(
     value, list of repository commands and login the factory requires and it does not hold, and
     the browser when it has none. A field with a default is held, and a login only once it signed
     in. The key of each kinby agent step's model is required, even one the factory declares
-    optional. A *new* workbench is asked for its own fields and every field the factory declares."""
+    optional, and so is the secret the intake's deliveries are signed with. A *new* workbench is
+    asked for its own fields and every field the factory declares."""
     requires = factory.requires
     declared = {field.name for field in requires.secrets}
     keys = _model_keys(factory, model)
+    delivery = None if factory.intake is None else factory.intake.delivery
+    needed = {*keys, *([] if delivery is None else [delivery.secret])}
     secrets = [
         *(
             field.setup_field(SetupFieldKind.SECRET).model_copy(
-                update={"required": field.required or field.name in keys}
+                update={"required": field.required or field.name in needed}
             )
             for field in requires.secrets
         ),
@@ -737,6 +743,18 @@ def _asked(
             if key not in declared
         ),
     ]
+    if delivery is not None and delivery.secret not in {*declared, *keys}:
+        secrets.append(
+            SetupField(
+                name=delivery.secret,
+                label="Delivery secret",
+                description="The secret the intake's deliveries are signed with, as their "
+                "sender holds it, such as a GitHub webhook's secret.",
+                kind=SetupFieldKind.SECRET,
+                type=SetupFieldType.TEXT,
+                required=True,
+            )
+        )
     values = [field.setup_field(SetupFieldKind.CONFIG) for field in requires.values]
     return LineSetupDescription(
         workbench=list(_NEW_WORKBENCH_FIELDS) if new else [],
@@ -794,10 +812,11 @@ def _intake_routine(factory: FactoryName, workbench: str, intake: WorkbenchIntak
     lines = [f"{key}: {render_frontmatter_value(value)}" for key, value in fields.items()]
     delivery = intake.delivery
     if delivery is not None:
+        # The hub checks each delivery with the secret of the line's workbench, and hands it on
+        # with the owner's control token, which every instance holds.
         signal = {
-            "auth": delivery.auth.value,
-            "secret": delivery.secret,
-            "signature_header": delivery.signature_header,
+            "auth": SignalAuth.TOKEN.value,
+            "secret": CONTROL_TOKEN_VARIABLE,
             "delivery_header": delivery.delivery_header,
         }
         lines += [
@@ -4458,6 +4477,36 @@ class Hub:
             return InstanceUnreachable.MISSING
         endpoint = await self.endpoint(line.owner_id)
         return endpoint if isinstance(endpoint, InstanceUnreachable) else (endpoint, line.intake)
+
+    def line_delivery(self, instance_id: UUID, routine: RoutineName) -> LineDelivery | None:
+        """Check a delivery to the intake of a line the instance owns as the factory's intake
+        declares, with the secret the line's workbench holds. Each line keeps its own, so one
+        owner takes two lines of a factory whose senders sign apart."""
+        line = next(
+            (
+                line
+                for line in self.registry.lines()
+                if (line.owner_id, line.intake) == (instance_id, routine)
+            ),
+            None,
+        )
+        factory = None if line is None else self.factories.file(line.factory)
+        if (
+            line is None
+            or not isinstance(factory, WorkbenchFactory)
+            or factory.intake is None
+            or factory.intake.delivery is None
+        ):
+            return None
+        delivery = factory.intake.delivery
+        signal = (
+            HmacSignalConfig(delivery.secret, delivery.signature_header, delivery.delivery_header)
+            if delivery.auth is SignalAuth.HMAC_SHA256 and delivery.signature_header is not None
+            else TokenSignalConfig(delivery.secret, delivery.delivery_header)
+        )
+        workbench = self.registry.instance(line.workbench_id)
+        held = {} if workbench is None else self._environment(workbench.path)
+        return LineDelivery(signal, held.get(delivery.secret, ""))
 
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
         """Wake the parked waits of the instance's factory that the signal matches."""

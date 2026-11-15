@@ -24,6 +24,7 @@ from kinby.contracts import (
 if TYPE_CHECKING:
     from kinby.core.routing import Dispatcher
     from kinby.hub.approvals import HomeApprovals
+    from kinby.plugins.routines import SignalConfig
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,15 @@ class Signal:
     body: bytes
 
 
+@dataclass(frozen=True)
+class LineDelivery:
+    """How the hub checks a delivery to a line's intake: as the factory's intake declares, with
+    the secret the line's workbench holds, or an empty one when it holds none."""
+
+    signal: SignalConfig
+    secret: str
+
+
 #: A user as a channel's service knows them, such as a Telegram user id.
 ChannelUser = NewType("ChannelUser", str)
 #: A message a channel sent, as its service knows it.
@@ -116,6 +126,10 @@ class InstanceRouting(Protocol):
         self, line_id: UUID
     ) -> tuple[InstanceEndpoint, RoutineName] | InstanceUnreachable:
         """The instance that owns the line now, and the routine of the line's intake there."""
+
+    def line_delivery(self, instance_id: UUID, routine: RoutineName) -> LineDelivery | None:
+        """How the hub checks a delivery to the instance's routine when it is the intake of a
+        line the instance owns. None for a routine that checks its own."""
 
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
         """The instance authenticated the signal and recorded it as a new delivery."""

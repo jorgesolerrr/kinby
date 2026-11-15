@@ -346,6 +346,26 @@ def test_the_check_refuses_an_intake_whose_tool_the_factorys_folder_does_not_hol
     ]
 
 
+@pytest.mark.parametrize(
+    ("old", "new", "refusal"),
+    [
+        (
+            "secret: GITHUB_WEBHOOK_SECRET",
+            "secret: github-webhook",
+            'The delivery secret "github-webhook" is not an environment variable name.',
+        ),
+        (
+            ",\n              signature_header: X-Hub-Signature-256",
+            "",
+            "An hmac-sha256 delivery names its signature_header.",
+        ),
+    ],
+    ids=["secret-name", "signature-header"],
+)
+def test_the_check_refuses_a_delivery_the_hub_could_not_check(tmp_path, old, new, refusal):
+    assert problems(tmp_path, _with("work_item:", INTAKE.replace(old, new))) == [refusal]
+
+
 def test_the_check_refuses_an_intake_with_no_trigger(tmp_path):
     files = _with("work_item:", "intake: { call: open_pull_request }\nwork_item:")
 
