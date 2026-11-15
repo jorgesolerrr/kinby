@@ -29,6 +29,7 @@ from tests.test_hub import FakeControl, FakeRuntime, hub_at, hub_client
 from tests.test_hub_factories import write_factory
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
+from tests.test_hub_notices import PUBLIC_URL
 from tests.test_hub_workbenches import CEC_BACKEND
 
 AGENTS = {
@@ -58,7 +59,11 @@ steps:
 def _hub(tmp_path: Path, control: FakeControl, runtime: FakeRuntime, files=AGENTS) -> Hub:
     write_factory(tmp_path / "hub" / "factories" / "tickets", files)
     return hub_at(
-        tmp_path / "hub", runtime=runtime, control=control, shipped_factories=tmp_path / "shipped"
+        tmp_path / "hub",
+        runtime=runtime,
+        control=control,
+        shipped_factories=tmp_path / "shipped",
+        public_url=PUBLIC_URL,
     )
 
 

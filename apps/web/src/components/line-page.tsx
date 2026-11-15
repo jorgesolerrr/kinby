@@ -27,13 +27,13 @@ import { workItem } from "@/lib/factory-runs"
 import { shownState, STATES } from "@/lib/instances"
 import { dailyBudget, type LineOpened, lineName, readLine, requirements } from "@/lib/lines"
 import { type Followed, followOperation } from "@/lib/operation"
-import { FACTORIES_PATH, linePath, tabPath } from "@/lib/selection"
+import { FACTORIES_PATH, linePath, runPath, tabPath } from "@/lib/selection"
 
 type Caller = Pick<Client, "call">
 
 /**
  * One line's page: its owner, model, daily budget and intake over two tabs. Runs lists every run
- * of the line. Workbench shows the workbench's state with its lifecycle, its image, workspace and
+ * of the line, each opening its page. Workbench shows the workbench's state with its lifecycle, its image, workspace and
  * repository commands, what the line's factory requires of it, and the other lines on it.
  * `instances` name the owner.
  */
@@ -103,7 +103,9 @@ export function LinePage({
                 {runs.map(({ run, needsYou }) => (
                   <TableRow key={run.run_id}>
                     <TableCell>
-                      <span className="font-medium">{workItem(run)}</span>
+                      <PageLink href={runPath(run.run_id)} className="font-medium hover:underline">
+                        {workItem(run)}
+                      </PageLink>
                     </TableCell>
                     <TableCell>
                       <RunBadge run={run} needsYou={needsYou} />

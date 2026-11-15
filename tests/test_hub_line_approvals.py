@@ -23,6 +23,7 @@ from tests.test_hub_factories import write_factory
 from tests.test_hub_line_asks import _notifications
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
+from tests.test_hub_notices import PUBLIC_URL
 
 DRAFTS = {
     "factory.yaml": """\
@@ -57,7 +58,11 @@ DRAFTED = StepResult(ending=StepEnding.CLEAN, values={"draft": "drafts/12.md"})
 def _hub(tmp_path: Path, control: FakeControl, runtime: FakeRuntime) -> Hub:
     write_factory(tmp_path / "hub" / "factories" / "tickets", DRAFTS)
     return hub_at(
-        tmp_path / "hub", runtime=runtime, control=control, shipped_factories=tmp_path / "shipped"
+        tmp_path / "hub",
+        runtime=runtime,
+        control=control,
+        shipped_factories=tmp_path / "shipped",
+        public_url=PUBLIC_URL,
     )
 
 
@@ -82,6 +87,26 @@ def test_a_run_parked_at_an_approval_raises_one_notification_naming_the_run_and_
         assert notification.text == (
             'The run for issue 12 awaits approval at "review": Read drafts/12.md for issue 12.'
         )
+        assert notification.link == f"{PUBLIC_URL}/factories/runs/{run.run_id}"
+
+    asyncio.run(scenario())
+
+
+def test_a_line_run_that_needs_a_human_raises_a_notification_that_opens_the_runs_page(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="No draft.")]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(hub_client(hub), runtime)
+        run = await _handed_in(hub_client(hub), line, 12)
+        await stopped(hub, run.run_id)
+        [notification] = await _notifications(hub, line.owner_id)
+
+        assert notification.title == "Needs human"
+        assert notification.link == f"{PUBLIC_URL}/factories/runs/{run.run_id}"
 
     asyncio.run(scenario())
 

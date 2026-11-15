@@ -33,6 +33,7 @@ from tests.test_hub_factories import write_factory
 from tests.test_hub_line_asks import KEYED, KINBY, _notifications
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
+from tests.test_hub_notices import PUBLIC_URL
 
 BROWSING = KEYED.model_copy(update={"browser": True})
 
@@ -57,6 +58,7 @@ def _hub(tmp_path: Path, control: FakeControl, runtime: FakeRuntime) -> Hub:
         control=control,
         shipped_factories=tmp_path / "shipped",
         browser=FakeBrowserRuntime("ws://nowhere"),
+        public_url=PUBLIC_URL,
     )
 
 
@@ -97,6 +99,7 @@ def test_a_kinby_steps_takeover_parks_its_run_and_raises_a_notification_naming_t
             "Sign in to Moodle."
         )
         assert notification.options == []
+        assert notification.link == f"{PUBLIC_URL}/factories/runs/{run_id}"
 
     asyncio.run(scenario())
 

@@ -24,7 +24,7 @@ describe("the Factories area", () => {
     openArea()
 
     const software = within(await screen.findByRole("region", { name: "software" }))
-    expect(software.getByText("ticket → implement → publish")).toBeDefined()
+    expect(software.getByText("ticket → implement → checks → publish")).toBeDefined()
     expect(rows(software.getByRole("table"))).toEqual([
       ["kinby", "KKinby", "Needs a humanRunning", "$20.00 a day"],
       ["landing", "FFinance", "Needs youQueued", "None"],
@@ -80,7 +80,7 @@ describe("the Factories area", () => {
     expect(screen.getByRole("region", { name: "software" })).toBeDefined()
   })
 
-  it("opens a line's page from its row and from a run's card", async () => {
+  it("opens a line's page from its row and a run's page from its card", async () => {
     const user = userEvent.setup()
     openArea()
 
@@ -89,6 +89,6 @@ describe("the Factories area", () => {
     expect(window.location.pathname).toBe("/factories/lines/l-landing")
 
     await user.click(screen.getByRole("link", { name: "unit 4 on course on cec-moodle" }))
-    expect(window.location.pathname).toBe("/factories/lines/l-course")
+    expect(window.location.pathname).toBe("/factories/runs/r-settling")
   })
 })

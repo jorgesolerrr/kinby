@@ -1,9 +1,13 @@
 import type {
   Client,
   FactoryRun,
+  FactoryRunDetail,
   Line,
   LineSetupDescription,
+  StepAttempt,
   StepId,
+  WaitingApproval,
+  WaitingTakeover,
   Workbench,
 } from "@kinby/contract"
 import { parse } from "yaml"
@@ -13,10 +17,11 @@ import { money } from "@/lib/stats"
 
 type Caller = Pick<Client, "call">
 
-/** A factory as the Factories area shows it: its steps in order, by id and kind. */
-interface FactorySteps {
+/** A factory as the Factories area shows it: its steps in order, by id, kind and engine. */
+export interface FactorySteps {
   name: string
-  steps: { id: StepId; kind: string }[]
+  /** Only an agent step names an engine. */
+  steps: { id: StepId; kind: string; engine?: string }[]
   /** Written the older way: its steps run in instances that hold its roles, and it takes no line. */
   older: boolean
 }
@@ -54,6 +59,14 @@ export interface LineOpened extends LineRuns {
 export interface Requirement {
   label: string
   held: boolean
+}
+
+/** One run's page: the run with its attempts, its factory, and the line and workbench it runs on. */
+export interface RunOpened {
+  detail: FactoryRunDetail
+  factory: FactorySteps
+  line: Line
+  workbench: Workbench
 }
 
 /** Read every factory, line and workbench, and each line's runs. */
@@ -124,6 +137,19 @@ export function requirements(required: LineSetupDescription, workbench: Workbenc
   ]
 }
 
+/** Read one run of a line with what its page shows. */
+export async function readRun(caller: Caller, runId: string): Promise<RunOpened> {
+  const detail = await caller.call("factory.run.get", { run_id: runId })
+  const { line_id, factory: name } = detail.run
+  if (line_id == null) throw new Error(`The run ${runId} belongs to no line.`)
+  const line = await caller.call("line.get", { line_id })
+  const [workbench, factory] = await Promise.all([
+    caller.call("workbench.get", { workbench_id: line.workbench_id }),
+    readFactory(caller, name),
+  ])
+  return { detail, factory, line, workbench }
+}
+
 /** A line as the user knows it, "software on kinby". */
 export function lineName(line: Line, workbenches: Workbench[]): string {
   const workbench = workbenches.find((held) => held.workbench_id === line.workbench_id)
@@ -145,41 +171,64 @@ async function readFactory(caller: Caller, name: string): Promise<FactorySteps> 
   // The hub reads it with PyYAML, which resolves `<<` merge keys.
   const file = parse(files["factory.yaml"] ?? "", { merge: true }) as {
     instances?: unknown
-    steps?: { id: StepId; kind: string }[]
+    steps?: { id: StepId; kind: string; engine?: string }[]
   }
   return {
     name,
-    steps: (file.steps ?? []).map(({ id, kind }) => ({ id, kind })),
+    steps: (file.steps ?? []).map(({ id, kind, engine }) => ({ id, kind, engine })),
     older: file.instances !== undefined,
   }
 }
 
+/** What a run waits on the user for. */
+export type Wait =
+  | { kind: "needs-human" }
+  | { kind: "approval" }
+  /** An ask from the turn of an agent step: an approval of a call, or a takeover. */
+  | { kind: "ask"; ask: WaitingApproval | WaitingTakeover }
+
 /**
- * The line's runs, each with whether it waits on the user: it stopped for a human, waits at an
- * approve step, or its turn waits on an ask or a takeover the user has not answered.
+ * What the run waits on the user for, if anything: it stopped for a human, waits at an approve
+ * step, or its turn waits on an ask or a takeover the user has not answered. `stepKind` is the kind
+ * of the step it is at, and `last` its last attempt, which only a run parked on a turn needs.
  */
+export function waitingOn(
+  run: FactoryRun,
+  stepKind: string | undefined,
+  last: StepAttempt | undefined,
+): Wait | undefined {
+  if (run.status === "needs-human") return { kind: "needs-human" }
+  if (run.status !== "parked") return undefined
+  if (stepKind === "approve") return { kind: "approval" }
+  const ask = stepKind === "wait" || last?.answer != null ? undefined : last?.ask
+  return ask == null ? undefined : { kind: "ask", ask }
+}
+
+/** The kind of the step the run is at, by the factory's file. */
+export function stepKind(factory: FactorySteps | undefined, run: FactoryRun): string | undefined {
+  return factory?.steps.find((step) => step.id === run.step)?.kind
+}
+
+/** The line's runs, each with whether it waits on the user, as `waitingOn` says. */
 async function readRuns(
   caller: Caller,
   line: Line,
   factory: FactorySteps | undefined,
 ): Promise<LineRuns> {
   const { runs } = await caller.call("factory.run.list", { line_id: line.line_id, limit: null })
-  const kind = (run: FactoryRun) => factory?.steps.find((step) => step.id === run.step)?.kind
-  const asks = async (run: FactoryRun) => {
+  const lastAttempt = async (run: FactoryRun) => {
     const { attempts } = await caller.call("factory.run.get", { run_id: run.run_id })
-    const last = attempts.at(-1)
-    return last?.ask != null && last.answer == null
+    return attempts.at(-1)
   }
   return {
     line,
     runs: await Promise.all(
-      runs.map(async (run) => ({
-        run,
-        needsYou:
-          run.status === "needs-human" ||
-          (run.status === "parked" &&
-            (kind(run) === "approve" || (kind(run) !== "wait" && (await asks(run))))),
-      })),
+      runs.map(async (run) => {
+        const kind = stepKind(factory, run)
+        const onTurn = run.status === "parked" && kind !== "approve" && kind !== "wait"
+        const last = onTurn ? await lastAttempt(run) : undefined
+        return { run, needsYou: waitingOn(run, kind, last) !== undefined }
+      }),
     ),
   }
 }

@@ -11,6 +11,7 @@ import { LibraryPage } from "@/components/library-page"
 import { LinePage } from "@/components/line-page"
 import { MainPanel } from "@/components/main-panel"
 import { PageBoundary } from "@/components/page-boundary"
+import { RunPage } from "@/components/run-page"
 import { SignIn } from "@/components/sign-in"
 import { SettingsDialog } from "@/components/settings-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -28,6 +29,7 @@ import {
   useInstanceTab,
   useLibraryTab,
   useOpenLine,
+  useOpenRun,
   usePath,
   useSelectedInstanceId,
   useSelectedThreadId,
@@ -65,6 +67,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const libraryOpen = useLibraryTab() !== undefined
   const factoriesOpen = useFactoriesOpen()
   const lineId = useOpenLine()
+  const runId = useOpenRun()
   const waiting = useWaiting(client, clock, connected)
   const settingsOpen = useSettingsOpen()
   const settingsSection = useSettingsSection()
@@ -121,6 +124,8 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                   clock={clock}
                   home={instances?.find((instance) => instance.home)}
                 />
+              ) : runId !== undefined ? (
+                <RunPage key={runId} hub={client} clock={clock} runId={runId} />
               ) : lineId !== undefined ? (
                 <LinePage
                   key={lineId}

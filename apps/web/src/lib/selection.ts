@@ -18,6 +18,7 @@ export const LIBRARY_PATH = `/${LIBRARY}`
 const FACTORIES = "factories"
 export const FACTORIES_PATH = `/${FACTORIES}`
 const LINES = "lines"
+const RUNS = "runs"
 
 /** An instance's page holds these tabs, each at its own path under the instance but Overview. */
 const TABS = ["overview", CONFIG, ROUTINES, MEMORY, STATS] as const
@@ -123,6 +124,11 @@ export function libraryPath(kind: LibraryKind): string {
 /** One line's page in the Factories area. */
 export function linePath(lineId: string): string {
   return `${FACTORIES_PATH}/${LINES}/${encodeURIComponent(lineId)}`
+}
+
+/** One run's page in the Factories area. The hub's notifications about the run link to it. */
+export function runPath(runId: string): string {
+  return `${FACTORIES_PATH}/${RUNS}/${encodeURIComponent(runId)}`
 }
 
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
@@ -335,7 +341,7 @@ export function useLibraryTab(): LibraryKind | undefined {
   return useSyncExternalStore(subscribe, libraryTab)
 }
 
-/** Whether the URL opens the Factories area, on its own page or on a line's. */
+/** Whether the URL opens the Factories area, on its own page or on a line's or a run's. */
 export function useFactoriesOpen(): boolean {
   return useSyncExternalStore(subscribe, () => window.location.pathname.split("/")[1] === FACTORIES)
 }
@@ -343,6 +349,11 @@ export function useFactoriesOpen(): boolean {
 /** The line whose page the URL opens in the Factories area, if it names one. */
 export function useOpenLine(): string | undefined {
   return useSyncExternalStore(subscribe, openedLine)
+}
+
+/** The run whose page the URL opens in the Factories area, if it names one. */
+export function useOpenRun(): string | undefined {
+  return useSyncExternalStore(subscribe, openedRun)
 }
 
 /** Whether the URL opens the Settings dialog, on a section or none. */
@@ -440,6 +451,11 @@ function openedView(): string | undefined {
 function openedLine(): string | undefined {
   const [, root, lines, lineId] = window.location.pathname.split("/")
   return root === FACTORIES && lines === LINES && lineId ? decoded(lineId) : undefined
+}
+
+function openedRun(): string | undefined {
+  const [, root, runs, runId] = window.location.pathname.split("/")
+  return root === FACTORIES && runs === RUNS && runId ? decoded(runId) : undefined
 }
 
 function settingsSection(): SettingsSection | undefined {

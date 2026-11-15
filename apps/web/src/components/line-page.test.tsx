@@ -41,6 +41,15 @@ describe("a line's page", () => {
     ])
   })
 
+  it("opens a run's page from its row", async () => {
+    const user = userEvent.setup()
+    render(<LinePage caller={hub()} clock={fakeClock()} lineId="l-kinby" instances={instances} />)
+
+    await user.click(await screen.findByRole("link", { name: "issue 1310" }))
+
+    expect(window.location.pathname).toBe("/factories/runs/r-running")
+  })
+
   it("shows its workbench: state, image, workspace, commands, what the factory requires, and the other lines", async () => {
     const user = userEvent.setup()
     render(<LinePage caller={hub()} clock={fakeClock()} lineId="l-kinby" instances={instances} />)

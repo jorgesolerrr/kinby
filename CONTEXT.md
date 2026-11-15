@@ -177,7 +177,7 @@ The sort of service a **channel** talks to, such as Telegram, Discord or email. 
 
 ### Notification
 
-What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits, when a **factory run** parks on the user's approval at a **step**, or when a **routine notice**, an **instance notice**, or a factory run that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run. It can offer options to **reply** with.
+What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits, when a **factory run** parks on the user's approval at a **step**, or when a **routine notice**, an **instance notice**, or a factory run that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run: a **line**'s run opens on its own page, with its **step attempts** and what it waits on, and a run of a **factory** written the older way opens on the **library**. It can offer options to **reply** with.
 _Avoid_: message, alert, push
 
 ### Reply
