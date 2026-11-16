@@ -28,6 +28,7 @@ from kinby.contracts import (
     ClientStepRun,
     CodeStepRun,
     CommandStepRun,
+    DeclaredSetup,
     ErrorCode,
     ErrorEnvelope,
     FactoryRun,
@@ -1333,6 +1334,41 @@ def test_a_run_whose_done_requires_fails_does_not_finish_as_done(tmp_path):
         )
 
     asyncio.run(scenario())
+
+
+def test_a_run_from_before_runs_named_their_instance_belongs_to_its_factorys_newest_instance(
+    tmp_path,
+):
+    directory = tmp_path / "hub"
+    hub = factory_hub(directory, FakeControl(), FakeRuntime())
+    client = hub_client(hub)
+
+    async def before() -> tuple[UUID, UUID]:
+        older = (await created_instance(client, name="older")).instance_id
+        coder = (await created_instance(client, name="coder")).instance_id
+        with sqlite3.connect(directory / "registry.sqlite") as connection:
+            connection.executemany(
+                "INSERT INTO factory_members (instance_id, factory, name, recipe, setup) "
+                "VALUES (?, 'checks', 'coder', NULL, ?)",
+                [
+                    (str(member), DeclaredSetup(setup_fields=[]).model_dump_json())
+                    for member in (older, coder)
+                ],
+            )
+        run, _ = hub.registry.open_run(coder, "checks", {"issue": 7}, "test")
+        return coder, run.run_id
+
+    coder, run_id = asyncio.run(before())
+    hub.close()
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        connection.execute("DROP INDEX factory_runs_by_instance")
+        connection.execute("DROP INDEX factory_runs_by_creation")
+        connection.execute("ALTER TABLE factory_runs DROP COLUMN instance_id")
+    reopened = factory_hub(directory, FakeControl(), FakeRuntime())
+
+    found = asyncio.run(detail(reopened, run_id))
+
+    assert found.run.instance_id == coder
 
 
 def test_a_value_of_another_type_than_its_step_declares_fails_the_step(tmp_path):
