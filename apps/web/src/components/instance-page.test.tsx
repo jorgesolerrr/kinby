@@ -452,7 +452,7 @@ describe("what needs the user on a running instance", () => {
       ...running,
       notices: [
         { code: "mcp_server_failed", server: "fetch", message: "fetch exited with code 1." },
-        { code: "template_behind", message: "The template changed." },
+        { code: "hub_route_missing", message: "The hub route is missing." },
       ],
     }
     const { user } = await openPage(
@@ -464,7 +464,7 @@ describe("what needs the user on a running instance", () => {
 
     const server = within(needsYou().getByRole("listitem", { name: "MCP server fetch failed" }))
     expect(server.getByText("fetch exited with code 1.")).toBeDefined()
-    expect(needsYou().queryByText("The template changed.")).toBeNull()
+    expect(needsYou().queryByText("The hub route is missing.")).toBeNull()
     expect(screen.queryByText(/^Start a thread with/)).toBeNull()
     await user.click(server.getByRole("button", { name: "Open Skills" }))
 

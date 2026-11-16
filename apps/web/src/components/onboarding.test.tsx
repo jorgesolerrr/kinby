@@ -167,7 +167,7 @@ describe("the onboarding's page", () => {
         (region) =>
           document.getElementById(region.getAttribute("aria-labelledby") ?? "")?.textContent,
       )
-    expect(titles).toEqual(["Role", "Name and look", "Skills", "Prompt", "Setup"])
+    expect(titles).toEqual(["Name and look", "Skills", "Prompt", "Setup"])
     expect(screen.queryByRole("button", { name: "Continue" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull()
   })
@@ -363,14 +363,13 @@ function operationAnswer(fields: Partial<OperationGetResult>): OperationGetResul
 }
 
 /**
- * A hub that prepared the image, with no factory and an empty library, and answers the create
- * operation's polls with `created`.
+ * A hub that prepared the image, with an empty library, and answers the create operation's polls
+ * with `created`.
  */
 function hub(answers: Answers, created: OperationGetResult = creating) {
   return stubCaller({
     "image.prepare": () => ({ operation_id: "op-1" }),
     "image.describe": () => vanilla,
-    "factory.list": () => ({ factories: [] }),
     "library.list": () => ({ entries: [] }),
     "instance.create": () => ({ operation_id: "op-create", instance_id: "instance-1" }),
     "operation.get": ({ operation_id }) => (operation_id === "op-1" ? prepared : created),
@@ -399,7 +398,7 @@ async function openPrompt(user: UserEvent) {
   return screen.getByLabelText("Behavior prompt") as HTMLTextAreaElement
 }
 
-/** Pick no role, name the instance, keep the skills, and write a prompt. */
+/** Name the instance, keep the skills, and write a prompt. */
 async function nameAndPrompt(user: UserEvent, name = "Ada") {
   await user.type(screen.getByLabelText("Name"), name)
   const prompt = await openPrompt(user)
@@ -793,98 +792,8 @@ describe("the onboarding's setup", () => {
   })
 })
 
-/** The `coder` role's suggested picks in the shipped `software` factory. */
-const SUGGESTED = [
-  "adversarial-review",
-  "api-and-interface-design",
-  "codebase-design",
-  "no-comments",
-  "ponytail",
-  "pr",
-  "tdd",
-  "unslop",
-]
-
-const [modelField, apiKeyField] = vanilla.setup_fields
-
-/** What the coder asks for: the built-in fields, a repository and a GitHub token, its prompt. */
-const coder: DeclaredSetup = {
-  setup_fields: [
-    ...(modelField && apiKeyField ? [modelField, apiKeyField] : []),
-    {
-      name: "repository",
-      label: "Repository",
-      description: "The repository the coder works in.",
-      kind: "config",
-      type: "url",
-      required: true,
-    },
-    {
-      name: "GH_TOKEN",
-      label: "GitHub token",
-      description: "Opens pull requests.",
-      kind: "secret",
-      type: "text",
-      required: true,
-    },
-    {
-      name: "behavior_prompt",
-      label: "Behavior prompt",
-      description: "Instructions the instance follows in every turn.",
-      kind: "config",
-      type: "multiline",
-      required: false,
-      default: "You implement tickets.\n",
-    },
-  ],
-}
-
 function skill(name: string): LibraryEntry {
   return { kind: "skill", name, description: `The ${name} skill.`, source: "shipped" }
-}
-
-/** A hub whose library holds the `software` factory, its suggested picks and one more skill. */
-function softwareHub(answers: Answers = {}) {
-  return hub({
-    "factory.list": () => ({ factories: [{ name: "software", source: "shipped" }] }),
-    "factory.describe": () => ({ instances: { coder }, suggested_picks: { coder: SUGGESTED } }),
-    "library.list": () => ({
-      entries: [
-        { kind: "factory", name: "software", description: null, source: "shipped" },
-        ...[...SUGGESTED, "house-style"].map(skill),
-      ],
-    }),
-    ...answers,
-  })
-}
-
-const roleRow = (name: RegExp) =>
-  within(screen.getByRole("list", { name: "Roles" })).findByRole("button", { name })
-
-async function pickCoder(user: UserEvent) {
-  await user.click(await roleRow(/^coder in software/))
-}
-
-/** The skills' rows in order, by name. */
-const skillRows = () =>
-  within(screen.getByRole("list", { name: "Skills" }))
-    .getAllByRole("listitem")
-    .map((row) => row.getAttribute("aria-label"))
-
-const skillRow = (name: string) =>
-  within(within(screen.getByRole("list", { name: "Skills" })).getByRole("listitem", { name }))
-
-async function fillCoderSetup(user: UserEvent) {
-  await fill(user, "Model", "anthropic:claude-sonnet-5")
-  await fill(user, "API key", "sk-ant")
-  await fill(user, "Repository", "https://github.com/owner/billing.git")
-  await fill(user, "GitHub token", "ghp-test")
-}
-
-/** Paste a value into a field: typing it would re-render the page on every key. */
-async function fill(user: UserEvent, label: string, value: string) {
-  await user.click(screen.getByLabelText(label))
-  await user.paste(value)
 }
 
 const sent = (caller: StubCaller) =>
@@ -1107,8 +1016,8 @@ describe("the onboarding's secret fields and hub secrets", () => {
   })
 })
 
-describe("the onboarding's role, skills and prompt", () => {
-  it("creates a vanilla instance with no role, the skills ticked and the prompt written", async () => {
+describe("the onboarding's skills and prompt", () => {
+  it("creates the instance with the skills ticked and the prompt written", async () => {
     const caller = hub({ "library.list": () => ({ entries: [skill("pr"), skill("tdd")] }) })
     const { user } = await openOnboarding(caller)
     await user.type(screen.getByLabelText("Name"), "Ada")
@@ -1137,67 +1046,30 @@ describe("the onboarding's role, skills and prompt", () => {
     ])
   })
 
-  it("lists the roles as rows, None first, each with its factory and the skills it suggests", async () => {
-    const { user } = await openOnboarding(softwareHub())
-
-    const coderRow = await roleRow(/^coder in software/)
-    const noneRow = await roleRow(/^None/)
-    const roles = within(screen.getByRole("list", { name: "Roles" }))
-    expect(roles.getAllByRole("button")).toEqual([noneRow, coderRow])
-    expect(
-      within(noneRow).getByText("A vanilla instance, from kinby's built-in defaults."),
-    ).toBeDefined()
-    expect(within(coderRow).getByText("Suggests 8 skills.")).toBeDefined()
-    expect([noneRow, coderRow].map((row) => row.getAttribute("aria-pressed"))).toEqual([
-      "true",
-      "false",
-    ])
-    await user.click(coderRow)
-
-    expect([noneRow, coderRow].map((row) => row.getAttribute("aria-pressed"))).toEqual([
-      "false",
-      "true",
-    ])
-  })
-
-  it("puts the role's suggested picks first, ticked and badged, and counts the picked", async () => {
+  it("lists the library's skills unticked, and counts the picked", async () => {
     const { user } = await openOnboarding(
-      softwareHub({
-        "library.list": () => ({ entries: ["house-style", ...SUGGESTED].map(skill) }),
-      }),
+      hub({ "library.list": () => ({ entries: [skill("pr"), skill("tdd")] }) }),
     )
     await screen.findByRole("checkbox", { name: "tdd" })
     const skills = within(screen.getByRole("region", { name: "Skills" }))
 
-    expect(skillRows()).toEqual(["house-style", ...SUGGESTED])
     expect(skills.getByText("0 picked")).toBeDefined()
-    await pickCoder(user)
-
-    expect(skillRows()).toEqual([...SUGGESTED, "house-style"])
-    expect(SUGGESTED.filter(ticked)).toEqual(SUGGESTED)
-    expect(skillRow("tdd").getByText("Suggested by coder")).toBeDefined()
-    expect(skillRow("house-style").queryByText(/Suggested by/)).toBeNull()
-    expect(skills.getByText("8 picked")).toBeDefined()
-    await user.click(screen.getByRole("checkbox", { name: "house-style" }))
-    expect(skills.getByText("9 picked")).toBeDefined()
+    await user.click(screen.getByRole("checkbox", { name: "pr" }))
+    expect(skills.getByText("1 picked")).toBeDefined()
   })
 
   it("folds the prompt to its first line and whose default it is", async () => {
-    const { user } = await openOnboarding(softwareHub())
+    await openOnboarding(hub({}))
 
     expect(within(promptRow()).getByText("kinby's default")).toBeDefined()
     expect(within(promptRow()).getByText("You are a personal AI teammate.")).toBeDefined()
     expect(screen.queryByLabelText("Behavior prompt")).toBeNull()
-    await pickCoder(user)
-
-    expect(within(promptRow()).getByText("coder's default")).toBeDefined()
-    expect(within(promptRow()).getByText("You implement tickets.")).toBeDefined()
   })
 
   it("marks an edited prompt, and Back to the default restores it", async () => {
-    const caller = softwareHub()
+    const caller = hub({})
     const { user } = await openOnboarding(caller)
-    await pickCoder(user)
+    await user.type(screen.getByLabelText("Name"), "Ada")
 
     const prompt = await openPrompt(user)
     expect(screen.queryByRole("button", { name: "Back to the default" })).toBeNull()
@@ -1207,190 +1079,43 @@ describe("the onboarding's role, skills and prompt", () => {
     expect(within(promptRow()).getByText("Answer in haiku.")).toBeDefined()
     await user.click(screen.getByRole("button", { name: "Back to the default" }))
 
-    expect(prompt.value).toBe("You implement tickets.\n")
+    expect(prompt.value).toBe("You are a personal AI teammate.\n")
     expect(within(promptRow()).queryByText("Edited")).toBeNull()
-    expect(within(promptRow()).getByText("coder's default")).toBeDefined()
-    await fillCoderSetup(user)
+    expect(within(promptRow()).getByText("kinby's default")).toBeDefined()
+    await fillSetup(user)
     await create(user)
     expect(sent(caller)[0]).toMatchObject({
-      config: { behavior_prompt: "You implement tickets.\n" },
+      config: { behavior_prompt: "You are a personal AI teammate.\n" },
     })
   })
 
-  it("preselects the coder's suggested picks and asks for its setup fields", async () => {
-    const { user } = await openOnboarding(softwareHub())
-    await pickCoder(user)
-
-    await screen.findByRole("checkbox", { name: "tdd" })
-    expect(SUGGESTED.filter(ticked)).toEqual(SUGGESTED)
-    expect(ticked("house-style")).toBe(false)
-    expect(screen.getByLabelText("Repository")).toBeDefined()
-    expect(screen.getByLabelText("GitHub token").getAttribute("type")).toBe("password")
-  })
-
-  it("names the role as who asks for its own fields, and every instance for the built-in ones", async () => {
-    const { user } = await openOnboarding(softwareHub())
-    await pickCoder(user)
-
-    expect(
-      setupRow("Repository").getByText("The repository the coder works in. · asked by coder"),
-    ).toBeDefined()
-    expect(
-      setupRow("GitHub token").getByText("Opens pull requests. · asked by coder"),
-    ).toBeDefined()
-    expect(
-      setupRow("Model").getByText("The model the instance calls. · every instance"),
-    ).toBeDefined()
-  })
-
-  it("creates a coder without a suggested pick the user unticked", async () => {
-    const caller = softwareHub()
-    const { user } = await openOnboarding(caller)
-    await pickCoder(user)
-
-    await user.click(await screen.findByRole("checkbox", { name: "tdd" }))
-    await fillCoderSetup(user)
-    await create(user)
-
-    expect(sent(caller)).toEqual([
-      {
-        manifest_id: "software-coder",
-        persona_name: "software-coder",
-        factory_role: { factory: "software", name: "coder" },
-        model: "anthropic:claude-sonnet-5",
-        config: {
-          repository: "https://github.com/owner/billing.git",
-          behavior_prompt: "You implement tickets.\n",
-        },
-        secrets: { api_key: "sk-ant", GH_TOKEN: "ghp-test" },
-        hub_secrets: {},
-        save_to_hub: {},
-        avatar: { shape: "circle", color: "blue" },
-        picks: SUGGESTED.filter((name) => name !== "tdd"),
+  it("creates a second instance once it has a name of its own", async () => {
+    let creates = 0
+    const caller = hub({
+      "instance.create": () => {
+        creates += 1
+        if (creates === 1) {
+          throw new CallError({
+            code: "INVALID_SETUP",
+            message: "Some setup values are missing or invalid.",
+            retryable: false,
+            fields: { manifest_id: 'An instance named "Ada" exists already.' },
+          })
+        }
+        return { operation_id: "op-create", instance_id: "instance-2" }
       },
-    ])
-  })
-
-  it("starts the prompt from the role's, and creates the coder with the edited text", async () => {
-    const caller = softwareHub()
-    const { user } = await openOnboarding(caller)
-    await pickCoder(user)
-
-    const prompt = await openPrompt(user)
-    expect(prompt.value).toBe("You implement tickets.\n")
-    await user.type(prompt, "Keep each pull request small.")
-    await fillCoderSetup(user)
-    await create(user)
-
-    expect(sent(caller)[0]).toMatchObject({
-      config: { behavior_prompt: "You implement tickets.\nKeep each pull request small." },
     })
-  })
-
-  it("proposes the factory and the role as the name, and takes another", async () => {
-    const caller = softwareHub()
     const { user } = await openOnboarding(caller)
-    await pickCoder(user)
-
-    const name = screen.getByLabelText("Name") as HTMLInputElement
-    expect(name.value).toBe("software-coder")
-    await user.clear(name)
-    await user.type(name, "billing-coder")
-    await fillCoderSetup(user)
-    await create(user)
-
-    expect(sent(caller)[0]).toMatchObject({
-      manifest_id: "billing-coder",
-      persona_name: "billing-coder",
-    })
-  })
-
-  it("keeps a name the user typed when a role is picked", async () => {
-    const { user } = await openOnboarding(softwareHub())
-
     await user.type(screen.getByLabelText("Name"), "Ada")
-    await pickCoder(user)
-
-    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Ada")
-  })
-
-  it("asks for the fields of a role edited since it was picked, once the hub refuses", async () => {
-    const prefix = {
-      name: "branch_prefix",
-      label: "Branch prefix",
-      description: "Starts the name of each branch.",
-      kind: "config" as const,
-      type: "text" as const,
-      required: true,
-    }
-    let describes = 0
-    let creates = 0
-    const caller = softwareHub({
-      "factory.describe": () => {
-        describes += 1
-        const setup = describes === 1 ? coder : { setup_fields: [...coder.setup_fields, prefix] }
-        return { instances: { coder: setup }, suggested_picks: { coder: SUGGESTED } }
-      },
-      "instance.create": () => {
-        creates += 1
-        if (creates === 1) {
-          throw new CallError({
-            code: "INVALID_SETUP",
-            message: "Some setup values are missing or invalid.",
-            retryable: false,
-            fields: { branch_prefix: "Branch prefix is required." },
-          })
-        }
-        return { operation_id: "op-create", instance_id: "instance-2" }
-      },
-    })
-    const { user } = await openOnboarding(caller)
-    await pickCoder(user)
-    await fillCoderSetup(user)
+    await fillSetup(user)
     await create(user)
 
-    const refused = await screen.findByLabelText("Branch prefix")
-    expect(refused.getAttribute("aria-invalid")).toBe("true")
-    await user.type(refused, "agent/")
-    await create(user)
-
-    expect(sent(caller)[1]).toMatchObject({
-      config: { branch_prefix: "agent/" },
-    })
-  })
-
-  it("creates a second coder on software once it has a name of its own", async () => {
-    let creates = 0
-    const caller = softwareHub({
-      "instance.create": () => {
-        creates += 1
-        if (creates === 1) {
-          throw new CallError({
-            code: "INVALID_SETUP",
-            message: "Some setup values are missing or invalid.",
-            retryable: false,
-            fields: { manifest_id: 'An instance named "software-coder" exists already.' },
-          })
-        }
-        return { operation_id: "op-create", instance_id: "instance-2" }
-      },
-    })
-    const { user } = await openOnboarding(caller)
-    await pickCoder(user)
-    await fillCoderSetup(user)
-    await create(user)
-
-    expect(
-      await screen.findByText('An instance named "software-coder" exists already.'),
-    ).toBeDefined()
+    expect(await screen.findByText('An instance named "Ada" exists already.')).toBeDefined()
     await user.clear(screen.getByLabelText("Name"))
-    await user.type(screen.getByLabelText("Name"), "billing-coder")
+    await user.type(screen.getByLabelText("Name"), "Grace")
     await create(user)
 
-    expect(sent(caller)).toMatchObject([
-      { manifest_id: "software-coder" },
-      { manifest_id: "billing-coder" },
-    ])
+    expect(sent(caller)).toMatchObject([{ manifest_id: "Ada" }, { manifest_id: "Grace" }])
     expect(await screen.findByRole("list", { name: "Creation steps" })).toBeDefined()
   })
 })

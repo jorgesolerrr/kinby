@@ -230,8 +230,7 @@ def test_hub_help_prints_a_writes_arguments_with_their_descriptions(capsys):
         "    The hash the check showed. STALE when the folder changed since."
     )
     assert lines[lines.index("  setup: dict[str, SetupValue] = {}") + 1] == (
-        "    Values for the configuration fields the prepared image, or the role's template, "
-        "declares, by field name."
+        "    Values for the configuration fields the prepared image declares, by field name."
     )
 
 

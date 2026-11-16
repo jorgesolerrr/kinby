@@ -95,16 +95,6 @@ const behind = instanceSummary({
   ],
 })
 
-const templateBehind = instanceSummary({
-  instance_id: "instance-1",
-  notices: [
-    {
-      code: "template_behind",
-      message: 'Factory "software" changed template "coder" since the hub copied it.',
-    },
-  ],
-})
-
 const routeMissing = instanceSummary({
   instance_id: "instance-1",
   notices: [
@@ -231,15 +221,6 @@ describe("ConfigPanel", () => {
     )
     expect(await screen.findByRole("heading", { name: "Core version" })).toBeDefined()
     expect(screen.getByRole("button", { name: "Update core" })).toBeDefined()
-  })
-
-  it("marks the core section behind the factory", () => {
-    openPanel({}, templateBehind)
-
-    expect(dotted()).toEqual(["Core version"])
-    expect(
-      screen.getByRole("button", { name: "Core version", description: "behind the factory" }),
-    ).toBeDefined()
   })
 
   it("marks the core section with no hub route", () => {

@@ -83,4 +83,4 @@ Nothing saves a run's stdout by default. Claude Code keeps each session of a wor
 
 Redeploying, restarting containers and editing files under `kinby-hub/` are writes. Do them only when Jorge asks. The hub is redeployed by `.claude/skills/e2e-pass/deploy.sh`, which also updates the instances.
 
-Lines are changed through the hub's contract, run inside the hub container with the access token: `line.setup`, `line.owner.set`, `instance.convert` and the `workbench.*` methods. The web app's Factories area sets lines up too.
+Lines are changed through the hub's contract, run inside the hub container with the access token: `line.setup`, `line.owner.set` and the `workbench.*` methods. The web app's Factories area sets lines up too.

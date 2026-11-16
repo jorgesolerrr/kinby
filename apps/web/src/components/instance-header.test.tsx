@@ -556,14 +556,12 @@ describe("the update alert", () => {
     expect(alert.getByRole("button", { name: "Update" })).toBeDefined()
   })
 
-  it.each([
-    ["template_behind", "Behind the factory"],
-    ["hub_route_missing", "No hub route"],
-  ] as const)("names a %s notice, with Update", async (code, title) => {
-    await openHeader({}, { ...running, notices: [{ code, message: "An update answers it." }] })
+  it("names a hub_route_missing notice, with Update", async () => {
+    const notice = { code: "hub_route_missing", message: "An update answers it." } as const
+    await openHeader({}, { ...running, notices: [notice] })
 
     const alert = within(screen.getByRole("alert"))
-    expect(alert.getByText(title)).toBeDefined()
+    expect(alert.getByText("No hub route")).toBeDefined()
     expect(alert.getByText("An update answers it.")).toBeDefined()
     expect(alert.getByRole("button", { name: "Update" })).toBeDefined()
   })

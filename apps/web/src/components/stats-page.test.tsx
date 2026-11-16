@@ -11,7 +11,7 @@ import {
   type TurnMetrics,
 } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -176,19 +176,10 @@ function runsResult(fields: Partial<StatsRunsResult> = {}): StatsRunsResult {
 function openStats(
   answers: Answers = { "stats.get": () => stats() },
   hubAnswers: Answers = { "stats.runs": () => runsResult() },
-  { factory = false } = {},
 ) {
   const client = stubCaller({ "routine.list": () => ({ routines: [], warnings: [] }), ...answers })
   const caller = stubCaller(hubAnswers)
-  render(
-    <StatsPage
-      client={client}
-      caller={caller}
-      clock={fakeClock()}
-      instanceId="hub-ada"
-      factory={factory}
-    />,
-  )
+  render(<StatsPage client={client} caller={caller} clock={fakeClock()} instanceId="hub-ada" />)
   return { client, caller }
 }
 
@@ -286,14 +277,10 @@ describe("the stats page", () => {
     expect(screen.queryByRole("tab")).toBeNull()
   })
 
-  it("adds the Runs section on a factory instance only", async () => {
+  it("adds the Runs section on any instance, since any instance can own a line", async () => {
     openStats()
     await totals()
-    expect(screen.queryByRole("region", { name: "Runs" })).toBeNull()
-    cleanup()
 
-    openStats(undefined, undefined, { factory: true })
-    await totals()
     expect(section("Runs")).toBeDefined()
   })
 
@@ -551,15 +538,7 @@ describe("the stats page", () => {
   it("reads again on window focus and on Refresh, and never on its own", async () => {
     const client = stubCaller({ "stats.get": () => stats() })
     const clock = fakeClock()
-    render(
-      <StatsPage
-        client={client}
-        caller={stubCaller({})}
-        clock={clock}
-        instanceId="hub-ada"
-        factory={false}
-      />,
-    )
+    render(<StatsPage client={client} caller={stubCaller({})} clock={clock} instanceId="hub-ada" />)
     const user = userEvent.setup()
     await act(() => clock.advance(10 * 60_000))
     expect(statsReads(client)).toHaveLength(1)
@@ -1195,7 +1174,6 @@ describe("the Runs section", () => {
         caller={caller}
         clock={fakeClock()}
         instanceId="hub-ada"
-        factory
       />,
     )
 
@@ -1227,11 +1205,9 @@ describe("the Runs section", () => {
   })
 
   it("says when no run started in the range, and which instances' tokens it left out", async () => {
-    openStats(
-      undefined,
-      { "stats.runs": () => runsResult({ unreachable: ["hub-bob"], skipped: ["hub-cy"] }) },
-      { factory: true },
-    )
+    openStats(undefined, {
+      "stats.runs": () => runsResult({ unreachable: ["hub-bob"], skipped: ["hub-cy"] }),
+    })
 
     await totals()
 

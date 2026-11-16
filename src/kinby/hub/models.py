@@ -262,7 +262,7 @@ class ImageArtifact:
 @dataclass(frozen=True)
 class ImageSelection:
     revision: str
-    #: One of the image recipes kinby ships, by name, as a factory's instance template names it.
+    #: One of the image recipes kinby ships, by name, as a workbench names it.
     recipe: str | None = None
 
 
@@ -283,7 +283,7 @@ class ImagePreparation(Protocol):
         ...
 
     async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
-        """Ask the kinby inside the image what a vanilla instance declares."""
+        """Ask the kinby inside the image what an instance declares."""
         ...
 
     async def resolve(self, revision: str) -> str:

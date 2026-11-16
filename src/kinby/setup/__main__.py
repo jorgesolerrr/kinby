@@ -1,4 +1,4 @@
-"""What a vanilla instance declares on this image, read by the hub when it prepares one.
+"""What an instance declares on this image, read by the hub when it prepares one.
 
 ``python -m kinby.setup`` prints it as JSON.
 """

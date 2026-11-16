@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-import json
 import logging
 import re
 import shutil
@@ -59,7 +58,6 @@ from kinby.contracts import (
     CHANNEL_UPDATE,
     DEFAULT_AVATAR,
     FACTORY_CHECK,
-    FACTORY_DESCRIBE,
     FACTORY_EDIT,
     FACTORY_GET,
     FACTORY_LIST,
@@ -83,7 +81,6 @@ from kinby.contracts import (
     IMAGE_PREPARE,
     INSTANCE_ADOPT,
     INSTANCE_ADOPT_PREVIEW,
-    INSTANCE_CONVERT,
     INSTANCE_CREATE,
     INSTANCE_DELETE,
     INSTANCE_DELETE_PREVIEW,
@@ -190,8 +187,6 @@ from kinby.contracts import (
     FactoryListResult,
     FactoryName,
     FactoryRemoveCommand,
-    FactoryResult,
-    FactoryRole,
     FactoryRun,
     FactoryRunStatus,
     FactoryRunTranscript,
@@ -214,7 +209,6 @@ from kinby.contracts import (
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
-    InstanceConvertCommand,
     InstanceCreateCommand,
     InstanceDeleteCommand,
     InstanceDeletePreviewCommand,
@@ -311,7 +305,6 @@ from kinby.contracts import (
     StorageItem,
     StorageKind,
     SubscriptionLogin,
-    TemplateBehind,
     ThreadApprovalRespondCommand,
     ThreadAskCommand,
     ThreadTakeoverResumeCommand,
@@ -353,14 +346,10 @@ from kinby.core.clock import utc_now
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
 from kinby.core.errors import (
     AdoptionBlocked,
-    ConversionFailed,
-    FactoryCheckFailed,
     FactoryInUse,
-    FactoryNotFound,
     FactoryRunNotFound,
     HomeInstanceKept,
     ImageNotPrepared,
-    InstanceInUse,
     InstanceRefused,
     InstanceUnavailable,
     IntakeFailed,
@@ -404,8 +393,8 @@ from kinby.hub.control import (
     IncompatibleLifecycleEndpoint,
     InstanceControl,
 )
-from kinby.hub.factories import FactoryStore, InstanceTemplate
-from kinby.hub.library import Library, skill_names
+from kinby.hub.factories import FactoryStore
+from kinby.hub.library import Library
 from kinby.hub.models import (
     ContainerRuntime,
     ImageArtifact,
@@ -427,7 +416,6 @@ from kinby.hub.playwright_browser import PlaywrightBrowser
 from kinby.hub.recovery import recover_lifecycle
 from kinby.hub.registry import (
     UNFINISHED,
-    FactoryMember,
     HubRegistry,
     ManagedInstance,
     WorkbenchSetup,
@@ -442,12 +430,10 @@ from kinby.hub.setup import (
     held_secrets,
     instance_setup,
     link_errors,
-    manifest_settings,
     secret_field,
     setup_errors,
 )
 from kinby.hub.takeovers import Takeovers
-from kinby.hub.template_sync import sync_template
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.hub.vault import Vault
 from kinby.instance import (
@@ -458,14 +444,11 @@ from kinby.instance import (
     ModelName,
     Tools,
     api_key_variable,
-    init_from_template,
     init_instance,
     inspect_instance,
 )
 from kinby.instance.code import declared_secrets, exposed_tools, packages
-from kinby.instance.config_changes import file_hash
-from kinby.instance.layout import ENV_NAME, SYSTEM_NAME
-from kinby.instance.manifest import repository_commands
+from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.read_only_tools import read_only_tools
 from kinby.instance.skills_lock import lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
@@ -537,7 +520,6 @@ LOGIN_SECONDS = 15 * 60
 #: The title of the notification each kind of instance notice raises.
 _NOTICE_TITLES = {
     "revision_behind": "Revision behind",
-    "template_behind": "Template behind",
     "hub_route_missing": "Hub route missing",
     "mcp_server_failed": "MCP server failed",
 }
@@ -573,25 +555,17 @@ def _acquire_directory(directory: Path) -> IO[str]:
 def _notices(
     record: ManagedInstance,
     hub_revision: str,
-    served: Mapping[tuple[FactoryName, str], InstanceTemplate],
     route: Mapping[str, str],
     environment: Mapping[str, str],
     failed_servers: Mapping[str, str],
 ) -> dict[str, InstanceNotice]:
-    """The hub route the instance's environment lacks, the kinby revision the hub moved past, the
-    template the factory moved past, and the MCP servers its last turn ran without, if any, each by
-    its kind and the value it reports.
+    """The hub route the instance's environment lacks, the kinby revision the hub moved past, and
+    the MCP servers its last turn ran without, if any, each by its kind and the value it reports.
 
-    *served* holds each template the hub serves now, by its factory and name. *route* is what the
-    hub writes into the instance's *environment* when it creates a container. An update refuses a
-    factory's instance whose template the hub does not serve, so its route notice waits until the
-    hub serves the template again.
+    *route* is what the hub writes into the instance's *environment* when it creates a container.
     """
     notices: dict[str, InstanceNotice] = {}
-    member = record.factory
-    template = None if member is None else served.get((member.factory, member.name))
-    updatable = member is None or template is not None
-    if updatable and any(environment.get(name) != value for name, value in route.items()):
+    if any(environment.get(name) != value for name, value in route.items()):
         notices[f"hub_route_missing:{route[HUB_URL_VARIABLE]} {route[HUB_SCOPES_VARIABLE]}"] = (
             HubRouteMissing(
                 message=(
@@ -610,18 +584,6 @@ def _notices(
             instance_revision=instance_revision,
             hub_revision=hub_revision,
         )
-    if member is not None and template is not None and template.baseline != member.baseline:
-        found = (
-            f'The hub kept no record of the files template "{member.name}" '
-            f'of factory "{member.factory}" supplied.'
-            if member.baseline is None
-            else f'Factory "{member.factory}" changed template "{member.name}" '
-            "since the hub copied it."
-        )
-        baseline = file_hash(json.dumps(template.baseline, sort_keys=True).encode())
-        notices[f"template_behind:{baseline}"] = TemplateBehind(
-            message=f"{found} An instance update brings the files up to the factory's."
-        )
     for server, message in failed_servers.items():
         notices[f"mcp_server_failed:{server}:{message}"] = McpServerFailed(
             message=message, server=server
@@ -630,21 +592,10 @@ def _notices(
 
 
 def _selection(record: ManagedInstance, revision: str) -> ImageSelection:
-    """The image a record's container runs: the revision, and the recipe of the instance's
-    template or of the workbench."""
-    if record.workbench is not None:
-        return ImageSelection(revision, record.workbench.recipe)
-    recipe = record.factory.recipe if record.factory is not None else None
+    """The image a record's container runs: the revision, and the workbench's recipe. An instance
+    runs kinby's base image."""
+    recipe = record.workbench.recipe if record.workbench is not None else None
     return ImageSelection(revision, recipe)
-
-
-def _instance_name(command: InstanceCreateCommand) -> str:
-    """The name the request gives, or ``{factory}-{role}`` for one that picks a factory role."""
-    if command.manifest_id is not None:
-        return command.manifest_id
-    if command.factory_role is None:
-        raise InvalidSetup({"manifest_id": "Name the instance, or pick a factory role."})
-    return f"{command.factory_role.factory}-{command.factory_role.name}"
 
 
 def _quoted(names: Iterable[str]) -> str:
@@ -837,20 +788,8 @@ def _model_keys(factory: WorkbenchFactory, line_model: str | None) -> list[str]:
     return list(dict.fromkeys(api_key_variable(model) for model in models if model is not None))
 
 
-def _member(factory: FactoryName, template: InstanceTemplate) -> FactoryMember:
-    """The role an instance written from *template* holds, with what the template supplied."""
-    return FactoryMember(
-        factory=factory,
-        name=template.name,
-        recipe=template.recipe,
-        setup=template.setup,
-        baseline=template.baseline,
-    )
-
-
 def _write_behavior_prompt(staging: Path, configured: Mapping[str, SetupValue]) -> None:
-    """Write the behavior prompt the creation resolved. A template's baseline keeps the hash of
-    its own, so an instance update keeps one the user changed."""
+    """Write the behavior prompt the creation resolved."""
     behavior_prompt = configured.get(BEHAVIOR_PROMPT_FIELD.name)
     if isinstance(behavior_prompt, str):
         (staging / SYSTEM_NAME).write_text(behavior_prompt, encoding="utf-8")
@@ -1023,10 +962,9 @@ class Hub:
             )
             self._locks: dict[UUID, asyncio.Lock] = {}
             self._hub_secrets_lock = asyncio.Lock()
-            #: Held while a line, a workbench or a factory role's instance is added, and while a
-            #: factory is removed, so no removal misses a dependent added during it, and no
-            #: workbench takes the name of the one a line setup creates while its owner takes the
-            #: intake routine.
+            #: Held while a line or a workbench is added, and while a factory is removed, so no
+            #: removal misses a dependent added during it, and no workbench takes the name of the
+            #: one a line setup creates while its owner takes the intake routine.
             self._factory_dependents = asyncio.Lock()
             self._stopping: dict[UUID, PendingStop] = {}
             #: The drain each operation is waiting on, whichever operation it is.
@@ -1082,7 +1020,6 @@ class Hub:
         dispatcher.register(LINE_GET, self.get_line)
         dispatcher.register(LINE_UPDATE, self.update_line)
         dispatcher.register(LINE_OWNER_SET, self.set_line_owner)
-        dispatcher.register(INSTANCE_CONVERT, self.convert_instance)
         dispatcher.register(LINE_REMOVE, self.remove_line)
         dispatcher.register(LINE_HAND_IN, self.hand_in)
         dispatcher.register(OPERATION_GET, self.operation)
@@ -1091,9 +1028,8 @@ class Hub:
         dispatcher.register(FACTORY_LIST, self.factories.list)
         dispatcher.register(FACTORY_GET, self.factories.get)
         dispatcher.register(FACTORY_CHECK, self.factories.check)
-        dispatcher.register(FACTORY_EDIT, self.edit_factory)
+        dispatcher.register(FACTORY_EDIT, self.factories.edit)
         dispatcher.register(FACTORY_REMOVE, self.remove_factory)
-        dispatcher.register(FACTORY_DESCRIBE, self.factories.describe)
         dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
         dispatcher.register(FACTORY_RUN_GET, self.runs.get)
         dispatcher.register(FACTORY_RUN_TRANSCRIPT, self.run_transcript)
@@ -1310,11 +1246,9 @@ class Hub:
             case LibraryMcpServerWriteCommand():
                 result = await self.library.write_mcp_server(write)
             case FactoryEditCommand():
-                result = await self.edit_factory(write)
+                result = await self.factories.edit(write)
             case LineSetupCommand():
                 result = await self.set_up_line(write)
-            case InstanceConvertCommand():
-                result = await self.convert_instance(write)
             case ChannelMute():
                 result = await self.channels.mute(write)
             case ChannelUnmute():
@@ -1328,34 +1262,17 @@ class Hub:
                 return HubWriteResult(result=await self._ask(write))
         return HubWriteResult(result=result.model_dump(mode="json"))
 
-    async def edit_factory(self, command: FactoryEditCommand) -> FactoryResult:
-        """Edit the factory, then raise the notices of the instances its templates moved past."""
-        edited = await self.factories.edit(command)
-        await self._raise_notices()
-        return edited
-
     async def remove_factory(self, command: FactoryRemoveCommand) -> FactoryListResult:
-        """Refuse while a line runs the factory, or an instance holds one of its roles, and name
-        each of them."""
+        """Refuse while a line runs the factory, and name the workbench of each."""
         async with self._factory_dependents:
             workbenches = [
                 self._workbench_name(line.workbench_id)
                 for line in self.registry.lines()
                 if line.factory == command.name
             ]
-            holders = [
-                record.manifest_id
-                for record in self.registry.factory_members(command.name)
-                if self._held(record)
-            ]
             if workbenches:
                 raise FactoryInUse(
                     f'Factory "{command.name}" has lines on workbench {_quoted(workbenches)}. '
-                    "Remove them before removing the factory."
-                )
-            if holders:
-                raise FactoryInUse(
-                    f'Factory "{command.name}" has instances {", ".join(holders)}. '
                     "Remove them before removing the factory."
                 )
             return await self.factories.remove(command)
@@ -1519,44 +1436,25 @@ class Hub:
     async def create(
         self, command: InstanceCreateCommand, requester: UUID | None = None
     ) -> LifecycleOperationResult:
-        """Accept a creation only once the whole request checks out: a vanilla instance's image is
-        prepared, a factory role's factory passes the check, the name is free, the setup values
-        fit what the image or the role's template declares, the hub keeps each hub secret a field
-        takes, and the library holds each pick. Typed values to save to the hub are saved first.
+        """Accept a creation only once the whole request checks out: the image is prepared, the
+        name is free, the setup values fit what the image declares, the hub keeps each hub secret a
+        field takes, and the library holds each pick. Typed values to save to the hub are saved
+        first.
 
         *requester* is the instance that asked for it through the hub, if one did."""
-        async with self._factory_dependents:
-            return await self._create_instance(command, requester)
-
-    async def _create_instance(
-        self, command: InstanceCreateCommand, requester: UUID | None
-    ) -> LifecycleOperationResult:
-        manifest_id = _instance_name(command)
-        role = command.factory_role
-        template: InstanceTemplate | None = None
-        member: FactoryMember | None = None
-        if role is not None:
-            template = await self.factories.template(role.factory, role.name)
-            if template is None:
-                raise InvalidSetup(
-                    {"factory_role": f'Factory "{role.factory}" has no role "{role.name}".'}
-                )
-            member = _member(role.factory, template)
         secrets = {name: value.get_secret_value() for name, value in command.secrets.items()}
         kept = self.secrets.values()
         linked = {field: kept[name] for field, name in command.hub_secrets.items() if name in kept}
         errors = setup_errors(
-            self._prepared_description() if template is None else template.setup,
+            self._prepared_description(),
             model=command.model,
             config=command.config,
             secrets=secrets | linked,
         ) | link_errors(secrets, command.hub_secrets, command.save_to_hub, kept)
-        if self._name_taken(manifest_id):
-            errors["manifest_id"] = f'An instance named "{manifest_id}" exists already.'
+        if self._name_taken(command.manifest_id):
+            errors["manifest_id"] = f'An instance named "{command.manifest_id}" exists already.'
         picks = sorted(set(command.picks))
-        refusal = self.library.refusal(
-            picks, skill_names(template.files) if template is not None else ()
-        )
+        refusal = self.library.refusal(picks, ())
         if refusal is not None:
             errors["picks"] = refusal
         if errors:
@@ -1564,14 +1462,13 @@ class Hub:
         for field, name in command.save_to_hub.items():
             self.secrets.save(name, secrets[field])
         record = self._new_record(
-            manifest_id,
+            command.manifest_id,
             persona_name=command.persona_name,
             revision=command.revision,
             avatar=command.avatar,
-            factory=member,
         )
         accepted = self._begin_instance_create(
-            record, command.model, command.config, secrets | linked, template, picks, requester
+            record, command.model, command.config, secrets | linked, picks, requester
         )
         self.registry.link_secrets(
             record.instance_id,
@@ -1600,7 +1497,6 @@ class Hub:
         persona_name: str | None = None,
         revision: str = _PREPARED_REVISION,
         avatar: Avatar = DEFAULT_AVATAR,
-        factory: FactoryMember | None = None,
         home: bool = False,
         workbench: WorkbenchSetup | None = None,
     ) -> ManagedInstance:
@@ -1618,7 +1514,6 @@ class Hub:
             prepared=False,
             storage=(),
             avatar=avatar,
-            factory=factory,
             home=home,
             workbench=workbench,
         )
@@ -1629,22 +1524,16 @@ class Hub:
         model: str,
         config: Mapping[str, SetupValue],
         secrets: dict[str, str],
-        template: InstanceTemplate | None = None,
         picks: Sequence[SkillName] = (),
         requester: UUID | None = None,
     ) -> LifecycleOperationResult:
         async def write(
             operation_id: UUID, staging: Path, artifact: ImageArtifact
         ) -> Sequence[SubscriptionLogin]:
-            """Write the instance from its template or its image, and copy in its picks."""
-            if template is None:
-                declared = await self._initialize_from_image(
-                    operation_id, record, staging, artifact, model, config, secrets
-                )
-            else:
-                declared = self._initialize_from_template(
-                    operation_id, record, staging, template, model, config, secrets
-                )
+            """Write the instance from its image, and copy in its picks."""
+            declared = await self._initialize_from_image(
+                operation_id, record, staging, artifact, model, config, secrets
+            )
             if picks:
                 self._record(operation_id, "picks", f"Copying {', '.join(picks)} from the library.")
                 self.library.pick(inspect_instance(staging), picks, lock_hash(staging))
@@ -1755,7 +1644,7 @@ class Hub:
         config: Mapping[str, SetupValue],
         secrets: dict[str, str],
     ) -> DeclaredSetup:
-        """Write a vanilla instance, with what the image just built declares."""
+        """Write the instance, with what the image just built declares."""
         self._record(
             operation_id,
             "validate",
@@ -1781,36 +1670,6 @@ class Hub:
         self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
         inspect_instance(staging)
         return description
-
-    def _initialize_from_template(
-        self,
-        operation_id: UUID,
-        record: ManagedInstance,
-        staging: Path,
-        template: InstanceTemplate,
-        model: str,
-        config: Mapping[str, SetupValue],
-        secrets: dict[str, str],
-    ) -> DeclaredSetup:
-        """Write a factory's instance from its template, whose setup the creation checked."""
-        self._record(
-            operation_id,
-            "initialize",
-            f'Writing the instance from template "{template.name}", with its secrets.',
-        )
-        configured = configuration(template.setup, model=model, config=config)
-        model = str(configured[MODEL_FIELD.name])
-        init_from_template(
-            staging,
-            template.files,
-            model=model,
-            settings=manifest_settings(template.setup, configured),
-        )
-        self._write_configuration(staging, record.manifest_id, record.persona_name)
-        _write_behavior_prompt(staging, configured)
-        self._write_secrets(staging / ".env", self._instance_secrets(model, secrets))
-        inspect_instance(staging)
-        return template.setup
 
     def _hub_route(self, record: ManagedInstance, manifest: Manifest | None) -> dict[str, str]:
         """The hub route, and the scopes an instance holds there, as its environment carries them:
@@ -1869,7 +1728,7 @@ class Hub:
 
     async def describe_image(self, command: ImageDescribeCommand) -> DeclaredSetup:
         """What the prepared image declares, as its preparation stored it, and the key web search
-        needs on a vanilla instance. It never builds."""
+        needs on an instance. It never builds."""
         return with_search_key(self._prepared_description(), Tools().search_key)
 
     async def _declared(self, artifact: ImageArtifact) -> DeclaredSetup:
@@ -2653,8 +2512,7 @@ class Hub:
         await self._runtime.create(self._container(record, image, record.storage))
 
     async def update(self, command: InstanceUpdateCommand) -> LifecycleOperationResult:
-        """Move this instance onto the image a selected revision prepares, and a factory's
-        instance onto the files its template supplies now."""
+        """Move this instance onto the image a selected revision prepares."""
         record = self._claimed(self._active_instance(command.instance_id))
         selection = _selection(record, command.revision)
         operation_id = uuid4()
@@ -2707,8 +2565,6 @@ class Hub:
         """
         revision = selection.revision
         self._revalidate(operation_id, record)
-        member = record.factory
-        template = None if member is None else await self._served_template(member)
         self._record(operation_id, "image", f"Preparing the image {revision} selects.")
         artifact = (await self._images.build(selection)).artifact
         self._record(
@@ -2719,26 +2575,10 @@ class Hub:
         )
         self.registry.stage_candidate(record.instance_id, revision, artifact)
         await self._remove_container(record, PendingStop(operation_id, asyncio.Event()))
-        baseline = None if member is None else member.baseline
-        taken: tuple[SkillName, ...] = ()
-        if template is not None and baseline is not None:
-            baseline, taken = self.library.take_supplied(record.path, baseline, template.files)
         lock = read_lock(record.path)
-        if taken or lock.skills or lock.mcp_servers:
+        if lock.skills or lock.mcp_servers:
             self._record(operation_id, "picks", "Bringing the picks up to the library's.")
-            detail = self.library.sync(record.path).detail
-            if taken:
-                detail = f"Made {', '.join(taken)} picks. {detail}"
-            self.registry.succeed_step(operation_id, detail)
-        if template is not None:
-            self._record(
-                operation_id,
-                "template",
-                f'Bringing the files of template "{template.name}" up to the factory\'s.',
-            )
-            sync = sync_template(template, record.path, baseline)
-            self.registry.record_template(record.instance_id, template.setup, sync.baseline)
-            self.registry.succeed_step(operation_id, sync.detail)
+            self.registry.succeed_step(operation_id, self.library.sync(record.path).detail)
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)
         running = record.intended_state is IntendedState.RUNNING
@@ -2750,17 +2590,6 @@ class Hub:
             )
             await self._observe_ready(record)
         return "Instance updated." if running else "Instance updated and left stopped."
-
-    async def _served_template(self, member: FactoryMember) -> InstanceTemplate:
-        """The template the hub serves now for a factory's instance, from a factory that passes
-        the check."""
-        template = await self.factories.template(member.factory, member.name)
-        if template is None:
-            raise ValueError(
-                f'Factory "{member.factory}" no longer has template "{member.name}", '
-                "so nothing was changed."
-            )
-        return template
 
     async def remove(self, command: InstanceRemoveCommand) -> LifecycleOperationResult:
         """Drain and remove the container. The data and the record stay for a restoration."""
@@ -3334,7 +3163,7 @@ class Hub:
         )
 
     def _create_home(self) -> LifecycleOperationResult:
-        """Create a vanilla instance and mark it home, through the ordinary creation. Its API
+        """Create an instance and mark it home, through the ordinary creation. Its API
         key stays pending setup, and the image is built if no preparation built it yet. It picks
         each home skill the library still holds."""
         record = self._new_record(_HOME_NAME, persona_name=_HOME_PERSONA_NAME, home=True)
@@ -3356,33 +3185,11 @@ class Hub:
     async def list(self, command: InstanceListCommand) -> InstanceListResult:
         hub_revision = await self._images.resolve(_PREPARED_REVISION)
         records = self.registry.listed_instances(removed=command.removed)
-        served = await self._served_templates(records)
         return InstanceListResult(
-            instances=[await self._summary(record, hub_revision, served) for record in records]
+            instances=[await self._summary(record, hub_revision) for record in records]
         )
 
-    async def _served_templates(
-        self, records: Iterable[ManagedInstance]
-    ) -> dict[tuple[FactoryName, str], InstanceTemplate]:
-        """Each template the factories of *records* serve now, by factory and name.
-
-        A factory the hub no longer serves, or one that fails its check, serves none.
-        """
-        served: dict[tuple[FactoryName, str], InstanceTemplate] = {}
-        for factory in {record.factory.factory for record in records if record.factory}:
-            try:
-                templates = await self.factories.templates(factory)
-            except FactoryNotFound, FactoryCheckFailed:
-                continue
-            served |= {(factory, template.name): template for template in templates}
-        return served
-
-    async def _summary(
-        self,
-        record: ManagedInstance,
-        hub_revision: str,
-        served: Mapping[tuple[FactoryName, str], InstanceTemplate],
-    ) -> InstanceSummary:
+    async def _summary(self, record: ManagedInstance, hub_revision: str) -> InstanceSummary:
         files = self._files(record)
         observed = await self._observed(record, files)
         return InstanceSummary(
@@ -3399,26 +3206,16 @@ class Hub:
             avatar=record.avatar,
             setup_pending=self._setup(record, files).pending,
             home=record.home,
-            factory_role=(
-                FactoryRole(factory=record.factory.factory, name=record.factory.name)
-                if record.factory is not None
-                else None
-            ),
-            notices=[*self._notices_of(record, files, hub_revision, served).values()],
+            notices=[*self._notices_of(record, files, hub_revision).values()],
         )
 
     def _notices_of(
-        self,
-        record: ManagedInstance,
-        files: _InstanceFiles,
-        hub_revision: str,
-        served: Mapping[tuple[FactoryName, str], InstanceTemplate],
+        self, record: ManagedInstance, files: _InstanceFiles, hub_revision: str
     ) -> dict[str, InstanceNotice]:
         manifest = files.manifest
         return _notices(
             record,
             hub_revision,
-            served,
             self._hub_route(record, manifest),
             files.secrets,
             {} if manifest is None else failed_mcp_servers(manifest.state_dir),
@@ -3429,12 +3226,11 @@ class Hub:
         try:
             hub_revision = await self._images.resolve(_PREPARED_REVISION)
             records = self.registry.listed_instances()
-            served = await self._served_templates(records)
         except Exception:
             _logger.exception("Could not look for instance notices")
             return
         for record in records:
-            notices = self._notices_of(record, self._files(record), hub_revision, served)
+            notices = self._notices_of(record, self._files(record), hub_revision)
             for key, notice in notices.items():
                 self.outbox.notify(
                     record.instance_id,
@@ -3484,12 +3280,10 @@ class Hub:
         return ObservedProcess(process, readiness, self._redact(status.detail, secrets))
 
     def _declared_setup(self, record: ManagedInstance) -> DeclaredSetup | None:
-        """What the instance asks for: its template's as created, or its image's. A workbench
-        declares only the logins it was created with."""
+        """What the instance asks for: its image's. A workbench declares only the logins it was
+        created with."""
         if record.workbench is not None:
             return DeclaredSetup(setup_fields=[], logins=list(record.workbench.logins))
-        if record.factory is not None:
-            return record.factory.setup
         return self.registry.description()
 
     @classmethod
@@ -4136,165 +3930,6 @@ class Hub:
                 f'"{running[0].step}". Change the owner once the step ends.'
             )
 
-    async def convert_instance(self, command: InstanceConvertCommand) -> Line:
-        """Convert the stopped instance into a workbench and a line of its role's factory on it,
-        owned by the home instance, whose intake takes the deliveries to the instance's signal
-        path. The workbench keeps the instance's id, directory, volumes, secrets, logins, picks and
-        repository commands. Its memory moves to the home instance, marked with the workbench.
-
-        Each part done is undone when a later one fails, so a conversion that fails leaves the
-        instance as it was.
-        """
-        async with (
-            self._factory_dependents,
-            self._locks.setdefault(command.instance_id, asyncio.Lock()),
-        ):
-            record = self._not_signing_in(self._claimed(self._active_instance(command.instance_id)))
-            member = record.factory
-            if member is None:
-                raise InvalidSetup(
-                    {"instance_id": f'Instance "{record.manifest_id}" picked no factory role.'}
-                )
-            self._refuse_in_use(record, member)
-            factory = await self.factories.checked(member.factory)
-            if factory.requires.image != member.recipe:
-                raise InvalidSetup(
-                    {
-                        "factory": f'Factory "{member.factory}" requires '
-                        f'{_image(factory.requires.image)}, and instance "{record.manifest_id}" '
-                        f"runs {_image(member.recipe)}."
-                    }
-                )
-            if self._name_taken(record.manifest_id, workbench=True):
-                raise InvalidSetup(
-                    {"instance_id": f'A workbench named "{record.manifest_id}" exists already.'}
-                )
-            home = next((other for other in self.registry.managed_instances() if other.home), None)
-            if home is None or not home.active:
-                raise InvalidSetup({"owner_id": "The hub has no home instance to own the line."})
-            manifest = inspect_instance(record.path).manifest
-            workbench = replace(
-                record,
-                factory=None,
-                storage=(*self._factories_mount(), *record.storage),
-                workbench=WorkbenchSetup(
-                    recipe=member.recipe,
-                    workspace_source=manifest.workspace.source,
-                    values={},
-                    commands=repository_commands(record.path),
-                    logins=tuple(member.setup.logins),
-                    browser=factory.requires.browser,
-                ),
-            )
-            model = manifest.models.main
-            lacking = _lacking(_asked(factory, model, self._holding(workbench), new=False))
-            if lacking:
-                raise InvalidSetup(
-                    {
-                        "instance_id": f'Instance "{record.manifest_id}" lacks what factory '
-                        f'"{member.factory}" requires: {", ".join(lacking)}.'
-                    }
-                )
-            line = Line(
-                line_id=uuid4(),
-                factory=member.factory,
-                workbench_id=record.instance_id,
-                owner_id=home.instance_id,
-                model=model,
-                usd_per_day=manifest.budgets.usd_per_day,
-                intake=(
-                    None
-                    if factory.intake is None
-                    else _intake_name(member.factory, record.manifest_id)
-                ),
-            )
-            await self._convert(record, workbench, line, factory.intake, home)
-            return line
-
-    def _refuse_in_use(self, record: ManagedInstance, member: FactoryMember) -> None:
-        """A running instance, or one a run or a line needs, is not converted, so nothing is cut
-        short or left with an owner that is no instance."""
-        if record.intended_state is not IntendedState.STOPPED:
-            raise InstanceInUse(
-                f'Instance "{record.manifest_id}" is running. Stop it before converting it.'
-            )
-        unfinished = [
-            run
-            for run in self.registry.runs(member.factory, UNFINISHED, record.instance_id)
-            if run.line_id is None
-        ]
-        if unfinished:
-            raise InstanceInUse(
-                f'Instance "{record.manifest_id}" has unfinished runs: {_named(unfinished)}. '
-                "Finish or cancel them before converting it."
-            )
-        owned = [
-            f'"{line.factory}" on "{self._workbench_name(line.workbench_id)}"'
-            for line in self.registry.lines()
-            if line.owner_id == record.instance_id
-        ]
-        if owned:
-            raise InstanceInUse(
-                f'Instance "{record.manifest_id}" owns the lines {", ".join(owned)}. '
-                "Give them another owner before converting it."
-            )
-
-    async def _convert(
-        self,
-        record: ManagedInstance,
-        workbench: ManagedInstance,
-        line: Line,
-        intake: WorkbenchIntake | None,
-        home: ManagedInstance,
-    ) -> None:
-        """Move the memory and the intake to *home*, replace the instance's container with the
-        workbench's, and record the conversion, undoing each part done when a later one fails."""
-        source, target = GraphStore(record.path), GraphStore(home.path)
-        memory = source.as_marked(record.manifest_id)
-        environment = record.path / ENV_NAME
-        held = environment.read_text(encoding="utf-8")
-        assert record.image_id is not None
-        container = self._container(record, record.image_id, record.storage)
-        async with AsyncExitStack() as undo:
-            undo.callback(target.restore, target.take(memory))
-            if line.intake is not None and intake is not None:
-                routine = _intake_routine(line.factory, record.manifest_id, intake)
-                await self._write_intake(home, line.intake, routine)
-                undo.push_async_callback(self._remove_intake, line)
-            try:
-                undo.callback(environment.write_text, held, encoding="utf-8")
-                # Its hub route granted an instance's scopes, which a workbench holds none of.
-                self._write_secrets(
-                    environment,
-                    {
-                        name: value
-                        for name, value in self._environment(record.path).items()
-                        if name not in {HUB_URL_VARIABLE, HUB_SCOPES_VARIABLE}
-                    },
-                )
-                if (await self._runtime.status(record.runtime_id)).state != "absent":
-                    await self._runtime.remove(record.runtime_id)
-                    undo.push_async_callback(self._runtime.create, container)
-                self._write_hub_url(workbench)
-                # A create can raise after Docker made the container, which holds the name then.
-                undo.push_async_callback(self._remove_if_there, record.runtime_id)
-                await self._runtime.create(
-                    self._container(workbench, record.image_id, workbench.storage)
-                )
-                self.registry.convert_instance(workbench, line)
-            except Exception as exc:
-                raise ConversionFailed(
-                    f'Instance "{record.manifest_id}" was not converted: '
-                    f"{str(exc) or type(exc).__name__}"
-                ) from exc
-            undo.pop_all()
-        for node in memory:
-            source.prune(node)
-
-    async def _remove_if_there(self, runtime_id: str) -> None:
-        if (await self._runtime.status(runtime_id)).state != "absent":
-            await self._runtime.remove(runtime_id)
-
     async def remove_line(self, command: LineRemoveCommand) -> LineListResult:
         """Remove the line and its intake routine. Its workbench keeps its clone, its secrets and
         its command lists. An owner that cannot delete the routine keeps the line."""
@@ -4420,7 +4055,8 @@ class Hub:
     ) -> tuple[InstanceEndpoint, RoutineName] | InstanceUnreachable:
         """Reach where a delivery to the instance's signal path goes, or without one, to the
         public path of the instance that kept the webhook URL it was registered with: the
-        instance's routine, or the intake of the line it was converted into."""
+        instance's routine, or the intake of the line an instance with a factory role was converted
+        into."""
         target = self.registry.signal_alias() if instance_id is None else instance_id
         if target is None:
             return InstanceUnreachable.MISSING

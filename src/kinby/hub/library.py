@@ -481,46 +481,6 @@ class Library:
             write_lock(instance_path, lock)
         return PickSync(written=tuple(written), kept=tuple(kept))
 
-    def take_supplied(
-        self, instance_path: Path, baseline: dict[str, FileHash], served: Iterable[str]
-    ) -> tuple[dict[str, FileHash], tuple[SkillName, ...]]:
-        """Make each shipped skill the template supplied, and serves no more, a pick of the
-        instance in *instance_path*, and give back *baseline* without it.
-
-        *served* is the paths of the template's files now. A pick's lock entry hashes the
-        instance's copy where it still matches *baseline*, and the library's otherwise, so a copy
-        the instance edited or linked out of its folder counts as edited locally. A skill an
-        interrupted update already made a pick leaves *baseline* too, keeping its lock entry.
-        """
-        lock = read_lock(instance_path)
-        folders = _skill_folders(self._directory)
-        shipped = self._registry.shipped_skills()
-        held = instance_path / SKILLS_DIR
-        dropped = skill_names(baseline) - skill_names(served)
-        taken = tuple(
-            sorted(
-                name
-                for name in dropped - lock.skills.keys()
-                if name in shipped
-                and name in folders
-                and (held / name).is_dir()
-                and not (held / name).is_symlink()
-            )
-        )
-        for name in taken:
-            prefix = f"{SKILLS_DIR}/{name}/"
-            supplied = {path: entry for path, entry in baseline.items() if path.startswith(prefix)}
-            untouched = not _linked(held / name) and _file_hashes(held / name, prefix) == supplied
-            lock.skills[name] = LockedSkill.of(
-                held / name if untouched else folders[name], LibrarySource.SHIPPED
-            )
-        if taken:
-            write_lock(instance_path, lock)
-        prefixes = tuple(f"{SKILLS_DIR}/{name}/" for name in dropped & lock.skills.keys())
-        return {
-            path: entry for path, entry in baseline.items() if not path.startswith(prefixes)
-        }, taken
-
     def _folder(self, name: SkillName) -> Path:
         folder = _skill_folders(self._directory).get(name)
         if folder is None:
@@ -654,29 +614,6 @@ def _refusal(name: SkillName, folder: Path | None, *, own: bool) -> str | None:
     if folder.is_symlink() or any(path.is_symlink() for path in folder.rglob("*")):
         return f'The library\'s skill "{name}" holds a link, so it cannot be picked.'
     return None
-
-
-def skill_names(paths: Iterable[str]) -> set[SkillName]:
-    """The skill folders among *paths*, each the path of a file in an instance."""
-    return {
-        SkillName(parts[1])
-        for parts in (PurePosixPath(path).parts for path in paths)
-        if len(parts) > 2 and parts[0] == SKILLS_DIR
-    }
-
-
-def _linked(folder: Path) -> bool:
-    """Whether *folder* holds a link, whose target the hub must never read."""
-    return any(path.is_symlink() for path in folder.rglob("*"))
-
-
-def _file_hashes(folder: Path, prefix: str) -> dict[str, FileHash]:
-    """The hash of each file in *folder*, by its path behind *prefix*."""
-    return {
-        f"{prefix}{path.relative_to(folder).as_posix()}": file_hash(path.read_bytes())
-        for path in folder.rglob("*")
-        if path.is_file()
-    }
 
 
 def _state(entry: LockedSkill, held: Path, name: SkillName, library: Path | None) -> PickState:

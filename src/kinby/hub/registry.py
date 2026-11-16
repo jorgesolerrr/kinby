@@ -72,23 +72,6 @@ class StorageConflict:
 
 
 @dataclass(frozen=True)
-class FactoryMember:
-    """The factory role an instance picked, and what its instance template declared."""
-
-    factory: FactoryName
-    #: The instance's name in the factory file.
-    name: str
-    #: The image recipe its template names. None is kinby's base image.
-    recipe: RecipeName | None
-    #: As the creation or the last update stored it, so an edit of the factory reaches the
-    #: instance's setup only through an update.
-    setup: DeclaredSetup
-    #: The hash of each file the template supplied, by its path. None for an instance created
-    #: before the hub recorded them.
-    baseline: dict[str, FileHash] | None
-
-
-@dataclass(frozen=True)
 class WorkbenchSetup:
     """What a workbench holds beside its container, its directory and its secrets."""
 
@@ -117,7 +100,6 @@ class ManagedInstance:
     prepared: bool
     storage: tuple[StorageItem, ...]
     avatar: Avatar = DEFAULT_AVATAR
-    factory: FactoryMember | None = None
     #: The instance registry marks it the home instance (ADR 0096). Never its manifest.
     home: bool = False
     #: Set for a workbench, whose container shares an instance's lifecycle and is no instance.
@@ -326,14 +308,6 @@ class HubRegistry:
                 CREATE TABLE IF NOT EXISTS sessions (
                     token_hash TEXT PRIMARY KEY
                 );
-                CREATE TABLE IF NOT EXISTS factory_members (
-                    instance_id TEXT PRIMARY KEY REFERENCES instances(id),
-                    factory TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    recipe TEXT,
-                    setup TEXT NOT NULL,
-                    baseline TEXT
-                );
                 CREATE TABLE IF NOT EXISTS workbenches (
                     instance_id TEXT PRIMARY KEY REFERENCES instances(id),
                     recipe TEXT,
@@ -353,7 +327,8 @@ class HubRegistry:
                     UNIQUE (factory, workbench_id)
                 );
                 -- The line whose intake takes the deliveries to an instance's signal path, by the
-                -- instance converted into the line's workbench, so its webhook keeps its address.
+                -- instance with a factory role converted into the line's workbench, so its webhook
+                -- keeps its address.
                 CREATE TABLE IF NOT EXISTS signal_lines (
                     instance_id TEXT PRIMARY KEY REFERENCES instances(id),
                     line_id TEXT NOT NULL
@@ -532,7 +507,8 @@ class HubRegistry:
             self._add_columns(connection, "step_attempts", {"ask": "TEXT", "answer": "TEXT"})
             # The ids of the views an attempt wrote to its run's instance, as JSON.
             self._add_columns(connection, "step_attempts", {"views": "TEXT NOT NULL DEFAULT '[]'"})
-            self._add_columns(connection, "factory_members", {"baseline": "TEXT"})
+            # The factory role each instance picked, from before factories ran on workbenches.
+            connection.execute("DROP TABLE IF EXISTS factory_members")
             # Null for a git skill added before the hub recorded the hash it landed with.
             self._add_columns(connection, "git_skills", {"hash": "TEXT"})
             self._add_columns(connection, "workbenches", {"commands": "TEXT NOT NULL DEFAULT '{}'"})
@@ -843,23 +819,6 @@ class HubRegistry:
                     instance.avatar.color.value,
                 ),
             )
-            member = instance.factory
-            if member is not None:
-                connection.execute(
-                    """
-                    INSERT INTO factory_members (
-                        instance_id, factory, name, recipe, setup, baseline
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(instance.instance_id),
-                        member.factory,
-                        member.name,
-                        member.recipe,
-                        member.setup.model_dump_json(),
-                        None if member.baseline is None else json.dumps(member.baseline),
-                    ),
-                )
             if instance.home:
                 # The hub creates a home instance only while it holds none, so this replaces
                 # only the mark of one whose creation failed.
@@ -867,8 +826,26 @@ class HubRegistry:
                     "INSERT OR REPLACE INTO hub_metadata (key, value) VALUES ('home_instance', ?)",
                     (str(instance.instance_id),),
                 )
-            if instance.workbench is not None:
-                self._insert_workbench(connection, instance.instance_id, instance.workbench)
+            workbench = instance.workbench
+            if workbench is not None:
+                connection.execute(
+                    """
+                    INSERT INTO workbenches (
+                        instance_id, recipe, workspace_source, named_values, commands, logins,
+                        browser
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(instance.instance_id),
+                        workbench.recipe,
+                        workbench.workspace_source,
+                        json.dumps(workbench.values),
+                        json.dumps(workbench.commands),
+                        _LOGINS.dump_json(workbench.logins).decode(),
+                        workbench.browser,
+                    ),
+                )
             self._insert_operation(
                 connection,
                 operation_id,
@@ -1063,16 +1040,6 @@ class HubRegistry:
     def unlink_hub_secret(self, hub_secret: HubSecretName) -> None:
         with self._transaction() as connection:
             connection.execute("DELETE FROM secret_links WHERE hub_secret = ?", (hub_secret,))
-
-    def record_template(
-        self, instance_id: UUID, setup: DeclaredSetup, baseline: dict[str, FileHash]
-    ) -> None:
-        """Store the setup and the baseline an update just synced the factory's instance to."""
-        with self._transaction() as connection:
-            connection.execute(
-                "UPDATE factory_members SET setup = ?, baseline = ? WHERE instance_id = ?",
-                (setup.model_dump_json(), json.dumps(baseline), str(instance_id)),
-            )
 
     def login_states(self, instance_id: UUID) -> dict[str, LoginState]:
         """How each login the hub tracks for this instance stands, by login id."""
@@ -1319,28 +1286,6 @@ class HubRegistry:
                 """,
                 (artifact.revision, artifact.image_id, str(instance_id)),
             )
-
-    @staticmethod
-    def _insert_workbench(
-        connection: sqlite3.Connection, workbench_id: UUID, workbench: WorkbenchSetup
-    ) -> None:
-        connection.execute(
-            """
-            INSERT INTO workbenches (
-                instance_id, recipe, workspace_source, named_values, commands, logins, browser
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(workbench_id),
-                workbench.recipe,
-                workbench.workspace_source,
-                json.dumps(workbench.values),
-                json.dumps(workbench.commands),
-                _LOGINS.dump_json(workbench.logins).decode(),
-                workbench.browser,
-            ),
-        )
 
     @staticmethod
     def _insert_storage(
@@ -1659,44 +1604,25 @@ class HubRegistry:
 
     def add_line(self, line: Line) -> None:
         with self._transaction() as connection:
-            self._insert_line(connection, line)
-
-    @staticmethod
-    def _insert_line(connection: sqlite3.Connection, line: Line) -> None:
-        connection.execute(
-            """
-            INSERT INTO lines (id, factory, workbench_id, owner_id, model, usd_per_day, intake)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(line.line_id),
-                line.factory,
-                str(line.workbench_id),
-                str(line.owner_id),
-                line.model,
-                line.usd_per_day,
-                line.intake,
-            ),
-        )
-
-    def convert_instance(self, workbench: ManagedInstance, line: Line) -> None:
-        """Record the instance as the *workbench* it was converted into, with its storage, and
-        *line* on it, whose intake takes the deliveries to the instance's signal path."""
-        assert workbench.workbench is not None
-        instance_id = str(workbench.instance_id)
-        with self._transaction() as connection:
-            connection.execute("DELETE FROM factory_members WHERE instance_id = ?", (instance_id,))
-            self._insert_workbench(connection, workbench.instance_id, workbench.workbench)
-            connection.execute("DELETE FROM storage WHERE instance_id = ?", (instance_id,))
-            self._insert_storage(connection, workbench.instance_id, workbench.storage)
-            self._insert_line(connection, line)
             connection.execute(
-                "INSERT INTO signal_lines (instance_id, line_id) VALUES (?, ?)",
-                (instance_id, str(line.line_id)),
+                """
+                INSERT INTO lines (id, factory, workbench_id, owner_id, model, usd_per_day, intake)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(line.line_id),
+                    line.factory,
+                    str(line.workbench_id),
+                    str(line.owner_id),
+                    line.model,
+                    line.usd_per_day,
+                    line.intake,
+                ),
             )
 
     def signal_line(self, instance_id: UUID) -> UUID | None:
-        """The line whose intake takes the deliveries to the converted instance's signal path."""
+        """The line whose intake takes the deliveries to the signal path of the instance converted
+        into its workbench."""
         with self._transaction() as connection:
             row = connection.execute(
                 "SELECT line_id FROM signal_lines WHERE instance_id = ?", (str(instance_id),)
@@ -1855,12 +1781,6 @@ class HubRegistry:
             ).fetchone()
         return self.operation(UUID(row[0])) if row is not None else None
 
-    def factory_members(self, factory: FactoryName) -> list[ManagedInstance]:
-        """The instances holding a role of this factory and not deleted, in creation order."""
-        return self._instances(
-            "factory = ? AND intended_state != ?", (factory, IntendedState.DELETED.value)
-        )
-
     def listed_instances(self, *, removed: bool = False) -> list[ManagedInstance]:
         """The active instances, or the removed ones whose records and storage the hub retains.
         A workbench is never one of them."""
@@ -1886,8 +1806,8 @@ class HubRegistry:
         )
 
     def _instances(self, where: str, parameters: tuple[str, ...]) -> list[ManagedInstance]:
-        """The records *where* selects, each with its storage, its factory role and what it holds
-        as a workbench, in creation order."""
+        """The records *where* selects, each with its storage and what it holds as a workbench, in
+        creation order."""
         with self._transaction() as connection:
             rows = connection.execute(
                 f"""
@@ -1904,11 +1824,9 @@ class HubRegistry:
                         )
                         FROM storage WHERE storage.instance_id = instances.id
                     ),
-                    factory, name, factory_members.recipe, setup, baseline,
                     workbenches.instance_id IS NOT NULL, workbenches.recipe, workspace_source,
                     named_values, commands, logins, browser
                 FROM instances
-                LEFT JOIN factory_members ON factory_members.instance_id = instances.id
                 LEFT JOIN workbenches ON workbenches.instance_id = instances.id
                 WHERE {where}
                 ORDER BY instances.rowid
@@ -1971,7 +1889,7 @@ class HubRegistry:
         A removed instance keeps its image for a restoration (ADR 0053), and an instance
         whose update failed still names its previous image (ADR 0035). Deletion leaves
         the candidate row a failed update staged. The image described last is the prepared
-        one, which a vanilla creation reads and reuses.
+        one, which a creation reads and reuses.
         """
         with self._transaction() as connection:
             rows = connection.execute(
@@ -3061,11 +2979,6 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
         avatar_color,
         home,
         storage,
-        factory,
-        name,
-        recipe,
-        setup,
-        baseline,
         workbench,
         workbench_recipe,
         workspace_source,
@@ -3099,17 +3012,6 @@ def _managed_instance(row: tuple[str, ...]) -> ManagedInstance:
             Avatar(shape=AvatarShape(avatar_shape), color=AvatarColor(avatar_color))
             if avatar_shape is not None
             else DEFAULT_AVATAR
-        ),
-        factory=(
-            FactoryMember(
-                factory=factory,
-                name=name,
-                recipe=recipe,
-                setup=DeclaredSetup.model_validate_json(setup),
-                baseline=None if baseline is None else json.loads(baseline),
-            )
-            if factory is not None
-            else None
         ),
         home=bool(home),
         workbench=(

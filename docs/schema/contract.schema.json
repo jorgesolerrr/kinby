@@ -2285,45 +2285,6 @@
       "title": "FactoryCheckResult",
       "type": "object"
     },
-    "FactoryDescribeCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "$ref": "#/$defs/FactoryName"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "title": "FactoryDescribeCommand",
-      "type": "object"
-    },
-    "FactoryDescription": {
-      "additionalProperties": false,
-      "properties": {
-        "instances": {
-          "additionalProperties": {
-            "$ref": "#/$defs/DeclaredSetup"
-          },
-          "type": "object"
-        },
-        "suggested_picks": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "instances",
-        "suggested_picks"
-      ],
-      "title": "FactoryDescription",
-      "type": "object"
-    },
     "FactoryEditCommand": {
       "additionalProperties": false,
       "description": "Write files of a factory's folder at once. The hub keeps them only if the check passes.\n\nA shipped factory is never written: the edit lands on its copy in the hub's factories.",
@@ -2435,25 +2396,6 @@
         "hash"
       ],
       "title": "FactoryResult",
-      "type": "object"
-    },
-    "FactoryRole": {
-      "additionalProperties": false,
-      "description": "The part an instance plays in a factory, such as ``coder`` in ``software``.",
-      "properties": {
-        "factory": {
-          "$ref": "#/$defs/FactoryName"
-        },
-        "name": {
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "factory",
-        "name"
-      ],
-      "title": "FactoryRole",
       "type": "object"
     },
     "FactoryRun": {
@@ -3269,7 +3211,7 @@
     },
     "ImagePrepareCommand": {
       "additionalProperties": false,
-      "description": "Prepare kinby's base image, the one a vanilla instance runs on.",
+      "description": "Prepare kinby's base image, the one an instance runs on.",
       "properties": {},
       "title": "ImagePrepareCommand",
       "type": "object"
@@ -3424,21 +3366,6 @@
       "title": "InstanceAdoptPreviewResult",
       "type": "object"
     },
-    "InstanceConvertCommand": {
-      "additionalProperties": false,
-      "description": "Convert a stopped instance that picked a factory role into a workbench, and a line of the\nrole's factory on it owned by the home instance. The factory must run on a workbench by then.\nThe result is the line, whose workbench is stopped.\n\nThe workbench keeps the instance's id, name, directory and volumes: its clone and installs,\nsecrets, logins, picks and lists of repository commands. The instance's memory moves to the\nhome instance, marked with the workbench, and its threads and runs still read through the hub.\nA delivery to the instance's signal path reaches the line's intake. Refused while the instance\nruns, a run needs it or it owns a line. A conversion that fails part way leaves the instance as\nit was.",
-      "properties": {
-        "instance_id": {
-          "format": "uuid",
-          "type": "string"
-        }
-      },
-      "required": [
-        "instance_id"
-      ],
-      "title": "InstanceConvertCommand",
-      "type": "object"
-    },
     "InstanceCreateCommand": {
       "additionalProperties": false,
       "properties": {
@@ -3451,17 +3378,6 @@
           },
           "type": "object"
         },
-        "factory_role": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FactoryRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "hub_secrets": {
           "additionalProperties": {
             "$ref": "#/$defs/HubSecretName"
@@ -3469,16 +3385,8 @@
           "type": "object"
         },
         "manifest_id": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "minLength": 1,
+          "type": "string"
         },
         "model": {
           "type": "string"
@@ -3522,6 +3430,7 @@
         }
       },
       "required": [
+        "manifest_id",
         "model"
       ],
       "title": "InstanceCreateCommand",
@@ -4088,17 +3997,6 @@
           "default": "",
           "type": "string"
         },
-        "factory_role": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FactoryRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "home": {
           "type": "boolean"
         },
@@ -4121,17 +4019,13 @@
               "mapping": {
                 "hub_route_missing": "#/$defs/HubRouteMissing",
                 "mcp_server_failed": "#/$defs/McpServerFailed",
-                "revision_behind": "#/$defs/RevisionBehind",
-                "template_behind": "#/$defs/TemplateBehind"
+                "revision_behind": "#/$defs/RevisionBehind"
               },
               "propertyName": "code"
             },
             "oneOf": [
               {
                 "$ref": "#/$defs/RevisionBehind"
-              },
-              {
-                "$ref": "#/$defs/TemplateBehind"
               },
               {
                 "$ref": "#/$defs/HubRouteMissing"
@@ -8775,7 +8669,7 @@
     },
     "SetupField": {
       "additionalProperties": false,
-      "description": "One value a prepared image or an instance template asks for before an instance exists.",
+      "description": "One value a prepared image asks for before an instance exists.",
       "properties": {
         "choices": {
           "anyOf": [
@@ -10281,7 +10175,7 @@
     },
     "SubscriptionLogin": {
       "additionalProperties": false,
-      "description": "One sign-in a template declares, run in a setup container (ADR 0065).",
+      "description": "One sign-in an image or a factory declares, run in a setup container (ADR 0065).",
       "properties": {
         "command": {
           "items": {
@@ -10478,26 +10372,6 @@
       ],
       "title": "TargetFile",
       "type": "string"
-    },
-    "TemplateBehind": {
-      "additionalProperties": false,
-      "description": "The template the instance's factory serves differs from the files the hub copied, or the\nhub kept no record of them, so an update is there.",
-      "properties": {
-        "code": {
-          "const": "template_behind",
-          "default": "template_behind",
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "code"
-      ],
-      "title": "TemplateBehind",
-      "type": "object"
     },
     "TextProp": {
       "anyOf": [
@@ -14375,22 +14249,6 @@
           ],
           "type": "object"
         },
-        "factory.describe": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/FactoryDescribeCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/FactoryDescription"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
         "factory.edit": {
           "additionalProperties": false,
           "properties": {
@@ -14719,22 +14577,6 @@
             },
             "result": {
               "$ref": "#/$defs/InstanceAdoptPreviewResult"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
-        "instance.convert": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/InstanceConvertCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/Line"
             }
           },
           "required": [
@@ -16982,7 +16824,6 @@
         "line.get",
         "line.update",
         "line.owner.set",
-        "instance.convert",
         "line.remove",
         "line.hand_in",
         "line.intake",
@@ -17000,7 +16841,6 @@
         "factory.check",
         "factory.edit",
         "factory.remove",
-        "factory.describe",
         "factory.run.list",
         "factory.run.get",
         "factory.run.transcript",

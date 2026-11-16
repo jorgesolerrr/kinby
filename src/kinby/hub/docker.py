@@ -105,7 +105,7 @@ class DockerImageBackend:
         return True
 
     async def describe(self, image_id: str) -> DeclaredSetup:
-        """Ask the kinby in the image what a vanilla instance declares."""
+        """Ask the kinby in the image what an instance declares."""
         try:
             output = await self._inspect(image_id, ["-m", "kinby.setup"])
         except ContainerError as exc:

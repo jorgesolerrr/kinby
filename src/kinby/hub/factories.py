@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from kinby.contracts import (
-    DeclaredSetup,
     FactoryCheckCommand,
     FactoryCheckResult,
-    FactoryDescribeCommand,
-    FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
     FactoryListCommand,
@@ -23,38 +19,11 @@ from kinby.contracts import (
     FactoryResult,
     FactorySource,
     FactorySummary,
-    FileHash,
-    SkillName,
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
-from kinby.factories.file import FactoryPath, RecipeName, WorkbenchFactory, read_factory_file
-from kinby.instance import template_tools
-from kinby.instance.config_changes import file_hash, files_hash
-from kinby.instance.layout import MANIFEST_NAME
-from kinby.setup import with_search_key
-
-
-@dataclass(frozen=True)
-class InstanceTemplate:
-    """One instance template of a factory that passed the check, read whole."""
-
-    #: The instance's name in the factory file.
-    name: str
-    recipe: RecipeName | None
-    setup: DeclaredSetup
-    #: Every file of the template's folder, by its path there.
-    files: dict[str, str]
-    suggested_picks: tuple[SkillName, ...]
-
-    @property
-    def baseline(self) -> dict[str, FileHash]:
-        """The hash of each file the template supplies but its manifest, which the instance owns."""
-        return {
-            path: file_hash(content.encode())
-            for path, content in self.files.items()
-            if path != MANIFEST_NAME
-        }
+from kinby.factories.file import FactoryPath, WorkbenchFactory, read_factory_file
+from kinby.instance.config_changes import files_hash
 
 
 class FactoryStore:
@@ -101,21 +70,6 @@ class FactoryStore:
         folder, _ = self._folder(name)
         return (folder / path).read_text(encoding="utf-8")
 
-    async def describe(self, command: FactoryDescribeCommand) -> FactoryDescription:
-        templates = await self.templates(command.name)
-        return FactoryDescription(
-            instances={
-                template.name: with_search_key(
-                    template.setup,
-                    template_tools(template.files.get(MANIFEST_NAME, "")).search_key,
-                )
-                for template in templates
-            },
-            suggested_picks={
-                template.name: list(template.suggested_picks) for template in templates
-            },
-        )
-
     async def checked(self, name: FactoryName) -> WorkbenchFactory:
         """The factory's file, read in the same pass as the check passes it."""
         async with self._edit_lock:
@@ -127,18 +81,6 @@ class FactoryStore:
         if problems:
             raise FactoryCheckFailed(problems)
         return read_factory_file(folder)
-
-    async def templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
-        """Each instance template of the factory, once the check passes it. A factory declares no
-        instances any more, so it holds none."""
-        await self.checked(name)
-        return ()
-
-    async def template(self, name: FactoryName, role: str) -> InstanceTemplate | None:
-        """The factory's instance template for *role*, or None when the factory has no such role."""
-        return next(
-            (template for template in await self.templates(name) if template.name == role), None
-        )
 
     async def edit(self, command: FactoryEditCommand) -> FactoryResult:
         """Write the files over the factory the client read, and keep them if the check passes."""

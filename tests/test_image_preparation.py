@@ -190,7 +190,7 @@ def test_other_git_failures_carry_git_s_own_message(tmp_path):
     assert str(raised.value).startswith("fatal: not a git repository")
 
 
-def test_a_template_recipe_is_built_into_the_image(tmp_path):
+def test_a_recipe_is_built_into_the_image(tmp_path):
     async def scenario() -> None:
         source = tmp_path / "source"
         source.mkdir()

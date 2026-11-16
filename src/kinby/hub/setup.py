@@ -26,7 +26,6 @@ from kinby.setup import (
     API_KEY_FIELD,
     MODEL_FIELD,
     resolved_values,
-    template_fields,
     value_problem,
     with_search_key,
 )
@@ -120,18 +119,6 @@ def configuration(
     """Each configuration field's value, the model's included, with defaults filling the gaps."""
     fields = [field for field in description.setup_fields if field.kind is SetupFieldKind.CONFIG]
     return resolved_values(fields, {**config, MODEL_FIELD.name: model})
-
-
-def manifest_settings(
-    setup: DeclaredSetup,
-    configured: Mapping[str, SetupValue],
-) -> dict[str, SetupValue]:
-    """The values of a template's own fields, by the dotted key of kinby.toml each lands at."""
-    return {
-        field.target.key: configured[field.name]
-        for field in template_fields(setup.setup_fields)
-        if field.target is not None and field.name in configured
-    }
 
 
 def held_secrets(model: ModelName, secrets: Mapping[str, str]) -> dict[str, str]:

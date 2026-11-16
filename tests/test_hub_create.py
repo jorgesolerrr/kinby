@@ -26,7 +26,6 @@ from kinby.contracts import (
     DeclaredSetup,
     ErrorCode,
     ErrorEnvelope,
-    FactoryRole,
     ImageDescribeCommand,
     InstanceCreateCommand,
     InstanceListCommand,
@@ -54,7 +53,6 @@ from tests.test_hub import (
     instance_environment,
     prepared,
 )
-from tests.test_hub_factories import write_factory
 
 
 def test_creating_before_the_image_is_prepared_is_refused_and_records_nothing(tmp_path):
@@ -450,22 +448,6 @@ def test_an_instance_created_before_avatars_lists_the_default_one(tmp_path):
     asyncio.run(scenario())
 
 
-def test_an_instance_needs_a_name(tmp_path):
-    client = hub_client(hub_at(tmp_path / "hub"))
-
-    async def scenario() -> None:
-        await prepared(client)
-
-        refused = await client.call(
-            INSTANCE_CREATE, InstanceCreateCommand(model="openai:gpt-5", secrets={"api_key": "sk"})
-        )
-
-        assert isinstance(refused, ErrorEnvelope)
-        assert refused.fields == {"manifest_id": "Name the instance, or pick a factory role."}
-
-    asyncio.run(scenario())
-
-
 def test_a_create_whose_name_is_taken_fails_and_says_so(tmp_path):
     hub = hub_at(tmp_path / "hub")
     client = hub_client(hub)
@@ -512,68 +494,6 @@ def test_a_removed_instance_is_not_restored_beside_one_of_the_same_name(tmp_path
         assert [summary.instance_id for summary in listed.instances] == [second]
 
     asyncio.run(scenario())
-
-
-FACTORY = """\
-name: checks
-requires: { image: coder }
-work_item: { issue: int }
-steps:
-  - { id: test, kind: command, run: ["uv run pytest"] }
-"""
-#: The same factory written the older way, whose steps ran in the instances it declared.
-OLDER_FACTORY = """\
-name: checks
-instances:
-  coder: {}
-work_item: { issue: int }
-steps:
-  - { id: test, kind: command, in: coder, run: ["uv run pytest"] }
-"""
-
-
-def _role_refused(tmp_path: Path, factory: str) -> ErrorEnvelope:
-    """Write *factory* to the hub, ask it for an instance that picks a role of it, and check the
-    refusal created nothing."""
-    runtime = FakeRuntime()
-    images = FakeImages()
-    write_factory(tmp_path / "hub" / "factories" / "checks", {"factory.yaml": factory})
-    hub = hub_at(
-        tmp_path / "hub", runtime=runtime, images=images, shipped_factories=tmp_path / "shipped"
-    )
-
-    refused = asyncio.run(
-        hub_client(hub).call(
-            INSTANCE_CREATE,
-            InstanceCreateCommand(
-                factory_role=FactoryRole(factory="checks", name="coder"),
-                model="openai:gpt-5",
-                secrets={"api_key": "sk-private"},
-            ),
-        )
-    )
-
-    assert isinstance(refused, ErrorEnvelope)
-    assert hub.registry.managed_instances() == []
-    assert images.selections == []
-    assert runtime.created == []
-    return refused
-
-
-def test_a_create_that_picks_a_role_the_factory_does_not_have_creates_nothing(tmp_path):
-    refused = _role_refused(tmp_path, FACTORY)
-
-    assert refused.code is ErrorCode.INVALID_SETUP
-    assert refused.fields == {"factory_role": 'Factory "checks" has no role "coder".'}
-
-
-def test_a_create_that_picks_a_role_of_a_factory_the_check_refuses_creates_nothing(tmp_path):
-    refused = _role_refused(tmp_path, OLDER_FACTORY)
-
-    assert refused.code is ErrorCode.INVALID_ARGUMENT
-    assert "factory.yaml declares instances, which no factory runs in any more." in (
-        refused.message
-    )
 
 
 def _config_field(name: str, label: str, type: SetupFieldType, **declared) -> SetupField:
@@ -814,7 +734,7 @@ def test_a_malformed_url_or_email_is_refused_on_its_field_and_creates_nothing(
 async def created(
     client: ContractClient, avatar: Avatar = DEFAULT_AVATAR, name: str = "ada"
 ) -> UUID:
-    """Create a vanilla instance from the prepared image, and wait until it is published."""
+    """Create an instance from the prepared image, and wait until it is published."""
     accepted = await client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(

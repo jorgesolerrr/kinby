@@ -196,18 +196,6 @@ describe("the instances", () => {
     expect((await instanceGroup("research")).getByText("stopped")).toBeDefined()
   })
 
-  it("lists teammates only, leaving out an instance that holds a factory role", async () => {
-    const coder = instanceSummary({
-      instance_id: "hub-coder",
-      persona_name: "Coder",
-      factory_role: { factory: "software", name: "coder" },
-    })
-    openApp({ signedIn: true, instances: [ada, coder] })
-
-    expect(await instanceRow("Ada")).toBeDefined()
-    expect(screen.queryByRole("button", { name: /^Coder/ })).toBeNull()
-  })
-
   it("shows the state the runtime observed, not the one the instance is meant to be in", async () => {
     const looping = { ...ada, process: "starting", detail: "restarting" } as const
     const failed = { ...unnamed, intended_state: "running", process: "failed" } as const
