@@ -35,7 +35,7 @@ from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ClosedTurnHook, Turns
-from kinby.instance import Instance, init_from_template, init_instance, load_instance
+from kinby.instance import Instance, init_instance, load_instance
 from kinby.instance.init import DEFAULT_CONSOLIDATION_LENS
 from kinby.memory import (
     Episode,
@@ -847,22 +847,3 @@ def test_the_shipped_stage_body_is_the_lens_inside_the_frame(tmp_path: Path) -> 
     assert DEFAULT_CONSOLIDATION_LENS not in edited.wake
     assert monday in edited.wake
     assert "consolidate" in edited.tools
-
-
-def test_an_instance_template_ships_its_own_consolidation_lens(tmp_path: Path) -> None:
-    own = (
-        "---\ndescription: Consolidate review lessons\n"
-        f"schedule: 0 4 * * *\nrun: consolidate\n---\n{_LENS}\n"
-    )
-    target = init_from_template(
-        tmp_path / "coder",
-        {"routines/consolidation/ROUTINE.md": own},
-        model="openai:gpt-5",
-        settings={},
-    )
-
-    routine = load_routine(load_instance(target), RoutineName("consolidation"))
-
-    assert routine is not None
-    assert routine.prompt.strip() == _LENS
-    assert routine.schedule == "0 4 * * *"

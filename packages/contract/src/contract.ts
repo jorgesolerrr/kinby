@@ -340,10 +340,6 @@ export interface Contract {
       command: FactoryCheckCommand;
       result: FactoryCheckResult;
     };
-    "factory.describe": {
-      command: FactoryDescribeCommand;
-      result: FactoryDescription;
-    };
     "factory.edit": {
       command: FactoryEditCommand;
       result: FactoryResult;
@@ -427,10 +423,6 @@ export interface Contract {
     "instance.adopt.preview": {
       command: InstanceAdoptPreviewCommand;
       result: InstanceAdoptPreviewResult;
-    };
-    "instance.convert": {
-      command: InstanceConvertCommand;
-      result: Line;
     };
     "instance.create": {
       command: InstanceCreateCommand;
@@ -1325,7 +1317,7 @@ export interface ChannelKindDescription {
   settings: SetupField[];
 }
 /**
- * One value a prepared image or an instance template asks for before an instance exists.
+ * One value a prepared image asks for before an instance exists.
  */
 export interface SetupField {
   choices?: string[] | null;
@@ -1394,35 +1386,6 @@ export interface FactoryCheckCommand {
 }
 export interface FactoryCheckResult {
   problems: string[];
-}
-export interface FactoryDescribeCommand {
-  name: FactoryName;
-}
-export interface FactoryDescription {
-  instances: {
-    [k: string]: DeclaredSetup;
-  };
-  suggested_picks: {
-    [k: string]: string[];
-  };
-}
-/**
- * The setup fields an instance asks for, the built-in fields first, and its logins.
- */
-export interface DeclaredSetup {
-  logins?: SubscriptionLogin[];
-  setup_fields: SetupField[];
-}
-/**
- * One sign-in a template declares, run in a setup container (ADR 0065).
- */
-export interface SubscriptionLogin {
-  command: string[];
-  description: string;
-  id: string;
-  label: string;
-  prompt_pattern: string;
-  volume: string;
 }
 /**
  * Write files of a factory's folder at once. The hub keeps them only if the check passes.
@@ -1719,7 +1682,25 @@ export interface HubWriteResult {
  */
 export interface ImageDescribeCommand {}
 /**
- * Prepare kinby's base image, the one a vanilla instance runs on.
+ * The setup fields an instance asks for, the built-in fields first, and its logins.
+ */
+export interface DeclaredSetup {
+  logins?: SubscriptionLogin[];
+  setup_fields: SetupField[];
+}
+/**
+ * One sign-in an image or a factory declares, run in a setup container (ADR 0065).
+ */
+export interface SubscriptionLogin {
+  command: string[];
+  description: string;
+  id: string;
+  label: string;
+  prompt_pattern: string;
+  volume: string;
+}
+/**
+ * Prepare kinby's base image, the one an instance runs on.
  */
 export interface ImagePrepareCommand {}
 export interface ImagePrepareResult {
@@ -1787,43 +1768,15 @@ export interface StorageItem {
   source: string;
   writable: boolean;
 }
-/**
- * Convert a stopped instance that picked a factory role into a workbench, and a line of the
- * role's factory on it owned by the home instance. The factory must run on a workbench by then.
- * The result is the line, whose workbench is stopped.
- *
- * The workbench keeps the instance's id, name, directory and volumes: its clone and installs,
- * secrets, logins, picks and lists of repository commands. The instance's memory moves to the
- * home instance, marked with the workbench, and its threads and runs still read through the hub.
- * A delivery to the instance's signal path reaches the line's intake. Refused while the instance
- * runs, a run needs it or it owns a line. A conversion that fails part way leaves the instance as
- * it was.
- */
-export interface InstanceConvertCommand {
-  instance_id: string;
-}
-/**
- * A factory set up on one workbench under an owning instance.
- */
-export interface Line {
-  factory: FactoryName;
-  intake: string | null;
-  line_id: string;
-  model: string | null;
-  owner_id: string;
-  usd_per_day: number | null;
-  workbench_id: string;
-}
 export interface InstanceCreateCommand {
   avatar?: Avatar;
   config?: {
     [k: string]: SetupValue;
   };
-  factory_role?: FactoryRole | null;
   hub_secrets?: {
     [k: string]: HubSecretName;
   };
-  manifest_id?: string | null;
+  manifest_id: string;
   model: string;
   persona_name?: string | null;
   picks?: string[];
@@ -1841,13 +1794,6 @@ export interface InstanceCreateCommand {
 export interface Avatar {
   color: AvatarColor;
   shape: AvatarShape;
-}
-/**
- * The part an instance plays in a factory, such as ``coder`` in ``software``.
- */
-export interface FactoryRole {
-  factory: FactoryName;
-  name: string;
 }
 /**
  * Delete the previewed targets. A target that changed since the preview stops it.
@@ -1887,13 +1833,12 @@ export interface InstanceListResult {
 export interface InstanceSummary {
   avatar: Avatar;
   detail?: string;
-  factory_role?: FactoryRole | null;
   home: boolean;
   image_id: string;
   instance_id: string;
   intended_state: IntendedState;
   manifest_id: string;
-  notices: (RevisionBehind | TemplateBehind | HubRouteMissing | McpServerFailed)[];
+  notices: (RevisionBehind | HubRouteMissing | McpServerFailed)[];
   persona_name: string | null;
   process: ProcessState;
   runtime_id: string;
@@ -1908,14 +1853,6 @@ export interface RevisionBehind {
   code: "revision_behind";
   hub_revision: string;
   instance_revision: string;
-  message: string;
-}
-/**
- * The template the instance's factory serves differs from the files the hub copied, or the
- * hub kept no record of them, so an update is there.
- */
-export interface TemplateBehind {
-  code: "template_behind";
   message: string;
 }
 /**
@@ -2288,6 +2225,18 @@ export interface LibrarySkillWriteCommand {
 }
 export interface LineGetCommand {
   line_id: string;
+}
+/**
+ * A factory set up on one workbench under an owning instance.
+ */
+export interface Line {
+  factory: FactoryName;
+  intake: string | null;
+  line_id: string;
+  model: string | null;
+  owner_id: string;
+  usd_per_day: number | null;
+  workbench_id: string;
 }
 /**
  * Hand a work item to a line, which starts a run on its workbench. The result is the run.

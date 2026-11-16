@@ -74,7 +74,6 @@ def test_starting_a_hub_with_no_home_instance_creates_kinby_and_marks_it(tmp_pat
         assert kinby.persona_name == "Kinby"
         assert kinby.home
         assert kinby.intended_state is IntendedState.STOPPED
-        assert kinby.factory_role is None
         # No API key was given, so the instance waits for one.
         assert kinby.setup_pending
         assert [spec.instance_id for spec in runtime.created] == [str(home.instance_id)]

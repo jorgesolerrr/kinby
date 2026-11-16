@@ -149,7 +149,7 @@ The hub's record of the **instances** it manages, their identities, storage loca
 
 ### Home instance
 
-The one **instance** the **hub** creates for itself and the user talks to about kinby: it builds inside kinby on the user's behalf and does personal work itself. The hub creates it on start whenever it holds none, as a **vanilla instance** whose API key waits as **pending setup**. The **instance registry** marks it, never its own **manifest**. Its **persona name** defaults to "Kinby". It can be stopped and renamed, never removed, and the role never moves to another instance. The web app lists it first and opens on its newest thread.
+The one **instance** the **hub** creates for itself and the user talks to about kinby: it builds inside kinby on the user's behalf and does personal work itself. The hub creates it on start whenever it holds none, from kinby's built-in defaults, with its API key waiting as **pending setup**. The **instance registry** marks it, never its own **manifest**. Its **persona name** defaults to "Kinby". It can be stopped and renamed, never removed, and the role never moves to another instance. The web app lists it first and opens on its newest thread.
 _Avoid_: system agent, main instance, Kinby (as a term)
 
 ### Hub instance ID
@@ -213,12 +213,12 @@ _Avoid_: config event, audit entry
 
 ### Instance update
 
-The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path and keeps every storage the instance owns. For a **factory**'s instance it also syncs the files its **instance template** supplied: it writes the ones the factory changed, removes the ones the factory dropped, and keeps and lists any the instance changed since. It never touches the **manifest**, the **instance secrets**, memory, **threads**, or a file the template did not supply. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
+The **lifecycle operation** that moves one **instance** onto the **image artifact** a newly selected revision prepares. The candidate is prepared before the current container is disturbed, so a preparation failure leaves the instance running on its selected image. The replacement then takes the drain-then-stop path and keeps every storage the instance owns. It never touches the **manifest**, the **instance secrets**, memory or **threads**. A replacement that does not come up is a failed operation, never an automatic return to the previous image.
 _Avoid_: upgrade, rollout
 
 ### Instance notice
 
-Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the **instance template** its **factory** serves now differs from the files the **hub** recorded when it copied them, the instance's environment lacks the hub route and the scopes the registry grants it, or an **MCP server** it picked did not start or list its tools at its last **turn**. An **instance update** answers the first three.
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the instance's environment lacks the hub route and the scopes the registry grants it, or an **MCP server** it picked did not start or list its tools at its last **turn**. An **instance update** answers the first two.
 _Avoid_: warning, alert
 
 ### Instance removal
@@ -264,12 +264,12 @@ _Avoid_: image build, warm-up
 
 ### Setup field
 
-One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model, its API key and its **behavior prompt**, which starts from kinby's default or the **instance template**'s. kinby writes those itself. An **instance template**'s own fields follow, and each of its configuration fields names its target: a file of the instance and a dotted key inside it. A template may give a built-in field another default, but it cannot remove the field. Defaults resolve built-in first, then template, then the user's value. A template's required secrets read as required secret text fields. A **factory** that declares what a **workbench** must provide lists its secrets and its named values as setup fields apart, each with no kind and no target.
+One value a prepared image asks for before an **instance** is created from it: a configuration value or a secret. Each has a type (text, multiline, boolean, integer, choice, email, or URL), may be required, and may have a default. An email is one address with a dot in its domain, and a URL has a scheme and a host. A secret never has one. The built-in fields come first. Every instance asks for its model, its API key and its **behavior prompt**, which starts from kinby's default. kinby writes those itself. A **factory** that declares what a **workbench** must provide lists its secrets and its named values as setup fields apart, each with no kind and no target.
 _Avoid_: required input, form field
 
 ### Subscription login
 
-One sign-in an **instance template** declares for a command-line agent its **instances** run on a subscription, or a **workbench** is created with: the command that signs in, where its credentials live, and how to find a URL and a one-time code in what the command prints. The **hub** runs it in a **setup container**, and the user finishes it in a browser. Each one keeps its credentials in a named volume the instance or the workbench owns, which a recreation keeps.
+One sign-in an image declares for a command-line agent its **instances** run on a subscription, or a **workbench** is created with: the command that signs in, where its credentials live, and how to find a URL and a one-time code in what the command prints. The **hub** runs it in a **setup container**, and the user finishes it in a browser. Each one keeps its credentials in a named volume the instance or the workbench owns, which a recreation keeps.
 _Avoid_: login, device flow, auth
 
 ### Setup container
@@ -609,20 +609,7 @@ _Avoid_: CI token, deploy token
 
 ### Signal alias
 
-The **hub**'s record of which managed **instance** answers the public **signal** path, so a webhook registered before the hub existed keeps its URL after adoption. At most one instance holds it. Once that instance is converted, the path reaches the **intake** of the **line** the **conversion** set up, as the instance's own signal path does.
-
-### Instance template
-
-The initial behavior, configuration and **setup fields** a **factory** written the older way supplied for one **factory role**, naming one of the image recipes kinby ships, with the **suggested picks** for that role. The **factory check** refuses such a factory now, so the **hub** serves no template. It copied a template's files into an instance that picked the role and recorded what it copied. The **manifest** it merges belongs to the instance from then on. An **instance update** brings the other files up to the factory's, except any the instance changed.
-
-### Factory role
-
-The part an **instance** played in a **factory** written the older way, which had an **instance template** per role. The **factory check** refuses such a factory now, so no instance picks a role any more. One that picked a role at creation keeps it until a **conversion** turns it into a **workbench** and a **line**. The web app's sidebar lists no instance with a role: its factory's entry in the **library** does.
-_Avoid_: member, slot
-
-### Vanilla instance
-
-An **instance** that picked no **factory role**, created from kinby's built-in defaults, such as the home instance.
+The **hub**'s record of which managed **instance** answers the public **signal** path, so a webhook registered before the hub existed keeps its URL after adoption. At most one instance holds it. When the **workbench** of a **line** was converted from that instance, the path reaches the line's **intake**, as the instance's own signal path does.
 
 ### Library
 
@@ -635,16 +622,16 @@ One pickable thing in the **library**, of one kind. An entry added from git reco
 
 ### Pick
 
-An **instance**'s or a **workbench**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill, or into the workbench's directory, and records the version copied, and a running instance or workbench can add or drop one. Picking an **MCP server** records a copy of its definition. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always. Picking a **factory role** happens once, at creation.
+An **instance**'s or a **workbench**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill, or into the workbench's directory, and records the version copied, and a running instance or workbench can add or drop one. Picking an **MCP server** records a copy of its definition. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always.
 _Avoid_: install (of a skill or a factory), package
 
 ### Suggested pick
 
-A **skill** a **factory role** proposes to an **instance** that picks the role, or a **factory** proposes to the **workbench** of a **line** set up from it. The **onboarding** or the line's setup preselects it, and the user may decline it.
+A **skill** a **factory** proposes to the **workbench** of a **line** set up from it. The line's setup preselects it, and the user may decline it.
 
 ### Onboarding
 
-The one flow that creates an **instance**: its name and appearance, image, **factory role**, **skills**, prompt, and the setup those **picks** require. The web app and the home instance both run it.
+The one flow that creates an **instance**, a teammate: its name and appearance, image, **skills**, prompt, and the setup the image asks for. It asks for no **factory**: a factory runs on a **workbench**, set up as a **line**. The web app and the home instance both run it.
 _Avoid_: factory install, create wizard
 
 ### Plugin
@@ -842,11 +829,6 @@ _Avoid_: environment, sandbox, site, station
 A **factory** set up on one **workbench** under an owning **instance**, the **home instance** unless the user names another, with a default model and a daily **budget**. The user can change the owner, the model and the budget later, and remove the line, from its page in the web app. Only a factory that declares what a workbench must provide is set up on one. Setup takes one pass. For a factory and a chosen workbench, the **hub** lists what the factory requires and the workbench lacks; with none chosen, all the factory requires and what a new workbench needs. One submission answers it: it creates the workbench when none was chosen, stores the secrets, named values and lists of **repository commands** on it, and sets the line up. A **subscription login** and a browser are no answer, so a workbench holds them before its setup. The user runs the setup in the web app, which offers a workbench the factory cannot run on disabled with why, or the **home instance** runs it from chat, as a write the user approves. Setup runs the **factory check**, then refuses a workbench built from another image recipe than the factory requires, or one that, with the answers, lacks a required secret, named value or list of repository commands, a required login signed in, the browser the factory requires, the `<PROVIDER>_API_KEY` of a kinby **agent step**'s model, or the secret the **intake**'s **deliveries** are signed with, and names each. A workbench has a browser when it was created with one and the hub runs the **browser service**. Setup then creates the line's **intake** in the owner, and the owner refusing it refuses the setup. A refused setup creates neither the workbench nor the line. The line holds its **factory runs**. The owner lists its lines with their unfinished runs, and hands one a **work item** when the user asks in chat, through a **hub tool**; the **hub** takes a hand-in only from the line's owner. A workbench can carry several lines, and an instance can own several. Changing a line's owner moves its runs, its intake and the memory marked with its workbench to the new owner in one operation, which is refused while a run of the line is running a step. A change that fails part way leaves the line, its intake and that memory with the old owner. An old owner that keeps another line on the workbench keeps a copy of that memory, since it holds that line's lessons too. Removing a line removes its intake and leaves its workbench as it is, and a factory with lines is never removed.
 _Avoid_: install, binding, assignment
 
-### Conversion
-
-The one move of a stopped **instance** that picked a **factory role** into a **workbench** and a **line** of that role's **factory**, owned by the **home instance**, once the factory declares what a workbench must provide. The workbench keeps the instance's id, name, directory and volumes, so its clone and installs, secrets, **subscription logins**, **picks** and lists of **repository commands** stay where they were. The line takes the instance's model and daily **budget**, and its **intake** takes every delivery to the instance's **signal** path. The instance's **facts** and **episodes** move to the home instance, marked with the workbench. Its threads and its **factory runs** still read through the **hub**, and the list of instances no longer holds it. The hub refuses a running instance, one an unfinished run needs, one that owns a line, and one that lacks what the factory requires, the secret its deliveries are signed with among it, and names each. That secret stays on the workbench, so the sender signs as it did and nothing changes on its side. A conversion that fails part way leaves the instance as it was. The home instance runs it from chat, as a write the user approves.
-_Avoid_: migration
-
 ### Agent step
 
 A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. On a workbench with a browser it has the browser tools too, and can ask the user for a **takeover**. It can write a **view** whole, which the **hub** writes among the views of the line's owner, and it reads, patches and deletes none. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
@@ -940,7 +922,7 @@ _Avoid_: fix round (that answers review threads)
 
 ### Repository commands
 
-The commands a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. A workbench's record holds them, each list replaced whole through the **hub** by the user, or by the owner of one of its **lines** in a write the **gate** holds. An **instance** can record lists of its own through the **instance tool**, which a **conversion** carries to its workbench. They belong to the workbench, never to the **factory** or the repository, so two workbenches each hold their own.
+The commands a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. A workbench's record holds them, each list replaced whole through the **hub** by the user, or by the owner of one of its **lines** in a write the **gate** holds. An **instance** can record lists of its own through the **instance tool**, which no workbench reads. They belong to the workbench, never to the **factory** or the repository, so two workbenches each hold their own.
 _Avoid_: onboarding, environment, the repository's gate
 
 ### Repository survey

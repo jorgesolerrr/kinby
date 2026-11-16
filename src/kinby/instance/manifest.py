@@ -206,12 +206,6 @@ def parse_manifest(text: str) -> RawManifest:
     return RawManifest.model_validate(tomllib.loads(text))
 
 
-def template_tools(text: str) -> Tools:
-    """How an instance template's ``kinby.toml`` configures the tools. The starter manifest it
-    merges over leaves them all to their defaults."""
-    return _tools(RawTools.model_validate(tomllib.loads(text).get("tools", {})))
-
-
 def _tools(raw: RawTools) -> Tools:
     return Tools(
         defaults=raw.defaults,

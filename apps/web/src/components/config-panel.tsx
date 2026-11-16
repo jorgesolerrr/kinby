@@ -264,7 +264,7 @@ export function ConfigPanel({
 
 /**
  * Why each section needs the user, by its label: a change that waits on a recreate, a core
- * behind the hub's, files behind the factory's, or an environment without its hub route.
+ * behind the hub's, or an environment without its hub route.
  */
 function needsOf(
   instance: InstanceSummary,
@@ -276,7 +276,6 @@ function needsOf(
   }
   const codes = new Set(instance.notices.map((notice) => notice.code))
   if (codes.has("revision_behind")) needs[CORE] = "behind the hub"
-  else if (codes.has("template_behind")) needs[CORE] = "behind the factory"
   else if (codes.has("hub_route_missing")) needs[CORE] = "no hub route"
   return needs
 }

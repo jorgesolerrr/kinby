@@ -1,11 +1,10 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Self
 from uuid import UUID, uuid4
 
-import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
 
@@ -39,7 +38,7 @@ from kinby.core.events import EventLog
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import Turns
-from kinby.instance import Instance, init_from_template, init_instance, load_instance
+from kinby.instance import Instance, init_instance, load_instance
 from kinby.instance.init import DEFAULT_LEARNING_REVIEW_LENS
 from kinby.memory import GraphStore
 from kinby.memory.facade import Episode, Fact, RecappedRun, RecappedTurn, new_node_id
@@ -399,19 +398,9 @@ def test_the_stage_is_offered_no_write_tool_and_writes_nothing(tmp_path: Path) -
     assert GraphStore(instance.path).nodes() == before
 
 
-@pytest.mark.parametrize(
-    "initialize",
-    [
-        lambda path: init_instance(path, model="openai:gpt-5"),
-        lambda path: init_from_template(path, {}, model="openai:gpt-5", settings={}),
-    ],
-    ids=["kinby init", "instance template"],
-)
-def test_a_new_instance_ships_a_weekly_learning_review_after_reflection(
-    tmp_path: Path, initialize: Callable[[Path], Path]
-) -> None:
+def test_a_new_instance_ships_a_weekly_learning_review_after_reflection(tmp_path: Path) -> None:
     async def scenario() -> tuple[RoutineSummary, RoutineSummary]:
-        instance = load_instance(initialize(tmp_path / "alice"))
+        instance = load_instance(init_instance(tmp_path / "alice", model="openai:gpt-5"))
         clock = FakeClock(datetime(2026, 9, 3, 12, tzinfo=UTC))
         listed = await call(runtime(instance, clock), "routine.list")
         assert isinstance(listed, RoutineListResult)

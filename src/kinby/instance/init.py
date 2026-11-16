@@ -5,16 +5,12 @@ from __future__ import annotations
 import errno
 import os
 import re
-import tomllib
 import unicodedata
-from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
 
 import tomlkit
 
-from kinby.contracts import SetupValue
 from kinby.instance.dataclasses import FeedbackPolicy, RecapPolicy
 from kinby.instance.errors import InstanceExistsError
 from kinby.instance.layout import (
@@ -65,10 +61,6 @@ DEFAULT_LEARNING_REVIEW_LENS = (
     "the work never searched for, and a fact the work read and then went against. Name only "
     "what the turns, runs and facts show, and leave the rest of a bad week alone."
 )
-_PROTECTED_TEMPLATE_ROOTS = {STATE_DIR, WORKSPACE_DIR}
-_FORBIDDEN_TEMPLATE_MANIFEST_KEYS = ("id", "persona_name", "state_dir")
-
-type TomlValue = str | int | float | bool | list["TomlValue"] | dict[str, "TomlValue"]
 
 
 def _slugify(name: str) -> str:
@@ -78,112 +70,12 @@ def _slugify(name: str) -> str:
     return text.strip("-") or "instance"
 
 
-def _is_toml_value(value: object) -> bool:
-    if isinstance(value, dict):
-        return all(_is_toml_value(item) for item in value.values())
-    if isinstance(value, list):
-        return all(not isinstance(item, dict) and _is_toml_value(item) for item in value)
-    return isinstance(value, str | int | float)
-
-
 def _write_readme(directory: Path, explanation: str) -> None:
     directory.mkdir(exist_ok=True)
     (directory / README_NAME).write_text(
         f"<!-- {explanation} -->\n",
         encoding="utf-8",
     )
-
-
-def _merge(base: dict[str, TomlValue], override: dict[str, TomlValue]) -> None:
-    for key, value in override.items():
-        current = base.get(key)
-        if isinstance(current, dict) and isinstance(value, dict):
-            _merge(current, value)
-        else:
-            base[key] = value
-
-
-def _relative_template_path(name: str) -> Path:
-    relative = Path(name)
-    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-        raise ValueError(f'Template path is invalid: "{name}".')
-    return relative
-
-
-def _copied_template_path(name: str) -> Path | None:
-    """Where a template file lands in the instance. None for one the instance does not copy."""
-    relative = _relative_template_path(name)
-    if name == MANIFEST_NAME:
-        return None
-    if relative.parts[0] in _PROTECTED_TEMPLATE_ROOTS or name == ENV_NAME:
-        raise ValueError(f'Template cannot copy "{name}".')
-    if relative.parts[0] == MEMORY_DIR and name != f"{MEMORY_DIR}/{PROFILE_NAME}":
-        raise ValueError(f'Template cannot copy "{name}".')
-    return relative
-
-
-def _set_key(document: dict[str, TomlValue], key: str, value: SetupValue) -> None:
-    """Set a dotted key, making the tables on its way that do not exist yet."""
-    *tables, last = key.split(".")
-    for part in tables:
-        table = document.setdefault(part, {})
-        if not isinstance(table, dict):
-            raise ValueError(f'Setup target "{key}" runs through "{part}", which is not a table.')
-        document = table
-    document[last] = value
-
-
-def _template_manifest(body: str, settings: Mapping[str, SetupValue]) -> dict[str, TomlValue]:
-    """A template's kinby.toml with *settings* set at their dotted keys, checked for merging."""
-    template = cast(dict[str, TomlValue], tomllib.loads(body))
-    for key, value in settings.items():
-        _set_key(template, key, value)
-    forbidden = [key for key in _FORBIDDEN_TEMPLATE_MANIFEST_KEYS if key in template]
-    if forbidden:
-        raise ValueError(f'Template cannot set "{forbidden[0]}".')
-    models = template.get("models")
-    if models is not None and not isinstance(models, dict):
-        raise ValueError("Template [models] must be a table.")
-    if not _is_toml_value(template):
-        raise ValueError("Template manifest cannot hold an array of tables or a date.")
-    return template
-
-
-def _validate_template(files: Mapping[str, str]) -> None:
-    for name in files:
-        _copied_template_path(name)
-
-
-def _merged_manifest(
-    directory: Path,
-    template: dict[str, TomlValue],
-    *,
-    model: str,
-) -> dict[str, TomlValue]:
-    """The starter manifest in *directory* with the template's merged over it, and the model."""
-    base = cast(
-        dict[str, TomlValue],
-        tomllib.loads((directory / MANIFEST_NAME).read_text(encoding="utf-8")),
-    )
-    _merge(base, template)
-    models = base["models"]
-    if not isinstance(models, dict):
-        raise ValueError("Template [models] must be a table.")
-    models["main"] = model
-    return base
-
-
-def _copy_template(directory: Path, files: Mapping[str, str]) -> None:
-    for name, body in files.items():
-        relative = _copied_template_path(name)
-        if relative is None:
-            continue
-        destination = directory / relative
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(body, encoding="utf-8")
-        except IsADirectoryError, NotADirectoryError, FileExistsError:
-            raise ValueError(f'Template cannot copy "{name}".') from None
 
 
 def _write_starter_tree(directory: Path, model: str) -> None:
@@ -329,31 +221,6 @@ def _write_starter_tree(directory: Path, model: str) -> None:
     )
     (directory / WORKSPACE_DIR).mkdir(exist_ok=True)
     (directory / STATE_DIR).mkdir(exist_ok=True)
-
-
-def init_from_template(
-    directory: Path,
-    files: Mapping[str, str],
-    *,
-    model: str,
-    settings: Mapping[str, SetupValue],
-) -> Path:
-    """Write an instance at *directory*, which must not exist, from a factory's instance template.
-
-    Every file of the template lands over kinby's starter tree, and its kinby.toml merges into
-    the starter manifest. *settings* are values for kinby.toml, by the dotted key each lands at.
-    """
-    directory = Path(directory).resolve()
-    if directory.exists():
-        raise InstanceExistsError(f"instance directory already exists: {directory}")
-    _validate_template(files)
-    template = _template_manifest(files.get(MANIFEST_NAME, ""), settings)
-    directory.mkdir(parents=True)
-    _write_starter_tree(directory, model)
-    _copy_template(directory, files)
-    manifest = _merged_manifest(directory, template, model=model)
-    (directory / MANIFEST_NAME).write_text(tomlkit.dumps(manifest), encoding="utf-8")
-    return directory
 
 
 def _publish_into_existing(source: Path, destination: Path) -> None:

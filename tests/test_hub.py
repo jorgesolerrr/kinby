@@ -161,7 +161,7 @@ class FakeImages:
         return BuiltImage(artifact, reused=reused)
 
     async def describe(self, artifact: ImageArtifact) -> DeclaredSetup:
-        """What the kinby in the image says a vanilla instance declares."""
+        """What the kinby in the image says an instance declares."""
         self.described.append(artifact)
         if self.check_failure is not None:
             raise ValueError(self.check_failure)

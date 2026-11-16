@@ -1192,7 +1192,7 @@ class SetupTarget(ContractModel):
 
 
 class SetupField(ContractModel):
-    """One value a prepared image or an instance template asks for before an instance exists."""
+    """One value a prepared image asks for before an instance exists."""
 
     name: str
     label: str
@@ -1204,12 +1204,13 @@ class SetupField(ContractModel):
     default: SetupValue | None = None
     #: The values a choice field offers. Only a choice field has them.
     choices: list[str] | None = None
-    #: Where a template's own configuration field lands. kinby writes the built-in fields itself.
+    #: Where an instance template's own configuration field landed. Kept so a description an
+    #: image stored before templates went still reads.
     target: SetupTarget | None = None
 
 
 class SubscriptionLogin(ContractModel):
-    """One sign-in a template declares, run in a setup container (ADR 0065)."""
+    """One sign-in an image or a factory declares, run in a setup container (ADR 0065)."""
 
     id: str
     label: str
@@ -1231,7 +1232,7 @@ class DeclaredSetup(ContractModel):
 
 
 class ImagePrepareCommand(ContractModel):
-    """Prepare kinby's base image, the one a vanilla instance runs on."""
+    """Prepare kinby's base image, the one an instance runs on."""
 
 
 class ImagePrepareResult(ContractModel):
@@ -1272,28 +1273,16 @@ class Avatar(ContractModel):
 DEFAULT_AVATAR = Avatar(shape=AvatarShape.CIRCLE, color=AvatarColor.BLUE)
 
 
-class FactoryRole(ContractModel):
-    """The part an instance plays in a factory, such as ``coder`` in ``software``."""
-
-    factory: FactoryName
-    #: The role's name in the factory file, which is also its instance template's.
-    name: Annotated[str, Field(min_length=1)]
-
-
 class InstanceCreateCommand(ContractModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    #: The instance's name. One that picks a factory role is named ``{factory}-{role}`` without it.
-    manifest_id: Annotated[str, Field(min_length=1)] | None = None
+    #: The instance's name.
+    manifest_id: Annotated[str, Field(min_length=1)]
     persona_name: Annotated[str, Field(min_length=1)] | None = None
-    #: The role the instance plays for life, whose instance template it is written from. None
-    #: creates a vanilla instance.
-    factory_role: FactoryRole | None = None
     #: The value of the built-in model field. The hub checks it with the other setup values.
     model: str
     revision: Annotated[str, Field(min_length=1)] = "HEAD"
-    #: Values for the configuration fields the prepared image, or the role's template, declares,
-    #: by field name.
+    #: Values for the configuration fields the prepared image declares, by field name.
     config: dict[str, SetupValue] = Field(default_factory=dict)
     #: Values for its secret fields, and any other variables the instance should hold.
     secrets: dict[str, SecretStr] = Field(default_factory=dict)
@@ -1304,7 +1293,7 @@ class InstanceCreateCommand(ContractModel):
     #: links it.
     save_to_hub: dict[str, HubSecretName] = Field(default_factory=dict)
     avatar: Avatar = DEFAULT_AVATAR
-    #: The library skills the instance picks, copied in after its template or kinby's defaults.
+    #: The library skills the instance picks, copied in after kinby's defaults.
     picks: list[SkillName] = Field(default_factory=list)
 
     @field_serializer("secrets", when_used="json")
@@ -1503,14 +1492,6 @@ class RevisionBehind(ContractModel):
     hub_revision: str
 
 
-class TemplateBehind(ContractModel):
-    """The template the instance's factory serves differs from the files the hub copied, or the
-    hub kept no record of them, so an update is there."""
-
-    code: Literal["template_behind"] = "template_behind"
-    message: str
-
-
 class HubRouteMissing(ContractModel):
     """The instance's environment lacks the hub route or scopes the registry grants it, or holds
     others, so an update is there."""
@@ -1529,7 +1510,7 @@ class McpServerFailed(ContractModel):
 
 
 InstanceNotice = Annotated[
-    RevisionBehind | TemplateBehind | HubRouteMissing | McpServerFailed,
+    RevisionBehind | HubRouteMissing | McpServerFailed,
     Field(discriminator="code"),
 ]
 
@@ -1553,8 +1534,6 @@ class InstanceSummary(ContractModel):
     notices: list[InstanceNotice]
     #: Whether the instance registry marks it the home instance.
     home: bool
-    #: The factory role the instance picked at creation, if any.
-    factory_role: FactoryRole | None = None
     #: The runtime's word for the process, such as "restarting" beside `starting`.
     detail: str = ""
 
@@ -1967,22 +1946,6 @@ class LineOwnerSetCommand(ContractModel):
 
     line_id: UUID
     owner_id: UUID
-
-
-class InstanceConvertCommand(ContractModel):
-    """Convert a stopped instance that picked a factory role into a workbench, and a line of the
-    role's factory on it owned by the home instance. The factory must run on a workbench by then.
-    The result is the line, whose workbench is stopped.
-
-    The workbench keeps the instance's id, name, directory and volumes: its clone and installs,
-    secrets, logins, picks and lists of repository commands. The instance's memory moves to the
-    home instance, marked with the workbench, and its threads and runs still read through the hub.
-    A delivery to the instance's signal path reaches the line's intake. Refused while the instance
-    runs, a run needs it or it owns a line. A conversion that fails part way leaves the instance as
-    it was.
-    """
-
-    instance_id: UUID
 
 
 class LineRemoveCommand(ContractModel):
@@ -3166,17 +3129,6 @@ class FactoryRemoveCommand(ContractModel):
     """Delete one of the hub's own factories. The result lists the factories left."""
 
     name: FactoryName
-
-
-class FactoryDescribeCommand(ContractModel):
-    name: FactoryName
-
-
-class FactoryDescription(ContractModel):
-    #: What each instance template asks for, by the instance's name in the factory.
-    instances: dict[str, DeclaredSetup]
-    #: The library skills each role suggests, which a client preselects, by the role's name.
-    suggested_picks: dict[str, list[SkillName]]
 
 
 class LibraryKind(StrEnum):

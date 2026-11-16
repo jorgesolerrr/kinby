@@ -45,16 +45,3 @@ export function standing(run: FactoryRun): string {
 export function finished(run: FactoryRun): boolean {
   return run.status === "done" || run.status === "cancelled"
 }
-
-/**
- * The runs that need a human, then the others in flight, each in the order given, then the finished
- * ones, newest first.
- */
-export function byAttention(runs: FactoryRun[]): FactoryRun[] {
-  const needing = (run: FactoryRun) => run.status === "needs-human"
-  return [
-    ...runs.filter(needing),
-    ...runs.filter((run) => !needing(run) && !finished(run)),
-    ...runs.filter(finished).sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
-  ]
-}

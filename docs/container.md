@@ -75,4 +75,4 @@ kinby hub /srv/kinby signals <instance-id>
 
 ## The software factory
 
-The software factory is a package in its own repository, [kinby-code-factory](https://github.com/jorgesolerrr/kinby-code-factory). It owns the image recipe that adds its coding clients, the instance template, and the webhook setup. [Set up a software factory](https://github.com/jorgesolerrr/kinby-code-factory/blob/main/docs/setup.md) walks through a new instance, and [the coder migration](https://github.com/jorgesolerrr/kinby-code-factory/blob/main/docs/migration.md) moves the existing coder onto the package and under the hub.
+kinby ships the `software` factory in `src/kinby/factories/shipped/software`. It runs on a workbench built from the `coder` image recipe, which adds its coding clients. Setting it up as a line on that workbench creates its intake routine in the line's owner, which receives the repository's webhook.

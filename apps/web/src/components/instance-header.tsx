@@ -62,11 +62,7 @@ export interface Lifecycle {
 }
 
 /** The notices an instance update answers. */
-const UPDATE_ANSWERS: InstanceNotice["code"][] = [
-  "revision_behind",
-  "template_behind",
-  "hub_route_missing",
-]
+const UPDATE_ANSWERS: InstanceNotice["code"][] = ["revision_behind", "hub_route_missing"]
 
 /**
  * The instance above its tabs: its avatar, its name, what the runtime saw it doing, and its

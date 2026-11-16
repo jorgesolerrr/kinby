@@ -11,7 +11,7 @@ Read `factory.list`, then `factory.get` for the factory to change or the one clo
 
 This skill's `references/factory.md` covers every `factory.yaml` field, the step kinds and engines, send-back, retries and needs human, the gate in each step, checks and tools with their imports, the step endings and the run folder, with a worked example that passes the factory check. Read it with the `skill` tool, `file` set to that path. Never read kinby's installed source to learn these.
 
-A factory whose file declares `instances` is in an older form, still run by the instances that picked its roles. Rewriting it in this form takes it from them, so write new factories in this form, and ask the user before you convert an old one.
+A factory whose file declares `instances` is in an older form, which the factory check refuses and names what replaced each key. Rewrite it in this form.
 
 ## The folder
 

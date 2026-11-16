@@ -26,7 +26,6 @@ const ANSWERS: Record<
   { label: string; open: (instanceId: string) => void }
 > = {
   revision_behind: { label: "Update", open: openCore },
-  template_behind: { label: "Update", open: openCore },
   hub_route_missing: { label: "Update", open: openCore },
   mcp_server_failed: { label: "Skills", open: openSkills },
 }

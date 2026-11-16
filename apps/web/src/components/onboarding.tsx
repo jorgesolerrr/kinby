@@ -5,18 +5,11 @@ import type {
   Client,
   Clock,
   DeclaredSetup,
-  FactoryRole,
   InstanceCreateCommand,
   SetupField,
   SubscriptionLogin,
 } from "@kinby/contract"
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  CircleCheckIcon,
-  CircleXIcon,
-} from "lucide-react"
+import { ChevronDownIcon, ChevronUpIcon, CircleCheckIcon, CircleXIcon } from "lucide-react"
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
@@ -69,10 +62,7 @@ import {
   type Identity,
   initialInput,
   MODEL_FIELD,
-  offeredRoles,
   PROMPT_FIELD,
-  proposedName,
-  type RoleOffer,
   type SecretSource,
   secretSource,
   type Starting,
@@ -105,8 +95,8 @@ const PREPARING: Preparation = { state: "preparing", steps: [] }
 const noop = () => {}
 
 /**
- * The onboarding, on one page: while the image prepares, pick a factory role or none, name the
- * instance, pick its skills, write its prompt and fill in its setup fields. Then create it and
+ * The onboarding, on one page: while the image prepares, name the instance, pick its skills,
+ * write its prompt and fill in its setup fields. Then create it and
  * start it. `onPublished` lists the instances again. It waits for the list that follows a start
  * before it opens the instance, so the page reads that instance as running.
  */
@@ -121,7 +111,6 @@ export function Onboarding({
 }) {
   // Each Prepare again counts, so preparing again after a failure follows a new preparation.
   const [attempt, setAttempt] = useState(1)
-  const [offer, setOffer] = useState<RoleOffer>()
   const [skills, setSkills] = useState<string[]>([])
   const [identity, setIdentity] = useState(NEW_IDENTITY)
   const [values, setValues] = useState<Record<string, FieldInput>>({})
@@ -155,29 +144,15 @@ export function Onboarding({
   }, [createdId, onPublished])
 
   const preparedDescription = preparation.state === "prepared" ? preparation.description : undefined
-  const description = offer?.setup ?? declared ?? preparedDescription
+  const description = declared ?? preparedDescription
   // A rebuilt image stores a new descriptor, then validate fails. Preparation still holds the
-  // fields the user was shown, so read the stored descriptor. A role edited since it was picked is
-  // refused the same way, so read its template's again.
+  // fields the user was shown, so read the stored descriptor.
   useEffect(() => {
     if (submitted === undefined || !setupWasRefused(creation)) return
     const request = ++declarationRead.current
-    const role = submitted.factory_role
-    const reread =
-      role == null
-        ? caller.call("image.describe", {}).then((next) => () => setDeclared(next))
-        : caller.call("factory.describe", { name: role.factory }).then(({ instances }) => () => {
-            const setup = instances[role.name]
-            if (setup === undefined) return
-            setOffer((current) =>
-              current !== undefined && roleKey(current.role) === roleKey(role)
-                ? { ...current, setup }
-                : current,
-            )
-          })
-    void reread.then(
-      (store) => {
-        if (request === declarationRead.current) store()
+    void caller.call("image.describe", {}).then(
+      (next) => {
+        if (request === declarationRead.current) setDeclared(next)
       },
       // Keep the fields already on the form if the hub cannot be read.
       () => {},
@@ -187,7 +162,7 @@ export function Onboarding({
   const refused = creation?.state === "invalid" ? creation.fields : {}
   const creating = creation !== undefined && creation.state !== "invalid"
 
-  // The setup fields wait for the image, which may ask for other fields than the role does.
+  // The setup fields wait for the image.
   const fields =
     preparation.state === "prepared" && description !== undefined ? description.setup_fields : []
   const model = values[MODEL_FIELD]
@@ -206,19 +181,6 @@ export function Onboarding({
     Object.values(resolved).some(unnamedSave),
   )
 
-  // Another role brings its own suggested picks, prompt and fields, and its name if the user
-  // kept the one proposed.
-  const pickRole = (next: RoleOffer | undefined) => {
-    setIdentity((current) =>
-      current.name === proposedName(offer?.role)
-        ? { ...current, name: proposedName(next?.role) }
-        : current,
-    )
-    setOffer(next)
-    setSkills(next?.suggestedPicks ?? [])
-    setValues({})
-    setSources({})
-  }
   const promptField = description?.setup_fields.find((field) => field.name === PROMPT_FIELD)
   // A refusal of no field shown here, such as a name another instance holds.
   const others = Object.entries(refused)
@@ -258,15 +220,7 @@ export function Onboarding({
                 disabled={blocked !== undefined}
                 aria-describedby={blocked === undefined ? undefined : reasonId}
                 onClick={() =>
-                  setSubmitted(
-                    createCommand(
-                      fields,
-                      values,
-                      identity,
-                      { role: offer?.role, skills },
-                      resolved,
-                    ),
-                  )
+                  setSubmitted(createCommand(fields, values, identity, skills, resolved))
                 }
               >
                 Create
@@ -297,13 +251,6 @@ export function Onboarding({
             )}
             <SectionFrame
               variant="page"
-              title="Role"
-              lead="A role brings its factory's hooks, tools, intake and setup fields. The instance keeps it for life."
-            >
-              <RoleRows caller={caller} clock={clock} offer={offer} onPick={pickRole} />
-            </SectionFrame>
-            <SectionFrame
-              variant="page"
               title="Name and look"
               lead="The name it answers as, and the avatar it shows."
             >
@@ -317,13 +264,7 @@ export function Onboarding({
                 <span className="text-sm text-muted-foreground">{skills.length} picked</span>
               }
             >
-              <SkillRows
-                caller={caller}
-                clock={clock}
-                offer={offer}
-                picked={skills}
-                onChange={setSkills}
-              />
+              <SkillRows caller={caller} clock={clock} picked={skills} onChange={setSkills} />
             </SectionFrame>
             <SectionFrame
               variant="page"
@@ -335,7 +276,7 @@ export function Onboarding({
               ) : (
                 <PromptRow
                   field={promptField}
-                  owner={offer === undefined ? "kinby's default" : `${offer.role.name}'s default`}
+                  owner="kinby's default"
                   value={values[PROMPT_FIELD]}
                   onChange={(value) =>
                     setValues((current) => ({ ...current, [PROMPT_FIELD]: value }))
@@ -346,7 +287,7 @@ export function Onboarding({
             <SectionFrame
               variant="page"
               title="Setup"
-              lead="What the image and the role ask for. Secrets are write-only: the hub keeps them with the instance and never sends them back."
+              lead="What the image asks for. Secrets are write-only: the hub keeps them with the instance and never sends them back."
               actions={
                 left > 0 && (
                   <span className="text-sm text-muted-foreground">
@@ -359,7 +300,6 @@ export function Onboarding({
                 <SetupRows
                   fields={fields.filter((field) => field.name !== PROMPT_FIELD)}
                   logins={description?.logins ?? []}
-                  role={offer?.role.name}
                   values={values}
                   sources={resolved}
                   errors={refused}
@@ -530,104 +470,15 @@ function isColor(value: unknown): value is AvatarColor {
   return typeof value === "string" && Object.hasOwn(COLORS, value)
 }
 
-const roleKey = ({ factory, name }: FactoryRole) => `${factory}/${name}`
-
-/** Pick one role of a factory in the library, or none for a vanilla instance. */
-function RoleRows({
-  caller,
-  clock,
-  offer,
-  onPick,
-}: {
-  caller: Pick<Client, "call">
-  clock: Clock
-  offer: RoleOffer | undefined
-  onPick: (offer: RoleOffer | undefined) => void
-}) {
-  const read = useCallback(() => offeredRoles(caller), [caller])
-  const { value: offers = [], failure } = useRead(read, clock)
-  const pick = (next: RoleOffer | undefined) => {
-    if (next !== offer) onPick(next)
-  }
-  return (
-    <>
-      {failure !== undefined && <Failure error={failure} />}
-      <ul aria-label="Roles" className="flex flex-col divide-y">
-        <RoleRow
-          label="None"
-          title="None"
-          description="A vanilla instance, from kinby's built-in defaults."
-          picked={offer === undefined}
-          onPick={() => pick(undefined)}
-        />
-        {offers.map((each) => (
-          <RoleRow
-            key={roleKey(each.role)}
-            label={`${each.role.name} in ${each.role.factory}`}
-            title={
-              <>
-                <span className="font-mono">{each.role.name}</span>{" "}
-                <span className="font-normal text-muted-foreground">in {each.role.factory}</span>
-              </>
-            }
-            description={suggests(each.suggestedPicks.length)}
-            picked={offer !== undefined && roleKey(offer.role) === roleKey(each.role)}
-            onPick={() => pick(each)}
-          />
-        ))}
-      </ul>
-    </>
-  )
-}
-
-function suggests(count: number): string {
-  if (count === 0) return "Suggests no skills."
-  return `Suggests ${count} ${count === 1 ? "skill" : "skills"}.`
-}
-
-function RoleRow({
-  label,
-  title,
-  description,
-  picked,
-  onPick,
-}: {
-  label: string
-  title: ReactNode
-  description: string
-  picked: boolean
-  onPick: () => void
-}) {
-  return (
-    <li>
-      <Item
-        size="row"
-        render={<button type="button" aria-label={label} aria-pressed={picked} onClick={onPick} />}
-      >
-        <ItemContent className="min-w-0">
-          <ItemTitle>{title}</ItemTitle>
-          <ItemDescription lines="one">{description}</ItemDescription>
-        </ItemContent>
-        <ItemActions>{picked && <CheckIcon />}</ItemActions>
-      </Item>
-    </li>
-  )
-}
-
-/**
- * Tick the library skills the instance copies in. A role's suggested picks come first, badged,
- * and start ticked.
- */
+/** Tick the library skills the instance copies in. */
 function SkillRows({
   caller,
   clock,
-  offer,
   picked,
   onChange,
 }: {
   caller: Pick<Client, "call">
   clock: Clock
-  offer: RoleOffer | undefined
   picked: string[]
   onChange: (picked: string[]) => void
 }) {
@@ -635,11 +486,6 @@ function SkillRows({
   const read = useCallback(() => caller.call("library.list", {}), [caller])
   const { value: listed, failure } = useRead(read, clock)
   const offered = listed?.entries.filter((entry) => entry.kind === "skill") ?? []
-  const suggested = offer?.suggestedPicks ?? []
-  const ordered = [
-    ...offered.filter(({ name }) => suggested.includes(name)),
-    ...offered.filter(({ name }) => !suggested.includes(name)),
-  ]
   return (
     <>
       {failure !== undefined && <Failure error={failure} />}
@@ -649,7 +495,7 @@ function SkillRows({
         <p className="text-sm text-muted-foreground">The library holds no skill.</p>
       ) : (
         <ul aria-label="Skills" className="flex flex-col divide-y">
-          {ordered.map(({ name, description }) => (
+          {offered.map(({ name, description }) => (
             <li key={name} aria-label={name}>
               <Item size="row">
                 <Checkbox
@@ -665,9 +511,6 @@ function SkillRows({
                     <Label id={`${id}-${name}-label`} htmlFor={`${id}-${name}`}>
                       <span className="truncate font-mono">{name}</span>
                     </Label>
-                    {offer !== undefined && suggested.includes(name) && (
-                      <Badge variant="secondary">Suggested by {offer.role.name}</Badge>
-                    )}
                   </ItemTitle>
                   {description !== null && (
                     <ItemDescription lines="one">{description}</ItemDescription>
@@ -761,7 +604,6 @@ function PromptRow({
 function SetupRows({
   fields,
   logins,
-  role,
   values,
   sources,
   errors,
@@ -772,8 +614,6 @@ function SetupRows({
 }: {
   fields: SetupField[]
   logins: SubscriptionLogin[]
-  /** The picked factory role's name, or nothing for none. */
-  role: string | undefined
   values: Record<string, FieldInput>
   sources: Record<string, SecretSource>
   errors: Record<string, string>
@@ -783,7 +623,7 @@ function SetupRows({
   onSource: (name: string, source: SecretSource) => void
 }) {
   const asker = (field: SetupField) =>
-    BUILT_IN_FIELDS.includes(field.name) ? "every instance" : `asked by ${role ?? "the image"}`
+    BUILT_IN_FIELDS.includes(field.name) ? "every instance" : "asked by the image"
   return (
     <ul aria-label="Setup" className="flex flex-col divide-y">
       {fields.map((field) =>

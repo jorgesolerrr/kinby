@@ -1,10 +1,9 @@
-"""The setup fields every instance asks for, and the values and template files they read."""
+"""The setup fields every instance asks for, and the values they read."""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from kinby.contracts import (
@@ -15,7 +14,6 @@ from kinby.contracts import (
     SetupValue,
 )
 from kinby.instance.init import DEFAULT_BEHAVIOR_PROMPT
-from kinby.instance.layout import SYSTEM_NAME
 
 _EMAIL = re.compile(r"[^@\s]+@[^@\s.]+(\.[^@\s.]+)+")
 
@@ -38,7 +36,7 @@ API_KEY_FIELD = SetupField(
 )
 #: What every instance asks for, whatever it starts from. kinby writes these values itself.
 BUILT_IN_FIELDS = (MODEL_FIELD, API_KEY_FIELD)
-#: Every instance asks for it last, starting from kinby's default or its template's.
+#: Every instance asks for it last, starting from kinby's default.
 BEHAVIOR_PROMPT_FIELD = SetupField(
     name="behavior_prompt",
     label="Behavior prompt",
@@ -53,13 +51,6 @@ BEHAVIOR_PROMPT_FIELD = SetupField(
 def vanilla_description() -> DeclaredSetup:
     """What kinby's base image declares: the built-in fields and the behavior prompt."""
     return DeclaredSetup(setup_fields=[*BUILT_IN_FIELDS, BEHAVIOR_PROMPT_FIELD])
-
-
-def behavior_prompt_field(template: Mapping[str, str]) -> SetupField:
-    """The behavior prompt field of an instance template, starting from its ``SYSTEM.md``."""
-    return BEHAVIOR_PROMPT_FIELD.model_copy(
-        update={"default": template.get(SYSTEM_NAME, DEFAULT_BEHAVIOR_PROMPT)}
-    )
 
 
 def with_built_in_fields(own: Iterable[SetupField]) -> list[SetupField]:
@@ -155,28 +146,11 @@ def resolved_values(
     return resolved
 
 
-def readable_template_files(template: Path) -> dict[str, str]:
-    """Read the text files in an instance template.
-
-    Bytecode Python left beside a template's tools and hooks is not part of it.
-    """
-    root = Path(template).resolve()
-    return {
-        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and not path.is_symlink()
-        and "__pycache__" not in path.relative_to(root).parts
-    }
-
-
 __all__ = [
     "API_KEY_FIELD",
     "BEHAVIOR_PROMPT_FIELD",
     "BUILT_IN_FIELDS",
     "MODEL_FIELD",
-    "behavior_prompt_field",
-    "readable_template_files",
     "resolved_values",
     "template_fields",
     "value_problem",

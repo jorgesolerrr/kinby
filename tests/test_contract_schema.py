@@ -386,7 +386,6 @@ def test_an_instance_summary_carries_its_notices() -> None:
     notice = _object(_object(summary["properties"])["notices"])["items"]
     assert _object(notice)["oneOf"] == [
         {"$ref": "#/$defs/RevisionBehind"},
-        {"$ref": "#/$defs/TemplateBehind"},
         {"$ref": "#/$defs/HubRouteMissing"},
         {"$ref": "#/$defs/McpServerFailed"},
     ]
@@ -395,10 +394,6 @@ def test_an_instance_summary_carries_its_notices() -> None:
         "message",
         "instance_revision",
         "hub_revision",
-    }
-    assert set(cast(list[str], _object(definitions["TemplateBehind"])["required"])) == {
-        "code",
-        "message",
     }
     assert set(cast(list[str], _object(definitions["HubRouteMissing"])["required"])) == {
         "code",

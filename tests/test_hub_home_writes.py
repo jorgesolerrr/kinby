@@ -1059,12 +1059,12 @@ def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
         ("library_move", {"name": "grill", "commit": None}, ["hash: ", "diff: "]),
         (
             "instance_create",
-            {"model": "openai:gpt-5", "secrets": {"api_key": "sk-bob"}},
+            {"manifest_id": "bob", "model": "openai:gpt-5", "secrets": {"api_key": "sk-bob"}},
             ["secrets: "],
         ),
         (
             "instance_create",
-            {"model": "openai:gpt-5", "save_to_hub": {"api_key": "openai"}},
+            {"manifest_id": "bob", "model": "openai:gpt-5", "save_to_hub": {"api_key": "openai"}},
             ["save_to_hub: "],
         ),
         (

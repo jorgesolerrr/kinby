@@ -19,7 +19,7 @@ The package scaffold is in place. Clone the repo, run `uv sync`, then `uv run ki
 
 Instance init, manifest parsing, and discovery are in place. The agent loop comes later.
 
-The single-user hub can now prepare, start, and inspect vanilla instances through the typed contract. Run its Docker-backed process with an explicit state directory and source checkout:
+The single-user hub can now prepare, start, and inspect instances through the typed contract. Run its Docker-backed process with an explicit state directory and source checkout:
 
 ```sh
 uv run kinby hub .kinby/hub --source .
@@ -29,7 +29,7 @@ When the hub itself runs in a container, pass `--docker-host-directory` with the
 
 Every start checks what the hub manages. Containers it still has go back to their intended running or stopped state, and the hub prints one line for everything else it found: a container that is gone, an instance whose last operation failed, a container it does not own. It adopts nothing and creates nothing on its own. `instance.recreate` replaces a container when you ask it to, and it is also how a replaced secret reaches one. `instance.secrets.set` writes the value into the instance's protected environment file and says that applying it needs a recreation.
 
-An instance template can declare subscription logins, like Codex's device sign-in, and each one gets a named volume the instance owns. `instance.login.start` runs a login's command in a setup container on the instance's image, with that volume and none of the instance's secrets. While it waits, the operation's `sign-in` step carries the URL and the one-time code the command printed. Open the URL, enter the code, and the operation succeeds when the command exits cleanly. After 15 minutes the hub removes the container and reports the code expired. Starting a login that is running returns it with the same code. A login leaves `instance.start` and `instance.stop` free, and `instance.remove` and `instance.delete` refuse while one runs.
+An image or a workbench can declare subscription logins, like Codex's device sign-in, and each one gets a named volume the instance or the workbench owns. `instance.login.start` runs a login's command in a setup container on the instance's image, with that volume and none of the instance's secrets. While it waits, the operation's `sign-in` step carries the URL and the one-time code the command printed. Open the URL, enter the code, and the operation succeeds when the command exits cleanly. After 15 minutes the hub removes the container and reports the code expired. Starting a login that is running returns it with the same code. A login leaves `instance.start` and `instance.stop` free, and `instance.remove` and `instance.delete` refuse while one runs.
 
 Creation marks each declared login pending. It turns `signed_in` or `failed` when a login operation ends. `instance.status` carries the instance's `setup`: each login with its state, and each secret field with whether it holds a value, never the value. `instance.list` sets `setup_pending` while a login is not signed in or a required secret is not set. The web app badges those instances in the sidebar and opens a stopped one on a setup card with its sign-ins, its secrets, and Start. Starting never waits for setup. Instances created before the hub tracked logins read as complete.
 

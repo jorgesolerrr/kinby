@@ -71,7 +71,7 @@ type Caller = Pick<InstanceClient, "call">
 
 /**
  * An instance's stats over the last 7, 30, or 90 UTC days, on one page: the totals and the turns
- * chart, then Spend, Origin, Quality, and Runs on a factory instance. It reads when it opens, when
+ * chart, then Spend, Origin, Quality, and Runs. It reads when it opens, when
  * the range changes, when the window regains focus, and on Refresh, and never polls. A core too old
  * for the page, one whose answer lacks what the page reads or one without stats.get, points to its
  * update.
@@ -81,13 +81,11 @@ export function StatsPage({
   caller,
   clock,
   instanceId,
-  factory,
 }: {
   client: Caller
   caller: Pick<Client, "call">
   clock: Clock
   instanceId: string
-  factory: boolean
 }) {
   const [range, setRange] = useState<Range>(7)
   // The charts' buckets come from the moment the read asked about, so midnight never splits them.
@@ -189,7 +187,6 @@ export function StatsPage({
               stats={stats}
               by={by}
               starts={starts}
-              factory={factory}
             />
           </>
         )}
@@ -198,13 +195,12 @@ export function StatsPage({
   )
 }
 
-/** Quality, then Runs on a factory instance, both from the one run usage read with the stats. */
+/** Quality, then Runs, both from the one run usage read with the stats. */
 function RunSections({
   by,
   starts,
-  factory,
   ...read
-}: RunUsageRead & { by: StatsBucketSize; starts: string[]; factory: boolean }) {
+}: RunUsageRead & { by: StatsBucketSize; starts: string[] }) {
   const runUsage = useRunUsage(read)
   return (
     <>
@@ -221,15 +217,13 @@ function RunSections({
           instanceId={read.instanceId}
         />
       </SectionFrame>
-      {factory && (
-        <SectionFrame
-          variant="page"
-          title="Runs"
-          lead="The factory runs this instance handed in during the range."
-        >
-          <Runs {...runUsage} />
-        </SectionFrame>
-      )}
+      <SectionFrame
+        variant="page"
+        title="Runs"
+        lead="The factory runs this instance handed in during the range."
+      >
+        <Runs {...runUsage} />
+      </SectionFrame>
     </>
   )
 }

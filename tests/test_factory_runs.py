@@ -1347,6 +1347,10 @@ def test_a_run_from_before_runs_named_their_instance_belongs_to_its_factorys_new
         older = (await created_instance(client, name="older")).instance_id
         coder = (await created_instance(client, name="coder")).instance_id
         with sqlite3.connect(directory / "registry.sqlite") as connection:
+            connection.execute(
+                "CREATE TABLE factory_members (instance_id TEXT PRIMARY KEY, factory TEXT NOT NULL,"
+                " name TEXT NOT NULL, recipe TEXT, setup TEXT NOT NULL, baseline TEXT)"
+            )
             connection.executemany(
                 "INSERT INTO factory_members (instance_id, factory, name, recipe, setup) "
                 "VALUES (?, 'checks', 'coder', NULL, ?)",
@@ -1369,6 +1373,11 @@ def test_a_run_from_before_runs_named_their_instance_belongs_to_its_factorys_new
     found = asyncio.run(detail(reopened, run_id))
 
     assert found.run.instance_id == coder
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        tables = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'factory_members'"
+        ).fetchall()
+    assert tables == []
 
 
 def test_a_value_of_another_type_than_its_step_declares_fails_the_step(tmp_path):

@@ -46,8 +46,6 @@ from kinby.contracts.models import (
     Event,
     FactoryCheckCommand,
     FactoryCheckResult,
-    FactoryDescribeCommand,
-    FactoryDescription,
     FactoryEditCommand,
     FactoryGetCommand,
     FactoryListCommand,
@@ -82,7 +80,6 @@ from kinby.contracts.models import (
     InstanceAdoptCommand,
     InstanceAdoptPreviewCommand,
     InstanceAdoptPreviewResult,
-    InstanceConvertCommand,
     InstanceCreateCommand,
     InstanceDeleteCommand,
     InstanceDeletePreviewCommand,
@@ -622,7 +619,6 @@ LINE_LIST = Method("line.list", Scope.HUB_READ, LineListCommand, LineListResult)
 LINE_GET = Method("line.get", Scope.HUB_READ, LineGetCommand, Line)
 LINE_UPDATE = Method("line.update", Scope.HUB_ADMIN, LineUpdateCommand, Line)
 LINE_OWNER_SET = Method("line.owner.set", Scope.HUB_ADMIN, LineOwnerSetCommand, Line)
-INSTANCE_CONVERT = Method("instance.convert", Scope.HUB_ADMIN, InstanceConvertCommand, Line)
 LINE_REMOVE = Method("line.remove", Scope.HUB_ADMIN, LineRemoveCommand, LineListResult)
 LINE_HAND_IN = Method("line.hand_in", Scope.HUB_ADMIN, LineHandInCommand, FactoryRun)
 LINE_INTAKE = Method("line.intake", Scope.LINE_INTAKE, LineIntakeCommand, LineIntakeResult)
@@ -666,9 +662,6 @@ FACTORY_GET = Method("factory.get", Scope.HUB_READ, FactoryGetCommand, FactoryRe
 FACTORY_EDIT = Method("factory.edit", Scope.HUB_ADMIN, FactoryEditCommand, FactoryResult)
 FACTORY_REMOVE = Method("factory.remove", Scope.HUB_ADMIN, FactoryRemoveCommand, FactoryListResult)
 FACTORY_CHECK = Method("factory.check", Scope.HUB_READ, FactoryCheckCommand, FactoryCheckResult)
-FACTORY_DESCRIBE = Method(
-    "factory.describe", Scope.HUB_READ, FactoryDescribeCommand, FactoryDescription
-)
 FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
 )
@@ -935,7 +928,6 @@ METHODS = (
     LINE_GET,
     LINE_UPDATE,
     LINE_OWNER_SET,
-    INSTANCE_CONVERT,
     LINE_REMOVE,
     LINE_HAND_IN,
     LINE_INTAKE,
@@ -953,7 +945,6 @@ METHODS = (
     FACTORY_CHECK,
     FACTORY_EDIT,
     FACTORY_REMOVE,
-    FACTORY_DESCRIBE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
     FACTORY_RUN_TRANSCRIPT,

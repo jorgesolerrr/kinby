@@ -56,7 +56,6 @@ from kinby.contracts import (
     LifecycleOperationResult,
     Method,
     OperationGetCommand,
-    TemplateBehind,
 )
 
 HUB_URL = "ws://localhost:8080/ws"
@@ -105,7 +104,7 @@ async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> i
         name = instance.persona_name or instance.manifest_id
         if chosen and instance.instance_id not in chosen:
             continue
-        repairable = any(isinstance(n, TemplateBehind | HubRouteMissing) for n in instance.notices)
+        repairable = any(isinstance(n, HubRouteMissing) for n in instance.notices)
         if instance.source_revision == revision and not repairable:
             print(f"{instance.instance_id} {name}: already on {revision[:12]}")
             continue

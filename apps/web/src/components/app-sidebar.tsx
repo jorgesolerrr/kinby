@@ -79,11 +79,9 @@ export function AppSidebar({
       return next
     })
   }, [])
-  // Teammates only: an instance that holds a factory role shows on its factory's Library page.
-  const teammates = instances.filter((instance) => instance.factory_role == null)
   const ordered = [
-    ...teammates.filter((instance) => instance.home),
-    ...teammates.filter((instance) => !instance.home),
+    ...instances.filter((instance) => instance.home),
+    ...instances.filter((instance) => !instance.home),
   ]
   return (
     <>
