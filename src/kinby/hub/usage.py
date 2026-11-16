@@ -78,9 +78,9 @@ def run_usage(
     reworked: Iterable[tuple[FactoryRun, Rework, Sequence[StepAttempt]]],
     answers: Mapping[UUID, StatsGetResult | Uncounted],
 ) -> StatsRunsResult:
-    """Join each run's rework with its tokens in every counted instance, since a step can run
-    in an instance other than the one that handed the run in, and with what its attempts on a
-    workbench spent."""
+    """Join each run's rework with its tokens in every counted instance, since a step of a run made
+    before lines could run in an instance other than the one that handed the run in, and with
+    what its attempts on a workbench spent."""
     read = {instance_id: _run_tokens(answer) for instance_id, answer in answers.items()}
     tokens: dict[UUID, list[RunTokens]] = {}
     for runs in read.values():

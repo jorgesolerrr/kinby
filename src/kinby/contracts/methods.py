@@ -60,7 +60,6 @@ from kinby.contracts.models import (
     FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
-    FactoryRunIntakeCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
     FactoryRunRetryCommand,
@@ -409,9 +408,9 @@ INSTANCE_PROBE = Method(
 INSTANCE_DRAIN = Method(
     "instance.drain", Scope.INSTANCE_LIFECYCLE, InstanceDrainCommand, InstanceDrainResult
 )
-#: The hub runs one step of a factory run in the instance, as it would run a turn.
+#: The hub runs one step of a factory run on the workbench of the run's line.
 STEP_RUN = Method("step.run", Scope.INSTANCE_LIFECYCLE, StepRunCommand, StepResult)
-#: The hub tells the instance that handed a factory run in that the run stopped.
+#: The hub tells the owner of a factory run's line that the run stopped.
 RUN_STOPPED = Method("run.stopped", Scope.INSTANCE_LIFECYCLE, RunStop, AcceptedResult)
 #: The hub has the workbench remove the folder of a run that ended done or cancelled.
 RUN_FOLDER_REMOVE = Method(
@@ -669,9 +668,6 @@ FACTORY_REMOVE = Method("factory.remove", Scope.HUB_ADMIN, FactoryRemoveCommand,
 FACTORY_CHECK = Method("factory.check", Scope.HUB_READ, FactoryCheckCommand, FactoryCheckResult)
 FACTORY_DESCRIBE = Method(
     "factory.describe", Scope.HUB_READ, FactoryDescribeCommand, FactoryDescription
-)
-FACTORY_RUN_INTAKE = Method(
-    "factory.run.intake", Scope.FACTORY_INTAKE, FactoryRunIntakeCommand, FactoryRun
 )
 FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
@@ -958,7 +954,6 @@ METHODS = (
     FACTORY_EDIT,
     FACTORY_REMOVE,
     FACTORY_DESCRIBE,
-    FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
     FACTORY_RUN_TRANSCRIPT,

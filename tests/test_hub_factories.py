@@ -25,34 +25,30 @@ from tests.test_hub import FakeImages, FakeRuntime, hub_client
 
 FACTORY = """\
 name: tickets
-instances:
-  coder: { image: coder }
-intake: { instance: coder, routine: scan }
+requires:
+  image: coder
 work_item: { issue: int, repo: str }
 steps:
   - id: implement
-    kind: client
-    in: coder
-    client: claude
+    kind: agent
+    engine: claude
     prompt: prompts/implement.md
-    hook: record_branch
+    check: record_branch
     results: { branch: str }
     timeout: 60m
   - id: review
     kind: agent
-    in: coder
+    engine: kinby
     prompt: prompts/review.md
-    hook: read_verdict
+    check: read_verdict
     requires: [branch]
     outcomes: { clean: next, changes: { back: implement, max: 3 } }
   - id: checks
     kind: command
-    in: coder
     run: ["uv run pytest"]
     requires: [branch]
   - id: open-pr
     kind: code
-    in: coder
     call: open_pull_request
     requires: [branch, repo]
     results: { pr: int }
@@ -95,9 +91,8 @@ FILES = {
     "factory.yaml": FACTORY,
     "prompts/implement.md": "Implement issue {{issue}}.\n",
     "prompts/review.md": "Review the branch.\n",
-    "instances/coder/routines/scan/ROUTINE.md": "---\ndescription: Scan\n---\nScan.\n",
-    "instances/coder/tools/github.py": TOOLS,
-    "instances/coder/hooks/record.py": HOOKS,
+    "tools/github.py": TOOLS,
+    "hooks/record.py": HOOKS,
 }
 
 
@@ -167,208 +162,94 @@ def test_the_check_passes_a_factory_whose_names_all_resolve(tmp_path):
     assert problems(tmp_path, FILES) == []
 
 
-def test_the_check_reports_every_name_that_does_not_resolve(tmp_path):
-    factory = (
-        FACTORY.replace("coder: { image: coder }", "coder: { image: rust }\n  reviewer: {}")
-        .replace("routine: scan", "routine: sweep")
-        .replace("prompts/review.md", "prompts/missing.md")
-        .replace("hook: record_branch", "hook: record_commits")
-        .replace("call: open_pull_request", "call: merge_pull_request")
-    )
-
-    found = problems(tmp_path, FILES | {"factory.yaml": factory})
-
-    assert found == [
-        'Instance "coder" names image recipe "rust", which kinby does not ship.',
-        'Instance "reviewer" has no template: instances/reviewer/ is not a folder.',
-        'The intake routine "sweep" is not in instance "coder".',
-        'Step "implement" names hook "record_commits", which instance "coder" does not have.',
-        'Step "review" names prompt "prompts/missing.md", which is not a file in the factory.',
-        'Step "open-pr" calls tool "merge_pull_request", which instance "coder" does not have.',
-    ]
-
-
-def test_a_step_may_name_one_of_kinbys_default_hooks_and_a_command_step_a_hook(tmp_path):
-    factory = FACTORY.replace("hook: read_verdict", "hook: find_pull_request").replace(
-        '    run: ["uv run pytest"]\n', '    run: ["uv run pytest"]\n    hook: record_branch\n'
-    )
-    misnamed = factory.replace(
-        "hook: record_branch\n    requires", "hook: record_check\n    requires"
-    )
-
-    assert problems(tmp_path / "default", FILES | {"factory.yaml": factory}) == []
-    assert problems(tmp_path / "misnamed", FILES | {"factory.yaml": misnamed}) == [
-        'Step "checks" names hook "record_check", which instance "coder" does not have.'
-    ]
-
-
-@pytest.mark.parametrize("key", ["needs_human", "ended"])
-def test_a_run_call_calls_a_tool_of_one_of_the_factorys_instances(tmp_path, key):
-    def calling(instance: str, tool: str) -> dict[str, str]:
-        return FILES | {"factory.yaml": FACTORY + f"{key}: {{ in: {instance}, call: {tool} }}\n"}
-
-    assert problems(tmp_path / "declared", calling("coder", "open_pull_request")) == []
-    assert problems(tmp_path / "missing", calling("coder", "label_issue")) == [
-        f'{key} calls tool "label_issue", which instance "coder" does not have.'
-    ]
-    assert problems(tmp_path / "undeclared", calling("triager", "open_pull_request")) == [
-        f'{key} runs in instance "triager", which the factory does not declare.'
-    ]
-
-
 def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
     broken = {
-        "instances/coder/tools/github.py": "raise RuntimeError('no token')\n",
-        "instances/coder/hooks/record.py": "import not_installed\n",
+        "tools/github.py": "raise RuntimeError('no token')\n",
+        "hooks/record.py": "import not_installed\n",
     }
 
     found = problems(tmp_path, FILES | broken)
 
     assert found[:2] == [
-        "instances/coder/tools/github.py: RuntimeError: no token",
-        "instances/coder/hooks/record.py: ModuleNotFoundError: No module named 'not_installed'",
+        "tools/github.py: RuntimeError: no token",
+        "hooks/record.py: ModuleNotFoundError: No module named 'not_installed'",
     ]
     assert (
-        'Step "open-pr" calls tool "open_pull_request", which instance "coder" does not have.'
+        'Step "open-pr" calls tool "open_pull_request", which the factory\'s folder does not hold.'
         in found
     )
 
 
-def test_the_check_fails_setup_and_login_declarations_an_install_would_fail_on(tmp_path):
-    declarations = """\
-  coder:
-    image: coder
-    setup_fields:
-      - { name: TOKEN, label: Token, description: A token., kind: secret, type: text,
-          required: true, default: sk-shipped }
-      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
-          required: false, default: many, target: { file: kinby.toml, key: budgets.steps } }
-      - { name: steps, label: Steps, description: A budget., kind: config, type: integer,
-          required: false, target: { file: kinby.toml, key: budgets.steps } }
-    logins:
-      - { id: claude, label: Claude, description: Signs in., command: [claude, login],
-          volume: /root/.claude, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
-      - { id: claude, label: Claude, description: Signs in., command: [claude, login],
-          volume: /root/.claude, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
-      - { id: codex, label: Codex, description: Signs in., command: [codex, login],
-          volume: codex, prompt_pattern: '(?P<url>\\S+) (?P<code>\\S+)' }
-"""
-    factory = FACTORY.replace("  coder: { image: coder }\n", declarations)
-
-    found = problems(tmp_path, FILES | {"factory.yaml": factory})
-
-    assert found[:2] == [
-        'Instance "coder": Secret field "TOKEN" has a default. A secret never ships in a template.',
-        'Instance "coder": Setup field "steps" has a default that is not a whole number.',
-    ]
-    assert found[2:] == [
-        'Instance "coder": Setup field "steps" is declared more than once.',
-        'Instance "coder": Login "claude" is declared more than once.',
-        'Instance "coder": Login "codex" mounts its volume at "codex", '
-        "which is not an absolute path.",
-    ]
-
-
 def _field(name: str = "drafts", **options: str | None) -> str:
-    """One setup field in flow YAML, an integer landing in kinby.toml unless *options* say not."""
+    """One required field in flow YAML, an optional integer unless *options* say not."""
     declared = {
         "name": name,
         "label": "Drafts",
         "description": "Drafts a day.",
-        "kind": "config",
         "type": "integer",
         "required": "false",
-        "target": "{ file: kinby.toml, key: budgets.steps }",
     } | options
     return "{ " + ", ".join(f"{key}: {value}" for key, value in declared.items() if value) + " }"
 
 
-def _declaring(declarations: str) -> dict[str, str]:
-    factory = FACTORY.replace(
-        "  coder: { image: coder }\n", f"  coder:\n    image: coder\n{declarations}"
-    )
+def _requiring(declarations: str) -> dict[str, str]:
+    factory = FACTORY.replace("  image: coder\n", f"  image: coder\n{declarations}")
     return FILES | {"factory.yaml": factory}
 
 
 @pytest.mark.parametrize(
-    ("field", "failure"),
+    ("required", "field", "failure"),
     [
-        (_field(target=None), 'Configuration field "drafts" names no target.'),
-        (_field(label='""'), 'Setup field "drafts" has no label.'),
+        ("values", _field(label='""'), 'Setup field "drafts" has no label.'),
         (
+            "values",
             _field(choices="[one, two]"),
             'Setup field "drafts" has choices, but it is not a choice field.',
         ),
-        (_field(type="choice"), 'Choice field "drafts" offers no choices.'),
+        ("values", _field(type="choice"), 'Choice field "drafts" offers no choices.'),
         (
-            _field("EDITOR-KEY", kind="secret", type="text", target=None),
-            'Secret field "EDITOR-KEY" is not an environment variable name.',
-        ),
-        (
-            _field("SEARCH_TOKEN", kind="secret", type="boolean", target=None),
+            "secrets",
+            _field("SEARCH_TOKEN", type="boolean"),
             'Secret field "SEARCH_TOKEN" is boolean. A secret is text or multiline.',
         ),
         (
-            _field("SEARCH_TOKEN", kind="secret", type="text"),
-            'Secret field "SEARCH_TOKEN" has a target. A secret lands in the instance secrets.',
+            "values",
+            _field(default="many"),
+            'Setup field "drafts" has a default that is not a whole number.',
         ),
         (
-            _field("model", type="text", default="openai:gpt-5"),
-            'Setup field "model" overrides a built-in field, which kinby writes itself, '
-            "so it takes no target.",
-        ),
-        (
-            _field("model", type="multiline", target=None),
-            'Setup field "model" overrides a built-in field, so it keeps its kind and type.',
-        ),
-        (
-            _field("behavior_prompt", type="multiline", default="You draft.", target=None),
-            'Setup field "behavior_prompt" is the behavior prompt, which starts from the '
-            "template's SYSTEM.md.",
-        ),
-        (
+            "values",
             _field(type="boolean", default="1"),
             'Setup field "drafts" has a default that is not true or false.',
         ),
         (
+            "values",
             _field(type="choice", choices="[plain, formal]", default="loud"),
             'Setup field "drafts" has a default that is not one of plain, formal.',
         ),
         (
+            "values",
             _field(type="email", default="not-an-email"),
             'Setup field "drafts" has a default that is not an email address, '
             "like someone@example.com.",
         ),
-        (
-            _field(type="url", default="owner/name"),
-            'Setup field "drafts" has a default that is not a URL with a scheme and a host, '
-            "like https://example.com.",
-        ),
     ],
     ids=[
-        "missing-target",
         "no-label",
         "choices-on-a-non-choice",
         "choice-without-choices",
-        "secret-not-an-environment-name",
         "secret-of-another-type",
-        "target-on-a-secret",
-        "target-on-a-built-in",
-        "built-in-of-another-type",
-        "behavior-prompt",
+        "integer-default",
         "boolean-default",
         "choice-default",
         "email-default",
-        "url-default",
     ],
 )
-def test_the_check_fails_each_malformed_setup_field(tmp_path, field, failure):
-    found = problems(tmp_path, _declaring(f"    setup_fields:\n      - {field}\n"))
-
-    assert found == [f'Instance "coder": {failure}']
+def test_the_check_fails_each_malformed_required_field(tmp_path, required, field, failure):
+    assert problems(tmp_path, _requiring(f"  {required}:\n    - {field}\n")) == [failure]
 
 
-def _login(login_id: str, pattern: str) -> str:
+def _login(login_id: str, pattern: str = r"(?P<url>\S+) (?P<code>\S+)") -> str:
     return (
         f"{{ id: {login_id}, label: Editor, description: Signs in., command: [editor, login], "
         f"volume: /root/.editor, prompt_pattern: '{pattern}' }}"
@@ -388,7 +269,7 @@ def _login(login_id: str, pattern: str) -> str:
             'Login "mailer" has a prompt pattern without the named group "code".',
         ),
         (
-            _login("Mail box", r"(?P<url>\S+) (?P<code>\S+)"),
+            _login("Mail box"),
             'Login "Mail box" has an id that cannot name a volume: use letters, digits, ".", '
             '"_" and "-", starting with a letter or digit.',
         ),
@@ -396,35 +277,13 @@ def _login(login_id: str, pattern: str) -> str:
     ids=["pattern-does-not-compile", "pattern-without-code", "id-not-a-volume-name"],
 )
 def test_the_check_fails_each_malformed_login(tmp_path, login, failure):
-    found = problems(tmp_path, _declaring(f"    logins:\n      - {login}\n"))
-
-    assert found == [f'Instance "coder": {failure}']
+    assert problems(tmp_path, _requiring(f"  logins:\n    - {login}\n")) == [failure]
 
 
-def test_the_check_fails_a_template_that_does_not_initialize(tmp_path):
-    for case, (name, content, problem) in enumerate(
-        [
-            ("kinby.toml", "[models\n", "Expected ']' at the end of a table declaration"),
-            ("kinby.toml", 'id = "mine"\n', 'Template cannot set "id".'),
-            (".env", "TOKEN=sk-shipped\n", 'Template cannot copy ".env".'),
-        ]
-    ):
-        found = problems(tmp_path / str(case), FILES | {f"instances/coder/{name}": content})
+def test_the_check_fails_a_login_declared_more_than_once(tmp_path):
+    logins = f"  logins:\n    - {_login('editor')}\n    - {_login('editor')}\n"
 
-        assert len(found) == 1
-        assert found[0].startswith(f'Instance "coder": the template does not initialize: {problem}')
-
-
-def test_the_check_fails_a_suggested_pick_the_shipped_library_does_not_hold(tmp_path):
-    factory = FACTORY.replace(
-        "coder: { image: coder }", "coder: { image: coder, suggested_picks: [tdd, absent] }"
-    )
-
-    found = problems(tmp_path, FILES | {"factory.yaml": factory})
-
-    assert found == [
-        'Instance "coder" suggests skill "absent", which the shipped library does not hold.'
-    ]
+    assert problems(tmp_path, _requiring(logins)) == ['Login "editor" is declared more than once.']
 
 
 def test_a_prompt_outside_the_factory_folder_does_not_resolve(tmp_path):
@@ -480,26 +339,6 @@ def test_the_check_fails_a_closing_filter_naming_a_value_no_step_or_work_item_ho
     ]
 
 
-def test_the_check_fails_a_command_naming_a_value_no_earlier_step_or_work_item_holds(tmp_path):
-    factory = FACTORY.replace(
-        'run: ["uv run pytest"]', 'run: ["git switch {{branch}}", "make {{pr}}"]'
-    )
-
-    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        'Step "checks" names "pr", which no earlier step declares in its results '
-        "and the work item does not carry."
-    ]
-
-
-def test_the_check_passes_a_command_step_naming_its_instances_lists(tmp_path):
-    factory = FACTORY.replace(
-        'run: ["uv run pytest"]',
-        'run: ["git switch {{branch}}", { commands: setup }, { commands: checks }]',
-    )
-
-    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == []
-
-
 @pytest.mark.parametrize(
     ("entry", "failure"),
     [
@@ -537,39 +376,6 @@ def test_a_wait_filter_reads_only_the_routine_a_header_or_the_body(tmp_path):
     ]
 
 
-def test_the_check_fails_a_resume_of_anything_but_an_earlier_step_of_the_same_client(tmp_path):
-    resumes = """\
-  - id: fix
-    kind: client
-    in: coder
-    client: codex
-    prompt: prompts/implement.md
-    hook: record_branch
-    resume: implement
-  - id: redo
-    kind: client
-    in: coder
-    client: claude
-    prompt: prompts/implement.md
-    hook: record_branch
-    resume: review
-  - id: again
-    kind: client
-    in: coder
-    client: claude
-    prompt: prompts/implement.md
-    hook: record_branch
-    resume: later
-"""
-    factory = FACTORY.replace("  - id: checks\n", resumes + "  - id: checks\n")
-
-    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        'Step "fix" resumes "implement", which is not an earlier codex step in instance "coder".',
-        'Step "redo" resumes "review", which is not an earlier claude step in instance "coder".',
-        'Step "again" resumes "later", which is not an earlier claude step in instance "coder".',
-    ]
-
-
 def test_the_check_fails_a_send_back_to_a_step_that_is_not_earlier(tmp_path):
     factory = FACTORY.replace(
         "outcomes: { clean: next, changes: { back: implement, max: 3 } }",
@@ -595,43 +401,22 @@ def test_the_check_fails_a_failure_send_back_that_is_not_earlier_or_that_also_re
     ]
 
 
-def test_the_check_fails_a_resume_that_is_not_an_earlier_client_step(tmp_path):
+def test_an_agent_step_resumes_neither_itself_nor_a_later_step(tmp_path):
+    def resuming(step: str, resumed: str) -> str:
+        return (
+            f"  - {{ id: {step}, kind: agent, engine: claude, prompt: prompts/implement.md, "
+            f"resume: {resumed} }}\n"
+        )
+
     factory = FACTORY.replace(
-        "    hook: record_branch\n", "    hook: record_branch\n    resume: implement\n", 1
+        "    check: record_branch\n", "    check: record_branch\n    resume: implement\n"
     ).replace(
-        "  - id: checks\n",
-        "  - id: fix\n"
-        "    kind: client\n"
-        "    in: coder\n"
-        "    client: claude\n"
-        "    prompt: prompts/implement.md\n"
-        "    hook: record_branch\n"
-        "    resume: review\n"
-        "  - id: refix\n"
-        "    kind: client\n"
-        "    in: coder\n"
-        "    client: claude\n"
-        "    prompt: prompts/implement.md\n"
-        "    hook: record_branch\n"
-        "    resume: fix\n"
-        "  - id: checks\n",
+        "  - id: checks\n", resuming("fix", "refix") + resuming("refix", "fix") + "  - id: checks\n"
     )
 
     assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        'Step "implement" resumes "implement", which is not an earlier claude step in instance '
-        '"coder".',
-        'Step "fix" resumes "review", which is not an earlier claude step in instance "coder".',
-    ]
-
-
-def test_agent_and_client_steps_must_name_a_hook(tmp_path):
-    factory = FACTORY.replace("    hook: record_branch\n", "").replace(
-        "    hook: read_verdict\n", ""
-    )
-
-    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == [
-        "factory.yaml: steps.0.client.hook: Field required",
-        "factory.yaml: steps.1.agent.hook: Field required",
+        'Step "implement" resumes "implement", which is not an earlier claude step.',
+        'Step "fix" resumes "refix", which is not an earlier claude step.',
     ]
 
 
@@ -853,7 +638,7 @@ def test_get_leaves_out_the_bytecode_python_writes_beside_the_factorys_python(tm
 
     async def scenario() -> None:
         before = await read(client)
-        bytecode = folder / "instances" / "coder" / "hooks" / "__pycache__" / "x.pyc"
+        bytecode = folder / "hooks" / "__pycache__" / "x.pyc"
         bytecode.parent.mkdir()
         bytecode.write_bytes(BYTECODE)
         after = await read(client)
@@ -872,7 +657,7 @@ def test_get_leaves_out_the_bytecode_python_writes_beside_the_factorys_python(tm
 
 def test_editing_a_shipped_factory_leaves_its_bytecode_behind(tmp_path):
     hub = factory_hub(tmp_path, shipped={"software": renamed(FILES, "software")})
-    bytecode = tmp_path / "shipped" / "software" / "instances" / "coder" / "tools" / "__pycache__"
+    bytecode = tmp_path / "shipped" / "software" / "tools" / "__pycache__"
     bytecode.mkdir()
     (bytecode / "github.pyc").write_bytes(BYTECODE)
     client = hub_client(hub)
@@ -909,52 +694,14 @@ def test_get_names_a_factory_file_that_is_not_text(tmp_path):
     asyncio.run(scenario())
 
 
-def test_an_edit_keeps_an_empty_instance_template(tmp_path):
+def test_an_edit_keeps_a_hooks_folder_that_links_elsewhere(tmp_path):
     hub = factory_hub(tmp_path)
     folder = tmp_path / "hub" / "factories" / "tickets"
     write_factory(
-        folder,
-        FILES
-        | {
-            "factory.yaml": FACTORY.replace(
-                "  coder: { image: coder }", "  coder: { image: coder }\n  helper: {}"
-            )
-        },
+        folder, {name: content for name, content in FILES.items() if name != "hooks/record.py"}
     )
-    (folder / "instances" / "helper").mkdir()
-    client = hub_client(hub)
-
-    async def scenario() -> None:
-        before = await read(client)
-        edited = await client.call(
-            FACTORY_EDIT,
-            FactoryEditCommand(
-                name="tickets", files={"prompts/review.md": "Review it.\n"}, hash=before.hash
-            ),
-        )
-
-        assert isinstance(edited, FactoryResult)
-
-    asyncio.run(scenario())
-
-
-def test_an_edit_keeps_an_instance_template_that_links_to_a_folder(tmp_path):
-    hub = factory_hub(tmp_path)
-    folder = tmp_path / "hub" / "factories" / "tickets"
-    write_factory(
-        folder, {name: content for name, content in FILES.items() if "instances/" not in name}
-    )
-    template = tmp_path / "coder"
-    write_factory(
-        template,
-        {
-            name.removeprefix("instances/coder/"): content
-            for name, content in FILES.items()
-            if name.startswith("instances/coder/")
-        },
-    )
-    (folder / "instances").mkdir()
-    (folder / "instances" / "coder").symlink_to(template, target_is_directory=True)
+    write_factory(tmp_path / "hooks", {"record.py": HOOKS})
+    (folder / "hooks").symlink_to(tmp_path / "hooks", target_is_directory=True)
     client = hub_client(hub)
 
     async def scenario() -> None:

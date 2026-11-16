@@ -14,9 +14,15 @@ from kinby.contracts import (
     StepEnding,
     StepResult,
 )
-from tests.test_factory_runs import FILES, detail, handed_in, settled, started_coder
-from tests.test_factory_runs import factory_hub as routed_hub
-from tests.test_factory_templates import created_roles, factory_hub
+from tests.test_factory_runs import (
+    FILES,
+    detail,
+    factory_hub,
+    handed_in,
+    settled,
+    started_home,
+    started_line,
+)
 from tests.test_hub import (
     FakeControl,
     FakeRuntime,
@@ -24,7 +30,7 @@ from tests.test_hub import (
     hub_client,
     instance_environment,
 )
-from tests.test_hub_notices import BUILT, CODER_BEHIND, ROUTE_MISSING, _edit, _rewrite_environment
+from tests.test_hub_notices import BUILT, ROUTE_MISSING, _rewrite_environment
 
 HUB_SCRIPT = Path(__file__).parents[1] / ".claude" / "skills" / "e2e-pass" / "hub.py"
 spec = importlib.util.spec_from_file_location("e2e_hub", HUB_SCRIPT)
@@ -33,52 +39,25 @@ e2e_hub = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e2e_hub)
 
 
-def test_an_update_brings_an_instance_on_the_revision_up_to_its_factorys_template(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
-    monkeypatch.setattr("kinby.cli.hub_update.POLL_SECONDS", 0)
-
-    async def scenario() -> None:
-        client = hub_client(factory_hub(tmp_path))
-        created = await created_roles(client)
-        await _edit(client, {"instances/coder/SYSTEM.md": "You implement issues well.\n"})
-        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
-        assert isinstance(listed, InstanceListResult)
-        assert {i.instance_id: i.notices for i in listed.instances}[created["coder"]] == [
-            CODER_BEHIND
-        ]
-
-        assert await e2e_hub.update(client, BUILT, []) == 0
-
-        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
-        assert isinstance(listed, InstanceListResult)
-        assert [i.notices for i in listed.instances] == [[], []]
-        out = capsys.readouterr().out
-        assert f"{created['coder']} tickets-coder: updating to {BUILT[:12]}" in out
-        assert f"{created['reviewer']} tickets-reviewer: already on {BUILT[:12]}" in out
-
-    asyncio.run(scenario())
-
-
 def test_an_update_gives_an_instance_on_the_revision_its_missing_hub_route(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     monkeypatch.setattr("kinby.cli.hub_update.POLL_SECONDS", 0)
     runtime = FakeRuntime()
-    hub = routed_hub(tmp_path / "hub", FakeControl(), runtime)
+    hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
 
     async def scenario() -> None:
         client = hub_client(hub)
-        coder = await started_coder(hub, runtime)
         alice = (await created_instance(client)).instance_id
-        environment = instance_environment(hub, coder)
+        bob = (await created_instance(client, name="bob")).instance_id
+        environment = instance_environment(hub, alice)
         del environment["KINBY_HUB_URL"]
-        _rewrite_environment(hub, coder, environment)
+        _rewrite_environment(hub, alice, environment)
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert isinstance(listed, InstanceListResult)
         assert {i.instance_id: i.notices for i in listed.instances} == {
-            coder: [ROUTE_MISSING],
-            alice: [],
+            alice: [ROUTE_MISSING],
+            bob: [],
         }
 
         assert await e2e_hub.update(client, BUILT, []) == 0
@@ -87,27 +66,19 @@ def test_an_update_gives_an_instance_on_the_revision_its_missing_hub_route(
         assert isinstance(listed, InstanceListResult)
         assert [i.notices for i in listed.instances] == [[], []]
         out = capsys.readouterr().out
-        assert f"{coder} checks-coder: updating to {BUILT[:12]}" in out
-        assert f"{alice} alice: already on {BUILT[:12]}" in out
+        assert f"{alice} alice: updating to {BUILT[:12]}" in out
+        assert f"{bob} bob: already on {BUILT[:12]}" in out
 
     asyncio.run(scenario())
 
 
 TWO_STEPS = """\
 name: checks
-instances:
-  coder: {}
-intake: { instance: coder, routine: scan }
+requires: { image: coder }
 work_item: { issue: int }
 steps:
-  - id: lint
-    kind: command
-    in: coder
-    run: ["uv run ruff check ."]
-  - id: test
-    kind: command
-    in: coder
-    run: ["uv run pytest"]
+  - { id: lint, kind: command, run: ["uv run ruff check ."] }
+  - { id: test, kind: command, run: ["uv run pytest"] }
 """
 
 
@@ -129,13 +100,13 @@ def test_a_run_that_needs_a_human_moves_on_by_its_issue_or_its_run_id(
         StepResult(ending=StepEnding.FAILED),
     ]
     runtime = FakeRuntime()
-    hub = routed_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": TWO_STEPS})
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": TWO_STEPS})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         await settled(hub, run.run_id)
-        await settled(hub, (await handed_in(hub, coder, 6)).run_id)
+        await settled(hub, (await handed_in(hub, line, 6)).run_id)
         stopped = len(control.steps)
 
         reference = 7 if by_issue else run.run_id
@@ -154,11 +125,12 @@ def test_an_issue_with_no_unfinished_run_fails_with_a_clear_message(
 ):
     control = FakeControl()
     runtime = FakeRuntime()
-    hub = routed_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": TWO_STEPS})
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": TWO_STEPS})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        await started_home(hub, runtime)
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
         assert (await settled(hub, run.run_id)).run.status is FactoryRunStatus.DONE
 
         assert await e2e_hub.retry(hub_client(hub), 7) == 1

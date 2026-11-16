@@ -224,7 +224,7 @@
     },
     "RepositoryCommands": {
       "additionalProperties": false,
-      "description": "The instance's list of repository commands named *commands*, in a command step's run.\n\nThe instance reads the list when the step runs. Its commands run as written, with no run\nvalues.",
+      "description": "The workbench's list of repository commands named *commands*, in a command step's run.\n\nThe hub reads the list when the step starts. Its commands run as written, with no run values.",
       "properties": {
         "commands": {
           "$ref": "#/$defs/CommandListName"

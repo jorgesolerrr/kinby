@@ -151,6 +151,16 @@ def _answered(tmp_path: Path, decision: Decision, reason: str | None = None):
     return model, tmp_path / "workbench" / "runs" / str(run_id), asked, resumed
 
 
+def test_an_ask_too_large_to_send_fails_the_step_and_names_its_size(tmp_path):
+    model = TurnModel(_calling("write", path="draft.md", content="x" * 2_000_000))
+
+    result = _run(tmp_path, model)
+
+    assert result.ending is StepEnding.FAILED
+    assert result.ask is None
+    assert result.summary.endswith(", over the 1,048,576-byte limit.")
+
+
 def test_approving_a_kinby_turns_ask_resumes_the_turn_and_the_write_happens(tmp_path):
     model, folder, _, resumed = _answered(tmp_path, ApprovalDecision.APPROVE)
 

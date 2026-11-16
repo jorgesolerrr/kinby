@@ -28,25 +28,11 @@ from kinby.contracts import (
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
-from kinby.factories.file import (
-    TEMPLATES_DIR,
-    FactoryFile,
-    FactoryPath,
-    InstanceDeclaration,
-    InstanceName,
-    RecipeName,
-    WorkbenchFactory,
-    read_factory_file,
-)
+from kinby.factories.file import FactoryPath, RecipeName, WorkbenchFactory, read_factory_file
 from kinby.instance import template_tools
 from kinby.instance.config_changes import file_hash, files_hash
 from kinby.instance.layout import MANIFEST_NAME
-from kinby.setup import (
-    behavior_prompt_field,
-    readable_template_files,
-    with_built_in_fields,
-    with_search_key,
-)
+from kinby.setup import with_search_key
 
 
 @dataclass(frozen=True)
@@ -54,7 +40,7 @@ class InstanceTemplate:
     """One instance template of a factory that passed the check, read whole."""
 
     #: The instance's name in the factory file.
-    name: InstanceName
+    name: str
     recipe: RecipeName | None
     setup: DeclaredSetup
     #: Every file of the template's folder, by its path there.
@@ -105,7 +91,7 @@ class FactoryStore:
         folder, _ = self._folder(command.name)
         return FactoryCheckResult(problems=list(await asyncio.to_thread(check_factory, folder)))
 
-    def file(self, name: FactoryName) -> FactoryFile | WorkbenchFactory:
+    def file(self, name: FactoryName) -> WorkbenchFactory:
         """The factory's file as the hub keeps it: the last version that passed the check."""
         folder, _ = self._folder(name)
         return read_factory_file(folder)
@@ -130,12 +116,12 @@ class FactoryStore:
             },
         )
 
-    async def checked(self, name: FactoryName) -> FactoryFile | WorkbenchFactory:
+    async def checked(self, name: FactoryName) -> WorkbenchFactory:
         """The factory's file, read in the same pass as the check passes it."""
         async with self._edit_lock:
             return await asyncio.to_thread(self._checked, name)
 
-    def _checked(self, name: FactoryName) -> FactoryFile | WorkbenchFactory:
+    def _checked(self, name: FactoryName) -> WorkbenchFactory:
         folder, _ = self._folder(name)
         problems = check_factory(folder)
         if problems:
@@ -143,26 +129,15 @@ class FactoryStore:
         return read_factory_file(folder)
 
     async def templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
-        """Each instance template of the factory, read in the same pass as the check passes it."""
-        async with self._edit_lock:
-            return await asyncio.to_thread(self._templates, name)
+        """Each instance template of the factory, once the check passes it. A factory declares no
+        instances any more, so it holds none."""
+        await self.checked(name)
+        return ()
 
-    async def template(self, name: FactoryName, role: InstanceName) -> InstanceTemplate | None:
+    async def template(self, name: FactoryName, role: str) -> InstanceTemplate | None:
         """The factory's instance template for *role*, or None when the factory has no such role."""
         return next(
             (template for template in await self.templates(name) if template.name == role), None
-        )
-
-    def _templates(self, name: FactoryName) -> tuple[InstanceTemplate, ...]:
-        factory = self._checked(name)
-        if isinstance(factory, WorkbenchFactory):
-            return ()
-        folder, _ = self._folder(name)
-        return tuple(
-            _template(
-                instance, declared, readable_template_files(folder / TEMPLATES_DIR / instance)
-            )
-            for instance, declared in factory.instances.items()
         )
 
     async def edit(self, command: FactoryEditCommand) -> FactoryResult:
@@ -229,25 +204,6 @@ class FactoryStore:
         return _named_folders(self._shipped, FactorySource.SHIPPED) | _named_folders(
             self._directory, FactorySource.HUB
         )
-
-
-def _template(
-    name: InstanceName, declared: InstanceDeclaration, files: dict[str, str]
-) -> InstanceTemplate:
-    """The template's fields are the built-in ones, its own, then its behavior prompt."""
-    return InstanceTemplate(
-        name=name,
-        recipe=declared.image,
-        setup=DeclaredSetup(
-            setup_fields=[
-                *with_built_in_fields(declared.setup_fields),
-                behavior_prompt_field(files),
-            ],
-            logins=list(declared.logins),
-        ),
-        files=files,
-        suggested_picks=declared.suggested_picks,
-    )
 
 
 def _factory_files(folder: Path) -> dict[str, Path]:

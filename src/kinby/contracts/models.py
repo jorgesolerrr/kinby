@@ -78,8 +78,6 @@ class Scope(StrEnum):
     HUB_READ = "hub:read"
     HUB_ADMIN = "hub:admin"
     HUB_UPDATE = "hub:update"
-    #: Hand a factory a work item. Only an instance holds it, on its own hub route.
-    FACTORY_INTAKE = "factory:intake"
     #: Run the intake of a line the instance owns. Every instance holds it, on its hub route.
     LINE_INTAKE = "line:intake"
     #: Hand work to the lines the instance owns and list them, read their workbenches, and record
@@ -110,8 +108,6 @@ INSTANCE_SCOPES = frozenset(
 )
 CONTROL_SCOPES = INSTANCE_SCOPES | {Scope.INSTANCE_LIFECYCLE}
 
-#: What a factory's instance holds on its hub route, with the control token the hub gave it.
-INTAKE_SCOPES = frozenset({Scope.FACTORY_INTAKE})
 #: What the home instance holds on its hub route: the hub's reads, and the reads of an instance
 #: the hub relays to it.
 HOME_SCOPES = frozenset({Scope.HUB_READ, Scope.HUB_HOME})
@@ -122,9 +118,7 @@ LINE_SCOPES = frozenset({Scope.LINE_INTAKE, Scope.LINE_OWNER})
 #: What an instance whose manifest turns the browser on holds on its hub route (ADR 0113).
 BROWSER_SCOPES = frozenset({Scope.BROWSER_OPEN})
 #: What a client authenticated against the hub holds: a hub has one user.
-HUB_SCOPES = (
-    frozenset(Scope) - INTAKE_SCOPES - NOTIFICATION_SCOPES - BROWSER_SCOPES - {Scope.HUB_HOME}
-)
+HUB_SCOPES = frozenset(Scope) - NOTIFICATION_SCOPES - BROWSER_SCOPES - {Scope.HUB_HOME}
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
@@ -1557,8 +1551,6 @@ class InstanceSummary(ContractModel):
     #: What the user may want to act on, such as an update the hub offers. None of them stops
     #: the instance.
     notices: list[InstanceNotice]
-    #: The factory runs stopped for the user, or awaiting approval, at one of the instance's steps.
-    needs_human: int
     #: Whether the instance registry marks it the home instance.
     home: bool
     #: The factory role the instance picked at creation, if any.
@@ -1608,23 +1600,17 @@ class InstanceSetup(ContractModel):
 
     logins: list[LoginSetup]
     secrets: list[SecretSetup]
-    #: The lists of repository commands its factory role's steps name and it does not hold.
-    missing_commands: list[CommandListName]
 
     @property
     def pending(self) -> bool:
-        """A login is not signed in, a required secret is not set, or a list of repository
-        commands is missing."""
-        return (
-            any(login.state is not LoginState.SIGNED_IN for login in self.logins)
-            or any(secret.required and not secret.is_set for secret in self.secrets)
-            or bool(self.missing_commands)
+        """A login is not signed in, or a required secret is not set."""
+        return any(login.state is not LoginState.SIGNED_IN for login in self.logins) or any(
+            secret.required and not secret.is_set for secret in self.secrets
         )
 
 
 class RepositoryCommandList(ContractModel):
-    """One of an instance's or a workbench's lists of repository commands, its commands in the
-    order they run."""
+    """One of a workbench's lists of repository commands, its commands in the order they run."""
 
     name: CommandListName
     commands: list[str]
@@ -1642,8 +1628,6 @@ class InstanceStatusResult(ContractModel):
     active_operation_id: UUID | None = None
     #: What waits on a container recreation. A start applies them to a stopped instance.
     recreate_reasons: list[RecreateReason]
-    #: The lists of repository commands it holds, when its factory role's steps name any.
-    repository_commands: list[RepositoryCommandList]
     #: Whether the hub opens browsers for it: it runs a browser service, and the instance's
     #: manifest turns the browser on.
     browser: bool = False
@@ -4132,11 +4116,11 @@ class ReasoningEffort(StrEnum):
 class FactoryRunStatus(StrEnum):
     """Where a factory run stands."""
 
-    #: Its current step runs in the step's instance.
+    #: Its current step runs on its line's workbench.
     RUNNING = "running"
-    #: Its current step waits for the step's instance, which runs one step at a time.
+    #: Its current step waits for its line's workbench, which runs one step at a time.
     QUEUED = "queued"
-    #: It waits on a signal or on the user's approval, and holds no instance.
+    #: It waits on a signal or on the user's approval, and holds no workbench.
     PARKED = "parked"
     #: It stopped for the user, keeping everything done so far.
     NEEDS_HUMAN = "needs-human"
@@ -4173,17 +4157,16 @@ type CommandListName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 
 
 class RepositoryCommands(ContractModel):
-    """The instance's list of repository commands named *commands*, in a command step's run.
+    """The workbench's list of repository commands named *commands*, in a command step's run.
 
-    The instance reads the list when the step runs. Its commands run as written, with no run
-    values.
+    The hub reads the list when the step starts. Its commands run as written, with no run values.
     """
 
     commands: CommandListName
 
 
 class CommandStepRun(ContractModel):
-    """Run each command in the instance's workspace without a shell, in order.
+    """Run each command in the run's folder without a shell, in order.
 
     The step passes when every command exits with code zero, and stops at the first that does not.
     """
@@ -4193,12 +4176,10 @@ class CommandStepRun(ContractModel):
     run: list[Annotated[str, Field(min_length=1)] | RepositoryCommands]
     #: How long the commands may run in all before the step fails. None lets them run.
     timeout_seconds: int | None = Field(default=None, ge=1)
-    #: The branch whose run worktree the commands run in. None runs them in the workspace.
-    branch: Annotated[str, Field(min_length=1)] | None = None
 
 
 class CodeStepRun(ContractModel):
-    """Call one of the instance's tools, with no model turn around it.
+    """Call one of the factory's tools, with no model turn around it.
 
     The tool's parameters named like a value of the run receive that value, and its ``run_id``
     parameter the run's id. A mapping the tool returns is the step result's values.
@@ -4235,21 +4216,20 @@ class AnsweredAsk(ContractModel):
 
 
 class AgentStepRun(ContractModel):
-    """Run a turn on a new thread of the instance, with the prompt and the run's values. On a
-    workbench the turn is in no thread, and runs in the run's folder."""
+    """Run a kinby turn in the run's folder, in no thread, with the prompt and the run's
+    values."""
 
     kind: Literal["agent"] = "agent"
     #: The text of the step's prompt file.
     prompt: str
-    #: The model a workbench's turn runs with, as provider:model. None in an instance, whose
-    #: manifest names it.
-    model: CodingModel | None = None
+    #: The model the turn runs with, as provider:model.
+    model: CodingModel
     #: The answered ask whose turn this attempt resumes on a workbench. None starts a new turn.
     answered: AnsweredAsk | None = None
 
 
 class ClientStepRun(ContractModel):
-    """Run a coding client in the instance's workspace, with the prompt and the run's values.
+    """Run a coding client in the run's folder, with the prompt and the run's values.
 
     No kinby turn runs around it. The client is killed once its timeout passes.
     """
@@ -4264,8 +4244,6 @@ class ClientStepRun(ContractModel):
     #: The model and reasoning effort the client runs with. None leaves the client's default.
     model: CodingModel | None = None
     effort: ReasoningEffort | None = None
-    #: The branch whose run worktree the client runs in. None runs it in the workspace.
-    branch: Annotated[str, Field(min_length=1)] | None = None
 
 
 class RunFolder(ContractModel):
@@ -4308,7 +4286,7 @@ class IntakeRunResult(ContractModel):
 
 
 class StepRunCommand(ContractModel):
-    """Run one step of a factory run in this instance or workbench, and return its result."""
+    """Run one step of a factory run on this workbench, and return its result."""
 
     step: Annotated[
         AgentStepRun | ClientStepRun | CommandStepRun | CodeStepRun, Field(discriminator="kind")
@@ -4318,13 +4296,13 @@ class StepRunCommand(ContractModel):
     #: The attempt at the step this is. None for the factory's needs_human and ended calls,
     #: which are none.
     attempt: int | None = None
-    #: The hook that records the step result once the step ends, however it ended: on a
-    #: workbench, the step's check, a hook of the factory's folder.
+    #: The step's check, a hook of the factory's folder that records the step result once the
+    #: step ends, however it ended.
     hook: HookName | None = None
     work_item: dict[ValueName, StepValue]
     #: Every value the run's earlier steps recorded, by name.
     results: dict[ValueName, StepValue] = Field(default_factory=dict)
-    #: Where a step on a workbench runs. None for a step in an instance.
+    #: Where the step runs. A step that names none fails.
     folder: RunFolder | None = None
     #: Cut the folder again from the base before the step, dropping all it held: the run went
     #: back to its first step to start over.
@@ -4384,9 +4362,9 @@ class FactoryRun(ContractModel):
 
     run_id: UUID
     factory: FactoryName
-    #: The instance that handed in its work item, or the owner of its line.
+    #: The owner of its line, or for a run made before lines, the instance that handed it in.
     instance_id: UUID
-    #: The line it runs on. None for a run of a factory whose steps run in instances.
+    #: The line it runs on. None for a run made before lines, whose steps ran in instances.
     line_id: UUID | None = None
     work_item: dict[ValueName, StepValue]
     status: FactoryRunStatus
@@ -4436,19 +4414,8 @@ class RunStop(ContractModel):
     #: The attempts since the run's previous stop, in the order they started.
     attempts: list[StepAttempt]
     #: The name of the workbench a line's run works on, which marks what the owner remembers
-    #: of it. None for a run of a factory written the older way.
+    #: of it. None for a run made before lines.
     workbench: str | None = None
-
-
-class FactoryRunIntakeCommand(ContractModel):
-    """Hand a work item to the factory whose intake is this instance and routine.
-
-    A work item that matches an unfinished run this instance handed in returns that run instead,
-    and retries the step of one that needs a human.
-    """
-
-    routine: RoutineName
-    work_item: dict[ValueName, StepValue]
 
 
 class FactoryRunListCommand(ContractModel):
@@ -4456,7 +4423,8 @@ class FactoryRunListCommand(ContractModel):
     factory: FactoryName | None = None
     #: Only the runs in this status. None lists the runs in every status.
     status: FactoryRunStatus | None = None
-    #: Only the runs this instance handed in. None lists every instance's.
+    #: Only the runs this instance handed in, or whose lines it owns. None lists every
+    #: instance's.
     instance_id: UUID | None = None
     #: Only the runs of this line. None lists every line's.
     line_id: UUID | None = None

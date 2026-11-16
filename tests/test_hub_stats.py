@@ -19,6 +19,7 @@ from kinby.contracts import (
     ErrorFrame,
     FactoryRunStatus,
     FrameId,
+    Line,
     MemoryCallCounts,
     OriginUse,
     PlanLimit,
@@ -38,6 +39,8 @@ from kinby.contracts import (
     StatsRunsResult,
     StatsSummary,
     StepAttempts,
+    StepEnding,
+    StepResult,
     SubscriptionUse,
     UsageSource,
 )
@@ -46,21 +49,12 @@ from kinby.hub import (
     ControlEndpoint,
     ControlUnreachable,
     HttpInstanceControl,
+    Hub,
     IncompatibleLifecycleEndpoint,
 )
 from kinby.hub.usage import Uncounted, summed_usage
 from tests.test_contract_server import TOKEN, served_dispatcher
-from tests.test_factory_runs import (
-    FIXED,
-    REVIEW,
-    REVIEW_FILES,
-    factory_hub,
-    failing,
-    handed_in,
-    reviewed,
-    settled,
-    started_coder,
-)
+from tests.test_factory_runs import factory_hub, handed_in, settled, started, started_line
 from tests.test_hub import (
     FakeControl,
     FakeRuntime,
@@ -72,6 +66,23 @@ from tests.test_hub import (
 )
 
 _DAY = date(2026, 9, 25)
+#: A factory whose review sends the work back to its fix, and whose publish is retried once.
+_REVIEW = """\
+name: checks
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - { id: fix, kind: command, run: ["make fix"] }
+  - id: review
+    kind: command
+    run: ["make review"]
+    outcomes: { clean: next, changes: { back: fix, max: 3 }, hopeless: stop, merged: done }
+  - id: publish
+    kind: command
+    run: ["make publish"]
+    retry: 1
+"""
+_FIXED = StepResult(ending=StepEnding.CLEAN)
 
 
 def _used(
@@ -462,25 +473,40 @@ def _tokens(run_id: UUID, *, input_tokens: int, cost: float | None, claude: int 
     )
 
 
-def test_run_usage_joins_each_instances_tokens_with_the_runs_attempts(tmp_path):
+async def _owned_line(hub: Hub, runtime: FakeRuntime) -> Line:
+    """The checks factory set up on a workbench under the home instance, both started."""
+    recovery = await hub.recover()
+    assert recovery.home is not None
+    await started(hub_client(hub), runtime, recovery.home)
+    return await started_line(hub, runtime)
+
+
+def _reviewed(outcome: str) -> StepResult:
+    return StepResult(ending=StepEnding.CLEAN, outcome=outcome)
+
+
+def _failing(summary: str) -> StepResult:
+    return StepResult(ending=StepEnding.FAILED, summary=summary)
+
+
+def test_run_usage_joins_each_instances_tokens_with_the_attempts_of_a_lines_runs(tmp_path):
     control = FakeControl()
     control.step_results = [
-        FIXED,
-        reviewed("changes"),
-        FIXED,
-        reviewed("clean"),
-        failing('"make publish" exited with code 1.'),
+        _FIXED,
+        _reviewed("changes"),
+        _FIXED,
+        _reviewed("clean"),
+        _failing('"make publish" exited with code 1.'),
     ]
     runtime = FakeRuntime()
-    retried = REVIEW.replace('run: ["make publish"]\n', 'run: ["make publish"]\n    retry: 1\n')
-    hub = factory_hub(tmp_path / "hub", control, runtime, REVIEW_FILES | {"factory.yaml": retried})
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": _REVIEW})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
+        line = await _owned_line(hub, runtime)
         reviewer = await started_instance(hub_client(hub), hub, name="bob")
-        reworked = (await settled(hub, (await handed_in(hub, coder, 7)).run_id)).run
-        clean = (await settled(hub, (await handed_in(hub, coder, 8)).run_id)).run
-        control.usage[_address(coder)] = _answer(_used()).model_copy(
+        reworked = (await settled(hub, (await handed_in(hub, line, 7)).run_id)).run
+        clean = (await settled(hub, (await handed_in(hub, line, 8)).run_id)).run
+        control.usage[_address(line.owner_id)] = _answer(_used()).model_copy(
             update={
                 "runs": [
                     _tokens(reworked.run_id, input_tokens=100, cost=0.5, claude=1000),
@@ -499,7 +525,7 @@ def test_run_usage_joins_each_instances_tokens_with_the_runs_attempts(tmp_path):
         )
 
         usage = await hub_client(hub, {Scope.HUB_READ}).call(
-            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+            STATS_RUNS, StatsRunsCommand(line_id=line.line_id)
         )
 
         assert isinstance(usage, StatsRunsResult), usage
@@ -541,19 +567,47 @@ def test_run_usage_joins_each_instances_tokens_with_the_runs_attempts(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_failure_that_stopped_the_run_is_no_retry(tmp_path):
+def test_run_usage_reads_a_run_made_before_lines_from_the_instance_that_handed_it_in(tmp_path):
     control = FakeControl()
-    control.step_results = [failing('"uv run pytest" exited with code 1.')]
     runtime = FakeRuntime()
     hub = factory_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        stopped = (await settled(hub, (await handed_in(hub, coder, 7)).run_id)).run
-        control.usage[_address(coder)] = _answer(_used())
+        alice = (await started_instance(hub_client(hub), hub)).instance_id
+        reviewer = await started_instance(hub_client(hub), hub, name="bob")
+        run, _ = hub.registry.open_run(alice, "checks", {"issue": 7}, "test")
+        control.usage[_address(alice)] = _answer(_used()).model_copy(
+            update={"runs": [_tokens(run.run_id, input_tokens=100, cost=0.5)]}
+        )
+        control.usage[_address(reviewer.instance_id)] = _answer(_used()).model_copy(
+            update={"runs": [_tokens(run.run_id, input_tokens=50, cost=0.25)]}
+        )
 
         usage = await hub_client(hub, {Scope.HUB_READ}).call(
-            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+            STATS_RUNS, StatsRunsCommand(instance_id=alice)
+        )
+
+        assert isinstance(usage, StatsRunsResult), usage
+        [read] = usage.runs
+        assert (read.run.run_id, read.run.line_id) == (run.run_id, None)
+        assert read.api == ApiUse(input_tokens=150, output_tokens=15, cost=0.75)
+
+    asyncio.run(scenario())
+
+
+def test_a_failure_that_stopped_the_run_is_no_retry(tmp_path):
+    control = FakeControl()
+    control.step_results = [_failing('"uv run pytest" exited with code 1.')]
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime)
+
+    async def scenario() -> None:
+        line = await _owned_line(hub, runtime)
+        stopped = (await settled(hub, (await handed_in(hub, line, 7)).run_id)).run
+        control.usage[_address(line.owner_id)] = _answer(_used())
+
+        usage = await hub_client(hub, {Scope.HUB_READ}).call(
+            STATS_RUNS, StatsRunsCommand(line_id=line.line_id)
         )
 
         assert isinstance(usage, StatsRunsResult), usage
@@ -574,17 +628,15 @@ def test_run_usage_holds_only_the_runs_created_in_the_range_in_any_timezone(tmp_
     hub = factory_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        runs = [
-            (await settled(hub, (await handed_in(hub, coder, i)).run_id)).run for i in (7, 8, 9)
-        ]
-        control.usage[_address(coder)] = _answer(_used())
+        line = await _owned_line(hub, runtime)
+        runs = [(await settled(hub, (await handed_in(hub, line, i)).run_id)).run for i in (7, 8, 9)]
+        control.usage[_address(line.owner_id)] = _answer(_used())
         middle = runs[1].created_at
         east = timezone(timedelta(hours=5))
 
         usage = await hub_client(hub, {Scope.HUB_READ}).call(
             STATS_RUNS,
-            StatsRunsCommand(instance_id=coder, since=middle.astimezone(east), until=middle),
+            StatsRunsCommand(line_id=line.line_id, since=middle.astimezone(east), until=middle),
         )
 
         assert isinstance(usage, StatsRunsResult), usage
@@ -599,16 +651,16 @@ def test_run_usage_counts_a_core_without_run_tokens_as_outdated(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
+        line = await _owned_line(hub, runtime)
         older = await started_instance(hub_client(hub), hub, name="bob")
-        await settled(hub, (await handed_in(hub, coder, 7)).run_id)
-        control.usage[_address(coder)] = _answer(_used()).model_copy(update={"runs": []})
+        await settled(hub, (await handed_in(hub, line, 7)).run_id)
+        control.usage[_address(line.owner_id)] = _answer(_used()).model_copy(update={"runs": []})
         control.usage[_address(older.instance_id)] = StatsGetResult.model_validate(
             _answer(_used()).model_dump(exclude={"runs"})
         )
 
         usage = await hub_client(hub, {Scope.HUB_READ}).call(
-            STATS_RUNS, StatsRunsCommand(instance_id=coder)
+            STATS_RUNS, StatsRunsCommand(line_id=line.line_id)
         )
 
         assert isinstance(usage, StatsRunsResult), usage

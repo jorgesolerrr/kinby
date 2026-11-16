@@ -177,7 +177,7 @@ The sort of service a **channel** talks to, such as Telegram, Discord or email. 
 
 ### Notification
 
-What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits, when a **factory run** parks on the user's approval at a **step**, or when a **routine notice**, an **instance notice**, or a factory run that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run: a **line**'s run opens on its own page, with its **step attempts** and what it waits on, and a run of a **factory** written the older way opens on the **library**. It can offer options to **reply** with.
+What kinby sends the user through its **channels** when something needs them or an **instance** decides to tell them. kinby sends one by itself when an **approval** waits, when a **factory run** parks on the user's approval at a **step**, or when a **routine notice**, an **instance notice**, or a factory run that **needs human** appears. An instance's **turn** sends one only when it chooses to, so a turn that sends none is silent. Every notification names the instance and where it came from, and links back to its **thread** or run: a **line**'s run opens on its own page, with its **step attempts** and what it waits on, and a run made before lines opens on the **library**. It can offer options to **reply** with.
 _Avoid_: message, alert, push
 
 ### Reply
@@ -279,7 +279,7 @@ _Avoid_: login container, helper container
 
 ### Pending setup
 
-What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, its **search backend**'s key while web search is on, a secret its **instance code** declares and its instance secrets lack, or **repository commands** its **factory**'s steps name and it does not hold. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
+What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, its **search backend**'s key while web search is on, or a secret its **instance code** declares and its instance secrets lack. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
 _Avoid_: incomplete instance, onboarding
 
 ### Avatar
@@ -486,7 +486,7 @@ A memory **eval** case that gives the agent ordinary work, never a question abou
 
 ### Memory delivery
 
-How the runtime brings memory to a **turn** or a **coding client**'s **step** before the agent searches it: none, the default; an index, the newest **facts**' ids and descriptions in the **system prompt** under a cap of about 1k tokens; or a pre-search, the bodies of the three facts a search with the task's text finds first, put in the message. Showing the index is not a **recall**, but a pre-search is, since the agent reads the bodies. It is turn configuration, not a manifest setting.
+How the runtime brings memory to a **turn** before the agent searches it: none, the default; an index, the newest **facts**' ids and descriptions in the **system prompt** under a cap of about 1k tokens; or a pre-search, the bodies of the three facts a search with the task's text finds first, put in the message. Showing the index is not a **recall**, but a pre-search is, since the agent reads the bodies. It is turn configuration, not a manifest setting.
 _Avoid_: delivery, which is a **signal**'s inbound call; injection
 
 ### Turn runner
@@ -613,11 +613,11 @@ The **hub**'s record of which managed **instance** answers the public **signal**
 
 ### Instance template
 
-The initial behavior, configuration and **setup fields** a **factory** supplies for one **factory role**, naming one of the image recipes kinby ships, with the **suggested picks** for that role. The **hub** copies its files into an instance that picks the role and records what it copied. The **manifest** it merges belongs to the instance from then on. An **instance update** brings the other files up to the factory's, except any the instance changed.
+The initial behavior, configuration and **setup fields** a **factory** written the older way supplied for one **factory role**, naming one of the image recipes kinby ships, with the **suggested picks** for that role. The **factory check** refuses such a factory now, so the **hub** serves no template. It copied a template's files into an instance that picked the role and recorded what it copied. The **manifest** it merges belongs to the instance from then on. An **instance update** brings the other files up to the factory's, except any the instance changed.
 
 ### Factory role
 
-The part an **instance** plays in a **factory** written the older way. A factory has an **instance template** per role. An instance picks at most one role, at creation, and keeps it until a **conversion** turns it into a **workbench** and a **line**. The web app's sidebar lists no instance with a role: its factory's entry in the **library** does.
+The part an **instance** played in a **factory** written the older way, which had an **instance template** per role. The **factory check** refuses such a factory now, so no instance picks a role any more. One that picked a role at creation keeps it until a **conversion** turns it into a **workbench** and a **line**. The web app's sidebar lists no instance with a role: its factory's entry in the **library** does.
 _Avoid_: member, slot
 
 ### Vanilla instance
@@ -816,7 +816,7 @@ A **routine**'s own deterministic code, a **tool** never offered to the model, t
 
 ### Coding client
 
-A command-line agent that implements or reviews repository changes under a separate model subscription: the **engine** of an **agent step**, or, in a **factory** written the older way, a step run inside a coding **instance**.
+A command-line agent that implements or reviews repository changes under a separate model subscription: the **engine** of an **agent step**.
 _Avoid_: model, subagent
 
 ### Coding run
@@ -829,7 +829,7 @@ The issue-to-PR process that assigns implementation and review to **coding clien
 
 ### Factory
 
-A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, deciding what happens when a step fails. It declares what a **workbench** must provide for its steps: an image recipe, secrets, named values, the names of lists of **repository commands**, **subscription logins** and a browser. Its **tools** live in its folder, and it declares its **intake**: what fires it, a schedule, **deliveries** or both, and the tool that finds **work items**. A factory written the older way declares **instances** instead: its steps run in ordinary instances that picked one of its **factory roles**, and a **routine** in one of them hands it new work. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
+A declared sequence of **steps** the **hub** runs to carry a **work item** from start to finish, deciding what happens when a step fails. It declares what a **workbench** must provide for its steps: an image recipe, secrets, named values, the names of lists of **repository commands**, **subscription logins** and a browser. Its **tools** live in its folder, and it declares its **intake**: what fires it, a schedule, **deliveries** or both, and the tool that finds **work items**. It holds behavior only: nothing in it names one repository's commands or conventions, or a picked **skill**.
 _Avoid_: workflow, package, pipeline (for the concept)
 
 ### Workbench
@@ -859,7 +859,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. In a factory written the older way it is also a task done by an **instance**'s turn or a **coding client** run inside an instance, and each step runs in an instance. A wait or an approval parks the run, which holds no instance or workbench until the signal, a deadline or the user moves it on. So does an **approval** or a **takeover** a kinby **agent step**'s turn requests, until the user answers it or finishes the takeover. A wait on the user's approval tells the user by itself, with a summary that can name the run's values. The user approves the run, or sends it back to an earlier step, with notes or none. It ends with a **step result**.
+One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no workbench until the signal, a deadline or the user moves it on. So does an **approval** or a **takeover** a kinby **agent step**'s turn requests, until the user answers it or finishes the takeover. A wait on the user's approval tells the user by itself, with a summary that can name the run's values. The user approves the run, or sends it back to an earlier step, with notes or none. It ends with a **step result**.
 
 ### Work item
 
@@ -867,7 +867,7 @@ The unit of work a **factory** carries, such as one issue.
 
 ### Factory run
 
-One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run of a factory written the older way belongs to the **instance** that handed the work item in. A work item that matches an unfinished run of the same line, or of the same instance, returns that run, so two lines can each carry a work item with the same values. A line's run counts as unfinished until the **factory**'s ended call for it went through, since its **run folder** goes only then. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run made before lines belongs to the **instance** that handed its work item in, and still reads through the **hub**, though its steps never run again. A work item that matches an unfinished run of the same line returns that run, so two lines can each carry a work item with the same values. A line's run counts as unfinished until the **factory**'s ended call for it went through, since its **run folder** goes only then. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
 
 ### Run folder
 
@@ -875,7 +875,7 @@ The folder one **factory run** works in on its **workbench**: a **run worktree**
 
 ### Run worktree
 
-The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on the branch the **factory** names with the base it is cut from, as the **software factory** names an **agent PR**'s branch and stacks it on its blockers' work, or else on a branch kinby names for the factory, the **work item** and the run. In an instance its run's first step cuts it from the base. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
+The checkout of the **workspace** that one **factory run** works in, on that run's branch. On a **workbench** it is the run's **run folder**, on the branch the **factory** names with the base it is cut from, as the **software factory** names an **agent PR**'s branch and stacks it on its blockers' work, or else on a branch kinby names for the factory, the **work item** and the run. It lives until the run ends done or cancelled: a **stop** for a human, a retry and a park leave it as it is, and sending the run back to that first step cuts it again. No other run's steps touch it.
 _Avoid_: workspace (the shared clone run worktrees are cut from), worktree (git's mechanism, not the concept)
 
 ### Run usage
@@ -884,25 +884,25 @@ The derived record of one **factory run**'s cost: its tokens and price across it
 
 ### Step result
 
-What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **hook** or **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and as `notes` what the user wrote when they last sent the run back, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
+What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and as `notes` what the user wrote when they last sent the run back, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
 
 ### Step attempt
 
-One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply, such as **repository commands** its instance does not hold. A call the instance provably did not take, because the hub could not send it or the instance was draining, is no attempt: the hub offers the step again until the instance takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the instance, not the connection, says how it ended, and a call the instance does not hold is offered again. One the instance's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. One whose kinby turn requested an **approval** or a **takeover** ends asked: the run parks until the user answers or finishes the takeover, which resumes the turn as the next attempt, without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
+One try at a **step** of a **factory run**: when it started and ended, how it ended, and its **step result**. It ends clean, failed, timed out, or needing a human when the step lacks what only the user can supply. A call the **workbench** provably did not take, because the hub could not send it or the workbench was draining, is no attempt: the hub offers the step again until the workbench takes it. Neither is one the **hub** stopped during, or whose answer a lost connection kept from the hub: the workbench, not the connection, says how it ended, and a call the workbench does not hold is offered again. One the workbench's own restart cut short ends failed. An attempt the subscription's limit stopped ends limited: the run parks until the **plan window** resets, then tries the step again without spending a retry. One whose kinby turn requested an **approval** or a **takeover** ends asked: the run parks until the user answers or finishes the takeover, which resumes the turn as the next attempt, without spending a retry. A failed attempt is tried again under the step's retry; a timed-out one, or one needing a human, never is and is never sent back. A step that declares what its failures do sends a failed attempt back to an earlier step instead, or tries the step again as many times as it declares, and either way the next attempt reads what failed. After that the run is **needs human**.
 
 ### Hook
 
-Deterministic code, never offered to the model, that kinby runs when a **step** ends, however it ended, to record the **step result** from the world: the repository, an outside system, files the step wrote. kinby ships default hooks, and an **instance** can hold its own. A **factory** that runs on a **workbench** holds its own as its **checks**.
+Deterministic code, never offered to the model, that kinby runs when a **step** ends, however it ended, to record the **step result** from the world: the repository, an outside system, files the step wrote. A **factory** holds its own as its **checks**.
 _Avoid_: callback, evidence check
 
 ### Check
 
-A **hook** of a **factory**'s own folder that one of its **steps** names, run on the **workbench** in the **run folder** however the step ended. It records the step's values and names its outcome, or fails the step by raising. A step that names no check runs none, and none of kinby's default hooks is a check.
+A **hook** of a **factory**'s own folder that one of its **steps** names, run on the **workbench** in the **run folder** however the step ended. It records the step's values and names its outcome, or fails the step by raising. A step that names no check runs none.
 _Avoid_: factory check (validates the whole factory), repository check (a command the software factory runs)
 
 ### Intake
 
-The **routine** that starts **factory runs**: it finds new **work items** and hands each to its **factory**. A **line**'s intake is a routine of its owner, which setting the line up creates from the factory's declaration and removing the line deletes. It fires on the factory's schedule and on its **deliveries**, which reach it at its own address on the **hub**, one per line, whichever instance owns the line. Changing the line's owner moves the routine as it stands to the new owner. Its **code step** has the **hub** run the factory's tool on the line's **workbench**, where the secrets that tool needs are, and the hub hands the line each work item the tool returns. The hub checks each delivery against the secret the line's **workbench** holds, so each line keeps its own and one owner can take two lines whose senders sign apart. The owner takes a checked delivery on its control token and never holds the workbench's secrets. In a factory written the older way, the intake is a routine of one of its instances that hands each work item over itself.
+The **routine** that starts **factory runs**: it finds new **work items** and hands each to its **factory**. A **line**'s intake is a routine of its owner, which setting the line up creates from the factory's declaration and removing the line deletes. It fires on the factory's schedule and on its **deliveries**, which reach it at its own address on the **hub**, one per line, whichever instance owns the line. Changing the line's owner moves the routine as it stands to the new owner. Its **code step** has the **hub** run the factory's tool on the line's **workbench**, where the secrets that tool needs are, and the hub hands the line each work item the tool returns. The hub checks each delivery against the secret the line's **workbench** holds, so each line keeps its own and one owner can take two lines whose senders sign apart. The owner takes a checked delivery on its control token and never holds the workbench's secrets.
 
 ### Needs human
 
@@ -911,11 +911,11 @@ _Avoid_: stopped run (a **stop** also ends a run as done or cancelled), restart
 
 ### Run stop
 
-A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the **instance** that handed the run in, or the owner of its **line**, about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again. Once a run ends done or cancelled, the **factory** can act on it once, as the **software factory** says on the issue why a run made no change.
+A **factory run** moving to done, cancelled or **needs human**. The **hub** tells the owner of its **line** about each stop once, with the **step attempts** since the run's previous stop. A run that is retried or sent back after needing a human can stop again. Once a run ends done or cancelled, the **factory** can act on it once, as the **software factory** says on the issue why a run made no change.
 
 ### Factory check
 
-kinby's validation of a **factory** as a whole before anything changes: its file, what it requires of a **workbench**, its **instance templates**, and the **tools** and **hooks** its steps name, from its templates or its own folder. A broken factory keeps its last good version.
+kinby's validation of a **factory** as a whole before anything changes: its file, what it requires of a **workbench**, and the **tools** and **checks** its steps name, from its own folder. It refuses a file written the older way and names what replaced each older key: `requires` for `instances`, the **run folder** on the **line**'s workbench for a step's `in` and `branch`, `check` for `hook`, and an **agent step** with an **engine** for a `client` step. A broken factory keeps its last good version.
 
 ### Software factory
 
@@ -940,7 +940,7 @@ _Avoid_: fix round (that answers review threads)
 
 ### Repository commands
 
-The commands an **instance** or a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. The instance records them through the **instance tool**, and a workbench's record holds them, each list replaced whole through the **hub** by the user, or by the owner of one of its **lines** in a write the **gate** holds. They belong to the instance or the workbench, never to the **factory** or the repository, so two instances of one **factory role**, or two workbenches, each hold their own.
+The commands a **workbench** runs for the repository it works in, held as named lists, such as the setup commands that prepare a checkout and the check commands that judge a change. A **factory**'s steps name the lists they run, and an empty list is a valid one. A workbench's record holds them, each list replaced whole through the **hub** by the user, or by the owner of one of its **lines** in a write the **gate** holds. An **instance** can record lists of its own through the **instance tool**, which a **conversion** carries to its workbench. They belong to the workbench, never to the **factory** or the repository, so two workbenches each hold their own.
 _Avoid_: onboarding, environment, the repository's gate
 
 ### Repository survey

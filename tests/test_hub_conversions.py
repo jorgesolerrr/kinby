@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import shutil
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
@@ -27,9 +28,10 @@ from kinby.contracts import (
     WORKBENCH_LIST,
     WORKBENCH_PICKS_GET,
     WORKBENCH_START,
+    DeclaredSetup,
     ErrorCode,
     ErrorEnvelope,
-    FactoryRole,
+    FactoryRun,
     FactoryRunCancelCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
@@ -61,10 +63,10 @@ from kinby.contracts import (
 )
 from kinby.core.threads import ThreadStore
 from kinby.instance import Serve
-from kinby.instance.layout import STATE_DIR
+from kinby.instance.layout import MANIFEST_NAME, STATE_DIR
 from kinby.memory import Episode, Fact, GraphStore, NodeId, RecappedTurn
 from kinby.workbench import WorkbenchServer, WorkbenchSteps
-from tests.test_factory_runs import handed_in, intake_client
+from tests.test_factory_runs import detail, intake_client
 from tests.test_hub import finished_operation, instance_environment
 from tests.test_hub_factories import write_factory
 from tests.test_hub_line_intake import LANDING, SECRET, TICKETS, Owned, owned
@@ -72,39 +74,20 @@ from tests.test_hub_routing import control_token
 from tests.test_hub_workbenches import created
 from tests.test_scheduler import call
 
-#: The tickets factory as it was, with a coder role whose steps run in its instance.
-OLD = {
-    "factory.yaml": """\
-name: tickets
-instances:
-  coder:
-    image: coder
-    setup_fields:
-      - { name: GITHUB_TOKEN, label: GitHub token, description: Opens pull requests., kind: secret,
-          type: text, required: true }
-      - { name: WEBHOOK_SECRET, label: Webhook secret, description: Signs the deliveries.,
-          kind: secret, type: text, required: false }
-intake: { instance: coder, routine: scan }
-work_item: { issue: int }
-steps:
-  - { id: review, kind: approve, summary: Review the issue. }
-""",
-    "instances/coder/SYSTEM.md": "You implement issues.\n",
-    "instances/coder/kinby.toml": """\
-[workspace]
-source = "https://github.com/owner/cec-backend.git"
-
-[workspace.commands]
-checks = ["uv run pytest"]
-""",
-    "instances/coder/routines/scan/ROUTINE.md": "---\ndescription: Scan\n---\nScan.\n",
-}
 #: The tickets factory rewritten to run on a workbench.
 NEW = TICKETS | {
     "factory.yaml": TICKETS["factory.yaml"]
     .replace("name: GH_TOKEN", "name: GITHUB_TOKEN")
     .replace("intake:", "  commands: [checks]\nintake:")
 }
+#: What the coder template of the tickets factory as it was wrote into the instance's manifest.
+WORKSPACE = """
+[workspace]
+source = "https://github.com/owner/cec-backend.git"
+
+[workspace.commands]
+checks = ["uv run pytest"]
+"""
 
 
 def _factory(owned: Owned, files: dict[str, str]) -> None:
@@ -114,23 +97,18 @@ def _factory(owned: Owned, files: dict[str, str]) -> None:
 
 
 async def _coder(owned: Owned, *, signed: bool = True) -> UUID:
-    """An instance that picked the coder role of the tickets factory as it was, and the tdd skill,
-    once the factory is rewritten to run on a workbench."""
-    coder = await _old_coder(owned, signed=signed)
+    """An instance that picked the coder role of the tickets factory and the tdd skill, holding
+    the webhook's secret when its deliveries are *signed*.
+
+    No factory declares a role any more, so the instance is created vanilla with what the role's
+    template wrote, and its record is given the role.
+    """
     _factory(owned, NEW)
-    return coder
-
-
-async def _old_coder(owned: Owned, *, signed: bool = True) -> UUID:
-    """The instance, while the factory still runs its steps in it, holding the webhook's secret
-    when its deliveries are *signed*."""
-    _factory(owned, OLD)
     webhook = {"WEBHOOK_SECRET": SECRET.decode()} if signed else {}
     accepted = await owned.client.call(
         INSTANCE_CREATE,
         InstanceCreateCommand(
             manifest_id="cec-backend",
-            factory_role=FactoryRole(factory="tickets", name="coder"),
             model="openai:gpt-5",
             secrets={"api_key": "sk-test", "GITHUB_TOKEN": "ghp-test", **webhook},
             picks=["tdd"],
@@ -138,7 +116,23 @@ async def _old_coder(owned: Owned, *, signed: bool = True) -> UUID:
     )
     assert isinstance(accepted, LifecycleOperationResult), accepted
     assert (await finished_operation(owned.client, accepted)).state is OperationState.SUCCEEDED
-    return accepted.instance_id
+    coder = accepted.instance_id
+    manifest = owned.hub.instances_directory / str(coder) / MANIFEST_NAME
+    manifest.write_text(manifest.read_text(encoding="utf-8") + WORKSPACE, encoding="utf-8")
+    with sqlite3.connect(owned.hub.directory / "registry.sqlite") as connection:
+        connection.execute(
+            "INSERT INTO factory_members (instance_id, factory, name, recipe, setup) "
+            "VALUES (?, 'tickets', 'coder', 'coder', ?)",
+            (str(coder), DeclaredSetup(setup_fields=[]).model_dump_json()),
+        )
+    return coder
+
+
+def _handed_in(owned: Owned, coder: UUID, issue: int) -> FactoryRun:
+    """A run of the tickets factory the instance handed in before lines, on no line, parked at
+    its review."""
+    run, _ = owned.hub.registry.open_run(coder, "tickets", {"issue": issue}, "review")
+    return owned.hub.registry.move_run(run.run_id, FactoryRunStatus.PARKED, "review")
 
 
 async def _converted(owned: Owned, instance_id: UUID) -> Line | ErrorEnvelope:
@@ -330,12 +324,11 @@ def test_its_facts_and_episodes_move_to_home_marked_with_the_workbench(tmp_path,
 def test_its_threads_and_its_past_runs_still_read_through_the_hub(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
-            coder = await _old_coder(hub)
+            coder = await _coder(hub)
             state = hub.hub.instances_directory / str(coder) / STATE_DIR
             thread = ThreadStore(state).create("Implement issue 12").id
-            run = await handed_in(hub.hub, coder, 12)
+            run = _handed_in(hub, coder, 12)
             await hub.client.call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id))
-            _factory(hub, NEW)
 
             await _converted(hub, coder)
             async with _workbench_served(hub, coder) as address:
@@ -345,14 +338,17 @@ def test_its_threads_and_its_past_runs_still_read_through_the_hub(tmp_path, monk
                     InstanceRelayReadCommand(instance_id=coder, method="thread.list", params={}),
                 )
             runs = await hub.client.call(FACTORY_RUN_LIST, FactoryRunListCommand(instance_id=coder))
+            past = await detail(hub.hub, run.run_id)
 
             assert isinstance(threads, InstanceRelayReadResult), threads
             [listed] = ThreadListResult.model_validate(threads.result).threads
             assert (listed.id, listed.title) == (thread, "Implement issue 12")
             assert isinstance(runs, FactoryRunListResult), runs
-            assert [(past.run_id, past.status) for past in runs.runs] == [
+            assert [(listed.run_id, listed.status) for listed in runs.runs] == [
                 (run.run_id, FactoryRunStatus.CANCELLED)
             ]
+            assert (past.run.instance_id, past.run.line_id) == (coder, None)
+            assert past.run.status is FactoryRunStatus.CANCELLED
 
     asyncio.run(scenario())
 
@@ -362,10 +358,9 @@ def test_the_stop_of_a_run_the_instance_never_heard_reaches_no_workbench(tmp_pat
 
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
-            coder = await _old_coder(hub)
-            run = await handed_in(hub.hub, coder, 12)
+            coder = await _coder(hub)
+            run = _handed_in(hub, coder, 12)
             await hub.client.call(FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id))
-            _factory(hub, NEW)
 
             await _converted(hub, coder)
             await _started(hub, coder)
@@ -429,9 +424,8 @@ def test_converting_an_instance_without_the_delivery_secret_refuses_and_names_it
 def test_converting_an_instance_with_unfinished_runs_refuses_and_names_them(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
-            coder = await _old_coder(hub)
-            run = await handed_in(hub.hub, coder, 12)
-            _factory(hub, NEW)
+            coder = await _coder(hub)
+            run = _handed_in(hub, coder, 12)
 
             refused = await _converted(hub, coder)
 

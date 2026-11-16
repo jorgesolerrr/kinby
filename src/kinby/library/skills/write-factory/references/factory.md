@@ -153,14 +153,13 @@ A filter reads as a `wait`'s does.
 
 ## Checks
 
-A check is a function in the factory's folder's `hooks/`, decorated with `hook`. Its name is the function's, and a step names it as its `check`. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`. kinby's default hooks are no check. The worked example has two.
+A check is a function in the factory's folder's `hooks/`, decorated with `hook`. Its name is the function's, and a step names it as its `check`. `hook`, `StepEnd` and `HookResult` come from `kinby.plugins.hooks`. The worked example has two.
 
 - It takes a `StepEnd`, with these fields:
   - `workspace`: the `Path` of the run folder.
   - `ending`: how the step ended, a `StepEnding` from `kinby.contracts`. See Step endings.
   - `work_item`: the work item's values, by name.
   - `results`: every value the run's earlier steps recorded, by name.
-  - `instance`: None on a workbench.
 - It returns a `HookResult`, or None to record nothing. Its fields, each with a default:
   - `values`: the values the step records, by name, as its `results` declare them. Each is a `str`, `int` or `bool`.
   - `outcome`: the outcome it names, one of the step's `outcomes`. None takes the next step.

@@ -620,15 +620,15 @@ describe("the sidebar", () => {
     )
   })
 
-  it("shows the dot while threads or factory runs need you, unfolding the group", async () => {
+  it("shows the dot while threads need you, unfolding the group", async () => {
     openApp({
       signedIn: true,
-      instances: [{ ...ada, needs_human: 1 }, unnamed],
+      instances: [ada, unnamed],
       threads: { "hub-ada": [thread({ id: "t1", title: "Deploy notes", status: "failed" })] },
     })
 
     const group = await instanceGroup("Ada")
-    expect(await group.findByText("2 waiting for you")).toBeDefined()
+    expect(await group.findByText("1 waiting for you")).toBeDefined()
     expect(group.getByRole("link", { name: "Deploy notes" })).toBeDefined()
     expect((await instanceRow("Ada")).getAttribute("aria-expanded")).toBe("true")
     expect((await instanceGroup("research")).queryByText(/waiting for you/)).toBeNull()
@@ -2017,7 +2017,6 @@ describe("the home screen", () => {
         setups: {
           "hub-ada": {
             logins: [],
-            missing_commands: [],
             secrets: [
               { name: "api_key", label: "API key", variable: "K", required: true, is_set: false },
             ],
@@ -2048,7 +2047,6 @@ describe("the home screen", () => {
     }
     const missing = (setup: Partial<InstanceSetup> = {}): InstanceSetup => ({
       logins: [],
-      missing_commands: [],
       secrets: [
         apiKey,
         {
@@ -2168,15 +2166,10 @@ describe("the home screen", () => {
       expect((await message()).hasAttribute("disabled")).toBe(true)
     })
 
-    it.each([
-      [
-        "a login",
-        {
-          logins: [{ id: "claude", label: "Claude", description: "", state: "pending" as const }],
-        },
-      ],
-      ["a list of repository commands", { missing_commands: ["checks"] }],
-    ])("links to the instance's page when %s is pending", async (_, pending) => {
+    it("links to the instance's page when a login is pending", async () => {
+      const pending = {
+        logins: [{ id: "claude", label: "Claude", description: "", state: "pending" as const }],
+      }
       window.history.replaceState(null, "", "/?to=hub-ada")
       openApp({ signedIn: true, instances: [kinby, ada], setups: { "hub-ada": missing(pending) } })
       const user = userEvent.setup()

@@ -1,8 +1,7 @@
-"""The recalls of a factory run's coding session, kept until its client step records them.
+"""The recalls of a factory run's coding session.
 
 Only the runtime appends to the event log, so ``kinby memory search`` in the session keeps its
-recall in the instance database apart from the events, and the step moves it onto the run's thread
-once the session ends.
+recall in the database apart from the events.
 """
 
 from __future__ import annotations
@@ -40,14 +39,3 @@ def keep_recall(state_dir: Path, nodes: tuple[NodeId, ...]) -> None:
     )
     with closing(open_database(state_dir)) as db:
         db.execute("INSERT INTO recalls VALUES (?, ?)", (str(UUID(run)), recall.model_dump_json()))
-
-
-def take_recalls(state_dir: Path, run_id: UUID) -> list[MemoryRecalled]:
-    """The recalls kept for *run_id*, in the order kept. None are kept after."""
-    with closing(open_database(state_dir)) as db, db:
-        db.execute("BEGIN IMMEDIATE")
-        kept = db.execute(
-            "SELECT recall FROM recalls WHERE run_id = ? ORDER BY rowid", (str(run_id),)
-        ).fetchall()
-        db.execute("DELETE FROM recalls WHERE run_id = ?", (str(run_id),))
-    return [MemoryRecalled.model_validate_json(recall) for (recall,) in kept]

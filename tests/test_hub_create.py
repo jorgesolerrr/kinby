@@ -1,9 +1,12 @@
-"""Creating an instance from a prepared image, with its setup values and its avatar."""
+"""Creating an instance from a prepared image, with its name, its setup values, its picks and
+its avatar."""
 
 import asyncio
+import json
 import sqlite3
 import tomllib
 from dataclasses import replace
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -14,6 +17,8 @@ from kinby.contracts import (
     IMAGE_DESCRIBE,
     INSTANCE_CREATE,
     INSTANCE_LIST,
+    INSTANCE_REMOVE,
+    INSTANCE_RESTORE,
     INSTANCE_STATUS,
     Avatar,
     AvatarColor,
@@ -21,9 +26,12 @@ from kinby.contracts import (
     DeclaredSetup,
     ErrorCode,
     ErrorEnvelope,
+    FactoryRole,
     ImageDescribeCommand,
     InstanceCreateCommand,
     InstanceListCommand,
+    InstanceRemoveCommand,
+    InstanceRestoreCommand,
     InstanceStatusCommand,
     InstanceStatusResult,
     LifecycleOperationResult,
@@ -35,8 +43,8 @@ from kinby.contracts import (
 )
 from kinby.hub import BuiltImage, ImageArtifact, ImageSelection
 from kinby.instance import init_instance, inspect_instance
+from kinby.instance.skills_lock import skill_hash
 from kinby.setup import vanilla_description, with_built_in_fields, with_search_key
-from tests.test_factory_templates import FILES, created_roles, factory_hub
 from tests.test_hub import (
     FakeImages,
     FakeRuntime,
@@ -46,6 +54,7 @@ from tests.test_hub import (
     instance_environment,
     prepared,
 )
+from tests.test_hub_factories import write_factory
 
 
 def test_creating_before_the_image_is_prepared_is_refused_and_records_nothing(tmp_path):
@@ -193,6 +202,74 @@ def test_a_vanilla_creation_without_a_behavior_prompt_keeps_the_default_one(tmp_
         init_instance(default, model="openai:gpt-5")
         system = (hub.instances_directory / str(accepted.instance_id) / "SYSTEM.md").read_text()
         assert system == (default / "SYSTEM.md").read_text()
+
+    asyncio.run(scenario())
+
+
+def test_a_created_instance_gets_the_hub_listen_address_in_one_serve_table(tmp_path):
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        client = hub_client(hub)
+        await prepared(client)
+
+        instance_id = await created(client)
+
+        written = (hub.instances_directory / str(instance_id) / "kinby.toml").read_text(
+            encoding="utf-8"
+        )
+        assert tomllib.loads(written)["serve"] == {"listen": "0.0.0.0:8787"}
+        assert written.splitlines().count("[serve]") == 1
+
+    asyncio.run(scenario())
+
+
+def _alice(picks: list[str]) -> InstanceCreateCommand:
+    return InstanceCreateCommand(
+        manifest_id="alice", model="openai:gpt-5", secrets={"api_key": "sk-test"}, picks=picks
+    )
+
+
+def _skills(directory: Path) -> set[str]:
+    return {folder.name for folder in (directory / "skills").iterdir() if folder.is_dir()}
+
+
+def _lock(directory: Path) -> dict[str, dict[str, str]]:
+    return json.loads((directory / "skills-lock.json").read_text(encoding="utf-8"))["skills"]
+
+
+def test_an_instance_is_created_with_picks(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    client = hub_client(hub)
+
+    async def scenario() -> UUID:
+        await prepared(client)
+        accepted = await client.call(INSTANCE_CREATE, _alice(["unslop"]))
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        finished = await finished_operation(client, accepted)
+        assert finished.state is OperationState.SUCCEEDED, finished.detail
+        return accepted.instance_id
+
+    directory = hub.instances_directory / str(asyncio.run(scenario()))
+
+    assert _skills(directory) == {"unslop"}
+    assert _lock(directory)["unslop"]["computedHash"] == skill_hash(directory / "skills" / "unslop")
+
+
+def test_a_create_whose_picks_the_library_refuses_creates_nothing(tmp_path):
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", runtime=runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await prepared(client)
+
+        refused = await client.call(INSTANCE_CREATE, _alice(["tdd", "absent", "unslop"]))
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_SETUP
+        assert 'The library has no skill "absent".' in refused.fields["picks"]
+        assert hub.registry.managed_instances() == []
+        assert runtime.created == []
 
     asyncio.run(scenario())
 
@@ -373,6 +450,132 @@ def test_an_instance_created_before_avatars_lists_the_default_one(tmp_path):
     asyncio.run(scenario())
 
 
+def test_an_instance_needs_a_name(tmp_path):
+    client = hub_client(hub_at(tmp_path / "hub"))
+
+    async def scenario() -> None:
+        await prepared(client)
+
+        refused = await client.call(
+            INSTANCE_CREATE, InstanceCreateCommand(model="openai:gpt-5", secrets={"api_key": "sk"})
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.fields == {"manifest_id": "Name the instance, or pick a factory role."}
+
+    asyncio.run(scenario())
+
+
+def test_a_create_whose_name_is_taken_fails_and_says_so(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await prepared(client)
+        first = await created(client)
+
+        refused = await client.call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                manifest_id="ada", model="openai:gpt-5", secrets={"api_key": "sk-private"}
+            ),
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_SETUP
+        assert refused.fields == {"manifest_id": 'An instance named "ada" exists already.'}
+        assert [record.instance_id for record in hub.registry.managed_instances()] == [first]
+
+    asyncio.run(scenario())
+
+
+def test_a_removed_instance_is_not_restored_beside_one_of_the_same_name(tmp_path):
+    client = hub_client(hub_at(tmp_path / "hub"))
+
+    async def scenario() -> None:
+        await prepared(client)
+        first = await created(client)
+        removal = await client.call(INSTANCE_REMOVE, InstanceRemoveCommand(instance_id=first))
+        assert isinstance(removal, LifecycleOperationResult)
+        assert (await finished_operation(client, removal)).state is OperationState.SUCCEEDED
+        second = await created(client)
+
+        refused = await client.call(INSTANCE_RESTORE, InstanceRestoreCommand(instance_id=first))
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.message == (
+            'An instance named "ada" exists already. Remove it before restoring this one.'
+        )
+        listed = await client.call(INSTANCE_LIST, InstanceListCommand())
+        assert not isinstance(listed, ErrorEnvelope)
+        assert [summary.instance_id for summary in listed.instances] == [second]
+
+    asyncio.run(scenario())
+
+
+FACTORY = """\
+name: checks
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - { id: test, kind: command, run: ["uv run pytest"] }
+"""
+#: The same factory written the older way, whose steps ran in the instances it declared.
+OLDER_FACTORY = """\
+name: checks
+instances:
+  coder: {}
+work_item: { issue: int }
+steps:
+  - { id: test, kind: command, in: coder, run: ["uv run pytest"] }
+"""
+
+
+def _role_refused(tmp_path: Path, factory: str) -> ErrorEnvelope:
+    """Write *factory* to the hub, ask it for an instance that picks a role of it, and check the
+    refusal created nothing."""
+    runtime = FakeRuntime()
+    images = FakeImages()
+    write_factory(tmp_path / "hub" / "factories" / "checks", {"factory.yaml": factory})
+    hub = hub_at(
+        tmp_path / "hub", runtime=runtime, images=images, shipped_factories=tmp_path / "shipped"
+    )
+
+    refused = asyncio.run(
+        hub_client(hub).call(
+            INSTANCE_CREATE,
+            InstanceCreateCommand(
+                factory_role=FactoryRole(factory="checks", name="coder"),
+                model="openai:gpt-5",
+                secrets={"api_key": "sk-private"},
+            ),
+        )
+    )
+
+    assert isinstance(refused, ErrorEnvelope)
+    assert hub.registry.managed_instances() == []
+    assert images.selections == []
+    assert runtime.created == []
+    return refused
+
+
+def test_a_create_that_picks_a_role_the_factory_does_not_have_creates_nothing(tmp_path):
+    refused = _role_refused(tmp_path, FACTORY)
+
+    assert refused.code is ErrorCode.INVALID_SETUP
+    assert refused.fields == {"factory_role": 'Factory "checks" has no role "coder".'}
+
+
+def test_a_create_that_picks_a_role_of_a_factory_the_check_refuses_creates_nothing(tmp_path):
+    refused = _role_refused(tmp_path, OLDER_FACTORY)
+
+    assert refused.code is ErrorCode.INVALID_ARGUMENT
+    assert "factory.yaml declares instances, which no factory runs in any more." in (
+        refused.message
+    )
+
+
 def _config_field(name: str, label: str, type: SetupFieldType, **declared) -> SetupField:
     return SetupField(
         name=name,
@@ -518,24 +721,6 @@ def test_a_present_secret_of_the_wrong_type_is_refused_on_its_field(
         assert value not in refused.model_dump_json()
         assert runtime.created == []
         assert list(hub.instances_directory.iterdir()) == []
-
-    asyncio.run(scenario())
-
-
-def test_a_template_that_declares_serve_gets_the_hub_listen_address_in_that_one_table(tmp_path):
-    async def scenario() -> None:
-        served = '[serve]\nlisten = "127.0.0.1:9000"\n\n[budgets]\nsteps = 3\n'
-        files = FILES | {"instances/coder/kinby.toml": served}
-        hub = factory_hub(tmp_path, files)
-
-        accepted = await created_roles(hub_client(hub))
-
-        coder = accepted["coder"]
-        written = (hub.instances_directory / str(coder) / "kinby.toml").read_text(encoding="utf-8")
-        manifest = tomllib.loads(written)
-        assert manifest["serve"] == {"listen": "0.0.0.0:8787"}
-        assert manifest["budgets"]["steps"] == 3
-        assert written.count("[serve]") == 1
 
     asyncio.run(scenario())
 

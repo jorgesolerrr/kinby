@@ -18,14 +18,12 @@ from kinby.contracts import (
     LoginSetup,
     LoginState,
     OperationState,
-    RepositoryCommandList,
     SecretSetup,
     SetupField,
     SetupFieldKind,
     SetupFieldType,
 )
 from kinby.hub import Hub
-from tests.test_factory_runs import FILES, LISTS_FACTORY, factory_hub, started_coder
 from tests.test_hub import (
     FakeControl,
     FakeImages,
@@ -44,7 +42,6 @@ from tests.test_hub_logins import (
     prompted,
     writer,
 )
-from tests.test_steps import hold_commands
 
 TOKEN = SetupField(
     name="WRITER_TOKEN",
@@ -143,7 +140,6 @@ def test_a_created_instance_reads_its_logins_pending_and_which_secrets_are_set(t
                     is_set=False,
                 ),
             ],
-            missing_commands=[],
         )
 
     asyncio.run(scenario())
@@ -500,74 +496,5 @@ def test_the_api_key_names_no_variable_when_the_model_cannot_be_read(tmp_path):
             "WRITER_TOKEN": "WRITER_TOKEN",
             "WRITER_WEBHOOK": "WRITER_WEBHOOK",
         }
-
-    asyncio.run(scenario())
-
-
-def test_setup_names_the_lists_its_factory_role_needs_until_each_is_recorded(tmp_path):
-    async def scenario() -> None:
-        runtime = FakeRuntime()
-        files = FILES | {"factory.yaml": LISTS_FACTORY}
-        hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
-        # Pending setup never blocks the start, so the coder can run the survey.
-        coder = await started_coder(hub, runtime)
-        hold_search_key(hub, coder)
-        none_held = await setup_of(hub, coder)
-        none_pending = await pending_by_instance(hub)
-        hold_commands(hub.instances_directory / str(coder), "checks = []\n")
-        one_held = await setup_of(hub, coder)
-        hold_commands(hub.instances_directory / str(coder), 'checks = []\nsetup = ["uv sync"]\n')
-
-        assert none_held.missing_commands == ["setup", "checks"]
-        assert none_pending == {coder: True}
-        assert one_held.missing_commands == ["setup"]
-        assert (await setup_of(hub, coder)).missing_commands == []
-        assert await pending_by_instance(hub) == {coder: False}
-
-    asyncio.run(scenario())
-
-
-def test_an_instance_whose_factory_names_no_list_has_no_commands_pending(tmp_path):
-    async def scenario() -> None:
-        runtime = FakeRuntime()
-        hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
-        coder = await started_coder(hub, runtime)
-        hold_search_key(hub, coder)
-
-        assert (await setup_of(hub, coder)).missing_commands == []
-        assert await pending_by_instance(hub) == {coder: False}
-
-    asyncio.run(scenario())
-
-
-def test_status_carries_each_list_an_instance_holds_when_its_factory_role_needs_any(tmp_path):
-    async def scenario() -> None:
-        runtime = FakeRuntime()
-        files = FILES | {"factory.yaml": LISTS_FACTORY}
-        hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, files)
-        coder = await started_coder(hub, runtime)
-        none_held = await status_of(hub, coder)
-        hold_commands(
-            hub.instances_directory / str(coder),
-            'checks = ["uv run ruff check .", "uv run pytest"]\nsetup = []\n',
-        )
-
-        assert none_held.repository_commands == []
-        assert (await status_of(hub, coder)).repository_commands == [
-            RepositoryCommandList(name="checks", commands=["uv run ruff check .", "uv run pytest"]),
-            RepositoryCommandList(name="setup", commands=[]),
-        ]
-
-    asyncio.run(scenario())
-
-
-def test_status_carries_no_list_when_the_instances_factory_role_needs_none(tmp_path):
-    async def scenario() -> None:
-        runtime = FakeRuntime()
-        hub = factory_hub(tmp_path / "hub", FakeControl(), runtime)
-        coder = await started_coder(hub, runtime)
-        hold_commands(hub.instances_directory / str(coder), 'setup = ["uv sync"]\n')
-
-        assert (await status_of(hub, coder)).repository_commands == []
 
     asyncio.run(scenario())

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import tomllib
 from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+import tomlkit
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
 from pydantic import JsonValue
@@ -16,17 +18,14 @@ from pydantic import JsonValue
 from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
-    CommandStepRun,
     Event,
     GateDecider,
     GateOutcome,
     Payload,
     PermissionMode,
-    RepositoryCommands,
     RoutineName,
     RoutineOrigin,
     RoutineTrigger,
-    StepEnding,
     SystemPrompt,
     ToolCall,
     ToolGated,
@@ -34,7 +33,6 @@ from kinby.contracts import (
 )
 from kinby.core.errors import RoutineNotFound, RoutinePending
 from kinby.core.scheduler import Delivery
-from kinby.core.steps import run_command_step
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import (
     ApprovalAnswer,
@@ -49,7 +47,15 @@ from kinby.plugins.instance_tools import instance_tools
 from kinby.plugins.skills import load_skills
 from tests.test_routines import instance_at
 from tests.test_scheduler import FakeClock, call, runtime
-from tests.test_steps import hold_commands
+
+
+def hold_commands(instance: Path, lists: str) -> None:
+    """Write *lists*, a TOML table body, as the instance's repository commands, in place of the
+    ones it held."""
+    manifest = instance / "kinby.toml"
+    document = tomlkit.parse(manifest.read_text())
+    document.setdefault("workspace", tomlkit.table())["commands"] = tomllib.loads(lists)
+    manifest.write_text(tomlkit.dumps(document))
 
 
 class ScriptedModel:
@@ -1401,28 +1407,6 @@ def commands_write(instance: Instance) -> Tool:
     return next(
         tool for tool in instance_tools(instance) if tool.name == "repository_commands_write"
     )
-
-
-def test_a_command_step_runs_the_repository_commands_the_tool_records(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        instance = instance_at(tmp_path)
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-
-        result = await commands_write(instance).ainvoke(
-            {"name": "setup", "commands": ["touch installed", "touch built"]},
-            ToolContext(instance=instance, thread_id=uuid4()),
-        )
-        step = await run_command_step(
-            CommandStepRun(run=[RepositoryCommands(commands="setup")]), instance, workspace
-        )
-
-        assert result == 'Recorded the repository commands "setup", 2 commands.'
-        assert step.ending is StepEnding.CLEAN
-        assert (workspace / "installed").is_file()
-        assert (workspace / "built").is_file()
-
-    asyncio.run(scenario())
 
 
 def test_repository_commands_write_replaces_the_whole_list(tmp_path: Path) -> None:

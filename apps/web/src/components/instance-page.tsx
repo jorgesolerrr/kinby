@@ -5,7 +5,6 @@ import type {
   InstanceStatusResult,
   InstanceSummary,
   McpServerFailed,
-  RepositoryCommandList,
 } from "@kinby/contract"
 import {
   type ReactNode,
@@ -23,7 +22,6 @@ import { Secrets } from "@/components/secrets-section"
 import { LoginRow, SubscriptionLogins } from "@/components/subscription-logins"
 import { Toolset } from "@/components/toolset"
 import { Vault } from "@/components/vault"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -50,8 +48,7 @@ import { BotIcon, ChevronRightIcon, CirclePauseIcon, LayoutDashboardIcon } from 
  * says it is stopped. A running one opens on what needs the user: its logins not signed in, each
  * to sign in to, and its MCP servers that failed. Through `client`, its own connection, it lists
  * its views. Running or stopped, it shows its toolset, and one the hub opens browsers for lists its
- * browser profiles and its vault. Outside the setup card, an instance whose factory role needs
- * repository commands shows them. `onChanged` hears a sign-in or a secret end, so the instances
+ * browser profiles and its vault. `onChanged` hears a sign-in or a secret end, so the instances
  * are listed again. While a stop asked from the header drains, `stopping` keeps the running view.
  */
 export function InstancePage({
@@ -101,9 +98,6 @@ export function InstancePage({
         instanceId={instance.instance_id}
         failed={failed.map((notice) => notice.server)}
       />
-      {status !== undefined && hasCommands(status) && (
-        <RepositoryCommands name={name} status={status} />
-      )}
     </>
   )
   if (intended === "stopped") {
@@ -162,10 +156,7 @@ export function InstancePage({
           <Views client={client} clock={clock} instanceId={instance.instance_id} name={name} />
         )}
         {sections}
-        {/* An instance missing a list of repository commands takes no work. */}
-        {!needsYou &&
-          (status?.setup.missing_commands.length ?? 0) === 0 &&
-          observedState(instance) === "running" && <ReadyForWork name={name} />}
+        {!needsYou && observedState(instance) === "running" && <ReadyForWork name={name} />}
       </Sections>
     )
   }
@@ -344,7 +335,7 @@ function SetupCard({
   onChanged: () => void
 }) {
   const titleId = useId()
-  const { logins, secrets, missing_commands: missing } = status.setup
+  const { logins, secrets } = status.setup
   return (
     <section aria-labelledby={titleId} className="py-6">
       <Card>
@@ -381,88 +372,10 @@ function SetupCard({
                 />
               </section>
             )}
-            {missing.length > 0 && (
-              <section className="flex flex-col gap-3">
-                <h3 className="font-medium">Repository commands</h3>
-                <p className="text-sm text-muted-foreground">
-                  {name} takes no work until it holds these lists. Start {name} and ask it in a
-                  thread for a repository survey.
-                </p>
-                <CommandLists held={status.repository_commands} missing={missing} />
-              </section>
-            )}
           </div>
         </CardContent>
       </Card>
     </section>
-  )
-}
-
-function hasCommands(status: InstanceStatusResult): boolean {
-  return status.repository_commands.length > 0 || status.setup.missing_commands.length > 0
-}
-
-/**
- * The repository commands the instance holds and those its factory role needs that it lacks.
- * They are read-only here: the instance records them.
- */
-function RepositoryCommands({ name, status }: { name: string; status: InstanceStatusResult }) {
-  return (
-    <SectionFrame
-      title="Repository commands"
-      lead={`What ${name} runs for the repository it works in. To change them, ask ${name} in a thread.`}
-      variant="page"
-    >
-      <CommandLists held={status.repository_commands} missing={status.setup.missing_commands} />
-    </SectionFrame>
-  )
-}
-
-/** Each list held, by name with its commands in the order they run, then each missing one. */
-function CommandLists({ held, missing }: { held: RepositoryCommandList[]; missing: string[] }) {
-  return (
-    <ItemGroup variant="outline" aria-label="Repository commands">
-      {held.map(({ name, commands }) => (
-        <li key={name} aria-label={name}>
-          <Item size="sm">
-            <ItemContent>
-              <ItemTitle>
-                <code className="font-mono">{name}</code>
-              </ItemTitle>
-              {commands.length > 0 && (
-                <ol className="flex flex-col gap-1 text-muted-foreground">
-                  {commands.map((command, index) => (
-                    // A list may run the same command twice.
-                    <li key={index}>
-                      <code className="font-mono break-all">{command}</code>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </ItemContent>
-            {commands.length === 0 && (
-              <ItemActions>
-                <Badge variant="outline">Empty</Badge>
-              </ItemActions>
-            )}
-          </Item>
-        </li>
-      ))}
-      {missing.map((list) => (
-        <li key={list} aria-label={list}>
-          <Item size="sm">
-            <ItemContent>
-              <ItemTitle>
-                <code className="font-mono">{list}</code>
-              </ItemTitle>
-            </ItemContent>
-            <ItemActions>
-              <Badge variant="outline">Missing</Badge>
-            </ItemActions>
-          </Item>
-        </li>
-      ))}
-    </ItemGroup>
   )
 }
 

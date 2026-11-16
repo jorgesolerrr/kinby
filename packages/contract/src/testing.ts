@@ -184,14 +184,9 @@ export function fakeHub({
               instance_id: "",
               process: "created",
               readiness: "not-running",
-              setup: hub.setups[String(params.instance_id)] ?? {
-                logins: [],
-                secrets: [],
-                missing_commands: [],
-              },
+              setup: hub.setups[String(params.instance_id)] ?? { logins: [], secrets: [] },
               home: false,
               recreate_reasons: [],
-              repository_commands: [],
             }
           }
           if (method === "instance.picks.get" && isRecord(params)) {
@@ -344,7 +339,6 @@ export function instanceSummary(
     image_id: "sha256:image",
     intended_state: "running",
     manifest_id: fields.instance_id,
-    needs_human: 0,
     notices: [],
     persona_name: null,
     process: "running",

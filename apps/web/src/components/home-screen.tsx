@@ -253,7 +253,7 @@ function Ready({
 
 /**
  * Asks for each required secret the instance lacks, as its page's setup card does, and links to
- * its page while a login or a list of repository commands is pending there too.
+ * its page while a login is pending there too.
  */
 function SetupCard({
   caller,
@@ -272,8 +272,7 @@ function SetupCard({
 }) {
   const titleId = useId()
   const name = instanceName(instance)
-  const elsewhere =
-    setup.logins.some((login) => login.state !== "signed_in") || setup.missing_commands.length > 0
+  const elsewhere = setup.logins.some((login) => login.state !== "signed_in")
   return (
     <section aria-labelledby={titleId}>
       <Card size="sm" variant="attention">
@@ -300,9 +299,7 @@ function SetupCard({
         {elsewhere && (
           <CardFooter>
             <div className="flex w-full flex-wrap items-center justify-between gap-2">
-              <p className="text-muted-foreground">
-                Finish its sign-ins and repository commands on its page.
-              </p>
+              <p className="text-muted-foreground">Finish its sign-ins on its page.</p>
               <Button
                 size="sm"
                 variant="outline"

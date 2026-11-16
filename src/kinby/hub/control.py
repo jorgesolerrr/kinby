@@ -147,7 +147,7 @@ class HttpInstanceControl:
         return await _call(endpoint, STATS_GET, command, "the stats call")
 
     async def run_step(self, endpoint: ControlEndpoint, command: StepRunCommand) -> StepResult:
-        """Run one factory step in the instance and wait for its result, however long it takes."""
+        """Run one factory step on the workbench and wait for its result, however long it takes."""
         return await _call(endpoint, STEP_RUN, command, "the step")
 
     async def run_stopped(self, endpoint: ControlEndpoint, stop: RunStop) -> AcceptedResult:

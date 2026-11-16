@@ -12,7 +12,6 @@ from kinby.cli.client import ContractClient
 from kinby.contracts import (
     FACTORY_LIST,
     FACTORY_REMOVE,
-    INSTANCE_CREATE,
     LINE_GET,
     LINE_LIST,
     LINE_REMOVE,
@@ -25,9 +24,6 @@ from kinby.contracts import (
     FactoryListCommand,
     FactoryListResult,
     FactoryRemoveCommand,
-    FactoryRole,
-    InstanceCreateCommand,
-    LifecycleOperationResult,
     Line,
     LineGetCommand,
     LineListCommand,
@@ -48,12 +44,11 @@ from kinby.contracts import (
     WorkbenchOperationResult,
 )
 from kinby.hub import Hub
-from tests.test_factory_templates import FILES as ROLE_FILES
-from tests.test_factory_templates import created_roles, factory_hub
 from tests.test_hub import (
     FakeRuntime,
     created_instance,
     finished_operation,
+    hub_at,
     hub_client,
     instance_environment,
 )
@@ -93,8 +88,16 @@ steps:
 """
 
 
+def _tickets_hub(tmp_path: Path, runtime: FakeRuntime | None = None, **options) -> Hub:
+    """A hub whose factories hold the tickets factory."""
+    write_factory(tmp_path / "hub" / "factories" / "tickets", {"factory.yaml": TICKETS})
+    return hub_at(
+        tmp_path / "hub", runtime=runtime, shipped_factories=tmp_path / "shipped", **options
+    )
+
+
 def _hub(tmp_path: Path, runtime: FakeRuntime | None = None) -> Hub:
-    hub = factory_hub(tmp_path, {"factory.yaml": TICKETS}, runtime=runtime)
+    hub = _tickets_hub(tmp_path, runtime)
     write_factory(tmp_path / "hub" / "factories" / "reviews", {"factory.yaml": REVIEWS})
     return hub
 
@@ -213,7 +216,7 @@ steps:
 
 
 def _signing_hub(tmp_path: Path, runtime: FakeRuntime) -> Hub:
-    hub = factory_hub(tmp_path, runtime=runtime, browser=FakeBrowserRuntime("ws://nowhere"))
+    hub = _tickets_hub(tmp_path, runtime, browser=FakeBrowserRuntime("ws://nowhere"))
     write_factory(tmp_path / "hub" / "factories" / "signing", {"factory.yaml": SIGNING})
     return hub
 
@@ -273,7 +276,7 @@ def test_a_workbench_with_its_login_signed_in_and_a_browser_takes_a_line(tmp_pat
 
 
 def test_a_workbench_has_no_browser_on_a_hub_that_runs_no_browser_service(tmp_path):
-    hub = factory_hub(tmp_path)
+    hub = _tickets_hub(tmp_path)
     browsing = "name: browsing\nrequires: { browser: true }\n" + REVIEWS.split("\n", 2)[2]
     write_factory(tmp_path / "hub" / "factories" / "browsing", {"factory.yaml": browsing})
     client = hub_client(hub)
@@ -396,22 +399,36 @@ def test_setup_refuses_an_owner_that_is_no_instance(tmp_path):
     asyncio.run(scenario())
 
 
-def test_only_a_factory_that_runs_on_a_workbench_is_set_up_on_one(tmp_path):
-    hub = factory_hub(tmp_path, ROLE_FILES)
+#: A factory file written the older way, whose steps ran in the instances it declared.
+OLDER = """\
+name: older
+instances:
+  coder: {}
+work_item: { issue: int }
+steps:
+  - { id: test, kind: command, in: coder, run: ["uv run pytest"] }
+"""
+
+
+def test_a_factory_file_written_the_older_way_is_not_set_up_on_a_workbench(tmp_path):
+    hub = _hub(tmp_path)
+    write_factory(tmp_path / "hub" / "factories" / "older", {"factory.yaml": OLDER})
     client = hub_client(hub)
 
     async def scenario() -> None:
         await _home(hub)
-        workbench_id = (await created(client, CEC_BACKEND)).workbench_id
+        workbench_id = await _cec_backend(client)
 
-        fields = await _refused(
-            client, LineSetupCommand(factory="tickets", workbench_id=workbench_id)
+        refused = await client.call(
+            LINE_SETUP, LineSetupCommand(factory="older", workbench_id=workbench_id)
         )
 
-        assert fields == {
-            "factory": 'Factory "tickets" declares instances, so its steps run in them. '
-            "Only a factory that runs on a workbench is set up on one."
-        }
+        assert isinstance(refused, ErrorEnvelope), refused
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert "factory.yaml declares instances, which no factory runs in any more." in (
+            refused.message
+        )
+        assert await _lines(client) == []
 
     asyncio.run(scenario())
 
@@ -465,27 +482,10 @@ def test_a_factory_with_lines_refuses_removal_and_names_them(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_factory_whose_roles_instances_hold_refuses_removal_and_names_them(tmp_path):
-    client = hub_client(factory_hub(tmp_path, ROLE_FILES))
-
-    async def scenario() -> None:
-        await created_roles(client)
-
-        refused = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
-
-        assert isinstance(refused, ErrorEnvelope)
-        assert refused.message == (
-            'Factory "tickets" has instances tickets-coder, tickets-reviewer. '
-            "Remove them before removing the factory."
-        )
-
-    asyncio.run(scenario())
-
-
 def test_a_factory_kinby_ships_is_never_removed(tmp_path):
     shipped = tmp_path / "shipped" / "reviews"
     write_factory(shipped, {"factory.yaml": REVIEWS})
-    client = hub_client(factory_hub(tmp_path, {"factory.yaml": TICKETS}))
+    client = hub_client(_tickets_hub(tmp_path))
 
     async def scenario() -> None:
         refused = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="reviews"))
@@ -527,31 +527,6 @@ def test_a_removal_racing_a_line_setup_refuses_once_the_line_is_set_up(tmp_path)
         assert isinstance(line, LineSetupResult), line
         assert isinstance(refused, ErrorEnvelope), refused
         assert refused.message.startswith('Factory "tickets" has lines on workbench')
-
-    asyncio.run(scenario())
-
-
-def test_a_removal_racing_a_role_creation_refuses_once_the_instance_is_created(tmp_path):
-    hub = factory_hub(tmp_path, ROLE_FILES)
-    client = hub_client(hub)
-
-    async def scenario() -> None:
-        accepted, refused = await _racing(
-            hub,
-            client.call(
-                INSTANCE_CREATE,
-                InstanceCreateCommand(
-                    factory_role=FactoryRole(factory="tickets", name="coder"),
-                    model="openai:gpt-5",
-                    secrets={"api_key": "sk-test"},
-                ),
-            ),
-        )
-
-        assert isinstance(accepted, LifecycleOperationResult), accepted
-        assert isinstance(refused, ErrorEnvelope), refused
-        assert refused.message.startswith('Factory "tickets" has instances tickets-coder')
-        assert (await finished_operation(client, accepted)).state is OperationState.SUCCEEDED
 
     asyncio.run(scenario())
 

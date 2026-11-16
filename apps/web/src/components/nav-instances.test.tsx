@@ -209,25 +209,6 @@ describe("an instance's dot", () => {
     expect(waiting(group)).toBe("4 waiting for you")
   })
 
-  it("counts its factory runs that need a human with its threads", async () => {
-    const { group } = adaGroup({ process: "running", needs_human: 2 }, [
-      thread({ id: "t1", status: "failed" }),
-    ])
-
-    await group.findByText("3 waiting for you")
-  })
-
-  it("counts its factory runs alone while it is not running", () => {
-    const { group, hub } = adaGroup({
-      intended_state: "stopped",
-      process: "stopped",
-      needs_human: 2,
-    })
-
-    expect(waiting(group)).toBe("2 waiting for you")
-    expect(hub.opened).toEqual([])
-  })
-
   it("is not shown while nothing waits", async () => {
     const { group, clock } = adaGroup({ process: "running" }, [thread({ id: "t1" })])
     await act(() => clock.advance(0))

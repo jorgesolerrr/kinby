@@ -1,10 +1,10 @@
 """Factory runs: carry each work item through its factory's steps.
 
-The hub queues each step for the instance or the line's workbench it runs on. Each takes one step
-at a time, first in, first out, across every factory. A wait or approve step parks its run, which
-holds no instance until a signal, its quiet time, its deadline or the user moves it on. A client
-step the subscription's limit stopped parks its run until the plan window resets. A kinby turn the
-gate asks about parks its run until the user answers, and the answer resumes the turn.
+The hub queues each step for the workbench of the run's line. Each workbench takes one step at a
+time, first in, first out, across every line on it. A wait or approve step parks its run, which
+holds no workbench until a signal, its quiet time, its deadline or the user moves it on. A coding
+client the subscription's limit stopped parks its run until the plan window resets. A kinby turn
+the gate asks about parks its run until the user answers, and the answer resumes the turn.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from collections.abc import (
 )
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -39,7 +38,6 @@ from kinby.contracts import (
     CodeStepRun,
     CodingClient,
     CodingSessionId,
-    CommandListName,
     CommandStepRun,
     FactoryName,
     FactoryRun,
@@ -48,7 +46,6 @@ from kinby.contracts import (
     FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
-    FactoryRunIntakeCommand,
     FactoryRunListCommand,
     FactoryRunListResult,
     FactoryRunOrigin,
@@ -58,7 +55,6 @@ from kinby.contracts import (
     FactoryRunSubscribeCommand,
     FactoryRunTakeoverFinishCommand,
     Line,
-    RepositoryCommandList,
     RunFolder,
     RunFolderRemoveCommand,
     RunStop,
@@ -83,8 +79,6 @@ from kinby.core.errors import (
     FactoryRunNotFound,
     InvalidWorkItem,
     NotAnEarlierStep,
-    NotAnIntake,
-    RepositoryCommandsMissing,
     RunAwaitsNoAnswer,
     RunAwaitsNoApproval,
     RunNeedsNoHuman,
@@ -96,23 +90,14 @@ from kinby.factories.file import (
     FAILURE,
     NOTES,
     QUIET,
-    AgentStep,
     ApproveStep,
-    ClientStep,
-    CodeStep,
-    CommandStep,
     Duration,
-    EndedCall,
     Engine,
-    FactoryFile,
-    InstanceName,
     InvalidFactoryFile,
-    NeedsHumanCall,
     Outcome,
     Retry,
     SendBack,
     SignalFilter,
-    Step,
     ToolCall,
     ValueType,
     WaitStep,
@@ -121,7 +106,6 @@ from kinby.factories.file import (
     WorkbenchCommandStep,
     WorkbenchFactory,
     WorkbenchStep,
-    command_lists,
     duration_seconds,
     run_value_name,
     run_value_names,
@@ -133,13 +117,11 @@ from kinby.hub.models import Signal
 from kinby.hub.registry import (
     STOPS,
     UNFINISHED,
-    FactoryMember,
     HubRegistry,
     ManagedInstance,
     RunAskRef,
     RunStopRef,
 )
-from kinby.instance import ManifestError, repository_commands
 from kinby.plugins.notify import approval_notification, takeover_notification
 
 if TYPE_CHECKING:
@@ -148,20 +130,20 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class UndeliveredCall:
-    """A call the instance provably did not take, so it ran nothing (ADR 0089)."""
+    """A call the workbench provably did not take, so it ran nothing (ADR 0089)."""
 
     reason: str
 
 
 @dataclass(frozen=True)
 class LostAnswer:
-    """A call the instance took, whose answer a lost connection kept from the hub. The instance
+    """A call the workbench took, whose answer a lost connection kept from the hub. The workbench
     holds that answer, so the same call sent again gets it (ADR 0107)."""
 
     reason: str
 
 
-#: Run one step in the instance with this id, and return its result, or why it went undelivered
+#: Run one step on the workbench with this id, and return its result, or why it went undelivered
 #: or its answer was lost.
 type StepCaller = Callable[
     [UUID, StepRunCommand], Awaitable[StepResult | UndeliveredCall | LostAnswer]
@@ -187,7 +169,7 @@ _logger = logging.getLogger(__name__)
 
 BACKOFF_SECONDS = 5.0
 BACKOFF_CAP_SECONDS = 300.0
-#: How long a client step's coding client runs when the step declares no timeout.
+#: How long an agent step's coding client runs when the step declares no timeout.
 _CLIENT_TIMEOUT: Duration = "60m"
 #: The statuses a run ends in, which the factory's ended call follows.
 _ENDS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED)
@@ -211,7 +193,7 @@ class _Refused:
 
 @dataclass(frozen=True)
 class _QueuedStep:
-    """One step waiting for its instance, as the instance will be asked to run it."""
+    """One step waiting for its workbench, as the workbench will be asked to run it."""
 
     run_id: UUID
     step: StepId
@@ -220,17 +202,14 @@ class _QueuedStep:
 
 @dataclass(frozen=True)
 class _QueuedReport:
-    """The factory's call for a run that stopped, waiting for its instance: its needs_human call,
-    or its ended call once the run ends done or cancelled.
+    """The factory's call for a run that stopped, waiting for the workbench of the run's line: its
+    needs_human call, or its ended call once the run ends done or cancelled.
 
     It is no step of the run, so it records no attempt. *status* and *generation* tie it to the
     stop that queued it, so delivering it marks only that stop reported, not a later one.
-    *instance* names the role that makes the call, so a retry finds the instance that holds it by
-    then. None makes it on the workbench of the run's line.
     """
 
     run_id: UUID
-    instance: InstanceName | None
     command: StepRunCommand
     status: FactoryRunStatus
     generation: int
@@ -258,13 +237,10 @@ class _QueuedRemoval:
 
 
 type _Queued = _QueuedStep | _QueuedReport | _QueuedStop | _QueuedRemoval
-#: A factory of either kind: its steps run in instances, or on a line's workbench.
-type _Factory = FactoryFile | WorkbenchFactory
-type _AnyStep = Step | WorkbenchStep
 
 
 class FactoryRuns:
-    """Start runs from intake, queue their steps per instance, and record every attempt."""
+    """Start runs handed to lines, queue their steps per workbench, and record every attempt."""
 
     def __init__(
         self,
@@ -283,8 +259,8 @@ class FactoryRuns:
         self._outbox = outbox
         self._remove_folder = remove_folder
         self._hand_view = hand_view
-        #: The steps, needs_human and ended calls and run stops waiting for each instance, and
-        #: the steps and folder removals waiting for each workbench, by id.
+        #: The steps, needs_human and ended calls and folder removals waiting for each workbench,
+        #: and the run stops waiting for each owner, by id.
         self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         #: The quiet time or deadline of each run parked at a wait that has one, and the reset of
@@ -293,41 +269,6 @@ class FactoryRuns:
         #: The waits a signal matched while the run was still on its way to them, by run id.
         self._woken: dict[UUID, set[StepId]] = {}
         self._subscribers: set[asyncio.Queue[FactoryRun]] = set()
-        registry.attribute_runs(self._intake_instance)
-
-    async def intake(self, instance_id: UUID, command: FactoryRunIntakeCommand) -> FactoryRun:
-        """Start a run of the factory whose intake is this instance and routine.
-
-        A work item that matches an unfinished run this instance handed in returns that run, and
-        retries the step of one that needs a human. An instance lacking a list of repository
-        commands its role's steps name takes no work.
-        """
-        record = self._registry.instance(instance_id)
-        member, factory = self._membership(instance_id) or (None, None)
-        if (
-            record is None
-            or member is None
-            or factory is None
-            or (factory.intake.instance, factory.intake.routine) != (member.name, command.routine)
-        ):
-            raise NotAnIntake(
-                f'Routine "{command.routine}" of this instance is no factory\'s intake.'
-            )
-        errors = _work_item_errors(factory.work_item, command.work_item)
-        if errors:
-            raise InvalidWorkItem(errors)
-        missing = _missing_commands(factory, member.name, record.path)
-        if missing:
-            raise RepositoryCommandsMissing(missing)
-        run, started = self._registry.open_run(
-            instance_id, member.factory, command.work_item, factory.steps[0].id
-        )
-        if started:
-            self._publish(run)
-            self._enqueue(run)
-        elif run.status is FactoryRunStatus.NEEDS_HUMAN:
-            return self._restart(run, run.step)
-        return run
 
     async def hand_in(self, line: Line, work_item: Mapping[ValueName, StepValue]) -> FactoryRun:
         """Start a run of the line's factory on its workbench, which the line's owner holds.
@@ -474,19 +415,12 @@ class FactoryRuns:
         return True
 
     def signal_accepted(self, instance_id: UUID, signal: Signal) -> None:
-        """Move on each run of the instance's factory, or of the lines it owns, whose parked wait
-        the signal matches.
+        """Move on each run of the lines the instance owns whose parked wait the signal matches.
 
         A run still working toward a wait the signal matches moves on from it as soon as it
         parks there, so a signal that lands between two steps is not lost. A run that needs a
         human ends once one of the factory's closing signals says its work finished elsewhere.
-        The instance of the factory's intake moves on only the runs it handed in.
         """
-        membership = self._membership(instance_id)
-        if membership is not None:
-            member, factory = membership
-            owner = instance_id if member.name == factory.intake.instance else None
-            self._signalled(factory, self._registry.runs(member.factory, UNFINISHED, owner), signal)
         for line in self._registry.lines():
             factory = self._file(line.factory)
             if line.owner_id == instance_id and factory is not None:
@@ -494,7 +428,7 @@ class FactoryRuns:
                 self._signalled(factory, runs, signal)
 
     def _signalled(
-        self, factory: _Factory, unfinished: Sequence[FactoryRun], signal: Signal
+        self, factory: WorkbenchFactory, unfinished: Sequence[FactoryRun], signal: Signal
     ) -> None:
         """Move on, or end, each of the factory's *unfinished* runs the signal matches.
 
@@ -610,73 +544,12 @@ class FactoryRuns:
         for stop in untold:
             self._put_stop(_QueuedStop(stop))
 
-    def needing_human(self, record: ManagedInstance, factory: FactoryFile | None) -> int:
-        """How many runs of the instance's factory, whose file is *factory*, need the user at a
-        step in that instance.
-
-        A run needs the user when it stopped for a human or awaits approval. A step that runs in
-        no instance counts toward the instance of the factory's intake. A run counts only toward
-        the instance its step runs in: the intake's instance for the runs it handed in, and the
-        first active instance of any other role.
-        """
-        member = record.factory
-        if member is None or factory is None:
-            return 0
-        if member.name == factory.intake.instance:
-            owner = record.instance_id
-        elif self._first_in(member.factory, member.name) == record.instance_id:
-            owner = None
-        else:
-            return 0
-        return sum(
-            _instance_of(factory, run.step) == member.name
-            for run in self._registry.runs(
-                member.factory, (FactoryRunStatus.NEEDS_HUMAN, FactoryRunStatus.PARKED), owner
-            )
-            if run.status is FactoryRunStatus.NEEDS_HUMAN or _awaits_approval(factory, run)
-        )
-
-    def missing_commands(
-        self, record: ManagedInstance, factory: FactoryFile | None
-    ) -> Sequence[CommandListName]:
-        """The lists of repository commands the instance's role in *factory* needs and it does not
-        hold."""
-        member = record.factory
-        if member is None or factory is None:
-            return []
-        return _missing_commands(factory, member.name, record.path)
-
-    def held_commands(self, record: ManagedInstance) -> Sequence[RepositoryCommandList]:
-        """The lists of repository commands the instance holds now, when its factory role needs
-        any."""
-        member = record.factory
-        factory = self.factory(member.factory) if member is not None else None
-        if member is None or factory is None or not command_lists(factory, member.name):
-            return []
-        return [
-            RepositoryCommandList(name=name, commands=commands)
-            for name, commands in _held_commands(record.path).items()
-        ]
-
-    def _membership(self, instance_id: UUID) -> tuple[FactoryMember, FactoryFile] | None:
-        """The instance's place in its factory, and that factory's file, if it has one."""
-        record = self._registry.instance(instance_id)
-        member = record.factory if record is not None else None
-        factory = self.factory(member.factory) if member is not None else None
-        if member is None or factory is None:
-            return None
-        return member, factory
-
     def _parked_ask(self, run: FactoryRun) -> WaitingApproval | WaitingTakeover | None:
         """The ask the run's kinby turn is parked on, or None when it is parked on none."""
         last = self._registry.attempts(run.run_id)[-1:]
         if run.status is not FactoryRunStatus.PARKED or not last:
             return None
         return last[0].ask if last[0].answer is None else None
-
-    def _intake_instance(self, name: FactoryName) -> InstanceName | None:
-        factory = self.factory(name)
-        return factory.intake.instance if factory is not None else None
 
     def _existing(self, run_id: UUID) -> FactoryRun:
         run = self._registry.run(run_id)
@@ -692,7 +565,7 @@ class FactoryRuns:
         return moved
 
     def _enqueue(self, run: FactoryRun) -> None:
-        """Queue the run's step for its instance.
+        """Queue the run's step for its workbench.
 
         A step that cannot start fails an attempt right away: its own, or that of the step that
         should have produced a value it requires.
@@ -707,11 +580,11 @@ class FactoryRuns:
         if isinstance(placed, WaitStep | ApproveStep):
             self._park(run.run_id, placed)
             return
-        instance_id, queued = placed
-        self._queue(instance_id).put_nowait(queued)
+        workbench_id, queued = placed
+        self._queue(workbench_id).put_nowait(queued)
 
     def _queue(self, instance_id: UUID) -> asyncio.Queue[_Queued]:
-        """The instance's queue, with the worker that empties it."""
+        """The workbench's or the owner's queue, with the worker that empties it."""
         queue = self._queues.get(instance_id)
         if queue is None:
             queue = self._queues[instance_id] = asyncio.Queue()
@@ -726,10 +599,9 @@ class FactoryRuns:
     def _placed(
         self, run: FactoryRun, step_id: StepId
     ) -> tuple[UUID, _QueuedStep] | WaitStep | ApproveStep | _Refused:
-        """The instance or workbench the run's step runs on and what it is asked, or why it cannot
-        run.
+        """The workbench the run's step runs on and what it is asked, or why it cannot run.
 
-        A wait or approve step runs in no instance: it is the step itself, which parks the run.
+        A wait or approve step runs on no workbench: it is the step itself, which parks the run.
         An approve step comes with the run's values filled in its summary.
         """
         factory = self._file(run.factory)
@@ -745,49 +617,12 @@ class FactoryRuns:
             return replace(step, summary=with_run_values_as_text(step.summary, held))
         if isinstance(step, WaitStep):
             return step
-        if isinstance(step, WorkbenchAgentStep | WorkbenchCommandStep | WorkbenchCodeStep):
-            return self._on_workbench(run, factory, step, held, results)
-        match step:
-            case AgentStep():
-                prompt = self._prompt(run, step)
-                if isinstance(prompt, _Refused):
-                    return prompt
-                asked, hook = AgentStepRun(prompt=prompt), step.hook
-            case ClientStep():
-                client_run = self._client_run(run, factory, step, held)
-                if isinstance(client_run, _Refused):
-                    return client_run
-                asked, hook = client_run, step.hook
-            case CommandStep():
-                commands = [
-                    with_run_values(entry, held) if isinstance(entry, str) else entry
-                    for entry in step.run
-                ]
-                timeout = duration_seconds(step.timeout) if step.timeout is not None else None
-                asked = CommandStepRun(
-                    run=commands, timeout_seconds=timeout, branch=_branch(step, held)
-                )
-                hook = step.hook
-            case CodeStep():
-                asked, hook = CodeStepRun(call=step.call), None
-        instance_id = self.holder(run, step.instance)
-        if instance_id is None:
-            return _Refused(
-                step.id, f'No instance holds role "{step.instance}" of factory "{run.factory}".'
-            )
-        command = StepRunCommand(
-            step=asked,
-            hook=hook,
-            origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step.id),
-            work_item=run.work_item,
-            results=results,
-        )
-        return instance_id, _QueuedStep(run.run_id, step.id, command)
+        return self._on_workbench(run, factory, step, held, results)
 
     def _on_workbench(
         self,
         run: FactoryRun,
-        factory: _Factory,
+        factory: WorkbenchFactory,
         step: WorkbenchAgentStep | WorkbenchCommandStep | WorkbenchCodeStep,
         held: Mapping[ValueName, StepValue],
         results: dict[ValueName, StepValue],
@@ -814,7 +649,7 @@ class FactoryRuns:
                 agent_run = (
                     self._kinby_run(run, step, line.model)
                     if step.engine is Engine.KINBY
-                    else self._client_run(run, factory, step, held, line.model)
+                    else self._client_run(run, factory, step, line.model)
                 )
                 if isinstance(agent_run, _Refused):
                     return agent_run
@@ -837,7 +672,7 @@ class FactoryRuns:
             case WorkbenchCodeStep():
                 asked = CodeStepRun(call=step.call)
         fresh = step is _first_at_work(factory) and self._went_on(run.run_id, step.id)
-        naming = factory.worktree if isinstance(factory, WorkbenchFactory) else None
+        naming = factory.worktree
         if (
             naming is not None
             and workbench.workbench.workspace_source is not None
@@ -881,7 +716,7 @@ class FactoryRuns:
         if workbench.workbench.workspace_source is None:
             return workbench, RunFolder(branch=None)
         factory = self._file(run.factory)
-        if isinstance(factory, WorkbenchFactory) and factory.worktree is not None:
+        if factory is not None and factory.worktree is not None:
             named = self._named(run.run_id, factory)
             if not named:
                 return workbench, RunFolder(branch=None)
@@ -894,35 +729,7 @@ class FactoryRuns:
         branch = "-".join((*words, run.run_id.hex[:8]))
         return workbench, RunFolder(branch=f"{run.factory}/{branch}")
 
-    def holder(self, run: FactoryRun, instance: InstanceName) -> UUID | None:
-        """The id of the instance that holds role *instance* for the run, or None when none does.
-
-        The instance that handed the run in holds its own role for it, and no other instance of
-        that role does, since one may work on another repository. None does once that instance
-        was converted into a workbench.
-        """
-        owner = self._registry.instance(run.instance_id)
-        if owner is not None and owner.workbench is not None:
-            return None
-        if owner is not None and owner.factory is not None and owner.factory.name == instance:
-            return owner.instance_id if owner.active else None
-        return self._first_in(run.factory, instance)
-
-    def _first_in(self, factory: FactoryName, role: InstanceName) -> UUID | None:
-        """The factory's first active instance of *role*, which runs the role's steps for runs
-        another instance handed in."""
-        return next(
-            (
-                record.instance_id
-                for record in self._registry.factory_members(factory)
-                if record.active and record.factory is not None and record.factory.name == role
-            ),
-            None,
-        )
-
-    def _prompt(
-        self, run: FactoryRun, step: AgentStep | ClientStep | WorkbenchAgentStep
-    ) -> str | _Refused:
+    def _prompt(self, run: FactoryRun, step: WorkbenchAgentStep) -> str | _Refused:
         try:
             return self._factories.prompt(run.factory, step.prompt)
         except (FactoryNotFound, OSError) as exc:
@@ -931,12 +738,11 @@ class FactoryRuns:
     def _client_run(
         self,
         run: FactoryRun,
-        factory: _Factory,
-        step: ClientStep | WorkbenchAgentStep,
-        held: Mapping[ValueName, StepValue],
-        line_model: str | None = None,
+        factory: WorkbenchFactory,
+        step: WorkbenchAgentStep,
+        line_model: str | None,
     ) -> ClientStepRun | _Refused:
-        """What the client step asks its instance to run, or the agent step its workbench.
+        """What the agent step on a coding client asks its workbench to run.
 
         An agent step that names no model takes its line's, *line_model*, when its coding client
         runs that model's provider, and the client's default otherwise. When the step it resumes
@@ -955,7 +761,7 @@ class FactoryRuns:
                     f'Step "{step.id}" resumes the session of "{step.resume}", '
                     "which this step did not record.",
                 )
-        client = step.client if isinstance(step, ClientStep) else CodingClient(step.engine)
+        client = CodingClient(step.engine)
         provider, _, name = (line_model or "").partition(":")
         return ClientStepRun(
             client=client,
@@ -964,7 +770,6 @@ class FactoryRuns:
             timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
             model=step.model or (name if provider == _PROVIDERS[client] else None),
             effort=step.effort,
-            branch=_branch(step, held) if isinstance(step, ClientStep) else None,
         )
 
     def _kinby_run(
@@ -993,7 +798,9 @@ class FactoryRuns:
         )
         return AgentStepRun(prompt=prompt, model=model, answered=answered)
 
-    def _session(self, run_id: UUID, factory: _Factory, step: StepId) -> CodingSessionId | None:
+    def _session(
+        self, run_id: UUID, factory: WorkbenchFactory, step: StepId
+    ) -> CodingSessionId | None:
         """The newest coding client session recorded by any step that shares the step's session.
 
         Steps share a session when their resumes lead back to the same step. A step that resumes
@@ -1002,7 +809,7 @@ class FactoryRuns:
         resumes = {
             other.id: other.resume
             for other in factory.steps
-            if isinstance(other, ClientStep | WorkbenchAgentStep)
+            if isinstance(other, WorkbenchAgentStep)
         }
 
         def first(step_id: StepId) -> StepId:
@@ -1021,7 +828,7 @@ class FactoryRuns:
         )
 
     def _held(
-        self, run: FactoryRun, factory: _Factory, filters: Iterable[SignalFilter]
+        self, run: FactoryRun, factory: WorkbenchFactory, filters: Iterable[SignalFilter]
     ) -> Mapping[ValueName, StepValue]:
         """The run's values that *filters* may name. Its attempts are read only when one names a
         value."""
@@ -1031,7 +838,7 @@ class FactoryRuns:
         return run.work_item | self._results(run.run_id, factory) if named else {}
 
     def _results(
-        self, run_id: UUID, factory: _Factory, starting: StepId | None = None
+        self, run_id: UUID, factory: WorkbenchFactory, starting: StepId | None = None
     ) -> dict[ValueName, StepValue]:
         """The values the run's clean attempts, and its failures sent back, recorded on its latest
         pass through the steps.
@@ -1077,10 +884,10 @@ class FactoryRuns:
         notes = self._registry.run_notes(run_id)
         return results if notes is None else results | {NOTES: notes}
 
-    def _named(self, run_id: UUID, factory: _Factory) -> dict[ValueName, StepValue]:
+    def _named(self, run_id: UUID, factory: WorkbenchFactory) -> dict[ValueName, StepValue]:
         """The ``branch`` and ``base`` the factory's worktree call last named for the run, however
         that attempt ended, or none before it named them."""
-        if not isinstance(factory, WorkbenchFactory) or factory.worktree is None:
+        if factory.worktree is None:
             return {}
         for attempt in reversed(self._registry.attempts(run_id)):
             branch, base = attempt.values.get(BRANCH), attempt.values.get(BASE)
@@ -1089,7 +896,8 @@ class FactoryRuns:
         return {}
 
     async def _work(self, instance_id: UUID, queue: asyncio.Queue[_Queued]) -> None:
-        """Run the instance's queued work one at a time, in the order it was queued."""
+        """Run the workbench's or the owner's queued work one at a time, in the order it was
+        queued."""
         while True:
             match await queue.get():
                 case _QueuedStep() as queued:
@@ -1114,10 +922,10 @@ class FactoryRuns:
             )
 
     async def _deliver(self, instance_id: UUID, queued: _QueuedStep) -> None:
-        """Send the step until its instance answers it.
+        """Send the step until its workbench answers it.
 
-        A call the instance did not take is no attempt. One whose answer was lost keeps its
-        attempt open and is sent again as it was, for the answer the instance holds.
+        A call the workbench did not take is no attempt. One whose answer was lost keeps its
+        attempt open and is sent again as it was, for the answer the workbench holds.
         """
         backoff = 0.0
         command: StepRunCommand | None = None
@@ -1136,7 +944,7 @@ class FactoryRuns:
                 command = None
             backoff = _next_backoff(backoff)
             _logger.info(
-                "Step %s of factory run %s got no answer from its instance, sending it again in "
+                "Step %s of factory run %s got no answer from its workbench, sending it again in "
                 "%s seconds: %s",
                 queued.step,
                 queued.run_id,
@@ -1225,7 +1033,7 @@ class FactoryRuns:
         self._put_report(report)
 
     def _park(self, run_id: UUID, step: WaitStep | ApproveStep) -> None:
-        """Open the step's attempt with the run parked at it, holding no instance.
+        """Open the step's attempt with the run parked at it, holding no workbench.
 
         An approval's attempt holds its summary, and tells the user. A wait a signal already
         matched on the run's way to it moves on at once.
@@ -1271,7 +1079,7 @@ class FactoryRuns:
         self._deadlines[run_id] = asyncio.create_task(expire())
 
     def _park_until(self, run_id: UUID, step: StepId, wakes_at: datetime) -> FactoryRun:
-        """Park the run at *step*, holding no instance, until its plan window resets."""
+        """Park the run at *step*, holding no workbench, until its plan window resets."""
         parked = self._registry.move_run(run_id, FactoryRunStatus.PARKED, step, wakes_at)
         self._publish(parked)
         self._wake_at(run_id, step, wakes_at)
@@ -1368,7 +1176,7 @@ class FactoryRuns:
             removal = RunFolderRemoveCommand(run_id=run.run_id, folder=folder)
             self._queue(workbench.instance_id).put_nowait(_QueuedRemoval(removal))
 
-    def _notify(self, run: FactoryRun, stop: RunStopRef, factory: _Factory | None) -> None:
+    def _notify(self, run: FactoryRun, stop: RunStopRef, factory: WorkbenchFactory | None) -> None:
         """Tell the user the run needs them, offering to retry it, send it back to the step before
         its stop, or cancel it."""
         if self._registry.instance(run.instance_id) is None:
@@ -1460,14 +1268,14 @@ class FactoryRuns:
 
     def _report(
         self,
-        factory: _Factory,
-        call: NeedsHumanCall | EndedCall | ToolCall,
+        factory: WorkbenchFactory,
+        call: ToolCall,
         run: FactoryRun,
         summary: str | None = None,
     ) -> None:
         """Queue the factory's call for the run as it stopped: the needs_human call, with the
-        *summary* it stopped with, or the ended call. A line's run makes it on its workbench, in
-        its folder.
+        *summary* it stopped with, or the ended call. It runs on the workbench, in the run's
+        folder.
 
         A run that ended done is at no step, so the call names the step of its last attempt.
         """
@@ -1480,37 +1288,23 @@ class FactoryRuns:
             results=self._results(run.run_id, factory),
             folder=placed[1] if placed is not None else None,
         )
-        role = call.instance if isinstance(call, NeedsHumanCall | EndedCall) else None
         generation = self._registry.stop_generation(run.run_id)
-        self._put_report(_QueuedReport(run.run_id, role, command, run.status, generation))
+        self._put_report(_QueuedReport(run.run_id, command, run.status, generation))
 
     def _put_report(self, report: _QueuedReport) -> None:
-        factory = report.command.origin.factory
-        run = self._existing(report.run_id)
-        if report.instance is None:
-            placed = self._workbench(run)
-            instance_id = placed[0].instance_id if placed is not None and placed[0].active else None
-        else:
-            instance_id = self.holder(run, report.instance)
-        if instance_id is None:
+        placed = self._workbench(self._existing(report.run_id))
+        if placed is None or not placed[0].active:
             _logger.warning(
-                "Factory run %s stopped, and neither its line's workbench nor an instance of "
-                "role %s of factory %s is there to make its %s call.",
+                "Factory run %s of factory %s stopped, and its line's workbench is not there to "
+                "make its %s call.",
                 report.run_id,
-                report.instance,
-                factory,
+                report.command.origin.factory,
                 report.key,
             )
             return
-        self._queue(instance_id).put_nowait(report)
+        self._queue(placed[0].instance_id).put_nowait(report)
 
-    def factory(self, name: FactoryName) -> FactoryFile | None:
-        """The file of a factory whose steps run in instances, as the hub keeps it, or None once
-        the factory is gone."""
-        found = self._file(name)
-        return found if isinstance(found, FactoryFile) else None
-
-    def _file(self, name: FactoryName) -> _Factory | None:
+    def _file(self, name: FactoryName) -> WorkbenchFactory | None:
         """The factory's file as the hub keeps it, or None once the factory is gone."""
         try:
             return self._factories.file(name)
@@ -1522,11 +1316,11 @@ class FactoryRuns:
             subscriber.put_nowait(run)
 
 
-def _step(factory: _Factory, step_id: StepId) -> _AnyStep | None:
+def _step(factory: WorkbenchFactory, step_id: StepId) -> WorkbenchStep | None:
     return next((step for step in factory.steps if step.id == step_id), None)
 
 
-def _first_at_work(factory: _Factory) -> _AnyStep | None:
+def _first_at_work(factory: WorkbenchFactory) -> WorkbenchStep | None:
     """The factory's first step that works in the run's folder, past any wait or approval."""
     return next(
         (step for step in factory.steps if not isinstance(step, WaitStep | ApproveStep)), None
@@ -1540,7 +1334,7 @@ def _work_item(run: FactoryRun) -> str:
 
 def _page(run: FactoryRun) -> str:
     """The web app's page a notification about the run opens: a line's run has its own, and a run
-    of a factory written the older way shows in the Library."""
+    made before the move to lines shows in the Library."""
     return "/library" if run.line_id is None else f"/factories/runs/{run.run_id}"
 
 
@@ -1552,7 +1346,7 @@ def _needing_human(run: FactoryRun) -> FactoryRun:
     return run
 
 
-def _awaits_approval(factory: _Factory | None, run: FactoryRun) -> bool:
+def _awaits_approval(factory: WorkbenchFactory | None, run: FactoryRun) -> bool:
     """Whether the run is parked at an approve step, for the user to approve or send back."""
     step = _step(factory, run.step) if factory is not None and run.step is not None else None
     return run.status is FactoryRunStatus.PARKED and isinstance(step, ApproveStep)
@@ -1601,33 +1395,18 @@ def _signal_field(signal: Signal, body: JsonValue, field: str) -> JsonValue:
     return found
 
 
-def _instance_of(factory: FactoryFile, step_id: StepId | None) -> InstanceName:
-    """The instance the step runs in, or the intake's for a step that runs in none."""
-    match _step(factory, step_id) if step_id is not None else None:
-        case AgentStep() | ClientStep() | CommandStep() | CodeStep() as step:
-            return step.instance
-        case _:
-            return factory.intake.instance
-
-
-def _earlier(factory: _Factory | None, step_id: StepId | None) -> list[StepId]:
+def _earlier(factory: WorkbenchFactory | None, step_id: StepId | None) -> list[StepId]:
     """The ids of the steps before *step_id* in *factory*."""
     ids = [step.id for step in factory.steps] if factory is not None else []
     return ids[: ids.index(step_id)] if step_id in ids else []
 
 
-def _branch(step: ClientStep | CommandStep, held: Mapping[ValueName, StepValue]) -> str | None:
-    """The run's value of the branch the step names, or None when it names none."""
-    name = None if step.branch is None else run_value_name(step.branch)
-    return None if name is None else str(held[name])
-
-
 def _unmet(
-    factory: _Factory, step: _AnyStep, held: Mapping[ValueName, StepValue]
+    factory: WorkbenchFactory, step: WorkbenchStep, held: Mapping[ValueName, StepValue]
 ) -> _Refused | None:
     """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
 
-    A command step also requires each value its commands name, and a client step its branch. The
+    A command step also requires each value its commands name. The
     lack is charged to the step that should have produced the value: the last earlier step that
     declares it in its results. A false work item value has no such step, so the requiring step
     itself fails.
@@ -1649,8 +1428,8 @@ def _unmet(
 
 
 def _settled(
-    factory: _Factory,
-    step: _AnyStep,
+    factory: WorkbenchFactory,
+    step: WorkbenchStep,
     result: StepResult,
     held: Mapping[ValueName, StepValue],
     tally: _Tally,
@@ -1696,7 +1475,7 @@ def _settled(
     return result, FactoryRunStatus.QUEUED, step.id
 
 
-def _outcome(step: _AnyStep, name: str | None) -> Outcome | None:
+def _outcome(step: WorkbenchStep, name: str | None) -> Outcome | None:
     """What the outcome *name* does next, or None when the step declares no such outcome.
 
     A result that names no outcome takes the next step.
@@ -1725,7 +1504,7 @@ class _Tally:
     sent_back: Counter[tuple[StepId, StepId]]
 
 
-def _tally(factory: _Factory, attempts: Iterable[StepAttempt]) -> _Tally:
+def _tally(factory: WorkbenchFactory, attempts: Iterable[StepAttempt]) -> _Tally:
     tally = _Tally(Counter(), Counter())
     for attempt in attempts:
         if attempt.ending is StepEnding.CLEAN:
@@ -1740,14 +1519,14 @@ def _tally(factory: _Factory, attempts: Iterable[StepAttempt]) -> _Tally:
     return tally
 
 
-def _failed_to(factory: _Factory, attempt: StepAttempt) -> SendBack | None:
+def _failed_to(factory: WorkbenchFactory, attempt: StepAttempt) -> SendBack | None:
     """Where a failed attempt sends the work, when its step declares where its failures go."""
     step = _step(factory, attempt.step)
     failed = step.failed if step is not None and attempt.ending is StepEnding.FAILED else None
     return failed if isinstance(failed, SendBack) else None
 
 
-def _runs_again(factory: _Factory, attempt: StepAttempt) -> bool:
+def _runs_again(factory: WorkbenchFactory, attempt: StepAttempt) -> bool:
     """Whether a failed attempt runs its step again under the step's ``failed``."""
     step = _step(factory, attempt.step)
     return (
@@ -1756,11 +1535,11 @@ def _runs_again(factory: _Factory, attempt: StepAttempt) -> bool:
 
 
 def _checked_done(
-    factory: _Factory, held: Mapping[ValueName, StepValue], last: StepResult
+    factory: WorkbenchFactory, held: Mapping[ValueName, StepValue], last: StepResult
 ) -> StepResult:
     """The clean result that ends the run, failed when the run lacks a ``done_requires`` value.
 
-    The values of that result count, so its hook's values are in.
+    The values of that result count, so its check's values are in.
     """
     values = {**held, **last.values}
     lacking = _lacking(values, factory.done_requires)
@@ -1776,7 +1555,7 @@ def _noted(result: StepResult, reason: str, ending: StepEnding = StepEnding.FAIL
     return result.model_copy(update={"ending": ending, "summary": summary})
 
 
-def _checked_types(step: _AnyStep, result: StepResult) -> StepResult:
+def _checked_types(step: WorkbenchStep, result: StepResult) -> StepResult:
     """The step's clean result, failed when a value it records is not of the type declared."""
     wrong = next(
         (
@@ -1800,39 +1579,20 @@ def _lacking(held: Mapping[ValueName, StepValue], names: Iterable[ValueName]) ->
     return next((name for name in names if held.get(name, False) is False), None)
 
 
-def _retries(step: _AnyStep) -> int:
+def _retries(step: WorkbenchStep) -> int:
     """How many times a failed step is tried again (ADR 0076).
 
-    Once for a step a model or a coding client runs, and never for any other unless it opts in.
+    Once for an agent step, and never for any other unless it opts in.
     """
     if isinstance(step.failed, Retry):
         return step.failed.retry
     if step.retry is not None:
         return step.retry
-    return 1 if isinstance(step, AgentStep | ClientStep | WorkbenchAgentStep) else 0
+    return 1 if isinstance(step, WorkbenchAgentStep) else 0
 
 
 def _next_backoff(waited: float) -> float:
     return min(max(waited * 2, BACKOFF_SECONDS), BACKOFF_CAP_SECONDS)
-
-
-def _missing_commands(
-    factory: FactoryFile, role: InstanceName, instance: Path
-) -> list[CommandListName]:
-    """The lists of repository commands the factory's steps in *role* name that the instance in
-    *instance* does not hold now."""
-    needed = command_lists(factory, role)
-    held = _held_commands(instance) if needed else {}
-    return [name for name in needed if name not in held]
-
-
-def _held_commands(instance: Path) -> dict[CommandListName, list[str]]:
-    """The lists of repository commands the instance in *instance* holds now. One whose manifest
-    cannot be read holds none."""
-    try:
-        return repository_commands(instance)
-    except ManifestError:
-        return {}
 
 
 def _work_item_errors(

@@ -371,7 +371,6 @@ def signal_runtime(
                 runner,
                 compact=runner.compact,
                 context=runner.context_breakdown,
-                memory_delivery=memory_delivery,
             ),
             SchedulerConfig(instance),
         ),

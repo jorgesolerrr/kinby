@@ -54,7 +54,6 @@ const setup: InstanceSetup = {
       is_set: false,
     },
   ],
-  missing_commands: [],
 }
 
 function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResult {
@@ -65,7 +64,6 @@ function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResul
     setup,
     home: false,
     recreate_reasons: [],
-    repository_commands: [],
     ...fields,
   }
 }

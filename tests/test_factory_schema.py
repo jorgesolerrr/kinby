@@ -7,7 +7,6 @@ from jsonschema import validate
 from jsonschema.exceptions import ValidationError
 
 from kinby.factories.schema import checkout_schema_path, factory_schema, main
-from tests.test_hub_factories import FACTORY
 from tests.test_hub_workbench_factories import FACTORY as REQUIRING_FACTORY
 
 
@@ -29,8 +28,11 @@ def test_schema_module_rewrites_the_schema_file(tmp_path: Path) -> None:
 
 
 def test_the_schema_refuses_a_factory_that_declares_instances() -> None:
+    factory = yaml.safe_load(REQUIRING_FACTORY)
+    factory["instances"] = {"coder": {"image": "coder"}}
+
     with pytest.raises(ValidationError):
-        validate(instance=yaml.safe_load(FACTORY), schema=factory_schema())
+        validate(instance=factory, schema=factory_schema())
 
 
 def test_the_schema_accepts_a_factory_that_requires_a_workbench() -> None:

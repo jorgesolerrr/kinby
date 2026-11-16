@@ -18,7 +18,6 @@ from kinby.contracts import (
     CompletionOutcome,
     ErrorCode,
     Event,
-    FactoryRunOrigin,
     HomeInstanceOrigin,
     ModelCompleted,
     ModePinned,
@@ -245,16 +244,11 @@ class InterruptedTurnClaim:
 
 
 @dataclass(frozen=True)
-class StepClaim:
-    """Held while a factory step runs in the instance."""
-
-
-@dataclass(frozen=True)
 class CompactionClaim:
     """Held while a thread compacts on demand, so no turn starts on it meanwhile."""
 
 
-type Claim = TurnClaim | InterruptedTurnClaim | RevertClaim | StepClaim | CompactionClaim
+type Claim = TurnClaim | InterruptedTurnClaim | RevertClaim | CompactionClaim
 
 
 class Turns:
@@ -341,38 +335,12 @@ class Turns:
         self.require_admitting()
         if any(isinstance(claim, RevertClaim) for claim in self._claims.values()):
             raise InstanceBusy("A revert is running. Wait for it to finish before starting a turn.")
-        if any(isinstance(claim, StepClaim) for claim in self._claims.values()):
-            raise InstanceBusy(
-                "A factory step is running. Wait for it to finish before starting a turn."
-            )
         running = self.holding().values()
         routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
         if routine is not None:
             raise InstanceBusy(f'Routine "{routine.name}" is running. Waiting for it to finish.')
         if running and isinstance(origin, RoutineOrigin):
             raise InstanceBusy(f'Routine "{origin.name}" is waiting for the running user turn.')
-
-    @asynccontextmanager
-    async def step(self) -> AsyncIterator[None]:
-        """Hold the instance for one factory step, the way a routine's turn holds it.
-
-        The step waits for everything holding the instance to finish, and no turn starts while
-        it runs. A draining instance takes no step.
-        """
-        while True:
-            # Clear before reading, so a change made while reading is never missed.
-            self._changed.clear()
-            self.require_admitting()
-            if not self.holding() and not self._claims:
-                break
-            await self._changed.wait()
-        key = uuid4()
-        claim = StepClaim()
-        self._claims[key] = claim
-        try:
-            yield
-        finally:
-            self._release_claim(key, claim)
 
     @asynccontextmanager
     async def compacting(self, thread_id: UUID) -> AsyncIterator[None]:
@@ -386,26 +354,6 @@ class Turns:
             yield
         finally:
             self._release_claim(thread_id, claim)
-
-    async def step_turn(self, title: str, message: str, origin: FactoryRunOrigin) -> list[Event]:
-        """Run an agent step's turn on a new thread, and wait for it to close.
-
-        Called while the step holds the instance, so this is the one turn that starts. It parks
-        on an approval like any other turn, and the wait lasts until the user answers. Returns
-        the turn's events, its closing event last.
-        """
-        self.require_admitting()
-        started = await self._wake(lambda: self._store.create(title).id, message, origin, uuid4())
-        while True:
-            # Clear before reading, so a turn that closes while reading is never missed.
-            self._changed.clear()
-            events = self._log.turn_events(started.turn_id)
-            closing = next(
-                (at for at, event in enumerate(events) if is_turn_closing(event.payload)), None
-            )
-            if closing is not None:
-                return events[: closing + 1]
-            await self._changed.wait()
 
     async def wait_idle(self) -> None:
         """Wait until nothing holds the instance: no live turn, no parked approval but a
