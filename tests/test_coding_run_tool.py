@@ -5,7 +5,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -16,7 +16,9 @@ from kinby.contracts import (
     ModelCompleted,
     PermissionMode,
     RunDelegated,
+    UsageSource,
 )
+from kinby.core.events import EventLog
 from kinby.instance import Instance
 from kinby.plugins import ToolContext, coding_runs
 from kinby.plugins.core import core_tools
@@ -60,12 +62,17 @@ def _names(instance: Instance) -> set[str]:
     return {tool.name for tool in core_tools(instance, ())}
 
 
-async def _delegate(instance: Instance, reported: list[DelegatedRun], **arguments: str) -> dict:
+async def _delegate(
+    instance: Instance,
+    reported: list[DelegatedRun],
+    thread_id: UUID | None = None,
+    **arguments: str,
+) -> dict:
     async def report(run: DelegatedRun) -> None:
         reported.append(run)
 
     [tool] = coding_runs.coding_run_tools(instance)
-    context = ToolContext(instance=instance, thread_id=uuid4(), run_reporter=report)
+    context = ToolContext(instance=instance, thread_id=thread_id or uuid4(), run_reporter=report)
     return json.loads(await tool.ainvoke(arguments, context))
 
 
@@ -202,6 +209,38 @@ def test_a_delegation_given_a_session_continues_it(
     [called] = recorded_calls(calls)
     assert [argument for argument in called.argv if argument in arguments] == arguments
     assert returned["session"] == session
+
+
+def test_a_continued_session_reports_only_the_tokens_its_own_run_spent(tmp_path, monkeypatch):
+    instance = _instance(tmp_path)
+    stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    _sign_in_claude(monkeypatch)
+    thread_id = uuid4()
+    earlier = DelegatedRun(
+        usage_source=UsageSource.CLAUDE_SUBSCRIPTION,
+        client="claude-code",
+        models=["claude-opus-5-5"],
+        input_tokens=100,
+        output_tokens=5,
+        cache_read_tokens=50,
+        duration_ms=1_000,
+        client_turns=1,
+        outcome=DelegatedRunOutcome.COMPLETED,
+        session="claude-1",
+    )
+    log = EventLog(instance.manifest.state_dir)
+    asyncio.run(log.append(thread_id, uuid4(), RunDelegated(run=earlier)))
+    reported: list[DelegatedRun] = []
+
+    asyncio.run(_delegate(instance, reported, thread_id, task="Repair it.", session="claude-1"))
+
+    [run] = reported
+    assert (
+        run.input_tokens,
+        run.output_tokens,
+        run.cache_read_tokens,
+        run.cache_creation_tokens,
+    ) == (60, 15, 0, 10)
 
 
 def test_a_delegation_the_plan_refused_returns_limited_until_its_window_resets(

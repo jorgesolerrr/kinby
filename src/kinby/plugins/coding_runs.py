@@ -3,16 +3,25 @@ coding run in the instance's workspace, and waits for the run to end."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import replace
 
 from pydantic import JsonValue
 
-from kinby.contracts import CodingClient, CodingSessionId, DelegatedRunOutcome, StepEnding
+from kinby.contracts import (
+    CodingClient,
+    CodingSessionId,
+    DelegatedRun,
+    DelegatedRunOutcome,
+    RunDelegated,
+    StepEnding,
+)
 from kinby.core.coding_clients import (
     CLIENT_TIMEOUT_SECONDS,
     CodingRun,
+    own_tokens,
     run_coding_client,
     signed_in_clients,
 )
@@ -69,10 +78,24 @@ async def delegate_to_coding_client(
         "session": ran.session,
     }
     if ran.reported is not None:
-        await context.report_run(ran.reported.model_copy(update={"outcome": ending}))
+        earlier = () if session is None else await asyncio.to_thread(_thread_runs, context)
+        own = own_tokens(ran.reported, earlier)
+        await context.report_run(own.model_copy(update={"outcome": ending}))
         if ran.reported.resets_at is not None and ending is DelegatedRunOutcome.LIMITED:
             returned["resets_at"] = ran.reported.resets_at.isoformat()
     return json.dumps(returned, ensure_ascii=False)
+
+
+def _thread_runs(context: ToolContext) -> list[DelegatedRun]:
+    """The delegated runs the thread recorded, whose tokens a continued session counts again."""
+    from kinby.core.events import EventLog
+
+    with EventLog(context.instance.manifest.state_dir).reader() as reader:
+        return [
+            event.payload.run
+            for event in reader.thread_events(context.thread_id)
+            if isinstance(event.payload, RunDelegated)
+        ]
 
 
 def _ending(ran: CodingRun) -> DelegatedRunOutcome:
