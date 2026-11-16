@@ -10436,6 +10436,12 @@
       "properties": {
         "message": {
           "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -11178,6 +11184,12 @@
       "properties": {
         "message": {
           "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "thread_id": {
           "format": "uuid",
@@ -12026,6 +12038,12 @@
             }
           ],
           "default": null
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "snapshot": {
           "anyOf": [

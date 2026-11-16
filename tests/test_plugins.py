@@ -1689,6 +1689,8 @@ def test_instance_skill_is_catalogued_and_skill_tool_is_bound(tmp_path: Path) ->
         assert (
             "# Skills\n"
             "Use the `skill` tool to read a skill's full instructions.\n"
+            "A skill the user references arrives with its body in their message, "
+            "so it needs no `skill` tool call.\n"
             "- planning: Plan work before changing files."
         ) in system_message.text
         assert "These are the detailed planning instructions." not in system_message.text

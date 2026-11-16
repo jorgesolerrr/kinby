@@ -685,7 +685,12 @@ The fixed, name-sorted set of tools for one **turn**. The model and tool calls u
 
 ### Skill
 
-A markdown instruction set the model reads on demand. Skills are listed to the model by name and description; the body is fetched only when the model asks for it.
+A markdown instruction set the model reads on demand. Skills are listed to the model by name and description; the body is fetched only when the model asks for it, or arrives with a message that holds a **skill reference** to it.
+
+### Skill reference
+
+A **skill** the user names in a message by picking it in the composer, whose body core puts in that **turn**, ahead of the message. The model reads it there, with no **skill tool** call. The **thread** keeps the message as typed and which skills it references, never the body. A reference to a skill the turn cannot load refuses the message.
+_Avoid_: slash command
 
 ### Skill tier
 
