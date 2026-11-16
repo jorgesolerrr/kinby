@@ -128,6 +128,7 @@ from kinby.core.stats import (
     work_recall,
 )
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
+from kinby.core.titles import TitleWriter
 from kinby.core.turn_metrics import TurnKey, TurnMetricsResult, metrics_events, turn_metrics
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
 from kinby.core.usage import TimeRange, usage_totals
@@ -157,6 +158,7 @@ class TurnConfig:
     compact: Callable[[UUID, str | None], Awaitable[Event]] | None = None
     #: What fills a thread's context size.
     context: Callable[[UUID], Awaitable[ThreadContextResult]] | None = None
+    title: TitleWriter | None = None
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,7 @@ def build_dispatcher(
             after_turn,
             turn_settings.snapshots,
             turn_settings.browser,
+            None if turn_settings.title is None else turn_settings.title.schedule,
         )
         if isinstance(turns, ScheduledTurnConfig):
             scheduler = Scheduler(turns.scheduler, event_log, store, turn_service)
@@ -512,6 +515,12 @@ async def turn_config(
         instance.manifest.workspace.path,
         enabled=instance.manifest.workspace.snapshots,
     )
+    title = TitleWriter(
+        ThreadStore(instance.manifest.state_dir),
+        event_log,
+        instance,
+        model_override=model_override,
+    )
     return TurnConfig(
         runner.prepare_for_turn,
         runner.permission_ceiling,
@@ -521,4 +530,5 @@ async def turn_config(
         browser,
         runner.compact,
         runner.context_breakdown,
+        title,
     )

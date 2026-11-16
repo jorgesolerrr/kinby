@@ -3,7 +3,13 @@ import { act, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { openThread, type Payload, started, thread } from "@/components/thread-testing"
+import {
+  openThread,
+  type Payload,
+  started,
+  thread,
+  threadSummary,
+} from "@/components/thread-testing"
 
 const loading = () => screen.queryByRole("status", { name: "Loading the thread" })
 
@@ -46,6 +52,34 @@ describe("a thread's panel", () => {
 
     expect(loading()).toBeNull()
     expect(screen.getByRole("alert").textContent).toContain("No thread t1.")
+  })
+
+  it("shows the title the recap model wrote once its event lands, without waiting for a poll", async () => {
+    let title = "fix the runtime"
+    const { subscription } = openThread({
+      "thread.list": () => ({
+        threads: [threadSummary({ title })],
+        ceiling: "full-access",
+        cursor: null,
+      }),
+    })
+    const heading = () => screen.findByRole("heading", { level: 1, name: title })
+    expect(await heading()).toBeDefined()
+
+    title = "Runtime fix"
+    const [titled] = thread([
+      "turn-1",
+      {
+        type: "thread.titled",
+        title,
+        model: "claude",
+        input_tokens: 40,
+        output_tokens: 4,
+      },
+    ])
+    await act(async () => subscription().deliver(titled as Event))
+
+    expect(await heading()).toBeDefined()
   })
 
   describe("the context size", () => {

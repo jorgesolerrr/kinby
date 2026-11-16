@@ -544,6 +544,22 @@ describe("a thread's timeline", () => {
       expect(turn?.approval?.approvalId).toBe("a1")
     })
 
+    it("still waits once the thread's title lands on the turn", () => {
+      const [turn] = replay([
+        "turn-1",
+        ...parked,
+        {
+          type: "thread.titled",
+          title: "Runtime fix",
+          model: "claude",
+          input_tokens: 40,
+          output_tokens: 4,
+        },
+      ]).turns
+
+      expect(turn?.approval?.approvalId).toBe("a1")
+    })
+
     it("stops waiting once the turn moves on, the call approved by the user", () => {
       const [turn] = replay([
         "turn-1",

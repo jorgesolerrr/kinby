@@ -232,6 +232,7 @@ class EventType(StrEnum):
     SIGNAL_RECEIVED = "signal.received"
     WORKSPACE_REVERTED = "workspace.reverted"
     THREAD_COMPACTED = "thread.compacted"
+    THREAD_TITLED = "thread.titled"
     NOTIFICATION_RAISED = "notification.raised"
     NOTIFICATION_ACCEPTED = "notification.accepted"
     NOTIFICATION_REFUSED = "notification.refused"
@@ -526,6 +527,16 @@ class ThreadCompacted(TokenTotals):
     model: str
 
 
+class ThreadTitled(TokenTotals):
+    """The recap model's title for a new thread, written from its first message and recorded on
+    its first turn. The thread takes it while it still holds the title that message gave it. The
+    tokens are what ``model`` spent writing it."""
+
+    type: Literal[EventType.THREAD_TITLED] = EventType.THREAD_TITLED
+    title: str
+    model: str
+
+
 class TurnVerdict(StrEnum):
     GOOD = "good"
     BAD = "bad"
@@ -721,6 +732,7 @@ Payload = Annotated[
     | SignalReceived
     | WorkspaceReverted
     | ThreadCompacted
+    | ThreadTitled
     | NotificationRaised
     | NotificationAccepted
     | NotificationRefused

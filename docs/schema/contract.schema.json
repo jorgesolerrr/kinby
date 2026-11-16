@@ -2126,6 +2126,7 @@
               "signal.received": "#/$defs/SignalReceived",
               "takeover.requested": "#/$defs/TakeoverRequested",
               "thread.compacted": "#/$defs/ThreadCompacted",
+              "thread.titled": "#/$defs/ThreadTitled",
               "tool.call": "#/$defs/ToolCall",
               "tool.gated": "#/$defs/ToolGated",
               "tool.result": "#/$defs/ToolResult",
@@ -2215,6 +2216,9 @@
             },
             {
               "$ref": "#/$defs/ThreadCompacted"
+            },
+            {
+              "$ref": "#/$defs/ThreadTitled"
             },
             {
               "$ref": "#/$defs/NotificationRaised"
@@ -10981,6 +10985,46 @@
         "turn_id"
       ],
       "title": "ThreadTakeoverStartCommand",
+      "type": "object"
+    },
+    "ThreadTitled": {
+      "additionalProperties": false,
+      "description": "The recap model's title for a new thread, written from its first message and recorded on\nits first turn. The thread takes it while it still holds the title that message gave it. The\ntokens are what ``model`` spent writing it.",
+      "properties": {
+        "cache_creation_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "output_tokens": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "const": "thread.titled",
+          "default": "thread.titled",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "title",
+        "model",
+        "type"
+      ],
+      "title": "ThreadTitled",
       "type": "object"
     },
     "ThreadTurnDiffCommand": {

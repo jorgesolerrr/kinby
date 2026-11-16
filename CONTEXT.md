@@ -352,7 +352,11 @@ A **turn** or recorded **workspace revert** selected for a **workspace diff** or
 
 ### Thread
 
-One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from. Its title is the one it was created with, or else its first message cut to 60 characters, until the user renames it.
+One conversation with its own durable history. Survives across sessions; can be resumed later. What memory distills from and what **instance statistics** are derived from. Its title is the one it was created with, or else its first message on one line, cut to 60 characters, until a **model title** or the user's rename replaces it.
+
+### Model title
+
+The title the **recap** model writes for a new **thread** from its first message alone: a few words, in the message's language, that name what the thread is about. It is written while the first **turn** runs, never in its way, and only on an **instance** whose **recap policy** is model-assisted. The thread takes it while it still holds its first-message title, so a title the thread was created with, or a rename made meanwhile, wins. Recorded as an event on the first turn with the model and its tokens, which count as that turn's recap tokens. When the model fails, the first-message title stays.
 
 ### Thread status
 
