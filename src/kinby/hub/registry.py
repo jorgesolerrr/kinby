@@ -487,18 +487,22 @@ class HubRegistry:
                 """
             )
             # A run stored before runs recorded their instance belongs to the newest instance that
-            # holds a role of its factory, which reads it through the hub.
-            connection.execute(
-                """
-                UPDATE factory_runs SET instance_id = (
-                    SELECT factory_members.instance_id FROM factory_members
-                    JOIN instances ON instances.id = factory_members.instance_id
-                    WHERE factory_members.factory = factory_runs.factory
-                    ORDER BY instances.rowid DESC LIMIT 1
+            # held a role of its factory, which reads it through the hub. Only a registry from
+            # before roles were dropped still has the table that says so.
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'factory_members'"
+            ).fetchone():
+                connection.execute(
+                    """
+                    UPDATE factory_runs SET instance_id = (
+                        SELECT factory_members.instance_id FROM factory_members
+                        JOIN instances ON instances.id = factory_members.instance_id
+                        WHERE factory_members.factory = factory_runs.factory
+                        ORDER BY instances.rowid DESC LIMIT 1
+                    )
+                    WHERE instance_id IS NULL
+                    """
                 )
-                WHERE instance_id IS NULL
-                """
-            )
             self._add_columns(connection, "step_attempts", {"session": "TEXT"})
             # What an attempt on a workbench spent, as JSON. Null for any other.
             self._add_columns(connection, "step_attempts", {"usage": "TEXT"})
