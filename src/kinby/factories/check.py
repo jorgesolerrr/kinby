@@ -2,9 +2,9 @@
 
 It validates the factory file against its schema and what it requires of a workbench, resolves
 every image recipe, prompt, tool and check the file names, its run calls' among them, and checks
-that each step's inputs come from an earlier step or the work item. It runs the folder's tool and
-hook files to learn their names, as a workbench does, and holds the steps to what the factory
-requires of the workbench.
+that each step's inputs come from an earlier step, the work item or the workbench's named values.
+It runs the folder's tool and hook files to learn their names, as a workbench does, and holds the
+steps to what the factory requires of the workbench.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from kinby.factories import ships_recipe
 from kinby.factories.file import (
     BASE,
     BRANCH,
+    NOTES,
     ApproveStep,
     Engine,
     InvalidFactoryFile,
@@ -76,6 +77,7 @@ def check_factory(folder: Path) -> tuple[str, ...]:
         *own.problems,
         *_steps(factory, folder, own),
         *_inputs(factory),
+        *_clashes(factory),
         *_order(factory),
         *_resumes(factory),
     )
@@ -236,9 +238,9 @@ def _prompt(folder: Path, step: WorkbenchAgentStep) -> Iterator[str]:
 
 def _inputs(factory: WorkbenchFactory) -> Iterator[str]:
     """Each value a step requires, a wait or a command names is held: by the work item, the
-    factory's worktree call or an earlier step. Each value done_requires or a closing filter names
-    is held by any step."""
-    held = set(factory.work_item)
+    workbench's named values, the factory's worktree call or an earlier step. Each value
+    done_requires or a closing filter names is held by any step."""
+    held = set(factory.work_item) | {value.name for value in factory.requires.values}
     if factory.worktree is not None:
         held |= {BRANCH, BASE}
     for step in factory.steps:
@@ -277,6 +279,19 @@ def _inputs(factory: WorkbenchFactory) -> Iterator[str]:
                 f'closing matches "{field}" against "{value}", which no step declares in its '
                 "results and the work item does not carry."
             )
+
+
+def _clashes(factory: WorkbenchFactory) -> Iterator[str]:
+    """No named value shares its name with another value a run holds."""
+    for value in factory.requires.values:
+        name = value.name
+        if name in factory.work_item:
+            yield f'Named value "{name}" shares its name with a work item value.'
+        if name in (BRANCH, BASE, NOTES):
+            yield f'Named value "{name}" shares its name with a value kinby keeps for a run.'
+        for step in factory.steps:
+            if name in step.results:
+                yield f'Named value "{name}" shares its name with a result of step "{step.id}".'
 
 
 def _order(factory: WorkbenchFactory) -> Iterator[str]:

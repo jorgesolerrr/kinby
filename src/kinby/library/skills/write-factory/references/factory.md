@@ -24,7 +24,7 @@ Each field may be left out.
 - `image`: one of the image recipes kinby ships. Left out, kinby's base image. Setting up a line refuses a workbench built from another recipe, so a factory that leaves it out runs only on a workbench on the base image. kinby ships one:
   - `coder`: the base image with `gh`, Claude Code, Codex, Bun, Node and pnpm, for the coding client engines.
 - `secrets`: the secrets the steps read, as environment variables of the workbench. See Fields.
-- `values`: named values that are not secrets, such as a site's address, which the workbench's record holds by name. See Fields.
+- `values`: named values that are not secrets, such as a site's address, which the workbench's record holds by name. Every step reads them as run values, as the workbench holds them when the step starts, and they never reach the environment. A named value cannot share its name with a work item value, a step's `results`, `branch`, `base` or `notes`. See Fields.
 - `commands`: the names of the workbench's lists of repository commands the steps run, such as `setup` and `checks`. A `command` step's `{ commands: <name> }` names one of them. The workbench holds the commands themselves, so the factory names no repository's commands.
 - `logins`: the sign-ins the workbench runs, which it keeps through a recreation. Setting up a line refuses a workbench whose login of that `id` has not signed in. See Logins.
 - `browser`: `true` when the steps need a browser. Setting up a line refuses a workbench created without one. Its browser session stays between runs, so a site a step signed in to is still signed in at the next run.
@@ -68,7 +68,7 @@ Every step runs on the workbench, in the run folder. Every step has these fields
 
 - `id`: unique in the factory. Lowercase letters, digits, `_` and `-`.
 - `kind`: `agent`, `command`, `code`, `wait` or `approve`.
-- `requires`: values the step needs, from the work item or an earlier step's `results`. The check refuses a value neither holds. A value false counts as missing.
+- `requires`: values the step needs, from the work item, `requires.values` or an earlier step's `results`. The check refuses a value none of them holds. A value false counts as missing. A named value the workbench lacks fails this step, which says so, since no earlier step produces it.
 - `results`: the values the step hands on, by name and type, as in `work_item`.
 - `outcomes`: what each outcome a check or code step names does next. See What happens next.
 - `retry`: how many times a failed attempt runs again.
@@ -99,7 +99,7 @@ Each kind adds its own:
   - `quiet`: a duration. With no signal for that long, the wait moves on by itself and records `quiet` as true.
   - `deadline`: a duration. With no signal for that long, the wait fails.
 - `approve`: parks the run until the user approves it or sends it back, holding no workbench.
-  - `summary`: what the user is asked to approve. A `{{name}}` stands for that run value, which the work item or an earlier step must declare, so the summary can name the draft to read.
+  - `summary`: what the user is asked to approve. A `{{name}}` stands for that run value, which the work item, `requires.values` or an earlier step must declare, so the summary can name the draft to read.
   - The hub notifies the user when the run parks here, so no step exists only to tell them.
   - Approving moves on and records nothing. Sending back goes to any earlier step, with notes the steps from there read as the value `notes`, so no step saves them first.
 
@@ -159,7 +159,7 @@ A check is a function in the factory's folder's `hooks/`, decorated with `hook`.
   - `workspace`: the `Path` of the run folder.
   - `ending`: how the step ended, a `StepEnding` from `kinby.contracts`. See Step endings.
   - `work_item`: the work item's values, by name.
-  - `results`: every value the run's earlier steps recorded, by name.
+  - `results`: every value the run's earlier steps recorded, and the workbench's named values, by name.
 - It returns a `HookResult`, or None to record nothing. Its fields, each with a default:
   - `values`: the values the step records, by name, as its `results` declare them. Each is a `str`, `int` or `bool`.
   - `outcome`: the outcome it names, one of the step's `outcomes`. None takes the next step.

@@ -4252,7 +4252,8 @@ class StepRunCommand(ContractModel):
     #: step ends, however it ended.
     hook: HookName | None = None
     work_item: dict[ValueName, StepValue]
-    #: Every value the run's earlier steps recorded, by name.
+    #: Every value the run's earlier steps recorded, and the named values its factory requires
+    #: that the workbench holds, by name.
     results: dict[ValueName, StepValue] = Field(default_factory=dict)
     #: Where the step runs. A step that names none fails.
     folder: RunFolder | None = None

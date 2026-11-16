@@ -13,6 +13,7 @@ import pytest
 
 from kinby.cli.client import ContractClient
 from kinby.contracts import (
+    FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
     FACTORY_RUN_LIST,
@@ -32,6 +33,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     FactoryRun,
+    FactoryRunApproveCommand,
     FactoryRunCancelCommand,
     FactoryRunDetail,
     FactoryRunGetCommand,
@@ -1307,6 +1309,104 @@ def test_a_value_a_command_names_is_required_of_the_step_that_should_have_produc
         assert finished.attempts[1].summary == (
             'Step "open-pr" requires "branch", which this step did not record.'
         )
+
+    asyncio.run(scenario())
+
+
+NAMED = """\
+name: checks
+requires:
+  image: coder
+  values:
+    - { name: site, label: Site, description: Where the course lives., type: text,
+        required: false }
+work_item: { issue: int }
+steps:
+  - id: build
+    kind: command
+    run: ["make build SITE={{site}}"]
+    check: read_branch
+  - id: publish
+    kind: code
+    call: open_pull_request
+    requires: [site]
+  - id: review
+    kind: agent
+    engine: claude
+    prompt: prompts/review.md
+  - id: merge
+    kind: approve
+    summary: Merge it on {{site}}.
+  - id: ship
+    kind: command
+    run: ["make ship SITE={{site}}"]
+"""
+NAMED_FILES = HANDOFF_FILES | {"factory.yaml": NAMED, "prompts/review.md": "Review it.\n"}
+
+
+def test_every_kind_of_step_reads_a_named_value_of_its_lines_workbench(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NAMED_FILES)
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        hub.registry.set_workbench_values(line.workbench_id, {"site": "moodle", "theme": "dark"})
+        run = await handed_in(hub, line, 7)
+        parked = await settled(hub, run.run_id)
+
+        build, publish, review = (command for _, command in control.steps)
+        assert build.step == CommandStepRun(run=["make build SITE=moodle"])
+        assert build.hook == "read_branch"
+        assert [command.results for command in (build, publish, review)] == [{"site": "moodle"}] * 3
+        assert (publish.step.kind, review.step.kind) == ("code", "client")
+        assert (parked.run.status, parked.attempts[-1].summary) == (
+            FactoryRunStatus.PARKED,
+            "Merge it on moodle.",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_named_value_changed_during_a_run_reaches_its_next_step(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NAMED_FILES)
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        hub.registry.set_workbench_values(line.workbench_id, {"site": "moodle"})
+        run = await handed_in(hub, line, 7)
+        await settled(hub, run.run_id)
+        hub.registry.set_workbench_values(line.workbench_id, {"site": "moodle two"})
+        await hub_client(hub).call(FACTORY_RUN_APPROVE, FactoryRunApproveCommand(run_id=run.run_id))
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        _, ship = control.steps[-1]
+        assert ship.step == CommandStepRun(run=["make ship SITE='moodle two'"])
+
+    asyncio.run(scenario())
+
+
+def test_a_step_that_names_a_named_value_its_workbench_lacks_does_not_start(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, NAMED_FILES)
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert (finished.run.status, finished.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "build")
+        [attempt] = finished.attempts
+        assert (attempt.step, attempt.ending, attempt.summary) == (
+            "build",
+            StepEnding.FAILED,
+            'Step "build" requires named value "site", which its workbench does not hold.',
+        )
+        assert control.steps == []
 
     asyncio.run(scenario())
 

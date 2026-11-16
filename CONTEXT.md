@@ -866,7 +866,7 @@ The derived record of one **factory run**'s cost: its tokens and price across it
 
 ### Step result
 
-What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, and as `notes` what the user wrote when they last sent the run back, and checks the values it requires before it starts; a missing one fails the step that should have produced it.
+What a **step** hands on: a short summary plus the named values the **factory** declares, recorded by the step's **check** or produced by the step itself, never read from an agent's own report. The next step receives the **work item** with every result before it, the named values its **factory** requires as the **workbench** holds them when the step starts, and as `notes` what the user wrote when they last sent the run back, and checks the values it requires before it starts; a missing one fails the step that should have produced it, or the step itself when the workbench lacks a named value.
 
 ### Step attempt
 
