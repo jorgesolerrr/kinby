@@ -30,7 +30,7 @@ from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_browser_tools import FakeBrowser
 from tests.test_hub_factories import write_factory
 from tests.test_views import BOARD, DATA
-from tests.test_workbench_steps import CHECK
+from tests.test_workbench_steps import CHECK, CLAUDE_STREAM, streaming, stub_client
 from tests.test_workbench_workspace import _seed
 
 type Decision = Literal[ApprovalDecision.APPROVE, ApprovalDecision.DENY]
@@ -344,3 +344,18 @@ def test_a_kinby_turn_on_a_workbench_with_no_browser_has_no_browser_tools(tmp_pa
 
     assert (result.ending, result.summary) == (StepEnding.CLEAN, "I cannot.")
     assert "browser_takeover" in _tool_output(model)
+
+
+def test_a_kinby_turn_on_a_workbench_delegates_to_no_coding_client(tmp_path, monkeypatch):
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "token")
+    model = TurnModel(
+        _calling("delegate_to_coding_client", task="Fix it."),
+        AIMessageChunk(content="I cannot."),
+    )
+
+    result = _run(tmp_path, model)
+
+    assert (result.ending, result.summary) == (StepEnding.CLEAN, "I cannot.")
+    assert "delegate_to_coding_client" in _tool_output(model)
+    assert not calls.exists()

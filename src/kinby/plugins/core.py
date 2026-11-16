@@ -7,6 +7,7 @@ from kinby.core.clock import utc_today
 from kinby.instance import Instance
 from kinby.memory import GraphStore, memory_tools
 from kinby.plugins.browser_tools import browser_tools
+from kinby.plugins.coding_runs import coding_run_tools
 from kinby.plugins.hub import hub_tools
 from kinby.plugins.instance_tools import instance_tools
 from kinby.plugins.intake import intake_tools
@@ -34,4 +35,5 @@ def core_tools(
         *view_tools(),
         *hub_tools(),
         *browser_tools(instance),
+        *coding_run_tools(instance),
     )

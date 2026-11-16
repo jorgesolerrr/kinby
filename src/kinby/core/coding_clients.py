@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import signal
 from collections.abc import Iterable
 from contextlib import suppress
@@ -56,6 +57,8 @@ _CODEX_RETRY = re.compile(r"try again at ([^.]+)\.")
 _ORDINAL_DAY = re.compile(r"(\d+)(?:st|nd|rd|th),")
 #: Names one run of a client in the environment of every process it starts.
 _LAUNCH = "KINBY_CLIENT_LAUNCH"
+#: How long a coding client runs when nothing names its timeout.
+CLIENT_TIMEOUT_SECONDS = 60 * 60
 
 
 @dataclass(frozen=True)
@@ -84,19 +87,19 @@ async def run_coding_client(
     *,
     instance: Path | None,
     state_dir: Path,
-    origin: FactoryRunOrigin,
-    attempt: int | None,
     resume: CodingSessionId | None,
     timeout_seconds: int,
     model: CodingModel | None,
     effort: ReasoningEffort | None,
+    origin: FactoryRunOrigin | None = None,
+    attempt: int | None = None,
     transcript: Path | None = None,
 ) -> CodingRun:
     """Run *client* in *workspace* with *prompt* on its input, continuing *resume* if given.
 
     A `kinby` command the client runs finds *instance*, wherever the workspace is, and knows the
-    step of the run *origin* names and the *attempt* at it. The client's event stream is written
-    to *transcript*, when given.
+    step of the run *origin* names and the *attempt* at it, when a step runs the client. The
+    client's event stream is written to *transcript*, when given.
 
     Claude keeps its sessions in *state_dir*, which outlives the container. When Claude no
     longer has *resume*, the prompt runs once more in a new session, and that run is the one
@@ -141,7 +144,7 @@ async def _run(
     *,
     instance: Path | None,
     state_dir: Path,
-    origin: FactoryRunOrigin,
+    origin: FactoryRunOrigin | None,
     attempt: int | None,
     timeout_seconds: int,
     deadline: float,
@@ -165,7 +168,7 @@ async def _run(
                 *_command(client, workspace, resume, model, effort),
                 cwd=workspace,
                 env=_environment(client, instance, state_dir, timeout_seconds)
-                | session_environment(origin, attempt)
+                | ({} if origin is None else session_environment(origin, attempt))
                 | {_LAUNCH: launch},
                 stdin=stdin,
                 stdout=stdout,
@@ -225,6 +228,21 @@ def _kill_leftovers(launch: str) -> None:
         with suppress(OSError):
             if marker in environ.read_bytes().split(b"\0"):
                 os.kill(int(environ.parent.name), signal.SIGKILL)
+
+
+def signed_in_clients(state_dir: Path) -> tuple[CodingClient, ...]:
+    """The coding clients installed here whose subscription login holds credentials.
+
+    Claude signs in with its token, or keeps its credentials where *state_dir* has it keep its
+    sessions. Codex keeps them in its home.
+    """
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    credentials = {
+        CodingClient.CLAUDE: "CLAUDE_CODE_OAUTH_TOKEN" in os.environ
+        or (state_dir / CLAUDE_DIR / ".credentials.json").is_file(),
+        CodingClient.CODEX: (codex_home / "auth.json").is_file(),
+    }
+    return tuple(client for client in CodingClient if credentials[client] and shutil.which(client))
 
 
 def own_tokens(run: DelegatedRun, earlier: Iterable[DelegatedRun]) -> DelegatedRun:
