@@ -68,7 +68,7 @@ from tests.test_hub_server import served, url
 from tests.test_hub_workbench_workspace import _commands_set
 from tests.test_hub_workbenches import created, finished
 from tests.test_routines import RoutineModel, instance_at, signal_runtime
-from tests.test_steps import CLAUDE_STREAM, streaming, stub_client
+from tests.test_workbench_steps import CLAUDE_STREAM, streaming, stub_client
 
 FACTORY = SHIPPED_FACTORIES / "software"
 SUGGESTED_PICKS = [

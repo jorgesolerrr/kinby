@@ -110,8 +110,7 @@ class _RunLog:
 
     @property
     def workbench(self) -> str | None:
-        """The workbench of the line the run belongs to. None for a run of a factory written the
-        older way."""
+        """The workbench of the line the run belongs to. None for a run made before lines."""
         return next((stop.workbench for stop in self.stops if stop.workbench is not None), None)
 
     @property

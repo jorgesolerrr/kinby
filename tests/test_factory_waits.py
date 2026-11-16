@@ -1,9 +1,11 @@
-"""Wait and approve steps: runs parked on a signal or on the user, holding no instance."""
+"""Wait and approve steps: a line's runs parked on a signal or on the user, holding no
+workbench."""
 
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 import aiohttp
@@ -15,6 +17,8 @@ from kinby.contracts import (
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_LIST,
     FACTORY_RUN_SEND_BACK,
+    INSTANCE_START,
+    LINE_OWNER_SET,
     ErrorCode,
     ErrorEnvelope,
     FactoryRun,
@@ -25,32 +29,40 @@ from kinby.contracts import (
     FactoryRunListResult,
     FactoryRunSendBackCommand,
     FactoryRunStatus,
+    InstanceStartCommand,
+    LifecycleOperationResult,
+    Line,
+    LineOwnerSetCommand,
+    OperationState,
     StepEnding,
     StepResult,
+    WorkbenchCreateCommand,
 )
 from kinby.hub import Hub
 from kinby.instance import Serve
 from tests.test_factory_runs import (
-    CLIENT_FILES,
-    FACTORY,
-    FILES,
-    created_in,
     detail,
     factory_hub,
     handed_in,
-    needing_human,
+    home,
     run_events,
     settled,
-    started_coder,
+    started,
+    started_line,
 )
-from tests.test_hub import FakeControl, FakeImages, FakeRuntime, hub_client
+from tests.test_hub import (
+    FakeControl,
+    FakeImages,
+    FakeRuntime,
+    created_instance,
+    finished_operation,
+    hub_client,
+)
 from tests.test_hub_server import served, url
 
 WAIT = """\
 name: checks
-instances:
-  coder: {}
-intake: { instance: coder, routine: scan }
+requires: { image: coder }
 work_item: { issue: int }
 steps:
   - id: babysit
@@ -62,10 +74,9 @@ steps:
     deadline: 7d
   - id: test
     kind: command
-    in: coder
     run: ["make test"]
 """
-WAIT_FILES = FILES | {"factory.yaml": WAIT}
+WAIT_FILES = {"factory.yaml": WAIT}
 COMMENT = b'{"action": "created", "issue": {"number": 7}}'
 
 
@@ -119,7 +130,7 @@ async def stopped(hub: Hub, run_id: UUID, timeout: float = 5) -> FactoryRunDetai
 async def signalled(
     hub: Hub,
     runtime: FakeRuntime,
-    coder: UUID,
+    owner: UUID,
     body: bytes,
     *,
     routine: str = "github",
@@ -127,14 +138,14 @@ async def signalled(
     answer: int = 202,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, list[bytes]]:
-    """Post one webhook to the coder's public signal path, and what its instance received."""
+    """Post one webhook to the owner's public signal path, and what its instance received."""
     received: list[bytes] = []
     async with served(hub) as address, instance_answering(answer, received) as private:
-        runtime.addresses[str(coder)] = f"http://{private.host}:{private.port}"
+        runtime.addresses[str(owner)] = f"http://{private.host}:{private.port}"
         async with (
             aiohttp.ClientSession() as sender,
             sender.post(
-                url(address, f"/instances/{coder}/signals/{routine}"),
+                url(address, f"/instances/{owner}/signals/{routine}"),
                 data=body,
                 headers={"X-GitHub-Event": event} | (headers or {}),
             ) as answered,
@@ -142,43 +153,47 @@ async def signalled(
             return answered.status, received
 
 
-def test_a_signal_matching_a_parked_wait_moves_its_run_on(tmp_path):
-    control = FakeControl()
-    runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", control, runtime, WAIT_FILES)
-
-    async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
-        await parked(hub, run.run_id)
-        waiting = await detail(hub, run.run_id)
-        status, received = await signalled(hub, runtime, coder, COMMENT)
-        finished = await settled(hub, run.run_id)
-
-        assert (waiting.run.status, waiting.run.step) == (FactoryRunStatus.PARKED, "babysit")
-        assert [(a.step, a.ending) for a in waiting.attempts] == [("babysit", None)]
-        assert (status, received) == (202, [COMMENT])
-        assert finished.run.status is FactoryRunStatus.DONE
-        assert [(a.step, a.ending) for a in finished.attempts] == [
-            ("babysit", StepEnding.CLEAN),
-            ("test", StepEnding.CLEAN),
-        ]
-
-    asyncio.run(scenario())
+async def _started_home(hub: Hub) -> UUID:
+    """The home instance, started, so a signal reaches it."""
+    home_id = await home(hub)
+    client = hub_client(hub)
+    start = await client.call(INSTANCE_START, InstanceStartCommand(instance_id=home_id))
+    assert isinstance(start, LifecycleOperationResult), start
+    assert (await finished_operation(client, start)).state is OperationState.SUCCEEDED
+    return home_id
 
 
-def test_a_signal_moves_on_only_the_runs_its_own_instance_handed_in(tmp_path):
+def _restarted(directory: Path, control: FakeControl, runtime: FakeRuntime) -> Hub:
+    return Hub(
+        directory,
+        runtime=runtime,
+        images=FakeImages(),
+        control=control,
+        shipped_factories=directory / "shipped",
+        private_url="http://hub:8080",
+    )
+
+
+def test_a_signal_to_an_owner_moves_on_only_the_runs_of_the_lines_it_owns(tmp_path):
     runtime = FakeRuntime()
     hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, WAIT_FILES)
+    client = hub_client(hub)
 
     async def scenario() -> None:
-        first = await created_in(hub, runtime, "coder", "checks-coder")
-        second = await created_in(hub, runtime, "coder", "billing-coder")
-        own = await handed_in(hub, first, 7)
-        other = await handed_in(hub, second, 7)
+        owner = await _started_home(hub)
+        teammate = await started(client, runtime, await created_instance(client, name="teammate"))
+        line = await started_line(hub, runtime)
+        landing = WorkbenchCreateCommand(name="landing", recipe="coder")
+        others = await started_line(hub, runtime, workbench=landing)
+        moved = await client.call(
+            LINE_OWNER_SET, LineOwnerSetCommand(line_id=others.line_id, owner_id=teammate)
+        )
+        assert isinstance(moved, Line), moved
+        own = await handed_in(hub, line, 7)
+        other = await handed_in(hub, others, 7)
         await parked(hub, own.run_id)
         await parked(hub, other.run_id)
-        await signalled(hub, runtime, first, COMMENT)
+        await signalled(hub, runtime, owner, COMMENT)
         finished = await settled(hub, own.run_id)
         await asyncio.sleep(0.05)
         waiting = await detail(hub, other.run_id)
@@ -194,20 +209,23 @@ def test_a_signal_among_many_closed_runs_moves_on_only_the_open_run_it_matches(t
     hub = factory_hub(tmp_path / "hub", FakeControl(), runtime, WAIT_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
+        owner = await _started_home(hub)
+        line = await started_line(hub, runtime)
         closed = []
         for issue, status in [(7, FactoryRunStatus.DONE), (7, FactoryRunStatus.CANCELLED)] + [
             (issue, FactoryRunStatus.DONE) for issue in range(100, 300)
         ]:
-            run, _ = hub.registry.open_run(coder, "checks", {"issue": issue}, "babysit")
+            run, _ = hub.registry.open_run(
+                owner, "checks", {"issue": issue}, "babysit", line_id=line.line_id
+            )
             hub.registry.begin_attempt(run.run_id, "babysit", FactoryRunStatus.PARKED)
             hub.registry.end_attempt(run.run_id, StepResult(ending=StepEnding.CLEAN, summary="."))
             closed.append(hub.registry.move_run(run.run_id, status, None))
-        own = await handed_in(hub, coder, 7)
-        other = await handed_in(hub, coder, 8)
+        own = await handed_in(hub, line, 7)
+        other = await handed_in(hub, line, 8)
         await parked(hub, own.run_id)
         await parked(hub, other.run_id)
-        await signalled(hub, runtime, coder, COMMENT)
+        await signalled(hub, runtime, owner, COMMENT)
         finished = await settled(hub, own.run_id)
         await asyncio.sleep(0.05)
         waiting = await detail(hub, other.run_id)
@@ -235,7 +253,7 @@ def test_a_signal_among_many_closed_runs_moves_on_only_the_open_run_it_matches(t
         (COMMENT, "github", "issue_comment", 401),
     ],
 )
-def test_a_signal_that_does_not_match_or_the_instance_did_not_accept_leaves_the_run_parked(
+def test_a_signal_that_does_not_match_or_the_owner_did_not_accept_leaves_the_run_parked(
     tmp_path, body, routine, event, answer
 ):
     control = FakeControl()
@@ -243,11 +261,11 @@ def test_a_signal_that_does_not_match_or_the_instance_did_not_accept_leaves_the_
     hub = factory_hub(tmp_path / "hub", control, runtime, WAIT_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        owner = await _started_home(hub)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         status, received = await signalled(
-            hub, runtime, coder, body, routine=routine, event=event, answer=answer
+            hub, runtime, owner, body, routine=routine, event=event, answer=answer
         )
         await asyncio.sleep(0.05)
         found = await detail(hub, run.run_id)
@@ -268,14 +286,14 @@ def test_a_signal_that_lands_while_the_run_works_toward_its_wait_moves_it_on_onc
     runtime = FakeRuntime()
     build_first = WAIT.replace(
         "  - id: babysit\n",
-        '  - id: build\n    kind: command\n    in: coder\n    run: ["make"]\n  - id: babysit\n',
+        '  - id: build\n    kind: command\n    run: ["make"]\n  - id: babysit\n',
     )
-    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": build_first})
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": build_first})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
-        await signalled(hub, runtime, coder, COMMENT)
+        owner = await _started_home(hub)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
+        await signalled(hub, runtime, owner, COMMENT)
         control.step_release.set()
         found = await settled(hub, run.run_id)
 
@@ -319,15 +337,13 @@ def test_a_wait_with_several_filters_moves_on_when_a_signal_matches_any_one_of_t
 ):
     control = FakeControl()
     runtime = FakeRuntime()
-    hub = factory_hub(
-        tmp_path / "hub", control, runtime, FILES | {"factory.yaml": REVIEW_OR_CHECKS}
-    )
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": REVIEW_OR_CHECKS})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        owner = await _started_home(hub)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
-        await signalled(hub, runtime, coder, body, event=event)
+        await signalled(hub, runtime, owner, body, event=event)
         await asyncio.sleep(0.05)
         found = await settled(hub, run.run_id)
 
@@ -336,20 +352,20 @@ def test_a_wait_with_several_filters_moves_on_when_a_signal_matches_any_one_of_t
     asyncio.run(scenario())
 
 
-def test_a_wait_never_matches_a_header_the_hub_does_not_forward_to_the_instance(tmp_path):
+def test_a_wait_never_matches_a_header_the_hub_does_not_forward_to_the_owner(tmp_path):
     control = FakeControl()
     runtime = FakeRuntime()
     on_cookie = WAIT.replace(
         "headers.X-GitHub-Event: issue_comment", "headers.Cookie: kinby_session=forged"
     )
-    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": on_cookie})
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": on_cookie})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        owner = await _started_home(hub)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         status, _ = await signalled(
-            hub, runtime, coder, COMMENT, headers={"Cookie": "kinby_session=forged"}
+            hub, runtime, owner, COMMENT, headers={"Cookie": "kinby_session=forged"}
         )
         await asyncio.sleep(0.05)
         found = await detail(hub, run.run_id)
@@ -367,11 +383,10 @@ def test_a_wait_whose_deadline_passes_fails_under_its_retry_then_needs_a_human(
     control = FakeControl()
     runtime = FakeRuntime()
     factory = WAIT.replace("deadline: 7d\n", "deadline: 1s\n" + retry)
-    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": factory})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         finished = await stopped(hub, run.run_id, timeout=attempts + 3)
 
@@ -394,11 +409,10 @@ def test_a_wait_whose_quiet_time_passes_moves_on_and_records_it(tmp_path):
     control = FakeControl()
     runtime = FakeRuntime()
     factory = WAIT.replace("deadline: 7d\n", "quiet: 1s\n    deadline: 7d\n")
-    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": factory})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         finished = await stopped(hub, run.run_id)
 
@@ -420,11 +434,10 @@ def test_cancelling_a_run_parked_at_a_wait_ends_it_and_drops_its_deadline(tmp_pa
     control = FakeControl()
     runtime = FakeRuntime()
     factory = WAIT.replace("deadline: 7d", "deadline: 1s")
-    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": factory})
+    hub = factory_hub(tmp_path / "hub", control, runtime, {"factory.yaml": factory})
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         cancelled = await hub_client(hub).call(
             FACTORY_RUN_CANCEL, FactoryRunCancelCommand(run_id=run.run_id)
@@ -445,23 +458,16 @@ def test_a_parked_wait_stays_parked_through_a_hub_restart_and_keeps_its_deadline
     runtime = FakeRuntime()
     directory = tmp_path / "hub"
     factory = WAIT.replace("deadline: 7d", "deadline: 1s")
-    hub = factory_hub(directory, control, runtime, FILES | {"factory.yaml": factory})
+    hub = factory_hub(directory, control, runtime, {"factory.yaml": factory})
 
     async def before_the_restart() -> UUID:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         return run.run_id
 
     run_id = asyncio.run(before_the_restart())
     hub.close()
-    restarted = Hub(
-        directory,
-        runtime=runtime,
-        images=FakeImages(),
-        control=control,
-        shipped_factories=directory / "shipped",
-    )
+    restarted = _restarted(directory, control, runtime)
 
     async def after_the_restart() -> None:
         await restarted.recover()
@@ -478,24 +484,20 @@ def test_a_parked_wait_stays_parked_through_a_hub_restart_and_keeps_its_deadline
 
 APPROVE = """\
 name: checks
-instances:
-  coder: {}
-intake: { instance: coder, routine: scan }
+requires: { image: coder }
 work_item: { issue: int }
 steps:
   - id: test
     kind: command
-    in: coder
     run: ["make test"]
   - id: merge
     kind: approve
     summary: Merge the branch.
   - id: publish
     kind: command
-    in: coder
     run: ["make publish"]
 """
-APPROVE_FILES = FILES | {"factory.yaml": APPROVE}
+APPROVE_FILES = {"factory.yaml": APPROVE}
 
 
 def test_approving_a_run_parked_at_an_approve_step_moves_it_on(tmp_path):
@@ -504,10 +506,8 @@ def test_approving_a_run_parked_at_an_approve_step_moves_it_on(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         waiting = await awaiting_approval(hub, run.run_id)
-        needing = await needing_human(hub)
         async with run_events(hub) as events:
             approved = await hub_client(hub).call(
                 FACTORY_RUN_APPROVE, FactoryRunApproveCommand(run_id=run.run_id)
@@ -515,7 +515,6 @@ def test_approving_a_run_parked_at_an_approve_step_moves_it_on(tmp_path):
             finished = await settled(hub, run.run_id)
 
         assert (waiting.run.status, waiting.run.step) == (FactoryRunStatus.PARKED, "merge")
-        assert needing == {coder: 1}
         assert isinstance(approved, FactoryRun)
         assert (approved.status, approved.step) == (FactoryRunStatus.QUEUED, "publish")
         assert events[0] == approved
@@ -526,7 +525,6 @@ def test_approving_a_run_parked_at_an_approve_step_moves_it_on(tmp_path):
             ("publish", StepEnding.CLEAN, ""),
         ]
         assert [command.origin.step for _, command in control.steps] == ["test", "publish"]
-        assert await needing_human(hub) == {coder: 0}
 
     asyncio.run(scenario())
 
@@ -537,8 +535,7 @@ def test_sending_back_a_run_that_awaits_approval_runs_the_earlier_step_again(tmp
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await awaiting_approval(hub, run.run_id)
         sent = await hub_client(hub).call(
             FACTORY_RUN_SEND_BACK, FactoryRunSendBackCommand(run_id=run.run_id, step="test")
@@ -563,8 +560,7 @@ def test_only_a_run_parked_at_an_approve_step_is_approved_or_sent_back_from_ther
     hub = factory_hub(tmp_path / "hub", control, runtime, WAIT_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         before = await detail(hub, run.run_id)
         approved = await hub_client(hub).call(
@@ -587,7 +583,6 @@ def test_only_a_run_parked_at_an_approve_step_is_approved_or_sent_back_from_ther
         assert isinstance(missing, ErrorEnvelope)
         assert missing.code is ErrorCode.NOT_FOUND
         assert await detail(hub, run.run_id) == before
-        assert await needing_human(hub) == {coder: 0}
 
     asyncio.run(scenario())
 
@@ -598,8 +593,7 @@ def test_a_run_awaiting_approval_is_only_sent_back_to_an_earlier_step(tmp_path):
     hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         waiting = await awaiting_approval(hub, run.run_id)
         refused = await hub_client(hub).call(
             FACTORY_RUN_SEND_BACK, FactoryRunSendBackCommand(run_id=run.run_id, step="publish")
@@ -612,34 +606,8 @@ def test_a_run_awaiting_approval_is_only_sent_back_to_an_earlier_step(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_parked_run_never_blocks_another_runs_step_on_its_instance(tmp_path):
-    control = FakeControl()
-    runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", control, runtime, APPROVE_FILES)
-
-    async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        first = await handed_in(hub, coder, 7)
-        await awaiting_approval(hub, first.run_id)
-        second = await handed_in(hub, coder, 8)
-        await awaiting_approval(hub, second.run_id)
-        await hub_client(hub).call(
-            FACTORY_RUN_APPROVE, FactoryRunApproveCommand(run_id=second.run_id)
-        )
-        finished = await settled(hub, second.run_id)
-
-        assert finished.run.status is FactoryRunStatus.DONE
-        assert (await detail(hub, first.run_id)).run.status is FactoryRunStatus.PARKED
-        assert [
-            (command.work_item["issue"], command.origin.step) for _, command in control.steps
-        ] == [(7, "test"), (8, "test"), (8, "publish")]
-        assert await needing_human(hub) == {coder: 1}
-
-    asyncio.run(scenario())
-
-
 def limited(after: timedelta) -> StepResult:
-    """A client step's result once the plan refused its coding run, resetting *after* from now."""
+    """An agent step's result once the plan refused its coding run, resetting *after* from now."""
     return StepResult(
         ending=StepEnding.LIMITED,
         summary="You've hit your limit.",
@@ -647,16 +615,36 @@ def limited(after: timedelta) -> StepResult:
     )
 
 
-def test_a_limited_client_step_parks_its_run_until_its_plan_window_resets(tmp_path):
+AGENT_FILES = {
+    "factory.yaml": """\
+name: checks
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: agent
+    engine: claude
+    prompt: prompts/implement.md
+  - id: fix
+    kind: agent
+    engine: claude
+    prompt: prompts/fix.md
+    resume: implement
+""",
+    "prompts/implement.md": "Implement it.\n",
+    "prompts/fix.md": "Fix it.\n",
+}
+
+
+def test_a_limited_agent_step_parks_its_run_until_its_plan_window_resets(tmp_path):
     control = FakeControl()
     refused = limited(timedelta(hours=1))
     control.step_results = [refused]
     runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES)
+    hub = factory_hub(tmp_path / "hub", control, runtime, AGENT_FILES)
 
     async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, await started_line(hub, runtime), 7)
         await parked(hub, run.run_id)
         found = await detail(hub, run.run_id)
         listed = await hub_client(hub).call(
@@ -679,62 +667,25 @@ def test_a_limited_client_step_parks_its_run_until_its_plan_window_resets(tmp_pa
     asyncio.run(scenario())
 
 
-def test_a_run_parked_by_its_plan_window_runs_its_step_again_at_the_reset_spending_no_retry(
-    tmp_path,
-):
-    control = FakeControl()
-    refused = limited(timedelta(seconds=1))
-    control.step_results = [
-        refused,
-        StepResult(ending=StepEnding.FAILED),
-        StepResult(ending=StepEnding.CLEAN, session="claude-1"),
-    ]
-    runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", control, runtime, CLIENT_FILES)
-
-    async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
-        finished = await stopped(hub, run.run_id)
-
-        assert finished.run.status is FactoryRunStatus.DONE
-        assert [(a.step, a.attempt, a.ending) for a in finished.attempts] == [
-            ("implement", 1, StepEnding.LIMITED),
-            ("implement", 2, StepEnding.FAILED),
-            ("implement", 3, StepEnding.CLEAN),
-            ("fix", 1, StepEnding.CLEAN),
-        ]
-        assert refused.resets_at is not None
-        assert finished.attempts[1].started_at >= refused.resets_at
-
-    asyncio.run(scenario())
-
-
 def test_a_run_parked_by_its_plan_window_wakes_at_the_reset_after_a_hub_restart(tmp_path):
     control = FakeControl()
     runtime = FakeRuntime()
     directory = tmp_path / "hub"
-    hub = factory_hub(directory, control, runtime, CLIENT_FILES)
+    hub = factory_hub(directory, control, runtime, AGENT_FILES)
 
     async def before_the_restart() -> tuple[UUID, StepResult]:
-        coder = await started_coder(hub, runtime)
-        # The window starts once the coder is up: under load, starting it can outlast the window,
+        line = await started_line(hub, runtime)
+        # The window starts once the line is up: under load, setting it up can outlast the window,
         # and a run refused past its reset never parks.
         refused = limited(timedelta(seconds=2))
         control.step_results = [refused, StepResult(ending=StepEnding.CLEAN, session="claude-1")]
-        run = await handed_in(hub, coder, 7)
+        run = await handed_in(hub, line, 7)
         await parked(hub, run.run_id)
         return run.run_id, refused
 
     run_id, refused = asyncio.run(before_the_restart())
     hub.close()
-    restarted = Hub(
-        directory,
-        runtime=runtime,
-        images=FakeImages(),
-        control=control,
-        shipped_factories=directory / "shipped",
-    )
+    restarted = _restarted(directory, control, runtime)
 
     async def after_the_restart() -> None:
         await restarted.recover()
@@ -753,72 +704,3 @@ def test_a_run_parked_by_its_plan_window_wakes_at_the_reset_after_a_hub_restart(
         ]
 
     asyncio.run(after_the_restart())
-
-
-CLOSING = (
-    FACTORY
-    + """\
-closing:
-  done:
-    - headers.X-GitHub-Event: pull_request
-      body.action: closed
-      body.pull_request.number: "{{issue}}"
-      body.pull_request.merged: true
-  cancelled:
-    - headers.X-GitHub-Event: issues
-      body.action: closed
-      body.issue.number: "{{issue}}"
-"""
-)
-
-
-@pytest.mark.parametrize(
-    ("event", "body", "status", "step"),
-    [
-        (
-            "pull_request",
-            b'{"action": "closed", "pull_request": {"number": 7, "merged": true}}',
-            FactoryRunStatus.DONE,
-            None,
-        ),
-        (
-            "issues",
-            b'{"action": "closed", "issue": {"number": 7}}',
-            FactoryRunStatus.CANCELLED,
-            "test",
-        ),
-        (
-            "pull_request",
-            b'{"action": "closed", "pull_request": {"number": 7, "merged": false}}',
-            FactoryRunStatus.NEEDS_HUMAN,
-            "test",
-        ),
-        (
-            "issues",
-            b'{"action": "closed", "issue": {"number": 8}}',
-            FactoryRunStatus.NEEDS_HUMAN,
-            "test",
-        ),
-    ],
-    ids=["done", "cancelled", "unmatched-value", "another-work-item"],
-)
-def test_a_closing_signal_ends_a_run_that_needs_a_human_done_or_cancelled(
-    tmp_path, event, body, status, step
-):
-    control = FakeControl()
-    control.step_results = [StepResult(ending=StepEnding.FAILED, summary="Tests failed.")]
-    runtime = FakeRuntime()
-    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": CLOSING})
-
-    async def scenario() -> None:
-        coder = await started_coder(hub, runtime)
-        run = await handed_in(hub, coder, 7)
-        await stopped(hub, run.run_id)
-        await signalled(hub, runtime, coder, body, event=event)
-        await asyncio.sleep(0.05)
-        found = await detail(hub, run.run_id)
-
-        assert (found.run.status, found.run.step) == (status, step)
-        assert [(a.step, a.ending) for a in found.attempts] == [("test", StepEnding.FAILED)]
-
-    asyncio.run(scenario())

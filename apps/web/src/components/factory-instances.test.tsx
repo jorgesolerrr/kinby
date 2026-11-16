@@ -25,7 +25,6 @@ const instances = [
     instance_id: "billing",
     manifest_id: "billing-coder",
     factory_role: coder,
-    needs_human: 1,
   }),
   instanceSummary({ instance_id: "software", manifest_id: "software-coder", factory_role: coder }),
   instanceSummary({

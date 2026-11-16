@@ -1,4 +1,4 @@
-"""Bring memory to a turn or a client step without the agent choosing to search."""
+"""Bring memory to a turn without the agent choosing to search."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _PRE_SEARCH_HEADER = "# From your memory\nA search of your memory for this work 
 
 
 class MemoryDelivery(StrEnum):
-    """How memory reaches a turn or a client step before the agent searches it."""
+    """How memory reaches a turn before the agent searches it."""
 
     NONE = "none"
     #: Every live fact's id and description, newest first, as many as fit about 1k tokens.

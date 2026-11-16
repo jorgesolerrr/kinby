@@ -11,7 +11,6 @@ from uuid import UUID
 from pydantic import TypeAdapter, ValidationError
 
 from kinby.contracts import (
-    CommandListName,
     DeclaredSetup,
     HubSecretName,
     InstanceSetup,
@@ -160,12 +159,11 @@ def instance_setup(
     links: Mapping[str, HubSecretName],
     model: ModelName | None,
     search_key: str | None,
-    missing_commands: Sequence[CommandListName],
     code_secrets: Sequence[str],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
-    the key its web search needs, each secret its instance code declares as a required one,
-    whether or not the descriptor declares it, and the lists of repository commands it is missing.
+    the key its web search needs, and each secret its instance code declares as a required one,
+    whether or not the descriptor declares it.
 
     `running` names the sign-in each login has running, by login id. `links` names the hub
     secret each linked variable took. `search_key` names the variable of the search backend's
@@ -216,7 +214,6 @@ def instance_setup(
             for login in description.logins
         ],
         secrets=needed,
-        missing_commands=list(missing_commands),
     )
 
 

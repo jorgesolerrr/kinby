@@ -1,6 +1,5 @@
-"""Declare hooks: code kinby runs when a factory step ends, never offered to the model. An
-instance's hooks record its steps' results, and a factory's checks those of its steps on a
-workbench."""
+"""Declare hooks: code kinby runs when a factory step ends, never offered to the model. A
+factory's hooks are its checks, which record its steps' results on a workbench."""
 
 from __future__ import annotations
 
@@ -12,7 +11,6 @@ from pathlib import Path
 from types import FunctionType
 
 from kinby.contracts import StepEnding, StepValue, ValueName, Warning
-from kinby.instance import Instance
 from kinby.instance.layout import HOOKS_DIR
 from kinby.plugins.errors import exception_message
 from kinby.plugins.registry import load_plugin_module
@@ -26,10 +24,7 @@ class StepEnd:
     said.
     """
 
-    #: The instance the step ran in. None on a workbench.
-    instance: Instance | None
-    #: Where the step ran: the run's folder on a workbench, its run worktree when it names a
-    #: branch, else the instance's workspace.
+    #: Where the step ran: the run's folder on the workbench.
     workspace: Path
     ending: StepEnding
     work_item: Mapping[ValueName, StepValue]
@@ -60,7 +55,7 @@ class Hook:
     function: FunctionType
 
     async def record(self, end: StepEnd) -> HookResult | None:
-        """Run the hook. One that blocks runs in a thread, off the instance's event loop."""
+        """Run the hook. One that blocks runs in a thread, off the event loop."""
         if inspect.iscoroutinefunction(self.function):
             recorded = await self.function(end)
         else:
@@ -79,15 +74,9 @@ def hook(function: FunctionType) -> Hook:
 
 
 def load_hooks(directory: Path) -> tuple[tuple[Hook, ...], tuple[Warning, ...]]:
-    """kinby's default hooks and those in *directory*'s hooks folder, by name.
-
-    A hook of the instance replaces the default of its name. Each file that does not load is a
-    warning.
-    """
-    # The default hooks are declared with this module's decorator, so they load on first use.
-    from kinby.plugins.defaults.hooks import HOOKS
-
-    hooks = {default.name: default for default in HOOKS}
+    """The hooks in *directory*'s hooks folder, by name. Each file that does not load is a
+    warning."""
+    hooks: dict[str, Hook] = {}
     warnings: list[Warning] = []
     for path in sorted((directory / HOOKS_DIR).glob("*.py")):
         try:

@@ -3,7 +3,12 @@ removes that folder when the hub asks."""
 
 import asyncio
 import json
+import os
+import re
 import subprocess
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -31,7 +36,6 @@ from kinby.contracts import (
 from kinby.core.errors import IntakeFailed
 from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_hub_factories import write_factory
-from tests.test_steps import CLAUDE_STREAM, recorded_calls, streaming, stub_client
 from tests.test_workbench_workspace import _seed
 
 BRANCH = RunFolder(branch="tickets/issue-12")
@@ -61,6 +65,11 @@ def drafted(end: StepEnd) -> HookResult:
 @hook
 def refused(end: StepEnd) -> None:
     raise ValueError("the draft has no title")
+
+
+@hook
+async def silent(end: StepEnd) -> None:
+    return None
 """
 
 
@@ -94,6 +103,11 @@ def _git(directory: Path, *arguments: str) -> str:
     return subprocess.run(
         ["git", *arguments], cwd=directory, capture_output=True, text=True, check=True
     ).stdout.strip()
+
+
+def _run_folder(tmp_path: Path, run_id: UUID) -> Path:
+    """The directory a run works in on a plain workspace."""
+    return tmp_path / "workbench" / "runs" / str(run_id)
 
 
 def test_commands_run_in_a_run_worktree_cut_from_the_clone_on_the_runs_branch(tmp_path):
@@ -340,6 +354,165 @@ def test_on_a_plain_workspace_a_run_works_in_a_directory_named_for_it_until_it_g
     assert not folder.exists()
 
 
+def test_a_command_step_runs_each_command_without_a_shell(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    step = CommandStepRun(run=["touch made", "echo $HOME > redirected"])
+
+    result = asyncio.run(workbench.run(_command(run_id, step, PLAIN)))
+
+    assert result.ending is StepEnding.CLEAN
+    assert (_run_folder(tmp_path, run_id) / "made").is_file()
+    assert not (_run_folder(tmp_path, run_id) / "redirected").exists()
+
+
+def test_a_command_step_fails_at_the_first_failing_command_and_names_it_with_its_outputs_tail(
+    tmp_path,
+):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    step = CommandStepRun(run=["touch made", "sh -c 'echo broken >&2; exit 3'", "touch never"])
+
+    result = asyncio.run(workbench.run(_command(run_id, step, PLAIN)))
+
+    assert result == StepResult(
+        ending=StepEnding.FAILED,
+        summary="\"sh -c 'echo broken >&2; exit 3'\" exited with code 3.\nbroken",
+    )
+    assert (_run_folder(tmp_path, run_id) / "made").is_file()
+    assert not (_run_folder(tmp_path, run_id) / "never").exists()
+
+
+def test_a_command_still_running_at_the_steps_timeout_is_killed_and_the_step_times_out(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    step = CommandStepRun(run=["sleep 30", "touch never"], timeout_seconds=1)
+
+    result = asyncio.run(asyncio.wait_for(workbench.run(_command(run_id, step, PLAIN)), 10))
+
+    assert result == StepResult(
+        ending=StepEnding.TIMED_OUT, summary="The commands ran past the step's timeout of 1s."
+    )
+    assert not (_run_folder(tmp_path, run_id) / "never").exists()
+
+
+def test_a_command_that_cannot_start_fails_the_step(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    step = CommandStepRun(run=["kinby-no-such-command --help"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN)))
+
+    assert result.ending is StepEnding.FAILED
+    assert result.summary.startswith('"kinby-no-such-command --help" could not start: ')
+
+
+async def _when_made(path: Path) -> None:
+    """Return once *path* exists."""
+    async with asyncio.timeout(5):
+        while not path.exists():
+            await asyncio.sleep(0.01)
+
+
+def test_a_step_call_sent_again_while_it_runs_waits_for_it_and_runs_it_once(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    step = CommandStepRun(run=["sh -c 'echo ran >> runs'", "sleep 0.3"])
+    command = _command(run_id, step, PLAIN)
+    runs = _run_folder(tmp_path, run_id) / "runs"
+
+    async def scenario() -> tuple[StepResult, StepResult]:
+        first = asyncio.create_task(workbench.run(command))
+        await _when_made(runs)
+        again = await workbench.run(command)
+        return again, await first
+
+    again, first = asyncio.run(scenario())
+
+    assert again.ending is StepEnding.CLEAN
+    assert again == first
+    assert runs.read_text() == "ran\n"
+
+
+def test_a_step_call_sent_again_after_it_finished_returns_its_result_also_after_a_restart(
+    tmp_path,
+):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    command = _command(run_id, CommandStepRun(run=["sh -c 'echo ran >> runs; exit 3'"]), PLAIN)
+
+    first = asyncio.run(workbench.run(command))
+    again = asyncio.run(workbench.run(command))
+    after_the_restart = asyncio.run(_workbench(tmp_path, None).run(command))
+
+    assert first.ending is StepEnding.FAILED
+    assert again == first
+    assert after_the_restart == first
+    assert (_run_folder(tmp_path, run_id) / "runs").read_text() == "ran\n"
+
+
+RESTARTED = StepResult(ending=StepEnding.FAILED, summary="The instance restarted during the step.")
+
+
+def test_a_step_call_its_workbench_restarted_during_answers_failed(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    step = CommandStepRun(run=["sh -c 'echo ran >> runs'", "sleep 0.3"])
+    command = _command(run_id, step, PLAIN)
+    runs = _run_folder(tmp_path, run_id) / "runs"
+
+    async def scenario() -> StepResult:
+        cut_short = asyncio.create_task(workbench.run(command))
+        await _when_made(runs)
+        answer = await _workbench(tmp_path, None).run(command)
+        await cut_short
+        return answer
+
+    assert asyncio.run(scenario()) == RESTARTED
+    assert runs.read_text() == "ran\n"
+
+
+def test_a_step_call_its_workbench_shut_down_during_answers_failed_after_the_restart(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    command = _command(run_id, CommandStepRun(run=["sh -c 'echo ran >> runs'", "sleep 5"]), PLAIN)
+    runs = _run_folder(tmp_path, run_id) / "runs"
+
+    async def shut_down() -> bool:
+        cut_short = asyncio.create_task(workbench.run(command))
+        await _when_made(runs)
+        # Cancel every task, as the event loop's shutdown does.
+        running = asyncio.all_tasks() - {asyncio.current_task()}
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        return cut_short.cancelled()
+
+    cancelled = asyncio.run(shut_down())
+    answer = asyncio.run(_workbench(tmp_path, None).run(command))
+
+    assert cancelled
+    assert answer == RESTARTED
+    assert runs.read_text() == "ran\n"
+
+
+@pytest.mark.parametrize(
+    ("step", "attempt"), [("review", 1), ("command", None)], ids=["next-step", "ended-call"]
+)
+def test_a_runs_next_step_call_lets_go_of_the_answer_it_held(tmp_path, step, attempt):
+    workbench = _workbench(tmp_path, None)
+    run_id = uuid4()
+    command = _command(run_id, CommandStepRun(run=["sh -c 'echo ran >> runs'"]), PLAIN)
+    origin = command.origin.model_copy(update={"step": step})
+    next_call = _command(run_id, CommandStepRun(run=["true"]), PLAIN).model_copy(
+        update={"origin": origin, "attempt": attempt}
+    )
+
+    for call in (command, next_call, command):
+        asyncio.run(workbench.run(call))
+
+    assert (_run_folder(tmp_path, run_id) / "runs").read_text() == "ran\nran\n"
+
+
 def test_a_code_step_runs_the_factorys_tool_as_its_folder_holds_it_at_each_step(tmp_path):
     workbench = _workbench(tmp_path, None)
     factory = tmp_path / "factories" / "tickets"
@@ -373,6 +546,57 @@ def test_a_code_step_fails_when_the_factory_has_no_such_tool(tmp_path):
     assert result == StepResult(
         ending=StepEnding.FAILED,
         summary='Tool "close_issue" is not one of factory "tickets"\'s tools.',
+    )
+
+
+GITHUB = '''\
+from kinby.plugins.hooks import HookResult
+from kinby.plugins.tools import tool
+
+
+@tool(write=True)
+def open_pull_request(branch: str, issue: int) -> dict[str, str]:
+    """Open the pull request of the branch."""
+    if branch == "broken":
+        raise RuntimeError("GitHub refused the pull request")
+    return {"pr": f"{branch} closes {issue}"}
+
+
+@tool(write=True)
+def read_review(issue: int) -> HookResult:
+    """Read the review of the issue's pull request."""
+    return HookResult(values={"reviewed": True}, outcome="changes")
+'''
+
+
+def _code_step(tmp_path: Path, call: str, branch: str) -> StepResult:
+    """Run the GitHub tool *call* as a code step of a run whose earlier step named *branch*."""
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"tools/github.py": GITHUB})
+    command = _command(uuid4(), CodeStepRun(call=call), PLAIN)
+    return asyncio.run(workbench.run(command.model_copy(update={"results": {"branch": branch}})))
+
+
+def test_a_code_step_calls_its_tool_with_the_work_item_and_the_runs_values(tmp_path):
+    result = _code_step(tmp_path, "open_pull_request", "agent/12")
+
+    assert result == StepResult(ending=StepEnding.CLEAN, values={"pr": "agent/12 closes 12"})
+
+
+def test_a_code_steps_tool_names_an_outcome_by_returning_a_hook_result(tmp_path):
+    result = _code_step(tmp_path, "read_review", "agent/12")
+
+    assert result == StepResult(
+        ending=StepEnding.CLEAN, outcome="changes", values={"reviewed": True}
+    )
+
+
+def test_a_code_step_whose_tool_raises_fails_and_says_why(tmp_path):
+    result = _code_step(tmp_path, "open_pull_request", "broken")
+
+    assert result == StepResult(
+        ending=StepEnding.FAILED,
+        summary='Tool "open_pull_request" failed: RuntimeError: GitHub refused the pull request',
     )
 
 
@@ -445,8 +669,90 @@ def test_a_check_that_raises_fails_the_step_and_says_why(tmp_path):
     )
 
 
-@pytest.mark.parametrize("check", ["approved", "record_branch"])
-def test_a_check_the_factorys_folder_does_not_hold_fails_the_step(tmp_path, check):
+def test_a_check_that_records_nothing_leaves_the_steps_own_result(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    step = CommandStepRun(run=["true"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="silent")))
+
+    assert result == StepResult(
+        ending=StepEnding.CLEAN, summary="Every command exited with code 0."
+    )
+
+
+@pytest.mark.parametrize(
+    ("check", "reason"),
+    [
+        ("refused", 'Check "refused" failed: ValueError: the draft has no title'),
+        ("approved", 'Check "approved" is not one of factory "tickets"\'s hooks.'),
+    ],
+    ids=["raises", "missing"],
+)
+def test_a_timed_out_step_whose_check_fails_still_times_out(tmp_path, check, reason):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    step = CommandStepRun(run=["sleep 30"], timeout_seconds=1)
+
+    result = asyncio.run(
+        asyncio.wait_for(workbench.run(_command(uuid4(), step, PLAIN, check=check)), 10)
+    )
+
+    assert result == StepResult(
+        ending=StepEnding.TIMED_OUT,
+        summary=f"The commands ran past the step's timeout of 1s.\n{reason}",
+    )
+
+
+LARGE = """\
+from kinby.plugins.hooks import HookResult, StepEnd, hook
+
+
+@hook
+def long_winded(end: StepEnd) -> HookResult:
+    raise RuntimeError("first words " + "x" * 5_000_000 + " last words")
+
+
+@hook
+def heavy(end: StepEnd) -> HookResult:
+    return HookResult(values={"diff": "x" * 2_000_000})
+"""
+
+
+def test_a_long_summary_keeps_its_start_and_its_end_and_says_how_much_was_cut(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/large.py": LARGE})
+    step = CommandStepRun(run=["true"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="long_winded")))
+
+    assert result.ending is StepEnding.FAILED
+    assert len(result.summary) < 16_100
+    assert result.summary.startswith(
+        'Every command exited with code 0.\nCheck "long_winded" failed: RuntimeError: first '
+    )
+    assert result.summary.endswith("x last words")
+    assert re.search(r"\n\[4,98\d,\d{3} characters cut\]\n", result.summary)
+
+
+def test_a_result_too_large_to_send_fails_the_step_and_names_its_size(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/large.py": LARGE})
+    step = CommandStepRun(run=["true"])
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="heavy")))
+
+    assert result.ending is StepEnding.FAILED
+    assert result.values == {}
+    assert re.fullmatch(
+        r"Every command exited with code 0\.\n"
+        r"The step's result is 2,000,\d{3} bytes, over the 1,048,576-byte limit\.",
+        result.summary,
+    )
+
+
+def test_a_check_the_factorys_folder_does_not_hold_fails_the_step(tmp_path):
+    check = "approved"
     workbench = _workbench(tmp_path, None)
     write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
     step = CommandStepRun(run=["true"])
@@ -460,12 +766,116 @@ def test_a_check_the_factorys_folder_does_not_hold_fails_the_step(tmp_path, chec
     )
 
 
+#: What Claude Code streams for a run that implemented the issue in session claude-1.
+CLAUDE_STREAM = [
+    {"type": "system", "subtype": "init", "session_id": "claude-1"},
+    {"type": "assistant", "message": {"id": "m1", "model": "claude-opus-5-5", "usage": {}}},
+    {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "session_id": "claude-1",
+        "result": "Implemented issue 7.",
+        "num_turns": 3,
+        "modelUsage": {
+            "claude-opus-5-5": {
+                "inputTokens": 100,
+                "outputTokens": 20,
+                "cacheReadInputTokens": 50,
+                "cacheCreationInputTokens": 10,
+            }
+        },
+    },
+]
+#: What Codex streams for the same run, in thread codex-1.
+CODEX_STREAM = [
+    {"type": "thread.started", "thread_id": "codex-1"},
+    {"type": "turn.started"},
+    {"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": "Done."}},
+    {
+        "type": "item.completed",
+        "item": {"id": "i2", "type": "agent_message", "text": "Implemented issue 7."},
+    },
+    {
+        "type": "turn.completed",
+        "usage": {"input_tokens": 160, "cached_input_tokens": 50, "output_tokens": 20},
+    },
+]
+#: The API keys a client would bill over its subscription login, all set for every stub client.
+API_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
+def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then: str) -> Path:
+    """Put an executable *name* first on PATH that records how it was called, then runs *then*.
+
+    Returns the file each call is recorded in, one JSON object per line.
+    """
+    calls = tmp_path / f"{name}.calls"
+    executable = tmp_path / "bin" / name
+    executable.parent.mkdir(exist_ok=True)
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys, time\n"
+        f"with open({str(calls)!r}, 'a') as calls:\n"
+        "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'stdin': sys.stdin.read(),\n"
+        f"               'api_keys': [name for name in {API_KEYS!r} if name in os.environ],\n"
+        "               'config_dir': os.environ.get('CLAUDE_CONFIG_DIR'),\n"
+        "               'no_background':\n"
+        "                   os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'),\n"
+        "               'command_limit': os.environ.get('BASH_MAX_TIMEOUT_MS'),\n"
+        "               'command_default': os.environ.get('BASH_DEFAULT_TIMEOUT_MS')},\n"
+        "              calls)\n"
+        "    calls.write('\\n')\n"
+        f"{then}\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
+    for variable in API_KEYS:
+        monkeypatch.setenv(variable, "sk-test")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", raising=False)
+    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("BASH_DEFAULT_TIMEOUT_MS", raising=False)
+    return calls
+
+
+def streaming(events: Sequence[Mapping[str, object]]) -> str:
+    """The stub's body that streams *events* as JSON lines and exits with code zero."""
+    return "".join(f"print({json.dumps(json.dumps(event))})\n" for event in events)
+
+
+@dataclass(frozen=True)
+class ClientCall:
+    """How the stub client was called."""
+
+    argv: list[str]
+    cwd: str
+    stdin: str
+    #: The API keys the client saw.
+    api_keys: list[str]
+    #: Where Claude keeps its sessions, when the client was told.
+    config_dir: str | None
+    #: Set when Claude may leave no command running in the background.
+    no_background: str | None
+    #: The longest Claude may wait for one command, in milliseconds.
+    command_limit: str | None
+    #: How long Claude waits for a command that names no timeout, in milliseconds.
+    command_default: str | None
+
+
+def recorded_calls(calls: Path) -> list[ClientCall]:
+    return [ClientCall(**json.loads(line)) for line in calls.read_text().splitlines()]
+
+
 IMPLEMENT = ClientStepRun(
     client=CodingClient.CLAUDE,
     prompt="Implement the issue.",
     timeout_seconds=30,
     model="claude-opus-5-5",
     effort=ReasoningEffort.HIGH,
+)
+CODEX_IMPLEMENT = IMPLEMENT.model_copy(
+    update={"client": CodingClient.CODEX, "model": "gpt-5.5-codex"}
 )
 
 
@@ -508,15 +918,26 @@ def test_an_agent_steps_result_carries_what_its_coding_client_spent(tmp_path, mo
     assert result.usage.api is None
 
 
-def test_an_agent_step_that_resumes_continues_the_session_it_names(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("step", "stream", "session", "arguments"),
+    [
+        (IMPLEMENT, CLAUDE_STREAM, "claude-1", ["--resume", "claude-1"]),
+        (CODEX_IMPLEMENT, CODEX_STREAM, "codex-1", ["exec", "resume", "codex-1", "-"]),
+    ],
+    ids=["claude", "codex"],
+)
+def test_an_agent_step_that_resumes_continues_the_session_it_names(
+    tmp_path, monkeypatch, step, stream, session, arguments
+):
     workbench = _workbench(tmp_path, None)
-    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
-    fix = IMPLEMENT.model_copy(update={"resume": "claude-1"})
+    calls = stub_client(tmp_path, monkeypatch, step.client, streaming(stream))
+    fix = step.model_copy(update={"resume": session})
 
-    asyncio.run(workbench.run(_command(uuid4(), fix, PLAIN)))
+    result = asyncio.run(workbench.run(_command(uuid4(), fix, PLAIN)))
 
     [called] = recorded_calls(calls)
-    assert called.argv[-2:] == ["--resume", "claude-1"]
+    assert (result.ending, result.session) == (StepEnding.CLEAN, session)
+    assert [argument for argument in called.argv if argument in arguments] == arguments
 
 
 def _skill(name: str, description: str) -> str:
@@ -540,7 +961,10 @@ def test_an_agent_step_offers_the_factorys_skills_and_the_workbenchs_picks(tmp_p
     assert f"- tdd ({tmp_path / 'workbench' / picked}): Test first." in called.stdin
 
 
-def test_an_agent_step_the_plan_refused_ends_limited_until_its_window_resets(tmp_path, monkeypatch):
+@pytest.mark.parametrize("check", [None, "approved"], ids=["unchecked", "missing-check"])
+def test_an_agent_step_the_plan_refused_ends_limited_until_its_window_resets(
+    tmp_path, monkeypatch, check
+):
     workbench = _workbench(tmp_path, None)
     resets_at = datetime(2030, 1, 1, 12, tzinfo=UTC)
     refused = [
@@ -552,9 +976,255 @@ def test_an_agent_step_the_plan_refused_ends_limited_until_its_window_resets(tmp
     ]
     stub_client(tmp_path, monkeypatch, "claude", streaming(refused) + "sys.exit(1)")
 
-    result = asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN)))
+    result = asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN, check=check)))
 
     assert (result.ending, result.resets_at) == (StepEnding.LIMITED, resets_at)
+
+
+@pytest.mark.parametrize(
+    ("step", "stream", "session", "arguments", "kept", "config_dir"),
+    [
+        (
+            IMPLEMENT,
+            CLAUDE_STREAM,
+            "claude-1",
+            ["-p", "--permission-mode", "acceptEdits"],
+            ["OPENAI_API_KEY", "CODEX_API_KEY"],
+            "claude",
+        ),
+        (
+            CODEX_IMPLEMENT,
+            CODEX_STREAM,
+            "codex-1",
+            ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"],
+            ["ANTHROPIC_API_KEY"],
+            None,
+        ),
+    ],
+    ids=["claude", "codex"],
+)
+def test_an_agent_step_runs_either_coding_client_on_its_login_and_keeps_its_session(
+    tmp_path, monkeypatch, step, stream, session, arguments, kept, config_dir
+):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, step.client, streaming(stream))
+    run_id = uuid4()
+
+    result = asyncio.run(workbench.run(_command(run_id, step, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    assert result.model_copy(update={"usage": None}) == StepResult(
+        ending=StepEnding.CLEAN, summary="Implemented issue 7.", session=session
+    )
+    assert called.argv[: len(arguments)] == arguments
+    assert called.cwd == str(_run_folder(tmp_path, run_id))
+    assert called.api_keys == kept
+    assert called.config_dir == (config_dir and str(tmp_path / "workbench" / ".state" / config_dir))
+
+
+@pytest.mark.parametrize(
+    ("step", "flags"),
+    [
+        (IMPLEMENT, [["--model", "claude-opus-5-5"], ["--effort", "high"]]),
+        (
+            CODEX_IMPLEMENT,
+            [["--model", "gpt-5.5-codex"], ["--config", "model_reasoning_effort=high"]],
+        ),
+    ],
+    ids=["claude", "codex"],
+)
+def test_an_agent_step_runs_its_coding_client_with_the_steps_model_and_effort(
+    tmp_path, monkeypatch, step, flags
+):
+    workbench = _workbench(tmp_path, None)
+    stream = CLAUDE_STREAM if step.client is CodingClient.CLAUDE else CODEX_STREAM
+    calls = stub_client(tmp_path, monkeypatch, step.client, streaming(stream))
+
+    asyncio.run(workbench.run(_command(uuid4(), step, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    for flag in flags:
+        at = called.argv.index(flag[0])
+        assert called.argv[at : at + 2] == flag
+
+
+def test_a_claude_step_runs_every_command_in_the_foreground_for_as_long_as_the_step_may_take(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    assert (called.no_background, called.command_limit, called.command_default) == (
+        "1",
+        "30000",
+        "30000",
+    )
+
+
+def test_an_agent_steps_prompt_has_no_skills_catalogue_when_there_are_no_skills(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    assert "# Skills" not in called.stdin
+
+
+def test_an_agent_steps_prompt_says_to_keep_a_lingering_process_off_a_pipe(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+
+    asyncio.run(workbench.run(_command(uuid4(), IMPLEMENT, PLAIN)))
+
+    [called] = recorded_calls(calls)
+    assert "# Commands" in called.stdin
+    assert "to a file" in called.stdin
+
+
+QUICK = IMPLEMENT.model_copy(update={"timeout_seconds": 1})
+
+
+@pytest.mark.parametrize(
+    ("step", "then", "ending", "session"),
+    [
+        (IMPLEMENT, streaming(CLAUDE_STREAM), StepEnding.CLEAN, "claude-1"),
+        (IMPLEMENT, 'print(\'{"type": "result", "subtype": "succ\')', StepEnding.CLEAN, None),
+        (QUICK, streaming(CLAUDE_STREAM[:2]) + "time.sleep(10)", StepEnding.TIMED_OUT, None),
+        (
+            IMPLEMENT,
+            streaming(CLAUDE_STREAM[:2]) + "sys.stdout.flush()\nos.kill(os.getpid(), 9)",
+            StepEnding.FAILED,
+            None,
+        ),
+    ],
+    ids=["clean", "malformed", "timeout", "kill"],
+)
+def test_an_agent_steps_check_records_its_result_however_the_client_ended(
+    tmp_path, monkeypatch, step, then, ending, session
+):
+    workbench = _workbench(tmp_path, None)
+    write_factory(tmp_path / "factories" / "tickets", {"hooks/drafted.py": CHECK})
+    stub_client(tmp_path, monkeypatch, "claude", then)
+
+    result = asyncio.run(workbench.run(_command(uuid4(), step, PLAIN, check="drafted")))
+
+    assert result.ending is ending
+    assert result.outcome == "redraft"
+    assert result.values == {"ending": ending.value, "drafted": False, "issue": 12}
+    assert result.session == session
+
+
+def test_a_client_that_runs_past_its_timeout_is_killed_and_ends_the_attempt_as_a_timeout(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    stub_client(tmp_path, monkeypatch, "codex", "time.sleep(1.5)\nopen('late', 'w').close()")
+    run_id = uuid4()
+    step = CODEX_IMPLEMENT.model_copy(update={"timeout_seconds": 1})
+
+    async def scenario() -> StepResult:
+        result = await workbench.run(_command(run_id, step, PLAIN))
+        await asyncio.sleep(1)
+        return result
+
+    result = asyncio.run(scenario())
+
+    assert (result.ending, result.summary) == (
+        StepEnding.TIMED_OUT,
+        "codex ran past its 1-second timeout and was killed.",
+    )
+    assert not (_run_folder(tmp_path, run_id) / "late").exists()
+
+
+def test_an_agent_step_kills_what_its_client_left_running_outside_its_process_group(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    left = (
+        "import subprocess\n"
+        "subprocess.Popen([sys.executable, '-c',"
+        ' \'import time; time.sleep(1); open("late", "w").close()\'],'
+        " start_new_session=True)\n"
+    )
+    stub_client(tmp_path, monkeypatch, "claude", left + streaming(CLAUDE_STREAM))
+    run_id = uuid4()
+
+    async def scenario() -> StepResult:
+        result = await workbench.run(_command(run_id, IMPLEMENT, PLAIN))
+        await asyncio.sleep(1.5)
+        return result
+
+    assert asyncio.run(scenario()).ending is StepEnding.CLEAN
+    assert not (_run_folder(tmp_path, run_id) / "late").exists()
+
+
+def _resume_failing(error: str) -> str:
+    """The stub's body that exits 1 with *error* when resuming, and otherwise implements."""
+    return (
+        "if '--resume' in sys.argv:\n"
+        f"    sys.stderr.write({error!r})\n"
+        "    sys.exit(1)\n"
+        f"{streaming(CLAUDE_STREAM)}"
+    )
+
+
+LOST = "No conversation found with session ID: claude-0\n"
+
+
+def test_a_claude_step_whose_session_was_lost_runs_once_more_in_a_new_session(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", _resume_failing(LOST))
+    fix = IMPLEMENT.model_copy(update={"resume": "claude-0"})
+
+    result = asyncio.run(workbench.run(_command(uuid4(), fix, PLAIN)))
+
+    assert result.model_copy(update={"usage": None}) == StepResult(
+        ending=StepEnding.CLEAN,
+        summary="Implemented issue 7.\nSession claude-0 was lost, so claude ran in a new one.",
+        session="claude-1",
+    )
+    resumed, started = recorded_calls(calls)
+    assert resumed.argv[-2:] == ["--resume", "claude-0"]
+    assert "--resume" not in started.argv
+    assert started.stdin == resumed.stdin
+
+
+def test_a_claude_step_whose_session_was_lost_runs_again_only_until_the_steps_timeout(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    stub_client(tmp_path, monkeypatch, "claude", "time.sleep(0.6)\n" + _resume_failing(LOST))
+    fix = QUICK.model_copy(update={"resume": "claude-0"})
+
+    result = asyncio.run(workbench.run(_command(uuid4(), fix, PLAIN)))
+
+    assert (result.ending, result.summary) == (
+        StepEnding.TIMED_OUT,
+        "claude ran past its 1-second timeout and was killed.\n"
+        "Session claude-0 was lost, so claude ran in a new one.",
+    )
+
+
+def test_a_resumed_claude_step_that_fails_otherwise_runs_only_once(tmp_path, monkeypatch):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", _resume_failing("Credit balance low\n"))
+    fix = IMPLEMENT.model_copy(update={"resume": "claude-0"})
+
+    result = asyncio.run(workbench.run(_command(uuid4(), fix, PLAIN)))
+
+    assert (result.ending, result.summary) == (
+        StepEnding.FAILED,
+        "claude exited with code 1.\nCredit balance low",
+    )
+    assert len(recorded_calls(calls)) == 1
 
 
 def _transcript(workbench: WorkbenchSteps, run_id: UUID, cursor: int = 0) -> FactoryRunTranscript:

@@ -56,7 +56,7 @@ from kinby.instance import Serve
 from kinby.instance.config_changes import file_hash
 from kinby.instance.permissions import GatePolicy
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, hub_tools
-from tests.test_factory_runs import factory_hub, started, started_coder
+from tests.test_factory_runs import factory_hub, started
 from tests.test_gate import ScriptedModel, _instance, _run_turn
 from tests.test_hub import (
     FakeControl,
@@ -1100,26 +1100,25 @@ def test_the_hub_writes_each_instance_the_scopes_its_hub_route_grants(tmp_path):
     async def scenario() -> tuple[UUID, UUID]:
         recovery = await hub.recover()
         assert recovery.home is not None
-        return await started(hub_client(hub), runtime, recovery.home), await started_coder(
-            hub, runtime
-        )
+        home = await started(hub_client(hub), runtime, recovery.home)
+        return home, (await started_instance(hub_client(hub), hub)).instance_id
 
-    home, coder = asyncio.run(scenario())
+    home, alice = asyncio.run(scenario())
 
     assert (
         instance_environment(hub, home)[HUB_SCOPES_VARIABLE]
         == "hub:home,hub:read,line:intake,line:owner,notification:raise"
     )
     assert (
-        instance_environment(hub, coder)[HUB_SCOPES_VARIABLE]
-        == "factory:intake,line:intake,line:owner,notification:raise"
+        instance_environment(hub, alice)[HUB_SCOPES_VARIABLE]
+        == "line:intake,line:owner,notification:raise"
     )
 
 
 @pytest.mark.parametrize(
     ("scopes", "present"),
-    [("hub:home,hub:read", True), ("factory:intake", False)],
-    ids=["home", "factory"],
+    [("hub:home,hub:read", True), ("line:intake,line:owner", False)],
+    ids=["home", "other"],
 )
 def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, scopes, present):
     monkeypatch.setenv(HUB_URL_VARIABLE, "http://hub:8080/instances/x/hub")

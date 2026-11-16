@@ -68,7 +68,6 @@ from kinby.contracts import (
     FACTORY_RUN_APPROVE,
     FACTORY_RUN_CANCEL,
     FACTORY_RUN_GET,
-    FACTORY_RUN_INTAKE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_RETRY,
     FACTORY_RUN_SEND_BACK,
@@ -103,7 +102,6 @@ from kinby.contracts import (
     INSTANCE_STOP,
     INSTANCE_TOOLSET_GET,
     INSTANCE_UPDATE,
-    INTAKE_SCOPES,
     LIBRARY_GIT_ADD,
     LIBRARY_GIT_PREVIEW,
     LIBRARY_LIST,
@@ -385,8 +383,6 @@ from kinby.factories import SHIPPED_FACTORIES, ships_recipe
 from kinby.factories.check import login_declaration_problems
 from kinby.factories.file import (
     Engine,
-    FactoryFile,
-    InstanceName,
     RecipeName,
     WorkbenchAgentStep,
     WorkbenchFactory,
@@ -577,7 +573,7 @@ def _acquire_directory(directory: Path) -> IO[str]:
 def _notices(
     record: ManagedInstance,
     hub_revision: str,
-    served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+    served: Mapping[tuple[FactoryName, str], InstanceTemplate],
     route: Mapping[str, str],
     environment: Mapping[str, str],
     failed_servers: Mapping[str, str],
@@ -1167,7 +1163,6 @@ class Hub:
         return (
             NOTIFICATION_SCOPES
             | LINE_SCOPES
-            | (INTAKE_SCOPES if record.factory is not None else frozenset())
             | (HOME_SCOPES if record.home else frozenset())
             | (BROWSER_SCOPES if self._browser_on(manifest) else frozenset())
         )
@@ -1201,8 +1196,6 @@ class Hub:
             dispatcher.register(
                 NOTIFICATION_RAISE, partial(self.outbox.raise_notification, instance_id)
             )
-        if Scope.FACTORY_INTAKE in scopes:
-            dispatcher.register(FACTORY_RUN_INTAKE, partial(self.runs.intake, instance_id))
         if Scope.LINE_INTAKE in scopes:
             dispatcher.register(LINE_INTAKE, partial(self.line_intake, instance_id))
         if Scope.LINE_OWNER in scopes:
@@ -3364,30 +3357,18 @@ class Hub:
         hub_revision = await self._images.resolve(_PREPARED_REVISION)
         records = self.registry.listed_instances(removed=command.removed)
         served = await self._served_templates(records)
-        factories = {
-            name: self.runs.factory(name)
-            for name in {record.factory.factory for record in records if record.factory}
-        }
         return InstanceListResult(
-            instances=[
-                await self._summary(
-                    record,
-                    hub_revision,
-                    served,
-                    factories[record.factory.factory] if record.factory else None,
-                )
-                for record in records
-            ]
+            instances=[await self._summary(record, hub_revision, served) for record in records]
         )
 
     async def _served_templates(
         self, records: Iterable[ManagedInstance]
-    ) -> dict[tuple[FactoryName, InstanceName], InstanceTemplate]:
+    ) -> dict[tuple[FactoryName, str], InstanceTemplate]:
         """Each template the factories of *records* serve now, by factory and name.
 
         A factory the hub no longer serves, or one that fails its check, serves none.
         """
-        served: dict[tuple[FactoryName, InstanceName], InstanceTemplate] = {}
+        served: dict[tuple[FactoryName, str], InstanceTemplate] = {}
         for factory in {record.factory.factory for record in records if record.factory}:
             try:
                 templates = await self.factories.templates(factory)
@@ -3400,10 +3381,8 @@ class Hub:
         self,
         record: ManagedInstance,
         hub_revision: str,
-        served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
-        factory: FactoryFile | None,
+        served: Mapping[tuple[FactoryName, str], InstanceTemplate],
     ) -> InstanceSummary:
-        """*factory* is the file of the factory the instance holds a role of."""
         files = self._files(record)
         observed = await self._observed(record, files)
         return InstanceSummary(
@@ -3418,7 +3397,7 @@ class Hub:
             runtime_id=record.runtime_id,
             storage=list(record.storage),
             avatar=record.avatar,
-            setup_pending=self._setup(record, files, factory).pending,
+            setup_pending=self._setup(record, files).pending,
             home=record.home,
             factory_role=(
                 FactoryRole(factory=record.factory.factory, name=record.factory.name)
@@ -3426,7 +3405,6 @@ class Hub:
                 else None
             ),
             notices=[*self._notices_of(record, files, hub_revision, served).values()],
-            needs_human=self.runs.needing_human(record, factory),
         )
 
     def _notices_of(
@@ -3434,7 +3412,7 @@ class Hub:
         record: ManagedInstance,
         files: _InstanceFiles,
         hub_revision: str,
-        served: Mapping[tuple[FactoryName, InstanceName], InstanceTemplate],
+        served: Mapping[tuple[FactoryName, str], InstanceTemplate],
     ) -> dict[str, InstanceNotice]:
         manifest = files.manifest
         return _notices(
@@ -3471,17 +3449,15 @@ class Hub:
         record = self._active_instance(command.instance_id)
         files = self._files(record)
         observed = await self._observed(record, files)
-        factory = self.runs.factory(record.factory.factory) if record.factory else None
         return InstanceStatusResult(
             instance_id=record.instance_id,
             process=observed.process,
             readiness=observed.readiness,
-            setup=self._setup(record, files, factory),
+            setup=self._setup(record, files),
             home=record.home,
             detail=observed.detail,
             active_operation_id=self.registry.active_operation(record.instance_id),
             recreate_reasons=[*await self._recreate_reasons(record, observed.process)],
-            repository_commands=[*self.runs.held_commands(record)],
             browser=self._browser_on(files.manifest),
         )
 
@@ -3540,11 +3516,9 @@ class Hub:
             # code_run reports a malformed project to the agent; setup reads it as declaring none.
             return ()
 
-    def _setup(
-        self, record: ManagedInstance, files: _InstanceFiles, factory: FactoryFile | None
-    ) -> InstanceSetup:
-        """The logins and secrets the instance's stored descriptor declares, how they stand, and
-        the lists of repository commands it is missing from those *factory* names."""
+    def _setup(self, record: ManagedInstance, files: _InstanceFiles) -> InstanceSetup:
+        """The logins and secrets the instance's stored descriptor declares, and how they
+        stand."""
         description = self._declared_setup(record)
         declared = description.logins if description is not None else []
         running = {
@@ -3561,7 +3535,6 @@ class Hub:
             links=self.registry.secret_links(record.instance_id),
             model=manifest.models.main if manifest is not None else None,
             search_key=manifest.tools.search_key if manifest is not None else None,
-            missing_commands=self.runs.missing_commands(record, factory),
             code_secrets=self._code_secrets(record),
         )
 
@@ -3887,24 +3860,13 @@ class Hub:
     async def describe_line_setup(self, command: LineSetupDescribeCommand) -> LineSetupDescription:
         """What setting the factory up on the chosen workbench asks for, or with none, what the
         factory and a new workbench ask for. A workbench the factory cannot run on is refused."""
-        factory = await self._workbench_factory(command.factory)
+        factory = await self.factories.checked(command.factory)
         if command.workbench_id is None:
             return _asked(factory, command.model, self._new_holding(), new=True)
         record = self._active_workbench(command.workbench_id)
         if errors := self._misfit(command.factory, factory, record):
             raise InvalidSetup(errors)
         return _asked(factory, command.model, self._holding(record), new=False)
-
-    async def _workbench_factory(self, name: FactoryName) -> WorkbenchFactory:
-        factory = await self.factories.checked(name)
-        if isinstance(factory, FactoryFile):
-            raise InvalidSetup(
-                {
-                    "factory": f'Factory "{name}" declares instances, so its steps run in them. '
-                    "Only a factory that runs on a workbench is set up on one."
-                }
-            )
-        return factory
 
     def _misfit(
         self, name: FactoryName, factory: WorkbenchFactory, record: ManagedInstance
@@ -3956,7 +3918,7 @@ class Hub:
             return await self._set_up_line(command)
 
     async def _set_up_line(self, command: LineSetupCommand) -> LineSetupResult:
-        factory = await self._workbench_factory(command.factory)
+        factory = await self.factories.checked(command.factory)
         # Blank text answers no secret, as a creation reads it, so it neither replaces one the
         # workbench holds nor collides with a hub secret linked to its variable.
         command = command.model_copy(
@@ -4194,7 +4156,7 @@ class Hub:
                     {"instance_id": f'Instance "{record.manifest_id}" picked no factory role.'}
                 )
             self._refuse_in_use(record, member)
-            factory = await self._workbench_factory(member.factory)
+            factory = await self.factories.checked(member.factory)
             if factory.requires.image != member.recipe:
                 raise InvalidSetup(
                     {
@@ -4258,8 +4220,8 @@ class Hub:
             )
         unfinished = [
             run
-            for run in self.registry.runs(member.factory, UNFINISHED)
-            if run.line_id is None and self.runs.holder(run, member.name) == record.instance_id
+            for run in self.registry.runs(member.factory, UNFINISHED, record.instance_id)
+            if run.line_id is None
         ]
         if unfinished:
             raise InstanceInUse(

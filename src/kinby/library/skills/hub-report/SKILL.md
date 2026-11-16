@@ -7,7 +7,7 @@ The user asks so they don't have to open each instance. Lead with what needs the
 
 ## 1. Gather
 
-1. `instance.list`: each instance's `persona_name`, its `intended_state` and `process`, `setup_pending`, its `notices`, and `needs_human`, the count of its factory runs stopped for the user.
+1. `instance.list`: each instance's `persona_name`, its `intended_state` and `process`, `setup_pending` and its `notices`.
 2. For each running instance, `thread.list` with its `instance_id`. A thread whose `status` is `awaiting_approval` waits on the user, and its `approval` names the tool it waits to call and the gate `rule` that asked. One whose status is `awaiting_reply` waits on their reply to a notification. One whose status is `failed` closed with an error. The sidebar filter, the default, lists all three.
 3. `factory.list`, then `factory.run.list` for each factory. Runs with status `needs-human` or `parked` wait. `factory.run.get` shows a run's steps and the summary of its last attempt.
 4. `stats.summary` with `since` set to the start of the period the user means, a day unless they say otherwise. It holds each running instance's usage, the API cost, each subscription's runs per plan window and any plan limit still ahead. It names the instances it could not count.
@@ -18,7 +18,7 @@ Done when every instance the hub lists is either counted or named as stopped or 
 ## 2. Look closer where something is wrong
 
 - An instance that should run and does not: `instance.status`, then `instance.logs` with a `tail`.
-- A pending setup: `instance.status` on that instance. Its `setup` holds the logins, the secrets and the missing lists of repository commands. Name what is missing, and say that the user finishes it on the instance's setup card.
+- A pending setup: `instance.status` on that instance. Its `setup` holds the logins and the secrets. Name what is missing, and say that the user finishes it on the instance's setup card.
 - A notice: an instance update in the web app answers it.
 - A failed thread: `thread.turn.list` on that instance, for the turns to point at.
 

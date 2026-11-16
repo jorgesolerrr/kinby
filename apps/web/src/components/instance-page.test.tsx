@@ -59,7 +59,6 @@ const setup: InstanceSetup = {
       is_set: false,
     },
   ],
-  missing_commands: [],
 }
 
 const stopped = instanceSummary({
@@ -86,7 +85,6 @@ function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResul
     setup,
     home: false,
     recreate_reasons: [],
-    repository_commands: [],
     ...fields,
   }
 }
@@ -170,43 +168,6 @@ describe("the setup card", () => {
     expect(secret("GitHub token").getByText("Not set")).toBeDefined()
     expect(secret("Webhook secret").getByText("Optional")).toBeDefined()
     expect(secret("Webhook secret").getByText("Not set")).toBeDefined()
-  })
-
-  it("names each missing list of repository commands, and says to ask for a survey", async () => {
-    const missing: InstanceSetup = { ...setup, missing_commands: ["setup", "checks"] }
-    await openPage({ "instance.status": () => status({ setup: missing }) })
-
-    const lists = within(card().getByRole("list", { name: "Repository commands" }))
-    expect(lists.getByRole("listitem", { name: "setup" })).toBeDefined()
-    expect(lists.getByRole("listitem", { name: "checks" })).toBeDefined()
-    expect(lists.getAllByText("Missing")).toHaveLength(2)
-    expect(
-      card().getByText(/Start Ada and ask it in a thread for a repository survey/),
-    ).toBeDefined()
-  })
-
-  it("shows the lists of repository commands it holds beside a missing one", async () => {
-    await openPage({
-      "instance.status": () =>
-        status({
-          setup: { ...setup, missing_commands: ["checks"] },
-          repository_commands: [{ name: "setup", commands: ["uv sync"] }],
-        }),
-    })
-
-    const lists = within(card().getByRole("list", { name: "Repository commands" }))
-    expect(
-      within(lists.getByRole("listitem", { name: "setup" })).getByText("uv sync"),
-    ).toBeDefined()
-    expect(
-      within(lists.getByRole("listitem", { name: "checks" })).getByText("Missing"),
-    ).toBeDefined()
-  })
-
-  it("shows no repository commands when none is missing", async () => {
-    await openPage({})
-
-    expect(card().queryByRole("heading", { name: "Repository commands" })).toBeNull()
   })
 
   it("reads a login whose last sign-in failed as failed", async () => {
@@ -617,53 +578,6 @@ describe("the views of a running instance", () => {
   })
 })
 
-describe("the repository commands", () => {
-  const running = { ...stopped, intended_state: "running", setup_pending: false } as const
-  const held = status({
-    process: "running",
-    setup: { ...setup, logins: [], missing_commands: ["deploy"] },
-    repository_commands: [
-      { name: "setup", commands: [] },
-      { name: "checks", commands: ["uv run ruff check .", "uv run pytest"] },
-    ],
-  })
-  const section = () => within(screen.getByRole("region", { name: "Repository commands" }))
-  const list = (name: string) => within(section().getByRole("listitem", { name }))
-
-  it("shows each list by name with its commands in order, an empty one and a missing one", async () => {
-    await openPage({ "instance.status": () => held }, running)
-
-    expect(
-      list("checks")
-        .getAllByRole("listitem")
-        .map((command) => command.textContent),
-    ).toEqual(["uv run ruff check .", "uv run pytest"])
-    expect(list("setup").getByText("Empty")).toBeDefined()
-    expect(list("deploy").getByText("Missing")).toBeDefined()
-    expect(screen.queryByText(/^Start a thread with/)).toBeNull()
-  })
-
-  it("offers no way to edit a list, and says to ask the instance", async () => {
-    await openPage({ "instance.status": () => held }, running)
-
-    expect(section().queryByRole("button")).toBeNull()
-    expect(section().queryByRole("textbox")).toBeNull()
-    expect(section().getByText(/To change them, ask Ada in a thread/)).toBeDefined()
-  })
-
-  it("shows them on a stopped instance too", async () => {
-    await openPage({ "instance.status": () => held }, { ...running, intended_state: "stopped" })
-
-    expect(list("checks").getByText("uv run pytest")).toBeDefined()
-  })
-
-  it("shows no section when its factory role needs no list", async () => {
-    await openPage({ "instance.status": () => status({ process: "running" }) }, running)
-
-    expect(screen.queryByRole("region", { name: "Repository commands" })).toBeNull()
-  })
-})
-
 describe("what the header holds", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
@@ -769,8 +683,6 @@ describe("the row groups of Overview", () => {
           status({
             process: "running",
             browser: true,
-            setup: { ...setup, missing_commands: ["deploy"] },
-            repository_commands: [{ name: "checks", commands: ["uv run pytest"] }],
           }),
         "instance.toolset.get": () => toolset,
         "browser.profile.list": () => ({
@@ -811,7 +723,7 @@ describe("the row groups of Overview", () => {
       within(needsYou).getByRole("listitem", { name: "MCP server fetch failed" }),
     ).toBeDefined()
     const lists = [needsYou]
-    for (const name of ["Views", "Browser profiles", "Vault", "Toolset", "Repository commands"]) {
+    for (const name of ["Views", "Browser profiles", "Vault", "Toolset"]) {
       lists.push(await screen.findByRole("list", { name }))
     }
     for (const list of lists) {

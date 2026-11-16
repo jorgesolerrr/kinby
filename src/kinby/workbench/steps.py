@@ -60,7 +60,7 @@ from kinby.core.run_worktrees import (
     run_worktree,
 )
 from kinby.core.shell_reads import is_shell_read
-from kinby.core.steps import recorded, run_commands, run_tool, step_failed
+from kinby.core.steps import bounded, recorded, run_commands, run_tool, step_failed
 from kinby.factories import SHIPPED_FACTORIES
 from kinby.factories.file import BASE, BRANCH
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, VIEWS_DIR, WORKSPACE_DIR
@@ -135,8 +135,12 @@ class WorkbenchSteps:
 
     async def run(self, command: StepRunCommand) -> StepResult:
         """Run the step once per attempt in its run's folder, cut first when the workbench lacks
-        it. A folder that cannot be had fails the step before it starts."""
-        return await self._held.answer(command, partial(self._run, command))
+        it. A folder that cannot be had fails the step before it starts. A result too large to
+        send is cut, or fails the step."""
+        return await self._held.answer(command, partial(self._bounded, command))
+
+    async def _bounded(self, command: StepRunCommand) -> StepResult:
+        return bounded(await self._run(command))
 
     async def remove_folder(self, command: RunFolderRemoveCommand) -> RunFolderRemoveResult:
         """Remove the run's folder, and a run worktree's branch, whichever exist. A directory
@@ -314,7 +318,7 @@ class WorkbenchSteps:
                 result = await run_commands(commands, timeout, folder)
             case ClientStepRun() as step:
                 result = await self._agent(step, command, folder)
-            case AgentStepRun(model=str() as model, prompt=prompt, answered=answered):
+            case AgentStepRun(model=model, prompt=prompt, answered=answered):
                 # LangGraph loads where a workbench runs a kinby turn, so `kinby hub` goes
                 # without it.
                 from kinby.core.turn_runner import init_chat_model
@@ -334,8 +338,6 @@ class WorkbenchSteps:
                 )
             case CodeStepRun() as step:
                 result = await self._call(step, command, folder)
-            case _:
-                return step_failed(f"A workbench runs no {command.step.kind} step.")
         if command.hook is None or result.ending is StepEnding.ASKED:
             return result
         return await self._checked(command.hook, result, command, folder)
@@ -453,18 +455,14 @@ class WorkbenchSteps:
         """The step's result with what its check, a hook of the factory's folder, records reading
         the run's folder. A check the folder does not hold fails a step that ended clean."""
         factory = command.origin.factory
-        own = self._factory(factory).resolve()
+        own = self._factory(factory)
         hooks, warnings = await asyncio.to_thread(load_hooks, own)
-        # The hooks kinby ships are an instance's defaults, which no factory's check names.
-        found = next(
-            (hook for hook in hooks if hook.name == name and hook.source.is_relative_to(own)),
-            None,
-        )
+        found = next((hook for hook in hooks if hook.name == name), None)
         if found is None:
             unloaded = "".join(f"\n{warning.sources[0]}: {warning.message}" for warning in warnings)
             reason = f'Check "{name}" is not one of factory "{factory}"\'s hooks.{unloaded}'
             return step_failed(reason, result)
-        return await recorded(found, "Check", result, command, folder)
+        return await recorded(found, result, command, folder)
 
     def _tool(self, factory: str, name: str) -> Tool | None:
         """The factory's tool by *name*, read from its folder now."""

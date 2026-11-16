@@ -1,12 +1,6 @@
-import asyncio
-
 import pytest
 
-from kinby.contracts import INSTANCE_CREATE, ErrorEnvelope
-from tests.test_factory_templates import factory_hub
-from tests.test_hub import hub_client
 from tests.test_hub_factories import TOOLS, problems
-from tests.test_hub_factory_roles import create_command
 
 FACTORY = """\
 name: tickets
@@ -157,18 +151,64 @@ def test_the_check_refuses_what_a_workbench_could_not_provide(tmp_path):
     ]
 
 
+def test_the_check_refuses_a_file_that_declares_instances_and_names_requires(tmp_path):
+    files = _with("requires:\n", "instances:\n  coder: {}\nrequires:\n")
+
+    assert problems(tmp_path, files) == [
+        "factory.yaml declares instances, which no factory runs in any more. Declare what the "
+        "factory needs of a workbench under requires."
+    ]
+
+
 @pytest.mark.parametrize(
-    ("old", "new", "field"),
+    ("old", "new", "refusal"),
     [
-        ("kind: command\n", "kind: command\n    in: coder\n", "steps.0.command.in"),
-        ("kind: command\n", "kind: command\n    branch: '{{issue}}'\n", "steps.0.command.branch"),
-        ("kind: code\n", "kind: code\n    in: coder\n", "steps.1.code.in"),
-        ("needs_human: { call", "needs_human: { in: coder, call", "needs_human.in"),
+        ("kind: command\n", "kind: command\n    in: coder\n", 'Step "checks" names in'),
+        (
+            "kind: command\n",
+            "kind: command\n    branch: '{{issue}}'\n",
+            'Step "checks" names branch',
+        ),
+        ("kind: code\n", "kind: code\n    in: coder\n", 'Step "open-pr" names in'),
     ],
 )
-def test_a_step_or_a_run_call_names_no_instance_or_branch(tmp_path, old, new, field):
+def test_the_check_refuses_in_and_branch_on_a_step_which_runs_in_the_runs_folder(
+    tmp_path, old, new, refusal
+):
     assert problems(tmp_path, _with(old, new)) == [
-        f"factory.yaml: {field}: Unexpected keyword argument"
+        f"{refusal}, but every step runs in the run's folder on the line's workbench. Drop it."
+    ]
+
+
+def test_the_check_refuses_a_hook_and_names_check(tmp_path):
+    files = _with("kind: code\n", "kind: code\n    hook: record_pr\n")
+
+    assert problems(tmp_path, files) == [
+        'Step "open-pr" names a hook. Name it as check, a hook of the factory\'s folder that '
+        "records the step's values and names its outcome."
+    ]
+
+
+def test_the_check_refuses_the_client_kind_and_names_agent_with_an_engine(tmp_path):
+    files = FILES | {
+        "factory.yaml": FACTORY.replace(
+            "  - id: checks\n",
+            "  - { id: implement, kind: client, client: claude, prompt: prompts/implement.md }\n"
+            "  - id: checks\n",
+        ),
+        "prompts/implement.md": "Implement it.\n",
+    }
+
+    assert problems(tmp_path, files) == [
+        'Step "implement" is of kind client. Make it kind agent with engine claude or codex.'
+    ]
+
+
+def test_a_run_call_names_no_instance(tmp_path):
+    files = _with("needs_human: { call", "needs_human: { in: coder, call")
+
+    assert problems(tmp_path, files) == [
+        "factory.yaml: needs_human.in: Unexpected keyword argument"
     ]
 
 
@@ -188,18 +228,6 @@ def test_the_check_holds_an_approve_summarys_run_values_to_what_earlier_steps_de
         'Step "merge" names "title", which no earlier step declares in its results and the '
         "work item does not carry."
     ]
-
-
-def test_a_factory_that_runs_on_a_workbench_offers_no_role_to_pick(tmp_path):
-    client = hub_client(factory_hub(tmp_path, FILES))
-
-    async def scenario() -> None:
-        refused = await client.call(INSTANCE_CREATE, create_command())
-
-        assert isinstance(refused, ErrorEnvelope)
-        assert refused.fields == {"factory_role": 'Factory "tickets" has no role "coder".'}
-
-    asyncio.run(scenario())
 
 
 CHECK = """\
@@ -223,12 +251,11 @@ def test_a_command_or_code_step_checks_with_a_hook_of_the_factorys_folder(tmp_pa
     assert problems(tmp_path, files) == []
 
 
-@pytest.mark.parametrize("check", ["passed", "record_branch"])
-def test_the_check_refuses_a_check_the_factorys_folder_does_not_hold(tmp_path, check):
-    files = _with("kind: code\n", f"kind: code\n    check: {check}\n") | {"hooks/checked.py": CHECK}
+def test_the_check_refuses_a_check_the_factorys_folder_does_not_hold(tmp_path):
+    files = _with("kind: code\n", "kind: code\n    check: passed\n") | {"hooks/checked.py": CHECK}
 
     assert problems(tmp_path, files) == [
-        f'Step "open-pr" names check "{check}", which the factory\'s folder does not hold.'
+        'Step "open-pr" names check "passed", which the factory\'s folder does not hold.'
     ]
 
 

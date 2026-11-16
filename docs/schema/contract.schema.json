@@ -88,7 +88,7 @@
     },
     "AgentStepRun": {
       "additionalProperties": false,
-      "description": "Run a turn on a new thread of the instance, with the prompt and the run's values. On a\nworkbench the turn is in no thread, and runs in the run's folder.",
+      "description": "Run a kinby turn in the run's folder, in no thread, with the prompt and the run's\nvalues.",
       "properties": {
         "answered": {
           "anyOf": [
@@ -107,15 +107,7 @@
           "type": "string"
         },
         "model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CodingModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/CodingModel"
         },
         "prompt": {
           "type": "string"
@@ -123,6 +115,7 @@
       },
       "required": [
         "prompt",
+        "model",
         "kind"
       ],
       "title": "AgentStepRun",
@@ -1450,20 +1443,8 @@
     },
     "ClientStepRun": {
       "additionalProperties": false,
-      "description": "Run a coding client in the instance's workspace, with the prompt and the run's values.\n\nNo kinby turn runs around it. The client is killed once its timeout passes.",
+      "description": "Run a coding client in the run's folder, with the prompt and the run's values.\n\nNo kinby turn runs around it. The client is killed once its timeout passes.",
       "properties": {
-        "branch": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "client": {
           "$ref": "#/$defs/CodingClient"
         },
@@ -1524,7 +1505,7 @@
     },
     "CodeStepRun": {
       "additionalProperties": false,
-      "description": "Call one of the instance's tools, with no model turn around it.\n\nThe tool's parameters named like a value of the run receive that value, and its ``run_id``\nparameter the run's id. A mapping the tool returns is the step result's values.",
+      "description": "Call one of the factory's tools, with no model turn around it.\n\nThe tool's parameters named like a value of the run receive that value, and its ``run_id``\nparameter the run's id. A mapping the tool returns is the step result's values.",
       "properties": {
         "call": {
           "$ref": "#/$defs/ToolName"
@@ -1571,20 +1552,8 @@
     },
     "CommandStepRun": {
       "additionalProperties": false,
-      "description": "Run each command in the instance's workspace without a shell, in order.\n\nThe step passes when every command exits with code zero, and stops at the first that does not.",
+      "description": "Run each command in the run's folder without a shell, in order.\n\nThe step passes when every command exits with code zero, and stops at the first that does not.",
       "properties": {
-        "branch": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "kind": {
           "const": "command",
           "default": "command",
@@ -2663,30 +2632,6 @@
         "run_id"
       ],
       "title": "FactoryRunGetCommand",
-      "type": "object"
-    },
-    "FactoryRunIntakeCommand": {
-      "additionalProperties": false,
-      "description": "Hand a work item to the factory whose intake is this instance and routine.\n\nA work item that matches an unfinished run this instance handed in returns that run instead,\nand retries the step of one that needs a human.",
-      "properties": {
-        "routine": {
-          "type": "string"
-        },
-        "work_item": {
-          "additionalProperties": {
-            "$ref": "#/$defs/StepValue"
-          },
-          "propertyNames": {
-            "$ref": "#/$defs/ValueName"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "routine",
-        "work_item"
-      ],
-      "title": "FactoryRunIntakeCommand",
       "type": "object"
     },
     "FactoryRunListCommand": {
@@ -4016,12 +3961,6 @@
           },
           "type": "array"
         },
-        "missing_commands": {
-          "items": {
-            "$ref": "#/$defs/CommandListName"
-          },
-          "type": "array"
-        },
         "secrets": {
           "items": {
             "$ref": "#/$defs/SecretSetup"
@@ -4031,8 +3970,7 @@
       },
       "required": [
         "logins",
-        "secrets",
-        "missing_commands"
+        "secrets"
       ],
       "title": "InstanceSetup",
       "type": "object"
@@ -4107,12 +4045,6 @@
           },
           "type": "array"
         },
-        "repository_commands": {
-          "items": {
-            "$ref": "#/$defs/RepositoryCommandList"
-          },
-          "type": "array"
-        },
         "setup": {
           "$ref": "#/$defs/InstanceSetup"
         }
@@ -4123,8 +4055,7 @@
         "readiness",
         "setup",
         "home",
-        "recreate_reasons",
-        "repository_commands"
+        "recreate_reasons"
       ],
       "title": "InstanceStatusResult",
       "type": "object"
@@ -4183,9 +4114,6 @@
         },
         "manifest_id": {
           "type": "string"
-        },
-        "needs_human": {
-          "type": "integer"
         },
         "notices": {
           "items": {
@@ -4257,7 +4185,6 @@
         "avatar",
         "setup_pending",
         "notices",
-        "needs_human",
         "home"
       ],
       "title": "InstanceSummary",
@@ -7729,7 +7656,7 @@
     },
     "RepositoryCommandList": {
       "additionalProperties": false,
-      "description": "One of an instance's or a workbench's lists of repository commands, its commands in the\norder they run.",
+      "description": "One of a workbench's lists of repository commands, its commands in the order they run.",
       "properties": {
         "commands": {
           "items": {
@@ -7750,7 +7677,7 @@
     },
     "RepositoryCommands": {
       "additionalProperties": false,
-      "description": "The instance's list of repository commands named *commands*, in a command step's run.\n\nThe instance reads the list when the step runs. Its commands run as written, with no run\nvalues.",
+      "description": "The workbench's list of repository commands named *commands*, in a command step's run.\n\nThe hub reads the list when the step starts. Its commands run as written, with no run values.",
       "properties": {
         "commands": {
           "$ref": "#/$defs/CommandListName"
@@ -10129,7 +10056,7 @@
     },
     "StepRunCommand": {
       "additionalProperties": false,
-      "description": "Run one step of a factory run in this instance or workbench, and return its result.",
+      "description": "Run one step of a factory run on this workbench, and return its result.",
       "properties": {
         "attempt": {
           "anyOf": [
@@ -14592,22 +14519,6 @@
           ],
           "type": "object"
         },
-        "factory.run.intake": {
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/FactoryRunIntakeCommand"
-            },
-            "result": {
-              "$ref": "#/$defs/FactoryRun"
-            }
-          },
-          "required": [
-            "command",
-            "result"
-          ],
-          "type": "object"
-        },
         "factory.run.list": {
           "additionalProperties": false,
           "properties": {
@@ -17090,7 +17001,6 @@
         "factory.edit",
         "factory.remove",
         "factory.describe",
-        "factory.run.intake",
         "factory.run.list",
         "factory.run.get",
         "factory.run.transcript",

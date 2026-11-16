@@ -19,7 +19,6 @@ from kinby.contracts import (
     OperationState,
 )
 from kinby.hub import Hub, HubRegistry, ImagePreparer
-from tests.test_factory_templates import WITH_SETUP
 from tests.test_hub import (
     FakeControl,
     FakeRuntime,
@@ -29,10 +28,10 @@ from tests.test_hub import (
     prepared,
 )
 from tests.test_hub_deletion import deleted, previewed
-from tests.test_hub_factories import write_factory
-from tests.test_hub_factory_roles import created as created_coder
 from tests.test_hub_recreate import CrashOnReplacement
 from tests.test_hub_removal import removed
+from tests.test_hub_workbenches import CEC_BACKEND
+from tests.test_hub_workbenches import created as created_workbench
 from tests.test_image_preparation import FakeImageBackend, _git, _source_repo
 
 
@@ -258,15 +257,14 @@ def test_the_prepared_image_and_its_description_stay_through_a_restart(tmp_path)
     asyncio.run(scenario())
 
 
-def test_the_prepared_image_stays_when_a_factory_role_is_created_beside_it(tmp_path):
+def test_the_prepared_image_stays_when_a_workbench_is_created_beside_it(tmp_path):
     async def scenario() -> None:
         backend = FakeImageBackend()
-        write_factory(tmp_path / "hub" / "factories" / "tickets", WITH_SETUP)
         hub = _hub(tmp_path, backend)
         client = hub_client(hub)
         await prepared(client)
 
-        await created_coder(client)
+        await created_workbench(client, CEC_BACKEND)
         await _settled(hub)
 
         assert backend.removed == []

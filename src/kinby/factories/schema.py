@@ -17,8 +17,7 @@ def checkout_schema_path() -> Path:
 
 
 def factory_schema() -> dict[str, JsonValue]:
-    """Return the JSON Schema of the factory file that runs on a workbench. A file that declares
-    instances still reads, though the schema refuses it."""
+    """Return the JSON Schema of the factory file."""
     schema: dict[str, JsonValue] = TypeAdapter(WorkbenchFactory).json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     return schema

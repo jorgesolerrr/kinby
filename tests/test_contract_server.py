@@ -208,10 +208,30 @@ def test_the_control_route_alone_grants_the_lifecycle_scope(tmp_path: Path) -> N
         }
         assert granted["result"] == {
             "contract_version": CONTRACT_VERSION,
-            "capabilities": [Capability.WS.value, Capability.STEP_ONCE.value],
+            "capabilities": [Capability.WS.value],
         }
 
     asyncio.run(scenario())
+
+
+def test_an_instance_takes_no_factory_step(tmp_path: Path) -> None:
+    async def scenario() -> dict[str, object]:
+        instance = instance_at(tmp_path)
+        async with (
+            served(instance, dispatcher_at(tmp_path)) as address,
+            connected(address, path="/control") as socket,
+        ):
+            await call(socket, "step.run")
+            return await frame(socket)
+
+    refused = asyncio.run(scenario())
+
+    assert refused["error"] == {
+        "code": ErrorCode.NOT_FOUND.value,
+        "message": 'Method "step.run" was not found.',
+        "retryable": False,
+        "fields": {},
+    }
 
 
 def test_a_malformed_frame_is_answered_and_the_connection_stays_open(tmp_path: Path) -> None:
@@ -515,7 +535,7 @@ def test_health_reports_the_contract_version_and_what_the_instance_can_do(tmp_pa
     assert serving == {
         "id": "test",
         "contract_version": CONTRACT_VERSION,
-        "capabilities": [Capability.WS.value, Capability.STEP_ONCE.value],
+        "capabilities": [Capability.WS.value],
     }
     assert off == {"id": "test", "contract_version": CONTRACT_VERSION, "capabilities": []}
 

@@ -148,7 +148,7 @@ export function NavInstances({
 
 /**
  * An instance's row, which folds the group under it, and its menu. The row says when the instance
- * is not running, and shows an ember dot while its sidebar threads or factory runs need the user.
+ * is not running, and shows an ember dot while its sidebar threads need the user.
  * Under a running instance, listed on the connection `reached`, come its views, its most recent
  * sidebar threads, and "All threads".
  */
@@ -171,7 +171,7 @@ function InstanceGroup({
   const running = instance.process === "running"
   const threads = useSidebarThreads(reached, clock)
   const views = useViews(reached, clock)
-  const count = (threads ?? []).filter(needsYou).length + instance.needs_human
+  const count = (threads ?? []).filter(needsYou).length
   // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.
   const [opened, setOpened] = useState(false)
   if (!opened && (instance.home || count > 0 || isSelected)) setOpened(true)

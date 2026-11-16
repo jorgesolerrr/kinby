@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
@@ -60,7 +60,6 @@ from kinby.contracts import (
     WaitingApproval,
     WaitingTakeover,
 )
-from kinby.factories.file import InstanceName
 from kinby.hub.models import ChannelNotification, ChannelUser, ImageArtifact, SentRef
 
 
@@ -78,7 +77,7 @@ class FactoryMember:
 
     factory: FactoryName
     #: The instance's name in the factory file.
-    name: InstanceName
+    name: str
     #: The image recipe its template names. None is kinby's base image.
     recipe: RecipeName | None
     #: As the creation or the last update stored it, so an edit of the factory reaches the
@@ -488,7 +487,7 @@ class HubRegistry:
                     # Set while the factory's ended call for the run is still to make. A run
                     # that ended before the call existed owes none.
                     "ended_call": "INTEGER NOT NULL DEFAULT 0",
-                    # The line it runs on. Null for a run of a factory whose steps run in
+                    # The line it runs on. Null for a run made before lines, whose steps ran in
                     # instances.
                     "line_id": "TEXT",
                     # What the user wrote when they last sent the run back. Null when they wrote
@@ -2118,33 +2117,6 @@ class HubRegistry:
                 ),
             )
         return self._existing_run(run_id), True
-
-    def attribute_runs(self, intake: Callable[[FactoryName], InstanceName | None]) -> None:
-        """Give each run stored before runs recorded their instance to its factory's intake.
-
-        *intake* names the factory's instance of the intake. The newest instance by that name gets
-        the runs, or the factory's newest instance when none has that name.
-        """
-        with self._transaction() as connection:
-            factories = [
-                row[0]
-                for row in connection.execute(
-                    "SELECT DISTINCT factory FROM factory_runs WHERE instance_id IS NULL"
-                )
-            ]
-            for factory in factories:
-                connection.execute(
-                    """
-                    UPDATE factory_runs SET instance_id = (
-                        SELECT factory_members.instance_id FROM factory_members
-                        JOIN instances ON instances.id = factory_members.instance_id
-                        WHERE factory_members.factory = factory_runs.factory
-                        ORDER BY factory_members.name = ? DESC, instances.rowid DESC LIMIT 1
-                    )
-                    WHERE factory = ? AND instance_id IS NULL
-                    """,
-                    (intake(factory), factory),
-                )
 
     def run(self, run_id: UUID) -> FactoryRun | None:
         with self._transaction() as connection:

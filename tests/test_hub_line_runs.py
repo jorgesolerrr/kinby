@@ -447,6 +447,9 @@ def test_a_line_takes_only_the_work_item_its_factory_declares(tmp_path):
         refused = await client.call(
             LINE_HAND_IN, LineHandInCommand(line_id=line.line_id, work_item={"pr": 12})
         )
+        mistyped = await client.call(
+            LINE_HAND_IN, LineHandInCommand(line_id=line.line_id, work_item={"issue": "12"})
+        )
 
         assert isinstance(refused, ErrorEnvelope)
         assert refused.code is ErrorCode.INVALID_ARGUMENT
@@ -454,6 +457,8 @@ def test_a_line_takes_only_the_work_item_its_factory_declares(tmp_path):
             "pr": "The factory's work item carries no value by this name.",
             "issue": "The work item needs this value.",
         }
+        assert isinstance(mistyped, ErrorEnvelope)
+        assert mistyped.fields == {"issue": "Expected a value of type int."}
         assert await _runs(client, line) == []
 
     asyncio.run(scenario())

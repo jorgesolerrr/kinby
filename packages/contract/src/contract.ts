@@ -94,7 +94,6 @@ export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "un
  * A change a running instance applies only once it is recreated.
  */
 export type RecreateReason = "secrets";
-export type CommandListName = string;
 /**
  * How an instance's subscription login stands: not signed in yet, or how its last one ended.
  */
@@ -107,6 +106,7 @@ export type SearchBackend = "brave" | "tavily" | "exa" | "searxng";
 export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
 export type EnvVariable = string;
+export type CommandListName = string;
 export type PriceSource = "shipped" | "manifest";
 /**
  * When kinby asks the user to rate a completed turn.
@@ -375,10 +375,6 @@ export interface Contract {
     "factory.run.get": {
       command: FactoryRunGetCommand;
       result: FactoryRunDetail;
-    };
-    "factory.run.intake": {
-      command: FactoryRunIntakeCommand;
-      result: FactoryRun;
     };
     "factory.run.list": {
       command: FactoryRunListCommand;
@@ -1609,18 +1605,6 @@ export interface DelegatedRun {
   session?: string | null;
   usage_source: UsageSource;
 }
-/**
- * Hand a work item to the factory whose intake is this instance and routine.
- *
- * A work item that matches an unfinished run this instance handed in returns that run instead,
- * and retries the step of one that needs a human.
- */
-export interface FactoryRunIntakeCommand {
-  routine: string;
-  work_item: {
-    [k: string]: StepValue;
-  };
-}
 export interface FactoryRunListCommand {
   cursor?: string | null;
   factory?: FactoryName | null;
@@ -1909,7 +1893,6 @@ export interface InstanceSummary {
   instance_id: string;
   intended_state: IntendedState;
   manifest_id: string;
-  needs_human: number;
   notices: (RevisionBehind | TemplateBehind | HubRouteMissing | McpServerFailed)[];
   persona_name: string | null;
   process: ProcessState;
@@ -2060,23 +2043,13 @@ export interface InstanceStatusResult {
   process: ProcessState;
   readiness: Readiness;
   recreate_reasons: RecreateReason[];
-  repository_commands: RepositoryCommandList[];
   setup: InstanceSetup;
-}
-/**
- * One of an instance's or a workbench's lists of repository commands, its commands in the
- * order they run.
- */
-export interface RepositoryCommandList {
-  commands: string[];
-  name: CommandListName;
 }
 /**
  * What an instance declares it needs, as its stored descriptor has it, and what is done.
  */
 export interface InstanceSetup {
   logins: LoginSetup[];
-  missing_commands: CommandListName[];
   secrets: SecretSetup[];
 }
 /**
@@ -3236,7 +3209,7 @@ export interface RunTotals {
   tokens: number;
 }
 /**
- * Run one step of a factory run in this instance or workbench, and return its result.
+ * Run one step of a factory run on this workbench, and return its result.
  */
 export interface StepRunCommand {
   attempt?: number | null;
@@ -3253,13 +3226,13 @@ export interface StepRunCommand {
   };
 }
 /**
- * Run a turn on a new thread of the instance, with the prompt and the run's values. On a
- * workbench the turn is in no thread, and runs in the run's folder.
+ * Run a kinby turn in the run's folder, in no thread, with the prompt and the run's
+ * values.
  */
 export interface AgentStepRun {
   answered?: AnsweredAsk | null;
   kind: "agent";
-  model?: CodingModel | null;
+  model: CodingModel;
   prompt: string;
 }
 /**
@@ -3270,12 +3243,11 @@ export interface AnsweredAsk {
   ask: WaitingApproval | WaitingTakeover;
 }
 /**
- * Run a coding client in the instance's workspace, with the prompt and the run's values.
+ * Run a coding client in the run's folder, with the prompt and the run's values.
  *
  * No kinby turn runs around it. The client is killed once its timeout passes.
  */
 export interface ClientStepRun {
-  branch?: string | null;
   client: CodingClient;
   effort?: ReasoningEffort | null;
   kind: "client";
@@ -3285,27 +3257,25 @@ export interface ClientStepRun {
   timeout_seconds: number;
 }
 /**
- * Run each command in the instance's workspace without a shell, in order.
+ * Run each command in the run's folder without a shell, in order.
  *
  * The step passes when every command exits with code zero, and stops at the first that does not.
  */
 export interface CommandStepRun {
-  branch?: string | null;
   kind: "command";
   run: (string | RepositoryCommands)[];
   timeout_seconds?: number | null;
 }
 /**
- * The instance's list of repository commands named *commands*, in a command step's run.
+ * The workbench's list of repository commands named *commands*, in a command step's run.
  *
- * The instance reads the list when the step runs. Its commands run as written, with no run
- * values.
+ * The hub reads the list when the step starts. Its commands run as written, with no run values.
  */
 export interface RepositoryCommands {
   commands: CommandListName;
 }
 /**
- * Call one of the instance's tools, with no model turn around it.
+ * Call one of the factory's tools, with no model turn around it.
  *
  * The tool's parameters named like a value of the run receive that value, and its ``run_id``
  * parameter the run's id. A mapping the tool returns is the step result's values.
@@ -3748,6 +3718,13 @@ export interface Workbench {
   };
   workbench_id: string;
   workspace_source: string | null;
+}
+/**
+ * One of a workbench's lists of repository commands, its commands in the order they run.
+ */
+export interface RepositoryCommandList {
+  commands: string[];
+  name: CommandListName;
 }
 export interface WorkbenchCreateCommand {
   browser?: boolean;

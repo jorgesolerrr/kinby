@@ -13,7 +13,6 @@ from kinby.contracts import (
     HUB_SECRET_LIST,
     HUB_SECRET_SET,
     INSTANCE_SCOPES,
-    INTAKE_SCOPES,
     UPDATE_SCOPES,
     ErrorCode,
     ErrorEnvelope,
@@ -141,8 +140,8 @@ def test_malformed_input_is_refused_without_echoing_a_submitted_value(tmp_path, 
 
 @pytest.mark.parametrize(
     "scopes",
-    [UPDATE_SCOPES, INSTANCE_SCOPES, CONTROL_SCOPES, INTAKE_SCOPES],
-    ids=["update", "instance", "control", "intake"],
+    [UPDATE_SCOPES, INSTANCE_SCOPES, CONTROL_SCOPES],
+    ids=["update", "instance", "control"],
 )
 @pytest.mark.parametrize(
     ("method", "payload"),
