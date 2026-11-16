@@ -1421,16 +1421,23 @@ def _unmet(
 ) -> _Refused | None:
     """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
 
-    A command step also requires each value its commands name. The
-    lack is charged to the step that should have produced the value: the last earlier step that
-    declares it in its results. A false work item value or a named value of the workbench has no
-    such step, so the requiring step itself fails.
+    A command step also requires each value its commands name, and a wait each named value of
+    the workbench its filters name, since a filter naming a value the run never holds would park
+    it for good. The lack is charged to the step that should have produced the value: the last
+    earlier step that declares it in its results. A false work item value or a named value of the
+    workbench has no such step, so the requiring step itself fails.
     """
-    named = run_value_names(step)
-    lacking = _lacking(held, (*step.requires, *named))
+    declared = {value.name for value in factory.requires.values}
+    filtered = (
+        name
+        for fields in (step.signal if isinstance(step, WaitStep) else ())
+        for expected in fields.values()
+        if (name := run_value_name(expected)) in declared and name not in held
+    )
+    lacking = _lacking(held, (*step.requires, *run_value_names(step))) or next(filtered, None)
     if lacking is None:
         return None
-    if lacking in {value.name for value in factory.requires.values}:
+    if lacking in declared:
         holds = "does not hold" if lacking not in held else "holds as false"
         return _Refused(
             step.id,

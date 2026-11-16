@@ -1411,6 +1411,42 @@ def test_a_step_that_names_a_named_value_its_workbench_lacks_does_not_start(tmp_
     asyncio.run(scenario())
 
 
+NAMED_WAIT = """\
+name: checks
+requires:
+  image: coder
+  values:
+    - { name: site, label: Site, description: Where the course lives., type: text,
+        required: false }
+work_item: { issue: int }
+steps:
+  - id: watch
+    kind: wait
+    signal:
+      - body.site: "{{site}}"
+"""
+
+
+def test_a_wait_whose_filter_names_a_named_value_its_workbench_lacks_does_not_park(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = factory_hub(tmp_path / "hub", control, runtime, FILES | {"factory.yaml": NAMED_WAIT})
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert (finished.run.status, finished.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "watch")
+        [attempt] = finished.attempts
+        assert (attempt.ending, attempt.summary) == (
+            StepEnding.FAILED,
+            'Step "watch" requires named value "site", which its workbench does not hold.',
+        )
+
+    asyncio.run(scenario())
+
+
 def test_a_run_whose_done_requires_fails_does_not_finish_as_done(tmp_path):
     control = FakeControl()
     control.step_results = [

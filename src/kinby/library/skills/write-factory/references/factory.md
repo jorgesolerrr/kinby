@@ -95,7 +95,7 @@ Each kind adds its own:
   - `call`: the tool's name. Its parameters named like a run value receive it, and `run_id` the run's id. A mapping it returns is the step's values, and a `HookResult` also names an outcome. Raising fails the step.
   - No gate: the tool runs even when it writes.
 - `wait`: parks the run, holding no workbench.
-  - `signal`: filters, at least one. A signal matches a filter when it carries every field of the filter with the same value and type. A field reads `routine`, the routine the signal came in on, `headers.<Name>` or `body.<key>.<key>`. A value `"{{name}}"` stands for that run value. A signal any routine of the line's owner accepts can match, the intake's deliveries among them. A match moves on and records nothing.
+  - `signal`: filters, at least one. A signal matches a filter when it carries every field of the filter with the same value and type. A field reads `routine`, the routine the signal came in on, `headers.<Name>` or `body.<key>.<key>`. A value `"{{name}}"` stands for that run value, and a named value the workbench lacks fails the wait before it parks. A signal any routine of the line's owner accepts can match, the intake's deliveries among them. A match moves on and records nothing.
   - `quiet`: a duration. With no signal for that long, the wait moves on by itself and records `quiet` as true.
   - `deadline`: a duration. With no signal for that long, the wait fails.
 - `approve`: parks the run until the user approves it or sends it back, holding no workbench.
