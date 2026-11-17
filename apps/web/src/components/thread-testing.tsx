@@ -1,4 +1,4 @@
-import type { Event, InstanceSummary, ThreadSummary } from "@kinby/contract"
+import type { Event, InstanceSummary, ThreadSummary, TurnStarted } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { render, screen } from "@testing-library/react"
 import { afterEach, beforeEach } from "vitest"
@@ -91,7 +91,7 @@ export function thread(...events: [turnId: string, payload: Payload][]): Event[]
   }))
 }
 
-export const started = (message: string): Payload => ({
+export const started = (message: string): TurnStarted => ({
   type: "turn.started",
   message,
   model: "claude",

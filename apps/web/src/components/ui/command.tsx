@@ -12,12 +12,18 @@ import {
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { SearchIcon, CheckIcon } from "lucide-react"
 
-function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
+function Command({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<typeof CommandPrimitive> & { variant?: "default" | "popup" }) {
   return (
     <CommandPrimitive
       data-slot="command"
       className={cn(
         "flex size-full flex-col overflow-hidden rounded-xl bg-popover p-1 text-popover-foreground",
+        // popup: floats over the page with a popover's shadow and ring, like the composer's skill menu.
+        variant === "popup" && "shadow-lg ring-1 ring-foreground/5 dark:ring-foreground/10",
         className,
       )}
       {...props}

@@ -5,6 +5,7 @@ import type {
   InstanceSetup,
   InstanceSummary,
   Line,
+  SkillSummary,
   ThreadSummary,
 } from "@kinby/contract"
 import { ACCESS_TOKEN, fakeClock, fakeHub, instanceSummary } from "@kinby/contract/testing"
@@ -30,6 +31,7 @@ function openApp({
   threads = {},
   setups = {},
   picks = {},
+  skills = {},
   lines = [],
   runs = [],
 }: {
@@ -39,10 +41,11 @@ function openApp({
   threads?: Record<string, ThreadSummary[]>
   setups?: Record<string, InstanceSetup>
   picks?: Record<string, InstancePicksResult>
+  skills?: Record<string, SkillSummary[]>
   lines?: Line[]
   runs?: FactoryRun[]
 }) {
-  const hub = fakeHub({ signedIn, instances, removed, threads, setups, picks, lines, runs })
+  const hub = fakeHub({ signedIn, instances, removed, threads, setups, picks, skills, lines, runs })
   const clock = fakeClock()
   const { unmount } = render(
     <App client={createClient("http://hub.test", hub.transport, clock)} clock={clock} />,
@@ -1723,10 +1726,43 @@ describe("the home screen", () => {
       { method: "thread.create", params: {} },
       {
         method: "thread.turn.start",
-        params: { thread_id: "thread-1", message: "What is on today?" },
+        params: { thread_id: "thread-1", message: "What is on today?", skills: [] },
       },
     ])
     expect(await threadStarts(hub, "hub-kinby")).toEqual([])
+  })
+
+  it("references a skill of the picked instance in the message that starts the thread", async () => {
+    window.history.replaceState(null, "", "/?to=hub-ada")
+    const { hub } = openApp({
+      signedIn: true,
+      instances: [kinby, ada],
+      skills: {
+        "hub-ada": [{ name: "tdd", description: "Test first.", tier: "kinby", shadowed_by: null }],
+      },
+    })
+    const user = userEvent.setup()
+
+    await user.type(await message(), "/t")
+    await user.click(await screen.findByRole("option", { name: /^\/tdd/ }))
+    await user.type(await message(), "the parser")
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+        "false",
+      ),
+    )
+    await user.click(screen.getByRole("button", { name: "Send" }))
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-1"),
+    )
+    expect(await threadStarts(hub, "hub-ada")).toEqual([
+      { method: "thread.create", params: {} },
+      {
+        method: "thread.turn.start",
+        params: { thread_id: "thread-1", message: "/tdd the parser", skills: ["tdd"] },
+      },
+    ])
   })
 
   /** Open the Library and come back to the home screen from New thread. */
@@ -1845,7 +1881,7 @@ describe("the home screen", () => {
       { method: "thread.create", params: {} },
       {
         method: "thread.turn.start",
-        params: { thread_id: "thread-1", message: "What is on today?" },
+        params: { thread_id: "thread-1", message: "What is on today?", skills: [] },
       },
     ])
   })
@@ -1970,7 +2006,7 @@ describe("the home screen", () => {
         { method: "thread.create", params: {} },
         {
           method: "thread.turn.start",
-          params: { thread_id: "thread-1", message: "Plan a weekend" },
+          params: { thread_id: "thread-1", message: "Plan a weekend", skills: [] },
         },
       ])
     })

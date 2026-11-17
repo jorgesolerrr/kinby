@@ -31,7 +31,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **card**: the `attention` variant, ringed in ember, for a card that waits on the user.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
 - **collapsible**: the content's `muted` variant, a panel under a top border on a muted tint with padding, for an unfolded row's detail in a bordered row group.
-- **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected.
+- **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected. The root's `popup` variant, a popover's shadow and ring, for the composer's skill menu, which floats over the transcript.
 - **dialog**: the title's `lg` size, on the section title scale, for the Settings dialog's own title. The content's `lg` size, with no padding or gap, for a dialog that lays out its own body, as Settings does. Below `md` it fills the screen as a column with square corners; from `md` it is a wide, tall row.
 - **drawer**: the content's `tall` size, 92% of the screen's height, for the side pane on a phone.
 - **empty**: the title at `text-base`, on the section title scale. The `outline` variant, a dashed border, for an empty Library tab.

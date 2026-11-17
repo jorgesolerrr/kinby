@@ -34,6 +34,8 @@ export interface TurnBlock {
   /** The day it started, `YYYY-MM-DD` in the browser's time zone. */
   startedOn: string
   request: string
+  /** The skills the request references. */
+  skills: string[]
   steps: Step[]
   /** The approval the turn is parked on, until the turn moves on. */
   approval?: ParkedApproval
@@ -139,6 +141,7 @@ export function project(timeline: Timeline, event: Event): Timeline {
       startedAt: event.timestamp,
       startedOn: localDay(event.timestamp),
       request: payload.message,
+      skills: payload.skills ?? [],
       steps: [],
     }
     return { ...timeline, sequence: event.sequence, turns: [...timeline.turns, turn] }
