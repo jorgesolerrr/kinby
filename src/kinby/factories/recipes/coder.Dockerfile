@@ -4,6 +4,9 @@ ARG CLAUDE_CODE_VERSION=2.1.280
 ARG CODEX_VERSION=0.154.0
 ARG BUN_VERSION=1.4.2
 ARG PNPM_VERSION=10.34.6
+# The hub appends this recipe to the base image of any revision a workbench picks, and one from
+# before the base image shipped Node has no npm. It gets the Node it had then.
+ARG FALLBACK_NODE_VERSION=22.23.3
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
@@ -11,14 +14,19 @@ RUN apt-get update \
     && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
         | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
     && case "$arch" in \
-        amd64) bun_arch=x64 ;; \
-        arm64) bun_arch=aarch64 ;; \
+        amd64) bun_arch=x64 node_arch=x64 ;; \
+        arm64) bun_arch=aarch64 node_arch=arm64 ;; \
         *) exit 1 ;; \
     esac \
     && curl -fsSL -o /tmp/bun.zip \
         "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${bun_arch}.zip" \
     && unzip -j /tmp/bun.zip "bun-linux-${bun_arch}/bun" -d /usr/local/bin \
     && rm /tmp/bun.zip \
+    && if ! command -v npm >/dev/null; then \
+        node="node-v${FALLBACK_NODE_VERSION}-linux-${node_arch}" \
+        && curl -fsSL "https://nodejs.org/dist/v${FALLBACK_NODE_VERSION}/${node}.tar.gz" \
+            | tar -xz -C /usr/local --strip-components=1 "${node}/bin" "${node}/lib"; \
+    fi \
     && npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
         "@openai/codex@${CODEX_VERSION}" "pnpm@${PNPM_VERSION}" \
     && npm cache clean --force
