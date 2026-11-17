@@ -208,6 +208,10 @@ class ClosedTurnHook(Protocol):
     def __call__(self, thread_id: UUID, turn_id: UUID) -> None: ...
 
 
+class TitleHook(Protocol):
+    def __call__(self, thread_id: UUID, turn_id: UUID, message: str) -> None: ...
+
+
 @dataclass
 class RunningTurn:
     request: PreparedTurnRequest
@@ -268,9 +272,10 @@ class Turns:
         after_turn: ClosedTurnHook,
         snapshots: SnapshotStore | None = None,
         browser: BrowserService | None = None,
+        title_later: TitleHook | None = None,
     ) -> None:
         """*browser* is the one the runner's turns use, which a turn ended on its takeover
-        closes."""
+        closes. *title_later* starts a better title for a thread its first message titled."""
         self._store = store
         self._log = log
         self._runner = runner
@@ -279,6 +284,7 @@ class Turns:
         self._after_turn = after_turn
         self._snapshots = snapshots
         self._browser = browser
+        self._title_later = title_later
         #: The deadlines of the takeovers turns parked on, kept until each passes.
         self._deadlines: set[asyncio.Task[None]] = set()
         self._changed = asyncio.Event()
@@ -669,7 +675,7 @@ class Turns:
                 ),
             )
             if not any(isinstance(event.payload, TurnStarted) for event in events):
-                self._title_untitled(thread_id, message)
+                self._title_untitled(thread_id, turn_id, message)
         finally:
             self._release_claim(thread_id, claim)
         self._spawn(turn, self._run(turn, preparation.budgets, delivery_body))
@@ -861,11 +867,13 @@ class Turns:
             return self._runner.routine_mode(origin.name) or mode
         return mode
 
-    def _title_untitled(self, thread_id: UUID, message: str) -> None:
+    def _title_untitled(self, thread_id: UUID, turn_id: UUID, message: str) -> None:
         thread = self._store.thread(thread_id)
         title = first_message_title(message)
         if thread is not None and thread.title is None and title:
             self._store.rename(thread_id, title)
+            if self._title_later is not None:
+                self._title_later(thread_id, turn_id, message)
 
     def require_thread(self, thread_id: UUID) -> None:
         if not self._store.exists(thread_id):

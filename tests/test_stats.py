@@ -53,6 +53,7 @@ from kinby.contracts import (
     SubscriptionUse,
     ThreadCompacted,
     ThreadCreateResult,
+    ThreadTitled,
     ToolCall,
     ToolGated,
     ToolResult,
@@ -67,10 +68,10 @@ from kinby.contracts import (
     UsageSource,
     UserOrigin,
 )
-from kinby.core.budgets import DailyBudget, check_daily_budget, daily_cost
+from kinby.core.budgets import DAILY_COST_EVENTS, DailyBudget, check_daily_budget, daily_cost
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
-from kinby.core.pricing import instance_prices, price_map
+from kinby.core.pricing import SHIPPED_PRICES, instance_prices, price_map
 from kinby.core.runtime import boot_instance
 from kinby.core.turn_metrics import TurnKey, turn_metrics
 from kinby.core.turn_runner import LangGraphRunner
@@ -1107,6 +1108,43 @@ def test_stats_get_adds_compactions_to_their_turn_apart_and_prices_them_at_their
     assert priced.cost == pytest.approx(0.000225 + 2 * 0.00045 + 0.000225)
     assert unpriced.cost is None
     assert result.unpriced_models == ["other:model"]
+
+
+def test_stats_and_daily_cost_count_a_threads_title_as_recap_tokens_at_its_model(
+    tmp_path: Path,
+) -> None:
+    early_thread, early_turn = uuid4(), uuid4()
+    late_thread, late_turn = uuid4(), uuid4()
+    now = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    titled = ThreadTitled(
+        title="Launch plan",
+        model="anthropic:claude-sonnet-4-6",
+        input_tokens=50,
+        output_tokens=5,
+    )
+    events = [
+        _event(1, early_thread, early_turn, now, TurnStarted(message="go", model="openai:gpt-5")),
+        _event(2, early_thread, early_turn, now, titled),
+        _event(3, early_thread, early_turn, now, TurnCompleted(input_tokens=100, output_tokens=10)),
+        _event(4, late_thread, late_turn, now, TurnStarted(message="go", model="openai:gpt-5")),
+        _event(5, late_thread, late_turn, now, TurnCompleted(input_tokens=100, output_tokens=10)),
+        _event(6, late_thread, late_turn, now, titled),
+    ]
+    event_log = historical_event_log(tmp_path, events)
+
+    result = asyncio.run(
+        build_dispatcher(tmp_path, event_log=event_log).dispatch(
+            "stats.get", {"records": True}, {Scope.INSTANCE_READ}
+        )
+    )
+    spent = daily_cost(event_log.events_of(DAILY_COST_EVENTS), SHIPPED_PRICES, now.date())
+
+    assert isinstance(result, StatsGetResult)
+    for record in result.records:
+        assert (record.input_tokens, record.output_tokens) == (150, 15)
+        assert (record.recap_input_tokens, record.recap_output_tokens) == (50, 5)
+        assert record.cost == pytest.approx(0.000225 + 0.000225)
+    assert spent.usd == pytest.approx(2 * (0.000225 + 0.000225))
 
 
 def test_stats_get_joins_a_factory_runs_turns_delegated_runs_and_recap_on_its_run_id(

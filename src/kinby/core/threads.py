@@ -32,6 +32,7 @@ from kinby.contracts import (
     ThreadListResult,
     ThreadStatus,
     ThreadSummary,
+    ThreadTitled,
     TurnFailed,
     TurnStarted,
     UserOrigin,
@@ -47,7 +48,8 @@ if TYPE_CHECKING:
 _COLUMNS = "id, title, created_at, archived"
 #: The most characters a title taken from a thread's first message has.
 TITLE_LENGTH = 60
-_NOTIFYING = (NotificationRaised, NotificationAccepted, NotificationRefused)
+#: The events recorded on a parked turn that are not its own next step.
+_BESIDE_A_PARK = (NotificationRaised, NotificationAccepted, NotificationRefused, ThreadTitled)
 #: The events a turn parks on.
 PARKING_EVENTS = frozenset({EventType.APPROVAL_REQUESTED, EventType.TAKEOVER_REQUESTED})
 _PARKED = frozenset({ThreadStatus.AWAITING_APPROVAL, ThreadStatus.AWAITING_TAKEOVER})
@@ -340,14 +342,14 @@ def offers_options(events: Sequence[Event], turn_id: UUID) -> bool:
 def parked_on(events: Sequence[Event]) -> PendingApproval | PendingTakeover | None:
     """The approval or the takeover the thread's turn is parked on."""
     # Answering an approval or finishing a takeover appends nothing, so the resumed turn's own
-    # next event is what ends the park. Events on any other turn, and the notifications recorded
-    # while it waits, leave it standing.
+    # next event is what ends the park. Events on any other turn, and the notifications and the
+    # thread's title recorded while it waits, leave it standing.
     for index, event in reversed(list(enumerate(events))):
         payload = event.payload
         if not isinstance(payload, ApprovalRequested | TakeoverRequested):
             continue
         if any(
-            later.turn_id == event.turn_id and not isinstance(later.payload, _NOTIFYING)
+            later.turn_id == event.turn_id and not isinstance(later.payload, _BESIDE_A_PARK)
             for later in events[index + 1 :]
         ):
             return None

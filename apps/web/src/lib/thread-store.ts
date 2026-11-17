@@ -1,9 +1,10 @@
 import type { InstanceClient } from "@kinby/contract"
 
 import { reason } from "@/lib/operation"
+import { threadList } from "@/lib/thread-list"
 import { EMPTY_TIMELINE, project, type Timeline } from "@/lib/timeline"
 
-type Follower = Pick<InstanceClient, "subscribe">
+type Follower = Pick<InstanceClient, "subscribe" | "call">
 
 /** What the panel shows of a thread. */
 interface ThreadView {
@@ -72,6 +73,12 @@ function createThreadStore(client: Follower, threadId: string): ThreadStore {
         try {
           for await (const event of subscription) {
             if (!following) return
+            // The list, not the event, holds the title the thread kept: a rename wins over the model.
+            if (event.payload.type === "thread.titled") {
+              threadList(client, "sidebar")
+                .listKept()
+                .catch(() => {})
+            }
             const timeline = project(view.timeline, event)
             show({ ...view, timeline, replayed: reached(timeline) })
           }

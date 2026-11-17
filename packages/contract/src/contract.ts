@@ -3901,6 +3901,7 @@ export interface Event {
     | SignalReceived
     | WorkspaceReverted
     | ThreadCompacted
+    | ThreadTitled
     | NotificationRaised
     | NotificationAccepted
     | NotificationRefused
@@ -4099,6 +4100,20 @@ export interface ThreadCompacted {
   output_tokens: number;
   summary: string;
   type: "thread.compacted";
+}
+/**
+ * The recap model's title for a new thread, written from its first message and recorded on
+ * its first turn. The thread takes it while it still holds the title that message gave it. The
+ * tokens are what ``model`` spent writing it.
+ */
+export interface ThreadTitled {
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  input_tokens: number;
+  model: string;
+  output_tokens: number;
+  title: string;
+  type: "thread.titled";
 }
 /**
  * A notification the instance raises on its hub route, again on each scheduler pass, until

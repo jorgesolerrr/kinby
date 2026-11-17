@@ -32,6 +32,7 @@ from kinby.contracts import (
     RunDelegated,
     RunStopped,
     ThreadCompacted,
+    ThreadTitled,
     TokenTotals,
     ToolCall,
     ToolGated,
@@ -81,6 +82,7 @@ METRICS_EVENTS = frozenset(
         EventType.TURN_INTERRUPTED,
         EventType.MEMORY_RECAPPED,
         EventType.THREAD_COMPACTED,
+        EventType.THREAD_TITLED,
         EventType.TURN_RATED,
     }
 )
@@ -111,15 +113,20 @@ class _ModelCall:
     results: list[ToolResult] = field(default_factory=list)
 
 
+#: A model call recorded apart from the turn it is counted under.
+type _ApartCall = MemoryRecapped | ThreadTitled | ThreadCompacted
+
+
 @dataclass
 class _Spend:
-    """A closed turn's own calls, and the calls recorded apart under it: its recap's and its
-    thread's compactions'."""
+    """A closed turn's own calls, and the calls recorded apart under it: its recap's, its
+    thread's title's and its thread's compactions'."""
 
     own: TokenTotals
     #: None when the turn's model is unpriced.
     own_cost: float | None
     recap: MemoryRecapped | None = None
+    title: ThreadTitled | None = None
     compactions: list[ThreadCompacted] = field(default_factory=list)
 
 
@@ -159,6 +166,7 @@ class _TurnEvents:
     tokens_before_first_write: int = 0
     delegated_runs: list[ReportedRun] = field(default_factory=list)
     recalled: dict[NodeId, None] = field(default_factory=dict)
+    title: ThreadTitled | None = None
     compactions: list[ThreadCompacted] = field(default_factory=list)
 
 
@@ -316,6 +324,9 @@ def turn_metrics(
         if isinstance(payload, ThreadCompacted) and turn is not None:
             turn.compactions.append(payload)
             continue
+        if isinstance(payload, ThreadTitled) and turn is not None:
+            turn.title = payload
+            continue
         if isinstance(payload, RunDelegated):
             reported = ReportedRun(timestamp=event.timestamp, run=payload.run)
             if turn is not None:
@@ -396,11 +407,15 @@ def turn_metrics(
                 profiled.append((record, turn.profile_version))
             closed_turns[key] = record
             spend = spends[key] = _Spend(
-                payload, own_cost, compactions=turn.compactions if turn is not None else []
+                payload,
+                own_cost,
+                title=turn.title if turn is not None else None,
+                compactions=turn.compactions if turn is not None else [],
             )
-            if spend.compactions:
-                for compaction in spend.compactions:
-                    if (unpriced := _unpriced(compaction, prices)) is not None:
+            apart = [*([spend.title] if spend.title is not None else []), *spend.compactions]
+            if apart:
+                for call in apart:
+                    if (unpriced := _unpriced(call, prices)) is not None:
                         unpriced_models_by_turn.setdefault(key, set()).add(unpriced)
                 _settle(record, spend, prices)
             continue
@@ -411,10 +426,12 @@ def turn_metrics(
                 cost = _call_cost(payload, prices)
                 run_recaps.append(RunRecap(event.thread_id, event.timestamp, payload, cost))
             continue
-        if isinstance(payload, MemoryRecapped | ThreadCompacted):
+        if isinstance(payload, MemoryRecapped | ThreadTitled | ThreadCompacted):
             spend = spends[key]
             if isinstance(payload, ThreadCompacted):
                 spend.compactions.append(payload)
+            elif isinstance(payload, ThreadTitled):
+                spend.title = payload
             elif record.outcome is CompletionOutcome.NO_WORK:
                 continue
             else:
@@ -442,15 +459,17 @@ def turn_metrics(
 
 
 def _settle(record: TurnMetrics, spend: _Spend, prices: Mapping[str, ModelPrice]) -> None:
-    """Total *record* over its turn's own calls and those recorded apart under it."""
-    later = [*([spend.recap] if spend.recap is not None else []), *spend.compactions]
+    """Total *record* over its turn's own calls and those recorded apart under it. The recap
+    model's calls, its recap and its thread's title, count as recap tokens."""
+    recap_calls = [call for call in (spend.recap, spend.title) if call is not None]
+    later = [*recap_calls, *spend.compactions]
     calls = [spend.own, *later]
     record.input_tokens = sum(call.input_tokens for call in calls)
     record.output_tokens = sum(call.output_tokens for call in calls)
     record.cache_read_tokens = sum(call.cache_read_tokens for call in calls)
     record.cache_creation_tokens = sum(call.cache_creation_tokens for call in calls)
-    record.recap_input_tokens = spend.recap.input_tokens if spend.recap is not None else 0
-    record.recap_output_tokens = spend.recap.output_tokens if spend.recap is not None else 0
+    record.recap_input_tokens = sum(call.input_tokens for call in recap_calls)
+    record.recap_output_tokens = sum(call.output_tokens for call in recap_calls)
     record.compaction_input_tokens = sum(call.input_tokens for call in spend.compactions)
     record.compaction_output_tokens = sum(call.output_tokens for call in spend.compactions)
     costs = [spend.own_cost, *(_call_cost(call, prices) for call in later)]
@@ -458,11 +477,9 @@ def _settle(record: TurnMetrics, spend: _Spend, prices: Mapping[str, ModelPrice]
     record.cost = sum(priced) if len(priced) == len(costs) else None
 
 
-def _call_cost(
-    call: MemoryRecapped | ThreadCompacted, prices: Mapping[str, ModelPrice]
-) -> float | None:
-    """A recap's or a compaction's cost at its model: nothing when it spent no tokens, None when
-    unpriced."""
+def _call_cost(call: _ApartCall, prices: Mapping[str, ModelPrice]) -> float | None:
+    """A recap's, a title's or a compaction's cost at its model: nothing when it spent no tokens,
+    None when unpriced."""
     price = prices.get(call.model) if call.model is not None else None
     if price is not None:
         return token_cost(call, price)
@@ -471,10 +488,8 @@ def _call_cost(
     return None
 
 
-def _unpriced(
-    call: MemoryRecapped | ThreadCompacted, prices: Mapping[str, ModelPrice]
-) -> UnpricedModel | None:
-    """The model of a recap or a compaction that spent tokens at no known price."""
+def _unpriced(call: _ApartCall, prices: Mapping[str, ModelPrice]) -> UnpricedModel | None:
+    """The model of a recap, a title or a compaction that spent tokens at no known price."""
     if _call_cost(call, prices) is None and call.model is not None:
         return UnpricedModel(call.model)
     return None

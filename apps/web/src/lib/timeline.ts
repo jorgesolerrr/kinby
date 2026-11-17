@@ -150,6 +150,8 @@ export function project(timeline: Timeline, event: Event): Timeline {
   if (payload.type === "model.completed" && !running) {
     return { ...timeline, sequence: event.sequence }
   }
+  // The thread's title is no step of the turn it lands on, so a parked turn stays parked.
+  if (payload.type === "thread.titled") return { ...timeline, sequence: event.sequence }
   return {
     ...timeline,
     sequence: event.sequence,

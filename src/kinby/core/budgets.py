@@ -20,6 +20,7 @@ DAILY_COST_EVENTS = frozenset(
         EventType.TURN_INTERRUPTED,
         EventType.MEMORY_RECAPPED,
         EventType.THREAD_COMPACTED,
+        EventType.THREAD_TITLED,
     }
 )
 
