@@ -812,7 +812,7 @@ A **routine**'s own deterministic code, a **tool** never offered to the model, t
 
 ### Coding client
 
-A command-line agent that implements or reviews repository changes under a separate model subscription: the **engine** of an **agent step**.
+A command-line agent that implements or reviews repository changes under a separate model subscription: the **engine** of an **agent step**. An **instance** whose image has one installed and signed in can hand it a task from a **turn**, which waits for the **coding run** in the instance's **workspace**.
 _Avoid_: model, subagent
 
 ### Coding run

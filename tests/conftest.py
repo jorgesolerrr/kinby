@@ -23,3 +23,16 @@ def _without_a_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for backend in SearchBackend:
         monkeypatch.delenv(backend.key_variable, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _without_a_coding_client_signed_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Run every test with no coding client signed in, even on a box whose clients are.
+
+    With one signed in, the model gets `delegate_to_coding_client`. A test that wants it signs a
+    client in itself.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path_factory.getbasetemp() / "codex"))

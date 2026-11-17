@@ -72,7 +72,7 @@ from kinby.contracts import (
     WaitingApproval,
     WaitingTakeover,
 )
-from kinby.core.coding_clients import own_tokens
+from kinby.core.coding_clients import CLIENT_TIMEOUT_SECONDS, own_tokens
 from kinby.core.errors import (
     BudgetExceeded,
     FactoryNotFound,
@@ -91,7 +91,6 @@ from kinby.factories.file import (
     NOTES,
     QUIET,
     ApproveStep,
-    Duration,
     Engine,
     InvalidFactoryFile,
     Outcome,
@@ -169,8 +168,6 @@ _logger = logging.getLogger(__name__)
 
 BACKOFF_SECONDS = 5.0
 BACKOFF_CAP_SECONDS = 300.0
-#: How long an agent step's coding client runs when the step declares no timeout.
-_CLIENT_TIMEOUT: Duration = "60m"
 #: The statuses a run ends in, which the factory's ended call follows.
 _ENDS = (FactoryRunStatus.DONE, FactoryRunStatus.CANCELLED)
 #: What a run worktree's branch keeps of each work item value. The rest becomes a dash.
@@ -767,7 +764,9 @@ class FactoryRuns:
             client=client,
             prompt=prompt,
             resume=session,
-            timeout_seconds=duration_seconds(step.timeout or _CLIENT_TIMEOUT),
+            timeout_seconds=(
+                duration_seconds(step.timeout) if step.timeout else CLIENT_TIMEOUT_SECONDS
+            ),
             model=step.model or (name if provider == _PROVIDERS[client] else None),
             effort=step.effort,
         )
