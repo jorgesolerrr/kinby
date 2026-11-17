@@ -1,4 +1,4 @@
-import { CallError, type Event, type PermissionMode } from "@kinby/contract"
+import { CallError, type Event, type PermissionMode, type SkillSummary } from "@kinby/contract"
 import { type Answers, fakeClock } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -13,12 +13,36 @@ import {
   threadSummary,
 } from "@/components/thread-testing"
 
+// jsdom lays nothing out, so it has no scrollIntoView, and the skill menu calls it on its rows.
+Element.prototype.scrollIntoView = () => {}
+
 /** How the instance lists thread t1, as `listed()` returns it, under `ceiling`. */
 function listing(listed = () => threadSummary(), ceiling: PermissionMode = "full-access") {
   return () => ({ threads: [listed()], ceiling, cursor: null })
 }
 
 const modePicker = () => screen.findByRole("combobox", { name: "Mode" })
+
+/** Open the composer of `threadId`, from a client that answers from `answers`. */
+const open = (
+  threadId: string,
+  answers: Answers = {},
+  client = instanceClient({ "thread.list": listing(), ...answers }),
+) => ({
+  client,
+  ...render(
+    <ThreadComposer
+      client={client}
+      clock={fakeClock()}
+      threadId={threadId}
+      name="Ada"
+      running={false}
+      contextSize={undefined}
+      modelWindow={undefined}
+    />,
+  ),
+})
+const box = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" })
 
 describe("a thread's panel", () => {
   it("puts focus in the composer once the replay has loaded", async () => {
@@ -39,7 +63,10 @@ describe("a thread's panel", () => {
     await user.type(screen.getByRole("textbox", { name: "Message Ada" }), "Fix the runtime{Enter}")
 
     expect(sent()).toEqual([
-      { method: "thread.turn.start", params: { thread_id: "t1", message: "Fix the runtime" } },
+      {
+        method: "thread.turn.start",
+        params: { thread_id: "t1", message: "Fix the runtime", skills: [] },
+      },
     ])
     expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" }).value).toBe("")
   })
@@ -223,25 +250,6 @@ describe("a thread's panel", () => {
   })
 
   describe("the draft", () => {
-    /** Open the composer of `threadId`, from a client that answers from `answers`. */
-    const open = (
-      threadId: string,
-      answers: Answers = {},
-      client = instanceClient({ "thread.list": listing(), ...answers }),
-    ) =>
-      render(
-        <ThreadComposer
-          client={client}
-          clock={fakeClock()}
-          threadId={threadId}
-          name="Ada"
-          running={false}
-          contextSize={undefined}
-          modelWindow={undefined}
-        />,
-      )
-    const box = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" })
-
     it("keeps an unsent message once the thread closes and opens again", async () => {
       const { unmount } = open("t1")
       await userEvent.setup().type(box(), "Fix the")
@@ -320,5 +328,169 @@ describe("a thread's panel", () => {
 
       expect(box().value).toBe("Fix the runtime")
     })
+  })
+})
+
+describe("a skill reference", () => {
+  /** The instance's skills: `planning` hides a lower tier's copy. */
+  const skills: SkillSummary[] = [
+    { name: "deploy", description: "Ship the app.", tier: "instance", shadowed_by: null },
+    { name: "planning", description: "Plan the work.", tier: "instance", shadowed_by: null },
+    { name: "planning", description: "Kinby's plan.", tier: "kinby", shadowed_by: "instance" },
+    { name: "tdd", description: "Test first.", tier: "kinby", shadowed_by: null },
+  ]
+  const accepted = () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" })
+  const openWithSkills = (answers: Answers = {}) =>
+    open("t1", { "skill.list": () => ({ skills, warnings: [] }), ...answers })
+  /** The rows of the menu, by their text. */
+  const rows = () => screen.queryAllByRole("option").map((row) => row.textContent)
+  /** The text of each reference the composer marks, in order. */
+  const marked = () => [...document.querySelectorAll("mark")].map((mark) => mark.textContent)
+  const turnStarts = (client: { calls: { method: string; params: unknown }[] }) =>
+    client.calls.filter((call) => call.method === "thread.turn.start").map((call) => call.params)
+
+  it("lists the skills a turn can load once a slash starts a word, and narrows them by name", async () => {
+    openWithSkills()
+    const user = userEvent.setup()
+
+    await user.type(box(), "Use /")
+    expect(await screen.findAllByRole("option")).toHaveLength(3)
+    expect(rows()).toEqual(["/deployShip the app.", "/planningPlan the work.", "/tddTest first."])
+
+    await user.type(box(), "d")
+    expect(rows()).toEqual(["/deployShip the app.", "/tddTest first."])
+
+    await user.type(box(), "e")
+    expect(rows()).toEqual(["/deployShip the app."])
+  })
+
+  it("lists the names that start with what was typed first", async () => {
+    openWithSkills()
+
+    await userEvent.setup().type(box(), "/p")
+
+    await screen.findAllByRole("option")
+    expect(rows()).toEqual(["/planningPlan the work.", "/deployShip the app."])
+  })
+
+  it("opens no menu for a slash inside a word, such as a URL", async () => {
+    const { client } = openWithSkills()
+
+    await userEvent.setup().type(box(), "See https://d")
+
+    expect(rows()).toEqual([])
+    expect(client.calls.map((call) => call.method)).not.toContain("skill.list")
+  })
+
+  it("puts a picked skill in the message as a reference, and sends its name with it", async () => {
+    const { client } = openWithSkills({ "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.type(box(), "Use /pl")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Enter}")
+
+    expect(box().value).toBe("Use /planning ")
+    expect(rows()).toEqual([])
+    expect(marked()).toEqual(["/planning"])
+    expect(turnStarts(client)).toEqual([])
+
+    await user.type(box(), "for it{Enter}")
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "Use /planning for it", skills: ["planning"] },
+    ])
+  })
+
+  it("holds several references, picked with the arrow keys, Tab or a click", async () => {
+    const { client } = openWithSkills({ "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.type(box(), "/")
+    await screen.findAllByRole("option")
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowUp}{Tab}then /")
+    await user.click(await screen.findByRole("option", { name: /^\/tdd/ }))
+    expect(marked()).toEqual(["/planning", "/tdd"])
+    await user.type(box(), "{Enter}")
+
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "/planning then /tdd", skills: ["planning", "tdd"] },
+    ])
+  })
+
+  it("drops a reference whose token is edited", async () => {
+    const { client } = openWithSkills({ "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.type(box(), "/tdd")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Enter}{Backspace}{Backspace}d now{Enter}")
+
+    expect(turnStarts(client)).toEqual([{ thread_id: "t1", message: "/tdd now", skills: [] }])
+  })
+
+  it("sends a slash typed without a pick as plain text, even when it names a skill", async () => {
+    const { client } = openWithSkills({ "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.type(box(), "/tdd")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Escape}")
+    expect(rows()).toEqual([])
+    await user.type(box(), " and /etc/hosts{Enter}")
+
+    expect(marked()).toEqual([])
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "/tdd and /etc/hosts", skills: [] },
+    ])
+  })
+
+  it("opens the menu again in the next message after one that closed it", async () => {
+    openWithSkills({ "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.type(box(), "/tdd")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Escape}{Enter}/")
+
+    expect(box().value).toBe("/")
+    expect(await screen.findAllByRole("option")).toHaveLength(3)
+  })
+
+  it("keeps the message when the instance refuses a skill it no longer has", async () => {
+    openWithSkills({
+      "thread.turn.start": () => {
+        throw new CallError({
+          code: "NOT_FOUND",
+          message: 'Skill "tdd" is not available in this turn.',
+          retryable: false,
+        })
+      },
+    })
+    const user = userEvent.setup()
+
+    await user.type(box(), "/tdd")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Enter}now{Enter}")
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      'Skill "tdd" is not available in this turn.',
+    )
+    expect(box().value).toBe("/tdd now")
+    expect(marked()).toEqual(["/tdd"])
+  })
+
+  it("keeps the references of a draft once the thread opens again", async () => {
+    const { unmount } = openWithSkills()
+    const user = userEvent.setup()
+    await user.type(box(), "/tdd")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Enter}now")
+
+    unmount()
+    const { client } = openWithSkills({ "thread.turn.start": accepted })
+    expect(marked()).toEqual(["/tdd"])
+    await user.type(box(), "{Enter}")
+
+    expect(turnStarts(client)).toEqual([{ thread_id: "t1", message: "/tdd now", skills: ["tdd"] }])
   })
 })

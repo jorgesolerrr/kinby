@@ -18,6 +18,7 @@ import type {
   InstanceSummary,
   Line,
   OperationGetResult,
+  SkillSummary,
   ThreadSummary,
 } from "./contract"
 
@@ -56,6 +57,8 @@ export interface FakeHub {
   setups: Record<string, InstanceSetup>
   /** What `instance.picks.get` answers with, by instance. */
   picks: Record<string, InstancePicksResult>
+  /** What `skill.list` answers with, by instance. */
+  skills: Record<string, SkillSummary[]>
   /** What `line.list` answers with. */
   lines: Line[]
   /** The lines' runs, which `factory.run.list` answers with by line. */
@@ -70,7 +73,8 @@ export interface FakeHub {
  * `thread.list` for an instance `threads` names, `view.list` with no views, `thread.create` with
  * `thread-1`, `thread-2` and on, and accepts every `thread.turn.start`. `instance.status` answers
  * with the setup `setups` holds for the instance, or nothing left to set up. `instance.picks.get`
- * answers with what `picks` holds for the instance, or no picks. `line.list` answers with `lines`
+ * answers with what `picks` holds for the instance, or no picks. `skill.list` answers with the
+ * skills `skills` holds for the instance, or none. `line.list` answers with `lines`
  * and `factory.run.list` with the `runs` of the line it names, on no factories and no workbenches.
  */
 export function fakeHub({
@@ -80,6 +84,7 @@ export function fakeHub({
   threads = {},
   setups = {},
   picks = {},
+  skills = {},
   lines = [],
   runs = [],
 }: {
@@ -89,6 +94,7 @@ export function fakeHub({
   threads?: Record<string, ThreadSummary[]>
   setups?: Record<string, InstanceSetup>
   picks?: Record<string, InstancePicksResult>
+  skills?: Record<string, SkillSummary[]>
   lines?: Line[]
   runs?: FactoryRun[]
 } = {}): FakeHub {
@@ -115,6 +121,7 @@ export function fakeHub({
     threads,
     setups,
     picks,
+    skills,
     lines,
     runs,
     sockets: [],
@@ -193,6 +200,9 @@ export function fakeHub({
             return (
               hub.picks[String(params.instance_id)] ?? { hash: null, picks: [], mcp_servers: [] }
             )
+          }
+          if (method === "skill.list" && instanceId) {
+            return { skills: hub.skills[decodeURIComponent(instanceId)] ?? [], warnings: [] }
           }
           if (method === "factory.list") return { factories: [] }
           if (method === "workbench.list") return { workbenches: [] }

@@ -64,6 +64,7 @@ export function ThreadComposer({
   modelWindow: number | undefined
 }) {
   const { threads, thread, ceiling } = useListedThread(client, threadId)
+  const listSkills = useCallback(async () => (await client.call("skill.list", {})).skills, [client])
   const [failure, setFailure] = useState<string>()
   const setMode = async (mode: PermissionMode) => {
     try {
@@ -84,7 +85,10 @@ export function ThreadComposer({
       name={name}
       running={running}
       failure={failure}
-      onSend={(message) => client.call("thread.turn.start", { thread_id: threadId, message })}
+      onSend={(message, skills) =>
+        client.call("thread.turn.start", { thread_id: threadId, message, skills })
+      }
+      listSkills={listSkills}
       onStop={() => client.call("thread.turn.interrupt", { thread_id: threadId })}
     >
       {thread !== undefined && ceiling !== undefined && (

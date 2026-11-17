@@ -3,6 +3,7 @@ import { type ComponentProps, Fragment, type ReactNode, useEffect, useRef, useSt
 import { code } from "@streamdown/code"
 import { defaultRehypePlugins, type ExtraProps, Streamdown, type StreamdownProps } from "streamdown"
 
+import { ReferencedText } from "@/components/referenced-text"
 import { RaisedNotification, ViewLine } from "@/components/thread-cards"
 import { TurnEnd } from "@/components/thread-end"
 import { ToolRun } from "@/components/thread-tool-run"
@@ -21,6 +22,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import type { Notifications } from "@/hooks/use-notifications"
 import { originLabel } from "@/lib/origin"
+import { referencesIn } from "@/lib/references"
 import { navigate, useSelectedTurnId } from "@/lib/selection"
 import {
   localDay,
@@ -152,7 +154,12 @@ function Turn({
         <Message align="end">
           <MessageContent>
             <Bubble align="end" variant="secondary">
-              <BubbleContent className="whitespace-pre-wrap">{turn.request}</BubbleContent>
+              <BubbleContent className="whitespace-pre-wrap">
+                <ReferencedText
+                  text={turn.request}
+                  references={referencesIn(turn.request, turn.skills)}
+                />
+              </BubbleContent>
             </Bubble>
           </MessageContent>
         </Message>
@@ -167,7 +174,12 @@ function Turn({
               <time dateTime={turn.startedAt}>{startedAt(turn.startedAt)}</time>
             </MarkerContent>
           </Marker>
-          <p className="pl-6 text-sm whitespace-pre-wrap text-muted-foreground">{turn.request}</p>
+          <p className="pl-6 text-sm whitespace-pre-wrap text-muted-foreground">
+            <ReferencedText
+              text={turn.request}
+              references={referencesIn(turn.request, turn.skills)}
+            />
+          </p>
         </div>
       )}
       {grouped(turn.steps).map((run) =>

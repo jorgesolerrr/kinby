@@ -55,6 +55,20 @@ export function byName(skills: SkillSummary[]): SkillGroup[] {
   return groups
 }
 
+/**
+ * The skills a turn can load, one per name, whose name holds `query`: those it starts first. The
+ * list comes sorted by name, so each half stays sorted.
+ */
+export function loadable(skills: SkillSummary[], query: string): SkillSummary[] {
+  const matching = skills.filter(
+    (skill) => skill.shadowed_by === null && skill.name.includes(query),
+  )
+  return [
+    ...matching.filter((skill) => skill.name.startsWith(query)),
+    ...matching.filter((skill) => !skill.name.startsWith(query)),
+  ]
+}
+
 export async function openSkill(
   caller: Caller,
   name: string,

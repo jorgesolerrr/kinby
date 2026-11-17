@@ -139,6 +139,24 @@ describe("a thread's panel", () => {
     })
   })
 
+  it("marks the skills the user's message referenced", async () => {
+    const events = thread([
+      "turn-1",
+      { ...started("Use /planning, then /tdd on /etc/hosts"), skills: ["tdd"] },
+    ])
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    expect([...document.querySelectorAll("mark")].map((mark) => mark.textContent)).toEqual(["/tdd"])
+    expect(screen.getByText(/^Use \/planning, then/).textContent).toBe(
+      "Use /planning, then /tdd on /etc/hosts",
+    )
+  })
+
   it("names the browser's zone in the time a routine's turn started", async () => {
     vi.stubEnv("TZ", "America/Bogota")
     onTestFinished(() => void vi.unstubAllEnvs())

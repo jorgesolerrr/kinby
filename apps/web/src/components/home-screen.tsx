@@ -5,6 +5,7 @@ import {
   useEffect,
   useEffectEvent,
   useId,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -43,6 +44,7 @@ import { selectInstance, selectThread } from "@/lib/selection"
 interface Queued {
   instanceId: string
   message: string
+  skills: string[]
   /** Ends the composer's send: `false` keeps the message, and a send clears it once it succeeds. */
   settle: (sent: false | Promise<unknown>) => void
 }
@@ -92,11 +94,15 @@ export function HomeScreen({
     useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
     "connected"
   const threads = useSidebarThreads(client, clock)
+  const listSkills = useMemo(
+    () => client && (async () => (await client.call("skill.list", {})).skills),
+    [client],
+  )
   const noThreads = !needsSetup && threads?.length === 0
-  const send = async (message: string) => {
+  const send = async (message: string, skills: string[]) => {
     if (client === undefined) return
     const created = await client.call("thread.create", {})
-    await client.call("thread.turn.start", { thread_id: created.id, message })
+    await client.call("thread.turn.start", { thread_id: created.id, message, skills })
     selectThread(picked.instance_id, created.id)
   }
   const failed = start.starting?.state === "failed"
@@ -106,12 +112,12 @@ export function HomeScreen({
     const elsewhere = waiting.instanceId !== picked.instance_id
     if (!(failed || connected || elsewhere)) return
     queued.current = undefined
-    waiting.settle(failed || elsewhere ? false : send(waiting.message))
+    waiting.settle(failed || elsewhere ? false : send(waiting.message, waiting.skills))
   })
   useEffect(() => settleQueued(), [failed, connected, picked.instance_id])
-  const startAndSend = (message: string) =>
+  const startAndSend = (message: string, skills: string[]) =>
     new Promise<unknown>((settle) => {
-      queued.current = { instanceId: picked.instance_id, message, settle }
+      queued.current = { instanceId: picked.instance_id, message, skills, settle }
       start.ask()
     })
 
@@ -156,6 +162,7 @@ export function HomeScreen({
           connected={stopped || connected}
           sendLabel={stopped ? "Start and send" : "Send"}
           onSend={stopped ? startAndSend : send}
+          listSkills={listSkills}
         >
           <Select
             items={listed.map((instance) => ({
