@@ -77,8 +77,8 @@ export function McpServerFields({
         </>
       ) : (
         <>
-          {field("command", "Command", "uvx runs the server in the instance's container.")}
-          {field("args", "Arguments", "One a line. The first is the package uvx runs.")}
+          {field("command", "Command", "uvx or npx runs the server in the instance's container.")}
+          {field("args", "Arguments", "One a line. The first is the package the command runs.")}
           {field(
             "env",
             "Env",

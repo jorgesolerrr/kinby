@@ -104,8 +104,9 @@ def dispatched_write(hub: Hub, entry: dict[str, object]) -> object:
     [
         ({"url": "https://mcp.example.com/mcp"}, "http"),
         ({"command": "uvx", "args": ["mcp-server-fetch"]}, "stdio"),
+        ({"command": "npx", "args": ["@acme/server"]}, "stdio"),
     ],
-    ids=["url", "command"],
+    ids=["url", "uvx", "npx"],
 )
 def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_path, entry, stored):
     hub = hub_at(tmp_path / "hub")
@@ -121,23 +122,33 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
     ("entry", "reason"),
     [
         ({"type": "sse", "url": "https://mcp.example.com/sse"}, "deprecated"),
-        ({"command": "npx", "args": ["-y", "@acme/server"]}, "uvx"),
+        ({"command": "docker", "args": ["run", "acme/server"]}, "uvx or npx"),
         ({"command": "uvx", "args": ["a"], "env": {"PATH": "/evil"}}, "PATH"),
         ({"command": "uvx", "args": ["a"], "env": {"LD_PRELOAD": "evil.so"}}, "LD_PRELOAD"),
         ({"command": "uvx", "args": ["a"], "env": {"PYTHONPATH": "/evil"}}, "PYTHONPATH"),
+        ({"command": "npx", "args": ["a"], "env": {"NODE_OPTIONS": "-r evil"}}, "NODE_OPTIONS"),
+        ({"command": "npx", "args": ["a"], "env": {"npm_config_registry": "x"}}, "npm_config"),
         ({"command": "uvx", "args": ["--index-url=http://evil", "a"]}, "package"),
         ({"command": "uvx", "args": ["${PACKAGE}"]}, "package"),
         ({"command": "uvx"}, "package"),
+        ({"command": "npx", "args": ["-y", "@acme/server"]}, "package"),
+        ({"command": "npx", "args": ["${PACKAGE}"]}, "package"),
+        ({"command": "npx"}, "package"),
     ],
     ids=[
         "sse",
-        "npx",
+        "other-command",
         "path",
         "ld-preload",
         "pythonpath",
+        "node-options",
+        "npm-config",
         "uvx-option",
         "uvx-variable",
-        "no-package",
+        "uvx-no-package",
+        "npx-option",
+        "npx-variable",
+        "npx-no-package",
     ],
 )
 def test_an_entry_kinby_cannot_run_or_whose_env_key_hijacks_the_process_is_refused(
