@@ -14,6 +14,7 @@ from kinby.contracts import (
     StepEnding,
     StepResult,
 )
+from kinby.hub import ImageSelection
 from tests.test_factory_runs import (
     FILES,
     detail,
@@ -25,12 +26,15 @@ from tests.test_factory_runs import (
 )
 from tests.test_hub import (
     FakeControl,
+    FakeImages,
     FakeRuntime,
     created_instance,
+    hub_at,
     hub_client,
     instance_environment,
 )
 from tests.test_hub_notices import BUILT, ROUTE_MISSING, _rewrite_environment
+from tests.test_hub_workbenches import started
 
 HUB_SCRIPT = Path(__file__).parents[1] / ".claude" / "skills" / "e2e-pass" / "hub.py"
 spec = importlib.util.spec_from_file_location("e2e_hub", HUB_SCRIPT)
@@ -68,6 +72,26 @@ def test_an_update_gives_an_instance_on_the_revision_its_missing_hub_route(
         out = capsys.readouterr().out
         assert f"{alice} alice: updating to {BUILT[:12]}" in out
         assert f"{bob} bob: already on {BUILT[:12]}" in out
+
+    asyncio.run(scenario())
+
+
+def test_an_update_moves_every_workbench_onto_the_revision(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    monkeypatch.setattr("kinby.cli.hub_update.POLL_SECONDS", 0)
+    images = FakeImages()
+    runtime = FakeRuntime()
+    hub = hub_at(tmp_path / "hub", images=images, runtime=runtime, control=FakeControl())
+
+    async def scenario() -> None:
+        client = hub_client(hub)
+        workbench_id = await started(client, runtime)
+
+        assert await e2e_hub.update(client, "v2", []) == 0
+
+        assert images.selections[-1] == ImageSelection("v2", recipe="coder")
+        assert f"{workbench_id} cec-backend: updating to v2" in capsys.readouterr().out
 
     asyncio.run(scenario())
 
