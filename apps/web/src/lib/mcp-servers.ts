@@ -12,6 +12,8 @@ export interface McpServerDraft {
   readArgs: string[]
   /** One `NAME=value` a line. */
   env: string
+  /** The env as read, which `env` cannot always show: a value with a newline or edge spaces. */
+  readEnv: Record<string, string>
   include: string
 }
 
@@ -23,6 +25,7 @@ export const EMPTY_DRAFT: McpServerDraft = {
   args: "",
   readArgs: [],
   env: "",
+  readEnv: {},
   include: "",
 }
 
@@ -38,6 +41,7 @@ export function draftOf({ entry, include = [] }: McpServer): McpServerDraft {
         args: (entry.args ?? []).join("\n"),
         readArgs: entry.args ?? [],
         env: textOf(entry.env, "="),
+        readEnv: entry.env ?? {},
       }
 }
 
@@ -50,7 +54,7 @@ export function serverOf(draft: McpServerDraft): McpServer {
             type: "stdio",
             command: draft.command.trim(),
             args: draft.args === draft.readArgs.join("\n") ? draft.readArgs : lines(draft.args),
-            env: pairsOf(draft.env, "="),
+            env: draft.env === textOf(draft.readEnv, "=") ? draft.readEnv : pairsOf(draft.env, "="),
           },
     include: lines(draft.include),
   }

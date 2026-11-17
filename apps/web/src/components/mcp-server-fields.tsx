@@ -25,7 +25,7 @@ export function McpServerFields({
 }) {
   const id = useId()
   const field = (
-    name: Exclude<keyof McpServerDraft, "type" | "readArgs">,
+    name: Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv">,
     label: string,
     description: string,
   ) => (
