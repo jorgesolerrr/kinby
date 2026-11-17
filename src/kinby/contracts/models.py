@@ -172,7 +172,8 @@ class ErrorEnvelope(ContractModel):
     message: str
     retryable: bool
     #: What is wrong with each value the client sent, by field name. INVALID_SETUP fills it, and
-    #: so does INVALID_ARGUMENT for a config write.
+    #: so does INVALID_ARGUMENT for a config write, and for a payload the contract refuses, by the
+    #: dotted path of the value, such as ``server.entry.stdio.command``.
     fields: dict[str, str] = Field(default_factory=dict)
 
     @property
