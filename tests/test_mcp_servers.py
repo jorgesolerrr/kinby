@@ -351,3 +351,42 @@ def test_a_server_that_never_answers_is_told_to_have_timed_out(
     message = failure(instance_at(tmp_path), echo("look", package="silent-server"))
 
     assert message.endswith("without them: it timed out after 0.1 seconds")
+
+
+def test_a_server_whose_variable_the_instance_lacks_is_left_out_with_a_notice_naming_it(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    needy = echo("look", env={"ECHO_KEY": "${ECHO_KEY}", "ECHO_MODE": "${ECHO_MODE:-quiet}"})
+    pick(instance, echo=echo("look"), needy=needy)
+
+    payloads = asyncio.run(
+        turn(
+            instance,
+            [("needy__look", {"text": "hi"}), ("echo__look", {"text": "hi"})],
+            PermissionMode.FULL_ACCESS,
+        )
+    )
+
+    outputs = [payload.output for payload in payloads if isinstance(payload, ToolResult)]
+    assert outputs == ['Tool "needy__look" is not available in this turn.', "looked: hi"]
+    assert failed_mcp_servers(instance.manifest.state_dir) == {
+        "needy": (
+            'MCP server "needy" needs ECHO_KEY, which the instance\'s secrets lack, '
+            "so the turn ran without it."
+        )
+    }
+
+
+def test_a_server_connects_once_the_instance_holds_the_variable_it_lacked(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, needy=echo("look", env={"ECHO_KEY": "${ECHO_KEY}"}))
+    asyncio.run(turn(instance, [], PermissionMode.ASK))
+    (tmp_path / ".env").write_text("ECHO_KEY=secret\n", encoding="utf-8")
+
+    payloads = asyncio.run(
+        turn(instance, [("needy__look", {"text": "hi"})], PermissionMode.FULL_ACCESS)
+    )
+
+    assert result(payloads).output == "looked: hi"
+    assert failed_mcp_servers(instance.manifest.state_dir) == {}

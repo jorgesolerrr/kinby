@@ -1,27 +1,34 @@
 """An instance picks MCP servers from the library: a pinned copy in its lock, with the user's trust
 in each server's read-only hints."""
 
+import asyncio
 import json
 from pathlib import Path
 
 from kinby.contracts import (
+    INSTANCE_SECRETS_SET,
     ConfigActor,
     ErrorCode,
     ErrorEnvelope,
     InstancePicksResult,
+    InstanceSecretsSetCommand,
+    InstanceSetup,
+    LifecycleOperationResult,
     McpServer,
     McpServerChoice,
     McpServerPick,
     PickState,
+    SecretSetup,
 )
 from kinby.hub import Hub
 from kinby.instance import inspect_instance
 from kinby.instance.config_changes import ConfigChangeLog
-from tests.test_hub import hub_client
+from tests.test_hub import finished_operation, hold_search_key, hub_client
 from tests.test_hub_library import reopened
 from tests.test_hub_library_mcp_servers import FETCH
 from tests.test_hub_pick_sync import _hub, _picks_step, _started, _update
-from tests.test_hub_picks import _lock, _picks, _set
+from tests.test_hub_picks import _instance_id, _lock, _picks, _set
+from tests.test_hub_setup import setup_of
 
 FETCHED = McpServerPick(name="fetch", trust_hints=False, state=PickState.UP_TO_DATE)
 
@@ -161,3 +168,49 @@ def test_the_hub_converts_a_picks_locked_copy_in_the_old_shape(tmp_path):
     assert _servers(_picks(hub_client(hub), directory)) == [
         McpServerPick(name="fetch", trust_hints=True, state=PickState.BEHIND)
     ]
+
+
+def test_a_variable_a_picked_server_needs_and_the_instance_lacks_is_pending_setup(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    instance_id = _instance_id(directory)
+    hold_search_key(hub, instance_id)
+    needy = McpServer.model_validate(
+        {
+            "entry": {
+                "url": "https://mcp.example.com/${ROUTE:-mcp}",
+                "headers": {"Authorization": "Bearer ${FETCH_TOKEN}"},
+            },
+            "include": ["fetch"],
+        }
+    )
+    _library_server(hub, "fetch", FETCH)
+    _library_server(hub, "remote", needy)
+    _pick_servers(hub, directory, McpServerChoice(name="fetch"), McpServerChoice(name="remote"))
+
+    async def scenario() -> tuple[InstanceSetup, InstanceSetup]:
+        missing = await setup_of(hub, instance_id)
+        replaced = await hub_client(hub).call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(instance_id=instance_id, secrets={"FETCH_TOKEN": "tok"}),
+        )
+        assert isinstance(replaced, LifecycleOperationResult)
+        await finished_operation(hub_client(hub), replaced)
+        return missing, await setup_of(hub, instance_id)
+
+    missing, filled = asyncio.run(scenario())
+
+    token = SecretSetup(
+        name="FETCH_TOKEN",
+        variable="FETCH_TOKEN",
+        label="FETCH_TOKEN",
+        required=True,
+        is_set=False,
+        mcp_servers=["remote"],
+    )
+    assert [secret for secret in missing.secrets if secret.mcp_servers] == [token]
+    assert missing.pending
+    assert [secret for secret in filled.secrets if secret.mcp_servers] == [
+        token.model_copy(update={"is_set": True})
+    ]
+    assert not filled.pending

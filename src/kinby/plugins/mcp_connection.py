@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import sys
 import threading
 from collections.abc import Mapping
@@ -26,13 +25,13 @@ from mcp.types import Tool as McpTool
 from kinby.contracts import McpHttpEntry, McpServerEntry
 from kinby.instance.skills_lock import LockedMcpServer
 from kinby.plugins.errors import exception_message
+from kinby.plugins.mcp import filled
 from kinby.plugins.tools import Tool
 
 #: How long one server may take to start and list its tools at turn start.
 CONNECT_SECONDS = 60
 #: At most how many bytes of a failed server's stderr end its notice.
 STDERR_TAIL = 2000
-_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 async def connected_tools(
@@ -120,22 +119,16 @@ def _transport(entry: McpServerEntry, secrets: Mapping[str, str], stderr: TextIO
     URL with its headers, or its command over stdio with only the env it declares and its stderr
     to *stderr*."""
     if isinstance(entry, McpHttpEntry):
-        headers = {name: _filled(value, secrets) for name, value in entry.headers.items()}
+        headers = {name: filled(value, secrets) for name, value in entry.headers.items()}
         return streamable_http_client(
-            _filled(entry.url, secrets), http_client=create_mcp_http_client(headers=headers)
+            filled(entry.url, secrets), http_client=create_mcp_http_client(headers=headers)
         )
     parameters = StdioServerParameters(
         command=entry.command,
-        args=[_filled(arg, secrets) for arg in entry.args],
-        env={name: _filled(value, secrets) for name, value in entry.env.items()},
+        args=[filled(arg, secrets) for arg in entry.args],
+        env={name: filled(value, secrets) for name, value in entry.env.items()},
     )
     return stdio_client(parameters, errlog=stderr)
-
-
-def _filled(value: str, secrets: Mapping[str, str]) -> str:
-    """*value* with each ``${VAR}`` the secret's, or ``${VAR:-default}``'s default when the
-    instance holds none. A variable with no secret and no default is empty."""
-    return _VARIABLE.sub(lambda match: secrets.get(match[1]) or match[2] or "", value)
 
 
 def _adapted(

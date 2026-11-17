@@ -2123,6 +2123,27 @@ describe("the home screen", () => {
       )
     })
 
+    it("names on the card the MCP server that needs a secret", async () => {
+      const token = {
+        name: "FETCH_TOKEN",
+        label: "FETCH_TOKEN",
+        variable: "FETCH_TOKEN",
+        required: true,
+        is_set: false,
+        mcp_servers: ["fetch"],
+      }
+      openApp({
+        signedIn: true,
+        instances: [kinby],
+        setups: { "hub-kinby": missing({ secrets: [{ ...apiKey, is_set: true }, token] }) },
+      })
+
+      const setup = await card("Kinby needs setup to answer")
+      expect(setup.getByText(/^Needed by the MCP server/).textContent).toBe(
+        "Needed by the MCP server fetch",
+      )
+    })
+
     it("saves a secret from the card with instance.secrets.set, then drops it and enables the composer", async () => {
       const { hub } = openApp({
         signedIn: true,
