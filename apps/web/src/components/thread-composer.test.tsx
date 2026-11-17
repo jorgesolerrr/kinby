@@ -444,6 +444,18 @@ describe("a skill reference", () => {
     ])
   })
 
+  it("opens the menu again in the next message after one that closed it", async () => {
+    openWithSkills({ "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.type(box(), "/tdd")
+    await screen.findAllByRole("option")
+    await user.keyboard("{Escape}{Enter}/")
+
+    expect(box().value).toBe("/")
+    expect(await screen.findAllByRole("option")).toHaveLength(3)
+  })
+
   it("keeps the message when the instance refuses a skill it no longer has", async () => {
     openWithSkills({
       "thread.turn.start": () => {

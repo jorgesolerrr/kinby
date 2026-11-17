@@ -149,6 +149,7 @@ export function Composer({
       if ((await onSend(text, [...new Set(names)])) !== false) {
         // The box may have changed while the send was out, here or in a composer opened again.
         setMessage((current) => (current === sent ? EMPTY_DRAFT : current))
+        setClosedAt(undefined)
         if (draft(draftKey) === sent) keepDraft(draftKey, EMPTY_DRAFT)
       }
       setSendFailure(undefined)
