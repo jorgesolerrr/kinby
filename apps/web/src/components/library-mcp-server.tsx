@@ -87,6 +87,7 @@ export function NewMcpServer({
         <Textarea
           id={`${id}-pasted`}
           value={pasted}
+          readOnly={busy}
           aria-invalid={unread || undefined}
           onChange={(event) => paste(event.target.value)}
         />

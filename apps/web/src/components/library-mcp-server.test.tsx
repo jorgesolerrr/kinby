@@ -18,12 +18,13 @@ const fetchServer: McpServer = {
 
 /**
  * A page over a library holding the MCP server fetch, defined as `server`, which writes and
- * deletes change. Each read of it returns the next hash.
+ * deletes change. Each read of it returns the next hash. Writes wait for `held`.
  */
 function openServersPage({
   write,
   server = fetchServer,
-}: { write?: () => void; server?: McpServer } = {}) {
+  held = Promise.resolve(),
+}: { write?: () => void; server?: McpServer; held?: Promise<void> } = {}) {
   let reads = 0
   let entries: LibraryEntry[] = [
     ...listed.entries,
@@ -44,7 +45,14 @@ function openServersPage({
       return { entries }
     },
   })
-  return { caller, user: openLibrary(caller, "/library/mcp-servers") }
+  const writesHeld: typeof caller = {
+    calls: caller.calls,
+    call: async (method, params) => {
+      if (method === "library.mcp_server.write") await held
+      return caller.call(method, params)
+    },
+  }
+  return { caller, user: openLibrary(writesHeld, "/library/mcp-servers") }
 }
 
 const serverWrites = (caller: ReturnType<typeof openServersPage>["caller"]) =>
@@ -219,6 +227,30 @@ describe("LibraryPage, MCP servers", () => {
     expect(
       serverWrites(caller).map((call) => (call.params as LibraryMcpServerWriteCommand).name),
     ).toEqual(["github", "git"])
+  })
+
+  it("takes no paste while a server is being added, so the write cannot drop it", async () => {
+    let written = () => {}
+    const { user } = openServersPage({ held: new Promise((resolve) => (written = resolve)) })
+    const block = {
+      github: { url: "https://api.githubcopilot.com/mcp/" },
+      git: { command: "uvx", args: ["mcp-server-git"] },
+    }
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste(JSON.stringify(block))
+    await user.click(screen.getByRole("button", { name: "Add" }))
+    const pasteBox = screen.getByRole("textbox", { name: "Paste an entry" }) as HTMLTextAreaElement
+    expect(pasteBox.readOnly).toBe(true)
+    await user.click(pasteBox)
+    await user.paste(JSON.stringify({ fetch: { command: "uvx", args: ["mcp-server-fetch"] } }))
+    written()
+
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("git"),
+    )
+    expect(pasteBox.readOnly).toBe(false)
   })
 
   it("skips a server of a pasted block", async () => {
