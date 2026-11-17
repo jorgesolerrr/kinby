@@ -1,6 +1,6 @@
 # MCP servers are a library kind whose calls are writes
 
-Amends [ADR 0091](0091-the-hub-keeps-a-library-and-a-pick-is-a-pinned-copy.md).
+Amends [ADR 0091](0091-the-hub-keeps-a-library-and-a-pick-is-a-pinned-copy.md). Amended by [ADR 0127](0127-an-mcp-server-is-defined-as-other-clients-define-it-and-the-image-ships-node.md): the definition is the `mcpServers` entry other clients use, and `npx` servers run. Amended by [ADR 0129](0129-every-tool-has-a-state-and-tool-search-and-code-mode-are-kinbys-own.md): tool states replace the include filter.
 
 Ticket [#161](https://github.com/jorgesolerrr/kinby/issues/161): kinby has no MCP client, and ADR 0091 left MCP servers as a future library kind. The research in [#918](https://github.com/jorgesolerrr/kinby/issues/918) and [#919](https://github.com/jorgesolerrr/kinby/issues/919) found that every agent studied leaves MCP configuration to the user, that Hermes asks on every call to an untrusted server's tools unless the tool declares `readOnlyHint`, and that Goose refuses dangerous environment keys for local servers. An MCP server becomes a **library** kind.
 

@@ -218,7 +218,7 @@ _Avoid_: upgrade, rollout
 
 ### Instance notice
 
-Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the instance's environment lacks the hub route and the scopes the registry grants it, or an **MCP server** it picked did not start or list its tools at its last **turn**. An **instance update** answers the first two.
+Something the **hub** reports about one **instance** that the user may want to act on, without stopping it: the instance runs another kinby revision than the hub's checkout, the instance's environment lacks the hub route and the scopes the registry grants it, an **MCP server** it picked did not start or list its tools at its last **turn**, or an **MCP sign-in** the server stopped accepting. An **instance update** answers the first two.
 _Avoid_: warning, alert
 
 ### Instance removal
@@ -279,7 +279,7 @@ _Avoid_: login container, helper container
 
 ### Pending setup
 
-What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, its **search backend**'s key while web search is on, or a secret its **instance code** declares and its instance secrets lack. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
+What an **instance** still needs after creation: a **subscription login** that is not signed in, a required secret **setup field** with no value in its **instance secrets**, its **search backend**'s key while web search is on, a secret its **instance code** declares or a picked **MCP server** names and its instance secrets lack, or an **MCP sign-in** that is not signed in. The **hub** tracks each declared login per instance as pending, signed in, or failed, from its creation on, and reads the secrets from the instance's stored descriptor and its secrets file, never showing a value. An instance created before the hub tracked logins reads as complete. Pending setup never blocks a start. A stopped instance with pending setup opens on its setup card, where the user signs in, sees which secrets are set, and starts it.
 _Avoid_: incomplete instance, onboarding
 
 ### Avatar
@@ -626,7 +626,7 @@ One pickable thing in the **library**, of one kind. An entry added from git reco
 
 ### Pick
 
-An **instance**'s or a **workbench**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill, or into the workbench's directory, and records the version copied, and a running instance or workbench can add or drop one. Picking an **MCP server** records a copy of its definition. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always.
+An **instance**'s or a **workbench**'s choice of a **library entry**. Picking a **skill** copies it into the instance as an instance-tier skill, or into the workbench's directory, and records the version copied, and a running instance or workbench can add or drop one. Picking an **MCP server** records a copy of its definition, and holds what the instance chose for it: whether it trusts the server's read-only hints, the **tool states** it changed, and its **MCP sign-in**. An **instance update** brings a picked skill up to the library's unless the instance changed it, and a picked MCP server always.
 _Avoid_: install (of a skill or a factory), package
 
 ### Suggested pick
@@ -668,7 +668,27 @@ The **context size** at which an **instance** compacts a **thread** on its own. 
 
 ### Default tools
 
-The **tools** kinby supplies to every instance unless its **manifest** disables them: read, write, edit, grep, glob, bash, web_search and web_fetch. The manifest can switch them all off, or switch off one by name and keep the rest. web_search is offered only while the instance holds its **search backend**'s key.
+The **tools** kinby supplies to every instance: read, write, edit, grep, glob, bash, web_search, web_fetch and run_code, the tool of **code mode**. They are one **tool group**, so the instance can switch the group or any one of them off. web_search is offered only while the instance holds its **search backend**'s key.
+
+### Tool group
+
+A named set of **tools** switched together: each **MCP server** an **instance** picked, its **default tools**, its **memory tools**, its browser tools and its **authored tools**. A group that is off offers none of its tools. A group that is on gives its tools a default **tool state**.
+_Avoid_: tool set, namespace, profile, bundle
+
+### Tool state
+
+How one **tool** reaches an **instance**'s **turns**: loaded, searchable, or off. The model is sent a loaded tool's definition on every call. It finds a searchable tool through **tool search**. An off tool is not there. A tool takes its **tool group**'s default unless it has a state of its own. For an MCP server, the **library entry** sets the defaults and the **pick** holds what the instance changed. Only the user and the **home instance** change a state, never the instance itself, and a change applies from the next turn.
+_Avoid_: enabled, disabled, deferred, lazy tool
+
+### Tool search
+
+How a **turn** uses a searchable **tool**: it searches the searchable tools by what they do, reads one's definition, and calls it by name. The **gate** checks that call as a call to the tool itself. A turn has tool search only while one of its tools is searchable.
+_Avoid_: tool discovery, progressive discovery, deferred loading
+
+### Code mode
+
+A **turn** running a script the model wrote, which calls the turn's **tools** and returns only what the script chooses to. The script reaches nothing but those tools: no files, no network, no secrets. Each call it makes passes the **gate** as if the model had made it, and a call the gate would ask about fails inside the script, so the model makes it directly.
+_Avoid_: programmatic tool calling, code execution, sandbox (the **sandbox** is the instance's container)
 
 ### Seen URL
 
@@ -722,7 +742,13 @@ _Avoid_: dynamic tool, self-made tool
 
 ### MCP server
 
-A **library** kind: an outside server whose tools an **instance** that picks it gets on its **turns**, each named `<server>__<tool>`. The user or the **home instance** adds it to the library; an instance never adds one to itself. Every call to its tools is gated as a write unless the user trusts the server's own read-only hints, a choice held on the **pick**.
+A **library** kind: an outside server whose tools an **instance** that picks it gets on its **turns**, each named `<server>__<tool>`. Its definition is the entry other MCP clients use, so one written for another client works here. The user or the **home instance** adds it to the library, by hand or from the MCP Registry, the public catalogue of servers; an instance never adds one to itself. Every call to its tools is gated as a write unless the user trusts the server's own read-only hints, a choice held on the **pick**.
+_Avoid_: connector, extension, integration
+
+### MCP sign-in
+
+The user's sign-in to one remote **MCP server** that asks for one, held for one **pick**. The user signs in once, in a browser, from the web app. The **hub** keeps the sign-in and renews it, and gives each **turn** only a short-lived token, so what renews the sign-in never enters the **instance**. One the server stops accepting goes back to **pending setup** and is an **instance notice**, and turns run without that server until the user signs in again.
+_Avoid_: OAuth login, connection, **subscription login** (which signs a command-line agent in)
 
 ### Routine grant
 
@@ -748,7 +774,7 @@ _Avoid_: handoff, which the factory uses for work handed to it
 
 ### Toolset
 
-What an **instance** can do beyond its workspace: its **default tools** on or off, its **search backend** and whether it holds the key, the **MCP servers** it picks, its **instance code**'s packages and **authored tools**, and whether the **browser service** is on for it. The instance page shows it, and the **home instance** reads it.
+What an **instance** can do beyond its workspace: its **tool groups** and the **tool state** of each tool in them, its **search backend** and whether it holds the key, the **MCP servers** it picks and their **MCP sign-ins**, its **instance code**'s packages, and whether the **browser service** is on for it. The instance page shows it, and the **home instance** reads it.
 
 ### View
 
