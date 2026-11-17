@@ -608,7 +608,7 @@ class FactoryRuns:
         step = _step(factory, step_id) if factory is not None else None
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
-        results = self._results(run.run_id, factory, step.id)
+        results = self._results(run, factory, step.id)
         held = run.work_item | results
         unmet = _unmet(factory, step, held)
         if unmet is not None:
@@ -835,10 +835,10 @@ class FactoryRuns:
         named = any(
             run_value_name(value) is not None for fields in filters for value in fields.values()
         )
-        return run.work_item | self._results(run.run_id, factory) if named else {}
+        return run.work_item | self._results(run, factory) if named else {}
 
     def _results(
-        self, run_id: UUID, factory: WorkbenchFactory, starting: StepId | None = None
+        self, run: FactoryRun, factory: WorkbenchFactory, starting: StepId | None = None
     ) -> dict[ValueName, StepValue]:
         """The values the run's clean attempts, and its failures sent back, recorded on its latest
         pass through the steps.
@@ -851,7 +851,8 @@ class FactoryRuns:
         what the attempt before it held. A failed attempt that runs its step again under
         ``failed`` adds what it recorded. The branch and base the factory's worktree call last
         named are ``branch`` and ``base``, and the notes the user last sent the run back with are
-        ``notes``.
+        ``notes``. The named values the factory requires are those the workbench of the run's line
+        holds now.
         """
         order = {step.id: index for index, step in enumerate(factory.steps)}
         recorded: dict[ValueName, tuple[int, StepValue]] = {}
@@ -868,7 +869,7 @@ class FactoryRuns:
             if last is not None and last[0] > at:
                 recorded.update((name, (at, value)) for name, value in last[1].items())
 
-        for attempt in self._registry.attempts(run_id):
+        for attempt in self._registry.attempts(run.run_id):
             start(attempt.step)
             last, retrying = None, attempt.step
             index = order.get(attempt.step, -1)
@@ -879,10 +880,24 @@ class FactoryRuns:
                 recorded |= {name: (index, value) for name, value in attempt.values.items()}
         if starting is not None:
             start(starting)
-        results = {name: value for name, (_, value) in recorded.items()}
-        results |= self._named(run_id, factory)
-        notes = self._registry.run_notes(run_id)
+        results = self._named_values(run, factory)
+        results |= {name: value for name, (_, value) in recorded.items()}
+        results |= self._named(run.run_id, factory)
+        notes = self._registry.run_notes(run.run_id)
         return results if notes is None else results | {NOTES: notes}
+
+    def _named_values(
+        self, run: FactoryRun, factory: WorkbenchFactory
+    ) -> dict[ValueName, StepValue]:
+        """The named values the factory requires that the workbench of the run's line holds."""
+        line = self._line(run)
+        workbench = self._registry.instance(line.workbench_id) if line is not None else None
+        if workbench is None or workbench.workbench is None:
+            return {}
+        held = workbench.workbench.values
+        return {
+            value.name: held[value.name] for value in factory.requires.values if value.name in held
+        }
 
     def _named(self, run_id: UUID, factory: WorkbenchFactory) -> dict[ValueName, StepValue]:
         """The ``branch`` and ``base`` the factory's worktree call last named for the run, however
@@ -1135,7 +1150,7 @@ class FactoryRuns:
             self._registry.end_attempt(run_id, result)
             moved = self._move(run_id, FactoryRunStatus.NEEDS_HUMAN, run.step)
         else:
-            held = run.work_item | self._results(run_id, factory)
+            held = run.work_item | self._results(run, factory)
             tally = _tally(factory, self._registry.counted_attempts(run_id))
             result, status, to = _settled(factory, step, result, held, tally)
             self._registry.end_attempt(run_id, result)
@@ -1285,7 +1300,7 @@ class FactoryRuns:
             step=CodeStepRun(call=call.call, summary=summary),
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step),
             work_item=run.work_item,
-            results=self._results(run.run_id, factory),
+            results=self._results(run, factory),
             folder=placed[1] if placed is not None else None,
         )
         generation = self._registry.stop_generation(run.run_id)
@@ -1406,15 +1421,28 @@ def _unmet(
 ) -> _Refused | None:
     """Why *step* cannot start for lack of a value it requires, or None when the run holds them.
 
-    A command step also requires each value its commands name. The
-    lack is charged to the step that should have produced the value: the last earlier step that
-    declares it in its results. A false work item value has no such step, so the requiring step
-    itself fails.
+    A command step also requires each value its commands name, and a wait each named value of
+    the workbench its filters name, since a filter naming a value the run never holds would park
+    it for good. The lack is charged to the step that should have produced the value: the last
+    earlier step that declares it in its results. A false work item value or a named value of the
+    workbench has no such step, so the requiring step itself fails.
     """
-    named = run_value_names(step)
-    lacking = _lacking(held, (*step.requires, *named))
+    declared = {value.name for value in factory.requires.values}
+    filtered = (
+        name
+        for fields in (step.signal if isinstance(step, WaitStep) else ())
+        for expected in fields.values()
+        if (name := run_value_name(expected)) in declared and name not in held
+    )
+    lacking = _lacking(held, (*step.requires, *run_value_names(step))) or next(filtered, None)
     if lacking is None:
         return None
+    if lacking in declared:
+        holds = "does not hold" if lacking not in held else "holds as false"
+        return _Refused(
+            step.id,
+            f'Step "{step.id}" requires named value "{lacking}", which its workbench {holds}.',
+        )
     earlier = factory.steps[: factory.steps.index(step)]
     producer = next((before for before in reversed(earlier) if lacking in before.results), None)
     if producer is None:

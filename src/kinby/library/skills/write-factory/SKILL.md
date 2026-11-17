@@ -29,7 +29,7 @@ A factory whose file declares `instances` is in an older form, which the factory
 
 ## Steps
 
-Every step has an `id`. It may declare `requires`, the values it needs from the work item or an earlier step, and `results`, the values it hands on by name and type. A step whose required value no earlier step produces fails the check.
+Every step has an `id`. It may declare `requires`, the values it needs from the work item, the workbench's named values or an earlier step, and `results`, the values it hands on by name and type. A step whose required value no earlier step produces fails the check.
 
 - `agent`: a model doing the work from a `prompt`, run by its `engine`: `claude` or `codex`, a coding client that keeps a session a later step can `resume`, or `kinby`, a kinby turn that goes through the gate. `model` and `effort` are optional, and the line's model fills a model left out.
 - `command`: commands in the run's folder, each without a shell. `{{name}}` stands for a run value, and `{ commands: <name> }` runs the workbench's list of repository commands of that name.

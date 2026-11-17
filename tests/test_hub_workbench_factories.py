@@ -230,6 +230,33 @@ def test_the_check_holds_an_approve_summarys_run_values_to_what_earlier_steps_de
     ]
 
 
+def test_every_step_may_read_a_named_value_the_factory_requires(tmp_path):
+    factory = (
+        FACTORY.replace('"git status"', '"curl {{moodle_url}}"')
+        .replace("requires: [repo]", "requires: [repo, moodle_url]")
+        .replace("Merge the pull request.", "Merge it on {{moodle_url}}.")
+        .replace("done_requires: [pr]", "done_requires: [pr, moodle_url]")
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": factory}) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "refusal"),
+    [
+        ("repo", 'Named value "repo" shares its name with a work item value.'),
+        ("pr", 'Named value "pr" shares its name with a result of step "open-pr".'),
+        ("branch", 'Named value "branch" shares its name with a value kinby keeps for a run.'),
+        ("base", 'Named value "base" shares its name with a value kinby keeps for a run.'),
+        ("notes", 'Named value "notes" shares its name with a value kinby keeps for a run.'),
+    ],
+)
+def test_the_check_refuses_a_named_value_that_shares_another_run_values_name(
+    tmp_path, name, refusal
+):
+    assert problems(tmp_path, _with("name: moodle_url", f"name: {name}")) == [refusal]
+
+
 CHECK = """\
 from kinby.plugins.hooks import HookResult, StepEnd, hook
 
