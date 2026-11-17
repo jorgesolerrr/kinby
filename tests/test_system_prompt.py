@@ -339,6 +339,8 @@ def test_missing_optional_files_leave_core_sections(
             "You are a personal AI teammate running on kinby.\n\n"
             "# Skills\n"
             "Use the `skill` tool to read a skill's full instructions.\n"
+            "A skill the user references arrives with its body in their message, "
+            "so it needs no `skill` tool call.\n"
             "- write-routine: Draft kinby routine files for recurring or manual work.\n"
             "- write-view: Compose a view's spec and data from the view catalogue. Use when "
             "creating or reshaping a view.\n\n"
@@ -399,7 +401,7 @@ def test_prompt_version_hashes_rendered_sections_without_environment(tmp_path: P
     first = assemble_system_prompt(instance, (), date(2026, 8, 28))
     next_day = assemble_system_prompt(instance, (), date(2026, 8, 29))
 
-    assert prompt_version(first) == "9ed5c7dc5ced"
+    assert prompt_version(first) == "5caa826cc6df"
     assert prompt_version(next_day) == prompt_version(first)
 
     (instance_path / "SYSTEM.md").write_text("CHANGED BEHAVIOR", encoding="utf-8")

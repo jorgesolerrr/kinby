@@ -147,6 +147,15 @@ def load_skill_file(path: Path) -> Skill:
     )
 
 
+def referenced_skills(skills: Sequence[Skill], names: Sequence[SkillName]) -> tuple[Skill, ...]:
+    """The skills *names* reference, in their order."""
+    by_name = {skill.name: skill for skill in skills}
+    missing = next((name for name in names if name not in by_name), None)
+    if missing is not None:
+        raise SkillNotFoundError(f'Skill "{missing}" is not available in this turn.')
+    return tuple(by_name[name] for name in names)
+
+
 def skill_tool(skills: Sequence[Skill]) -> Tool:
     """Build the core tool that reads this turn's skill set."""
     by_name = {skill.name: skill for skill in skills}

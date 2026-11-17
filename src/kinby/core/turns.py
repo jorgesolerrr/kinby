@@ -28,6 +28,7 @@ from kinby.contracts import (
     PromptVersion,
     RoutineName,
     RoutineOrigin,
+    SkillName,
     SystemPrompt,
     ThreadApprovalRespondCommand,
     ThreadAskCommand,
@@ -67,6 +68,7 @@ from kinby.core.errors import (
     NoActiveTurn,
     PermissionDenied,
     ReadOnlyMarkRefused,
+    SkillNotFound,
     SnapshotUnavailable,
     TakeoverNotFound,
     ThreadBusy,
@@ -113,6 +115,7 @@ class TurnRequest:
     model: ModelName
     permission_mode: PermissionMode
     origin: Origin = field(default_factory=UserOrigin)
+    skills: tuple[SkillName, ...] = ()
 
     def prepare(self, system_prompt: SystemPrompt) -> PreparedTurnRequest:
         return PreparedTurnRequest(
@@ -122,6 +125,7 @@ class TurnRequest:
             model=self.model,
             permission_mode=self.permission_mode,
             origin=self.origin,
+            skills=self.skills,
             system_prompt=system_prompt,
         )
 
@@ -141,6 +145,8 @@ class TurnPreparation:
     profile_version: ProfileVersion | None = None
     daily_budget: DailyBudget | None = None
     budgets: Budgets = field(default_factory=Budgets)
+    #: The names of the skills a turn can load.
+    skills: frozenset[SkillName] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -415,7 +421,9 @@ class Turns:
         return accepted(event)
 
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
-        started = await self.wake(command.thread_id, command.message, UserOrigin())
+        started = await self.wake(
+            command.thread_id, command.message, UserOrigin(), tuple(command.skills)
+        )
         # A thread the user goes back to returns to the sidebar.
         self._store.unarchive(command.thread_id)
         return started
@@ -573,11 +581,12 @@ class Turns:
         thread_id: UUID,
         message: str,
         origin: Origin,
+        skills: tuple[SkillName, ...] = (),
     ) -> AcceptedResult:
         self.require_thread(thread_id)
         self.require_available(origin)
         self._require_idle(thread_id)
-        return await self._wake(lambda: thread_id, message, origin, uuid4())
+        return await self._wake(lambda: thread_id, message, origin, uuid4(), skills=skills)
 
     async def wake_recorded(
         self,
@@ -592,13 +601,21 @@ class Turns:
         return await self._wake(lambda: thread_id, message, origin, turn_id, delivery_body)
 
     async def ask(self, command: ThreadAskCommand) -> AcceptedResult:
-        return await self.wake_new_thread(None, command.message, HomeInstanceOrigin())
+        return await self.wake_new_thread(
+            None, command.message, HomeInstanceOrigin(), tuple(command.skills)
+        )
 
     async def wake_new_thread(
-        self, title: str | None, message: str, origin: Origin
+        self,
+        title: str | None,
+        message: str,
+        origin: Origin,
+        skills: tuple[SkillName, ...] = (),
     ) -> AcceptedResult:
         self.require_available(origin)
-        return await self._wake(lambda: self._store.create(title).id, message, origin, uuid4())
+        return await self._wake(
+            lambda: self._store.create(title).id, message, origin, uuid4(), skills=skills
+        )
 
     async def _wake(
         self,
@@ -607,9 +624,13 @@ class Turns:
         origin: Origin,
         turn_id: UUID,
         delivery_body: str | None = None,
+        skills: tuple[SkillName, ...] = (),
     ) -> AcceptedResult:
         preparation = self._prepare_for_turn()
         check_daily_budget(preparation.daily_budget)
+        missing = next((name for name in skills if name not in preparation.skills), None)
+        if missing is not None:
+            raise SkillNotFound(f'Skill "{missing}" is not available in this turn.')
         thread_id = thread()
         events = self._log.thread_events(thread_id)
         claim = TurnClaim(origin)
@@ -621,6 +642,7 @@ class Turns:
                 message=message,
                 model=preparation.model,
                 origin=origin,
+                skills=skills,
                 permission_mode=self._turn_mode(
                     origin,
                     _permission_mode(events, preparation.default_mode, preparation.ceiling),
@@ -637,6 +659,7 @@ class Turns:
                 turn.turn_id,
                 TurnStarted(
                     message=turn.message,
+                    skills=list(turn.skills),
                     origin=turn.origin,
                     model=turn.model,
                     permission_mode=turn.permission_mode,

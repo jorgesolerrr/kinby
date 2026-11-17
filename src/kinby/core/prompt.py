@@ -131,6 +131,8 @@ def assemble_system_prompt(
     catalogue = [
         "# Skills",
         "Use the `skill` tool to read a skill's full instructions.",
+        "A skill the user references arrives with its body in their message, "
+        "so it needs no `skill` tool call.",
     ]
     catalogue.extend(f"- {skill.name}: {skill.description}" for skill in skills)
     sections.append(
@@ -205,6 +207,12 @@ def render_wake(origin: Origin, message: str, payload: str | None = None) -> str
             f"<routine-data>\n{payload}\n</routine-data>"
         )
     return rendered
+
+
+def render_skill_references(skills: Sequence[Skill], wake: str) -> str:
+    """*wake*, after the body of each skill its message references."""
+    blocks = (f'<skill name="{skill.name}">\n{skill.body.strip()}\n</skill>' for skill in skills)
+    return "\n\n".join((*blocks, wake))
 
 
 def render_step_message(

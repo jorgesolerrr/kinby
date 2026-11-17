@@ -98,6 +98,7 @@ from kinby.core.prompt import (
     assemble_system_prompt,
     profile_version,
     prompt_version,
+    render_skill_references,
     render_system_prompt,
     render_wake,
 )
@@ -167,7 +168,7 @@ from kinby.plugins.routines import (
     load_routines,
     resolve_code_step,
 )
-from kinby.plugins.skills import Skill, load_skills, skill_tool
+from kinby.plugins.skills import Skill, load_skills, referenced_skills, skill_tool
 from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
 from kinby.plugins.views import view_write
 
@@ -398,7 +399,8 @@ class LangGraphRunner:
             self._tools = ToolRegistry(self._instance.path, tools=manifest.tools)
         self._instance = replace(self._instance, manifest=manifest)
         self._gate_policy = self._load_gate_policy()
-        sections = self._prompt_sections()
+        skills, _ = self._skills()
+        sections = self._prompt_sections(skills)
         profile = next(
             (section for section in sections if section.name is PromptSectionName.PROFILE), None
         )
@@ -430,6 +432,7 @@ class LangGraphRunner:
             profile_version=version,
             daily_budget=daily_budget,
             budgets=manifest.budgets,
+            skills=frozenset(skill.name for skill in skills),
         )
 
     def _manifest(self) -> Manifest:
@@ -639,10 +642,10 @@ class LangGraphRunner:
     def _prepare_restored_turn(self, turn: TurnRequest) -> PreparedTurnRequest:
         if isinstance(turn, PreparedTurnRequest):
             return turn
-        return turn.prepare(render_system_prompt(self._prompt_sections()))
-
-    def _prompt_sections(self) -> tuple[PromptSection, ...]:
         skills, _ = self._skills()
+        return turn.prepare(render_system_prompt(self._prompt_sections(skills)))
+
+    def _prompt_sections(self, skills: tuple[Skill, ...]) -> tuple[PromptSection, ...]:
         index = (
             memory_index(GraphStore(self._instance.path))
             if self._memory_delivery is MemoryDelivery.INDEX
@@ -706,6 +709,7 @@ class LangGraphRunner:
             )
         wake = render_wake(turn.origin, prepared.message, prepared.payload)
         if isinstance(graph_input, ModelState):
+            wake = render_skill_references(referenced_skills(skills, turn.skills), wake)
             wake = await self._pre_searched(wake, prepared.message, emit)
         model = self._model_factory(turn.model)
         runnables = [tool.runnable for tool in tools.tools]
@@ -1109,7 +1113,7 @@ class LangGraphRunner:
         async with mcp_tools(self._instance) as picked:
             rows = context_rows(
                 size,
-                self._prompt_sections(),
+                self._prompt_sections(skills),
                 tools.tools,
                 picked,
                 messages,

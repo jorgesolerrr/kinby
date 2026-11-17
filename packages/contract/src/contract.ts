@@ -3273,6 +3273,7 @@ export interface ThreadSummary {
 }
 export interface ThreadAskCommand {
   message: string;
+  skills?: string[];
 }
 export interface ThreadCompactCommand {
   focus?: string | null;
@@ -3398,6 +3399,7 @@ export interface ThreadTurnRevertPreviewResult {
 }
 export interface ThreadTurnStartCommand {
   message: string;
+  skills?: string[];
   thread_id: string;
 }
 export interface ThreadTurnTargetListCommand {
@@ -3919,6 +3921,7 @@ export interface TurnStarted {
   permission_mode?: PermissionMode | null;
   profile_version?: string | null;
   prompt_version?: string | null;
+  skills?: string[];
   snapshot?: string | null;
   type: "turn.started";
 }

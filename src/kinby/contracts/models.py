@@ -315,6 +315,8 @@ Origin = Annotated[
 class TurnStarted(ContractModel):
     type: Literal[EventType.TURN_STARTED] = EventType.TURN_STARTED
     message: str
+    #: The skills *message* references, so a client knows which `/name` in it is one.
+    skills: list[SkillName] = Field(default_factory=list)
     model: str
     permission_mode: PermissionMode | None = None
     origin: Origin = Field(default_factory=UserOrigin)
@@ -753,10 +755,14 @@ class ThreadSubscribeCommand(ContractModel):
 class ThreadTurnStartCommand(ContractModel):
     thread_id: UUID
     message: str
+    #: The skills the message references, whose bodies the model reads with it.
+    skills: list[SkillName] = Field(default_factory=list)
 
 
 class ThreadAskCommand(ContractModel):
     message: str
+    #: The skills the message references, whose bodies the model reads with it.
+    skills: list[SkillName] = Field(default_factory=list)
 
 
 class ThreadTurnDiffCommand(ContractModel):
