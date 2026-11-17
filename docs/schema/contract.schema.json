@@ -5511,42 +5511,49 @@
       "title": "ManifestValues",
       "type": "object"
     },
+    "McpHttpEntry": {
+      "additionalProperties": false,
+      "description": "A remote server, reached at its URL over Streamable HTTP.",
+      "properties": {
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "http",
+          "default": "http",
+          "type": "string"
+        },
+        "url": {
+          "pattern": "^(https?://|\\$\\{)\\S+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "type"
+      ],
+      "title": "McpHttpEntry",
+      "type": "object"
+    },
     "McpServer": {
       "additionalProperties": false,
-      "description": "An MCP server's definition, as the library keeps it.",
+      "description": "An MCP server's definition, as the library keeps it: its entry, and kinby's own fields\nbeside it.",
       "properties": {
-        "env": {
-          "items": {
-            "$ref": "#/$defs/EnvVariable"
-          },
-          "type": "array"
+        "entry": {
+          "$ref": "#/$defs/McpServerEntry"
         },
         "include": {
           "items": {
             "type": "string"
           },
           "type": "array"
-        },
-        "transport": {
-          "discriminator": {
-            "mapping": {
-              "url": "#/$defs/McpUrlTransport",
-              "uvx": "#/$defs/McpUvxTransport"
-            },
-            "propertyName": "type"
-          },
-          "oneOf": [
-            {
-              "$ref": "#/$defs/McpUrlTransport"
-            },
-            {
-              "$ref": "#/$defs/McpUvxTransport"
-            }
-          ]
         }
       },
       "required": [
-        "transport"
+        "entry"
       ],
       "title": "McpServer",
       "type": "object"
@@ -5568,6 +5575,23 @@
       ],
       "title": "McpServerChoice",
       "type": "object"
+    },
+    "McpServerEntry": {
+      "discriminator": {
+        "mapping": {
+          "http": "#/$defs/McpHttpEntry",
+          "stdio": "#/$defs/McpStdioEntry"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/McpHttpEntry"
+        },
+        {
+          "$ref": "#/$defs/McpStdioEntry"
+        }
+      ]
     },
     "McpServerFailed": {
       "additionalProperties": false,
@@ -5639,36 +5663,9 @@
       "title": "McpServerResult",
       "type": "object"
     },
-    "McpUrlTransport": {
+    "McpStdioEntry": {
       "additionalProperties": false,
-      "description": "A remote server, reached at its URL.",
-      "properties": {
-        "headers": {
-          "additionalProperties": {
-            "$ref": "#/$defs/EnvVariable"
-          },
-          "type": "object"
-        },
-        "type": {
-          "const": "url",
-          "default": "url",
-          "type": "string"
-        },
-        "url": {
-          "pattern": "^https?://\\S+$",
-          "type": "string"
-        }
-      },
-      "required": [
-        "url",
-        "type"
-      ],
-      "title": "McpUrlTransport",
-      "type": "object"
-    },
-    "McpUvxTransport": {
-      "additionalProperties": false,
-      "description": "A local server ``uvx`` runs in the instance's container.",
+      "description": "A local server, which a launcher the image ships runs in the instance's container.",
       "properties": {
         "args": {
           "items": {
@@ -5676,21 +5673,29 @@
           },
           "type": "array"
         },
-        "package": {
-          "pattern": "^[^-\\s]\\S*$",
+        "command": {
           "type": "string"
         },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/EnvVariable"
+          },
+          "type": "object"
+        },
         "type": {
-          "const": "uvx",
-          "default": "uvx",
+          "const": "stdio",
+          "default": "stdio",
           "type": "string"
         }
       },
       "required": [
-        "package",
+        "command",
         "type"
       ],
-      "title": "McpUvxTransport",
+      "title": "McpStdioEntry",
       "type": "object"
     },
     "MemoryAddCommand": {

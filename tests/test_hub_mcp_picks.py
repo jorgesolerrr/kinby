@@ -18,6 +18,7 @@ from kinby.hub import Hub
 from kinby.instance import inspect_instance
 from kinby.instance.config_changes import ConfigChangeLog
 from tests.test_hub import hub_client
+from tests.test_hub_library import reopened
 from tests.test_hub_library_mcp_servers import FETCH
 from tests.test_hub_pick_sync import _hub, _picks_step, _started, _update
 from tests.test_hub_picks import _lock, _picks, _set
@@ -127,4 +128,36 @@ def test_a_library_change_to_a_picked_server_reaches_the_instance_only_through_a
     }
     assert _servers(_picks(hub_client(hub), directory)) == [
         McpServerPick(name="fetch", trust_hints=True, state=PickState.UP_TO_DATE)
+    ]
+
+
+def test_the_hub_converts_a_picks_locked_copy_in_the_old_shape(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    _library_server(hub, "fetch", FETCH)
+    _pick_servers(hub, directory, McpServerChoice(name="fetch", trust_hints=True))
+    lock = json.loads((directory / "skills-lock.json").read_bytes())
+    lock["mcpServers"]["fetch"]["server"] = {
+        "transport": {"type": "uvx", "package": "mcp-server-fetch", "args": ["--ignore-robots"]},
+        "env": ["FETCH_USER_AGENT"],
+        "include": ["fetch"],
+    }
+    (directory / "skills-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
+    hub = reopened(hub)
+
+    assert _locked_servers(directory)["fetch"] == {
+        "server": {
+            "entry": {
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["mcp-server-fetch", "--ignore-robots"],
+                "env": {"FETCH_USER_AGENT": "${FETCH_USER_AGENT}"},
+            },
+            "include": ["fetch"],
+        },
+        "trustHints": True,
+    }
+    assert _servers(_picks(hub_client(hub), directory)) == [
+        McpServerPick(name="fetch", trust_hints=True, state=PickState.BEHIND)
     ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 from collections.abc import Mapping
@@ -22,7 +23,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import TextContent
 from mcp.types import Tool as McpTool
 
-from kinby.contracts import McpServer, McpUrlTransport
+from kinby.contracts import McpHttpEntry, McpServerEntry
 from kinby.instance.skills_lock import LockedMcpServer
 from kinby.plugins.errors import exception_message
 from kinby.plugins.tools import Tool
@@ -31,14 +32,19 @@ from kinby.plugins.tools import Tool
 CONNECT_SECONDS = 60
 #: At most how many bytes of a failed server's stderr end its notice.
 STDERR_TAIL = 2000
+_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 async def connected_tools(
-    name: str, pick: LockedMcpServer, env: Mapping[str, str], source: Path, stack: AsyncExitStack
+    name: str,
+    pick: LockedMcpServer,
+    secrets: Mapping[str, str],
+    source: Path,
+    stack: AsyncExitStack,
 ) -> list[Tool]:
-    """The included tools of the server *pick* names, connected until *stack* closes. A server
-    that does not start or list its tools raises NotConnected."""
-    client, listed = await _connect(pick.server, env, stack)
+    """The included tools of the server *pick* names, its entry filled from *secrets*, connected
+    until *stack* closes. A server that does not start or list its tools raises NotConnected."""
+    client, listed = await _connect(pick.server.entry, secrets, stack)
     return [
         _adapted(name, pick, each, client, source)
         for each in listed
@@ -51,8 +57,8 @@ class NotConnected(Exception):
 
 
 class _Stderr:
-    """Where a uvx server writes its stderr: passed on to the instance's own, with its tail kept
-    to tell why the server failed. A URL server writes none."""
+    """Where a local server writes its stderr: passed on to the instance's own, with its tail kept
+    to tell why the server failed. A remote server writes none."""
 
     def __init__(self) -> None:
         read, write = os.pipe()
@@ -78,16 +84,17 @@ class _Stderr:
 
 
 async def _connect(
-    server: McpServer, env: Mapping[str, str], stack: AsyncExitStack
+    entry: McpServerEntry, secrets: Mapping[str, str], stack: AsyncExitStack
 ) -> tuple[Client, list[McpTool]]:
-    """A client of *server* that *stack* closes, and every tool it lists. A server that fails
-    is closed at once, and raises why, ending with what it last wrote to stderr."""
+    """A client of the server *entry* defines that *stack* closes, and every tool it lists. A
+    server that fails is closed at once, and raises why, ending with what it last wrote to
+    stderr."""
     stderr = _Stderr()
     try:
         async with asyncio.timeout(CONNECT_SECONDS), AsyncExitStack() as connecting:
             connecting.callback(stderr.close)
             client = await connecting.enter_async_context(
-                Client(_transport(server, env, stderr.file))
+                Client(_transport(entry, secrets, stderr.file))
             )
             listed: list[McpTool] = []
             cursor: str | None = None
@@ -108,21 +115,27 @@ async def _connect(
     raise NotConnected(f"{reason}. Its stderr ended with: {tail}" if tail else reason)
 
 
-def _transport(server: McpServer, env: Mapping[str, str], stderr: TextIO) -> Transport:
-    """How to reach *server*: its URL with the headers its variables fill, or uvx over stdio with
-    only the variables it declares and its stderr to *stderr*."""
-    transport = server.transport
-    if isinstance(transport, McpUrlTransport):
-        headers = {header: env.get(variable, "") for header, variable in transport.headers.items()}
+def _transport(entry: McpServerEntry, secrets: Mapping[str, str], stderr: TextIO) -> Transport:
+    """How to reach the server *entry* defines, each of its values filled from *secrets*: its
+    URL with its headers, or its command over stdio with only the env it declares and its stderr
+    to *stderr*."""
+    if isinstance(entry, McpHttpEntry):
+        headers = {name: _filled(value, secrets) for name, value in entry.headers.items()}
         return streamable_http_client(
-            transport.url, http_client=create_mcp_http_client(headers=headers)
+            _filled(entry.url, secrets), http_client=create_mcp_http_client(headers=headers)
         )
     parameters = StdioServerParameters(
-        command="uvx",
-        args=[transport.package, *transport.args],
-        env={name: env[name] for name in server.env if name in env},
+        command=entry.command,
+        args=[_filled(arg, secrets) for arg in entry.args],
+        env={name: _filled(value, secrets) for name, value in entry.env.items()},
     )
     return stdio_client(parameters, errlog=stderr)
+
+
+def _filled(value: str, secrets: Mapping[str, str]) -> str:
+    """*value* with each ``${VAR}`` the secret's, or ``${VAR:-default}``'s default when the
+    instance holds none. A variable with no secret and no default is empty."""
+    return _VARIABLE.sub(lambda match: secrets.get(match[1]) or match[2] or "", value)
 
 
 def _adapted(

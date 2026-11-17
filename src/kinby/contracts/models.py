@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 import textwrap
 from copy import copy
 from datetime import date, datetime
@@ -17,6 +18,7 @@ from pydantic import (
     AfterValidator,
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     JsonValue,
@@ -3336,33 +3338,72 @@ type EnvVariable = Annotated[
 ]
 
 
-class McpUrlTransport(ContractModel):
-    """A remote server, reached at its URL."""
-
-    type: Literal["url"] = "url"
-    url: Annotated[str, Field(pattern=r"^https?://\S+$")]
-    #: Each header sent to the server, by name, and the variable that holds its value.
-    headers: dict[str, EnvVariable] = Field(default_factory=dict)
+def _launcher(command: str) -> str:
+    if command != "uvx":
+        raise ValueError(f"kinby runs a local server with uvx only, not {command}.")
+    return command
 
 
-class McpUvxTransport(ContractModel):
-    """A local server ``uvx`` runs in the instance's container."""
+def _package_first(args: list[str]) -> list[str]:
+    if not args or not re.fullmatch(r"[^-\s$]\S*", args[0]):
+        raise ValueError(
+            "The first argument is the package uvx runs, never an option or a variable, which "
+            "uvx would take as its own."
+        )
+    return args
 
-    type: Literal["uvx"] = "uvx"
-    #: Never an option, which uvx would take as its own.
-    package: Annotated[str, Field(pattern=r"^[^-\s]\S*$")]
-    args: list[str] = Field(default_factory=list)
+
+class McpHttpEntry(ContractModel):
+    """A remote server, reached at its URL over Streamable HTTP."""
+
+    type: Literal["http"] = "http"
+    url: Annotated[str, Field(pattern=r"^(https?://|\$\{)\S+$")]
+    #: Each header sent to the server, by name.
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
-McpTransport = Annotated[McpUrlTransport | McpUvxTransport, Field(discriminator="type")]
+class McpStdioEntry(ContractModel):
+    """A local server, which a launcher the image ships runs in the instance's container."""
+
+    type: Literal["stdio"] = "stdio"
+    command: Annotated[str, AfterValidator(_launcher)]
+    args: Annotated[list[str], AfterValidator(_package_first)] = Field(
+        default_factory=list, validate_default=True
+    )
+    #: The variables the server gets, and the only ones.
+    env: dict[EnvVariable, str] = Field(default_factory=dict)
+
+
+def _typed(entry: object) -> object:
+    """The entry with the type its fields name when it names none, as Cursor writes one."""
+    if not isinstance(entry, dict):
+        return entry
+    if entry.get("type") == "sse":
+        raise ValueError(
+            "The sse transport is deprecated, so kinby does not take it. "
+            "Give the server's HTTP address as an http entry."
+        )
+    if "type" in entry:
+        return entry
+    if "url" in entry:
+        return {"type": "http", **entry}
+    if "command" in entry:
+        return {"type": "stdio", **entry}
+    return entry
+
+
+#: The ``mcpServers`` entry other MCP clients use (ADR 0127). A value may hold ``${VAR}`` or
+#: ``${VAR:-default}``, which a turn fills from the instance's secrets.
+type McpServerEntry = Annotated[
+    McpHttpEntry | McpStdioEntry, Field(discriminator="type"), BeforeValidator(_typed)
+]
 
 
 class McpServer(ContractModel):
-    """An MCP server's definition, as the library keeps it."""
+    """An MCP server's definition, as the library keeps it: its entry, and kinby's own fields
+    beside it."""
 
-    transport: McpTransport
-    #: The variables a local server gets, and the only ones.
-    env: list[EnvVariable] = Field(default_factory=list)
+    entry: McpServerEntry
     #: The server's tools a turn is offered, by name. The others are left out.
     include: list[str] = Field(default_factory=list)
 
