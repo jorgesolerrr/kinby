@@ -8,7 +8,7 @@ Run each pass issue the user names against the playground hub at `kinby.jorgesol
 
 Run every command from the repository root in Git Bash. The helpers sit next to this file:
 
-- `deploy.sh` pulls main on the box, rebuilds the hub, and runs an instance update on its instances.
+- `deploy.sh` pulls main on the box, rebuilds the hub, and updates its instances and workbenches.
 - `hub.sh` runs `hub.py` inside the hub container, signed in with the hub's access token: `instances`, `update`, `secrets`, and `retry`, `send-back` and `cancel`, which take a run id or an issue number. `hub.sh tokens` runs `tokens.py` instead, the token probe below.
 - `browser.py` drives Playwright's bundled Chromium with the stored browser session.
 
@@ -16,7 +16,7 @@ Run every command from the repository root in Git Bash. The helpers sit next to 
 
 1. **Read the passes.** `gh issue view <N>` for each number. Collect the unticked boxes in order, and what each one needs: which instances, a routine that has fired, a stopped instance, a secret. Done when you hold that list for every pass issue.
 
-2. **Deploy.** Run `bash .claude/skills/e2e-pass/deploy.sh` with a ten-minute timeout, or in the background, since the hub image and each instance image build on the box. With no arguments it updates every active instance that runs another revision, or carries a notice an update answers: a template behind its factory, or no hub route. Pass hub instance IDs to update only those. Done when it exits 0 and every instance line ends in `succeeded` or `already on`.
+2. **Deploy.** Run `bash .claude/skills/e2e-pass/deploy.sh` with a ten-minute timeout, or in the background, since the hub image and each instance image build on the box. With no arguments it updates every active instance that runs another revision or lacks its hub route, and every workbench. Pass instance or workbench IDs to update only those. Done when it exits 0 and every line ends in `succeeded` or `already on`.
 
    A hub that fails to build or to listen stops the pass. Report the output to Jorge. A failed instance update is a failure like any box. File it (step 5) and go on with the instances that are up.
 

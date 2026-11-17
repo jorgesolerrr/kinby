@@ -1,8 +1,8 @@
 """The hub calls an e2e pass makes, run inside the playground's hub container by `hub.sh`.
 
     hub.py instances                           list the active instances
-    hub.py update <revision> [<instance-id>]   update instances behind that revision or their
-                                               factory's template
+    hub.py update <revision> [<id>]            update instances behind that revision, and
+                                               every workbench
     hub.py secrets <instance-id>               NAME=value lines on stdin, then recreate
     hub.py retry <run>                         try a stopped factory run's step again
     hub.py send-back <run> <step>              send a stopped factory run back to an earlier step
@@ -37,6 +37,8 @@ from kinby.contracts import (
     INSTANCE_RECREATE,
     INSTANCE_SECRETS_SET,
     INSTANCE_UPDATE,
+    WORKBENCH_LIST,
+    WORKBENCH_UPDATE,
     AccessToken,
     ContractModel,
     ErrorEnvelope,
@@ -56,6 +58,9 @@ from kinby.contracts import (
     LifecycleOperationResult,
     Method,
     OperationGetCommand,
+    WorkbenchListCommand,
+    WorkbenchOperationResult,
+    WorkbenchUpdateCommand,
 )
 
 HUB_URL = "ws://localhost:8080/ws"
@@ -63,7 +68,7 @@ HUB_URL = "ws://localhost:8080/ws"
 
 async def _operate[Command: ContractModel](
     client: ContractClient,
-    method: Method[Command, LifecycleOperationResult],
+    method: Method[Command, LifecycleOperationResult] | Method[Command, WorkbenchOperationResult],
     command: Command,
 ) -> int:
     """Start one lifecycle operation and follow it to its end. Only success returns zero."""
@@ -93,12 +98,18 @@ async def show_instances(client: ContractClient) -> int:
 
 
 async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> int:
-    """Update each chosen instance, or every active one, that runs another revision, whose
-    template is behind its factory's, or whose environment lacks its hub route."""
+    """Update each chosen instance or workbench, or every active one. An instance is updated when
+    it runs another revision or its environment lacks its hub route. A workbench's record names
+    no revision, so a workbench is always updated."""
     failures = 0
     instances = await _instances(client)
-    for unknown in set(chosen) - {instance.instance_id for instance in instances}:
-        print(f"{unknown}: no active instance has this id", file=sys.stderr)
+    listed = await client.call(WORKBENCH_LIST, WorkbenchListCommand())
+    if isinstance(listed, ErrorEnvelope):
+        raise SystemExit(format_error(listed))
+    workbenches = listed.workbenches
+    known = {i.instance_id for i in instances} | {w.workbench_id for w in workbenches}
+    for unknown in set(chosen) - known:
+        print(f"{unknown}: no active instance or workbench has this id", file=sys.stderr)
         failures += 1
     for instance in instances:
         name = instance.persona_name or instance.manifest_id
@@ -111,6 +122,12 @@ async def update(client: ContractClient, revision: str, chosen: list[UUID]) -> i
         print(f"{instance.instance_id} {name}: updating to {revision[:12]}", flush=True)
         command = InstanceUpdateCommand(instance_id=instance.instance_id, revision=revision)
         failures += await _operate(client, INSTANCE_UPDATE, command)
+    for workbench in workbenches:
+        if chosen and workbench.workbench_id not in chosen:
+            continue
+        print(f"{workbench.workbench_id} {workbench.name}: updating to {revision[:12]}", flush=True)
+        update = WorkbenchUpdateCommand(workbench_id=workbench.workbench_id, revision=revision)
+        failures += await _operate(client, WORKBENCH_UPDATE, update)
     return 1 if failures else 0
 
 
@@ -231,7 +248,9 @@ def main() -> int:
     commands.add_parser("instances", help="list the active instances")
     update_parser = commands.add_parser("update", help="update instances to a revision")
     update_parser.add_argument("revision", help="full commit sha of the hub's checkout")
-    update_parser.add_argument("instance_ids", type=UUID, nargs="*", help="default: all")
+    update_parser.add_argument(
+        "instance_ids", type=UUID, nargs="*", help="instance or workbench ids; default: all"
+    )
     secrets_parser = commands.add_parser("secrets", help="seed secrets from stdin")
     secrets_parser.add_argument("instance_id", type=UUID)
     run_help = "a run id, or an issue number for its unfinished run"

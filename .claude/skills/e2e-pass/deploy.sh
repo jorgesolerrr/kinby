@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Deploy main to the playground hub, then update its instances to that commit.
-#   deploy.sh                    update every active instance
-#   deploy.sh <instance-id> ...  update only these
+# Deploy main to the playground hub, then update its instances and workbenches to that commit.
+#   deploy.sh          update every active instance and workbench
+#   deploy.sh <id> ... update only these instances or workbenches
 # Takes several minutes: the hub image and each instance image build on the box.
 set -euo pipefail
 
