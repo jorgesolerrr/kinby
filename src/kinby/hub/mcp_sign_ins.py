@@ -112,6 +112,9 @@ class McpSignIns:
         self._key = key
         self._clock = clock
         self._running: dict[str, _Running] = {}
+        #: The last sign-in started to each server, which may still run after the browser came
+        #: back, until its token exchange ends.
+        self._last: dict[tuple[UUID, McpServerName], asyncio.Task[None]] = {}
 
     def setup(self, instance_id: UUID, server: McpServerName) -> McpSignInSetup:
         kept = self._read(instance_id).get(server)
@@ -136,12 +139,10 @@ class McpSignIns:
         to the same server started before completes nothing afterwards."""
         from kinby.hub.mcp_sign_in_flow import Failed, SignInFlow
 
-        for state, running in list(self._running.items()):
-            if (running.instance_id, running.server) == (instance_id, server):
-                del self._running[state]
-                running.task.cancel()
+        self._end(instance_id, {server})
         flow = SignInFlow(entry, secrets, f"{hub_url}{CALLBACK_PATH}")
         task = asyncio.create_task(self._run(instance_id, server, flow))
+        self._last[instance_id, server] = task
         await asyncio.wait((flow.authorization_url, task), return_when=asyncio.FIRST_COMPLETED)
         if not flow.authorization_url.done():
             failed = self._read(instance_id).get(server)
@@ -170,12 +171,19 @@ class McpSignIns:
         return f"/instances/{running.instance_id}"
 
     def sign_out(self, instance_id: UUID, server: McpServerName) -> None:
+        """Delete the sign-in to *server*, and end one still running."""
+        self._end(instance_id, {server})
         kept = self._read(instance_id)
         if kept.pop(server, None) is not None:
             self._write(instance_id, kept)
 
     def keep(self, instance_id: UUID, servers: Collection[McpServerName]) -> None:
-        """Delete each sign-in of a server outside *servers*, as a dropped pick's."""
+        """Delete each sign-in of a server outside *servers*, as a dropped pick's, and end each
+        one still running."""
+        self._end(
+            instance_id,
+            {server for each, server in self._last if each == instance_id} - set(servers),
+        )
         kept = self._read(instance_id)
         if kept.keys() - set(servers):
             self._write(instance_id, {name: kept[name] for name in kept if name in servers})
@@ -213,8 +221,21 @@ class McpSignIns:
         self.keep(instance_id, picks.keys() - stale)
 
     def forget(self, instance_id: UUID) -> None:
-        """Delete every sign-in of the instance, as its deletion does."""
+        """Delete every sign-in of the instance, as its deletion does, and end each one still
+        running."""
+        self._end(instance_id, {server for each, server in self._last if each == instance_id})
         self._path(instance_id).unlink(missing_ok=True)
+
+    def _end(self, instance_id: UUID, servers: Collection[McpServerName]) -> None:
+        """Cancel the sign-ins running to *servers*, so none of them keeps a sign-in, and refuse
+        their links."""
+        for state, running in list(self._running.items()):
+            if running.instance_id == instance_id and running.server in servers:
+                del self._running[state]
+        for server in servers:
+            task = self._last.pop((instance_id, server), None)
+            if task is not None:
+                task.cancel()
 
     async def _run(self, instance_id: UUID, server: McpServerName, flow: SignInFlow) -> None:
         """Run the sign-in and keep how it ended. One nobody finished in time leaves the sign-in

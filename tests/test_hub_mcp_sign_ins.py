@@ -343,6 +343,33 @@ def test_signing_out_deletes_the_sign_in_and_sets_it_pending(
     asyncio.run(scenario())
 
 
+def test_signing_out_or_dropping_the_pick_ends_a_sign_in_still_waiting_on_the_server(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        client = hub_client(hub)
+        instance_id = await _picked(hub, {"url": oauth_server.url})
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            back = await _approved(session, await _start(client, instance_id, url(address, "")))
+            await client.call(
+                INSTANCE_MCP_SIGN_OUT,
+                InstanceMcpSignOutCommand(instance_id=instance_id, server="cockpit"),
+            )
+            after_sign_out = await _landed(session, back)
+            back = await _approved(session, await _start(client, instance_id, url(address, "")))
+            await _pick(client, instance_id)
+            await _pick(client, instance_id, McpServerChoice(name="cockpit"))
+            after_drop = await _landed(session, back)
+
+        assert (after_sign_out.status, after_drop.status) == (400, 400)
+        assert await _sign_ins(hub, instance_id) == [
+            McpSignInSetup(server="cockpit", state=LoginState.PENDING)
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_dropping_the_pick_and_deleting_the_instance_delete_the_sign_in(
     tmp_path, oauth_server: OAuthMcpServer
 ):
