@@ -7,8 +7,12 @@ import { describe, expect, it } from "vitest"
 import { listed, names, openLibrary, refused } from "@/components/library-testing"
 
 const fetchServer: McpServer = {
-  transport: { type: "uvx", package: "mcp-server-fetch", args: ["--ignore-robots"] },
-  env: ["FETCH_USER_AGENT"],
+  entry: {
+    type: "stdio",
+    command: "uvx",
+    args: ["mcp-server-fetch", "--ignore-robots"],
+    env: { FETCH_USER_AGENT: "${FETCH_USER_AGENT}" },
+  },
   include: ["fetch"],
 }
 
@@ -55,7 +59,7 @@ describe("LibraryPage, MCP servers", () => {
     expect(screen.getByRole("tab", { name: "MCP servers 1" })).toBeTruthy()
   })
 
-  it("adds a remote server from its URL, the variables of its headers and its tools", async () => {
+  it("adds a remote server from its URL, its headers and its tools", async () => {
     const { caller, user } = openServersPage()
 
     await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
@@ -63,7 +67,7 @@ describe("LibraryPage, MCP servers", () => {
     await user.type(screen.getByRole("textbox", { name: "URL" }), "https://example.com/mcp")
     await user.type(
       screen.getByRole("textbox", { name: "Headers" }),
-      "Authorization: GITHUB_AUTHORIZATION",
+      "Authorization: Bearer ${{GITHUB_TOKEN}\nX-Agent: kinby",
     )
     await user.type(screen.getByRole("textbox", { name: "Tools" }), "get_issue\nlist_issues")
     await user.click(screen.getByRole("button", { name: "Add" }))
@@ -75,12 +79,11 @@ describe("LibraryPage, MCP servers", () => {
         params: {
           name: "github",
           server: {
-            transport: {
-              type: "url",
+            entry: {
+              type: "http",
               url: "https://example.com/mcp",
-              headers: { Authorization: "GITHUB_AUTHORIZATION" },
+              headers: { Authorization: "Bearer ${GITHUB_TOKEN}", "X-Agent": "kinby" },
             },
-            env: [],
             include: ["get_issue", "list_issues"],
           },
           hash: null,
@@ -89,15 +92,21 @@ describe("LibraryPage, MCP servers", () => {
     ])
   })
 
-  it("adds a local server from its uvx package, arguments and variables", async () => {
+  it("adds a local server from its command, arguments and env", async () => {
     const { caller, user } = openServersPage()
 
     await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "git")
-    await user.click(screen.getByRole("button", { name: "uvx" }))
-    await user.type(screen.getByRole("textbox", { name: "Package" }), "mcp-server-git")
-    await user.type(screen.getByRole("textbox", { name: "Arguments" }), "--repository\n/workspace")
-    await user.type(screen.getByRole("textbox", { name: "Variables" }), "GIT_AUTHOR_NAME")
+    await user.click(screen.getByRole("button", { name: "stdio" }))
+    expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe("uvx")
+    await user.type(
+      screen.getByRole("textbox", { name: "Arguments" }),
+      "mcp-server-git\n--repository\n/workspace",
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: "Env" }),
+      "GIT_AUTHOR_NAME=${{GIT_AUTHOR_NAME}\nGIT_EDITOR=true",
+    )
     await user.click(screen.getByRole("button", { name: "Add" }))
 
     expect(await screen.findByRole("button", { name: "git, written MCP server" })).toBeTruthy()
@@ -105,12 +114,12 @@ describe("LibraryPage, MCP servers", () => {
       {
         name: "git",
         server: {
-          transport: {
-            type: "uvx",
-            package: "mcp-server-git",
-            args: ["--repository", "/workspace"],
+          entry: {
+            type: "stdio",
+            command: "uvx",
+            args: ["mcp-server-git", "--repository", "/workspace"],
+            env: { GIT_AUTHOR_NAME: "${GIT_AUTHOR_NAME}", GIT_EDITOR: "true" },
           },
-          env: ["GIT_AUTHOR_NAME"],
           include: [],
         },
         hash: null,
@@ -137,8 +146,11 @@ describe("LibraryPage, MCP servers", () => {
     const { caller, user } = openServersPage()
 
     await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
-    const package_ = await screen.findByRole("textbox", { name: "Package" })
-    expect((package_ as HTMLInputElement).value).toBe("mcp-server-fetch")
+    const args = await screen.findByRole("textbox", { name: "Arguments" })
+    expect((args as HTMLTextAreaElement).value).toBe("mcp-server-fetch\n--ignore-robots")
+    expect((screen.getByRole("textbox", { name: "Env" }) as HTMLTextAreaElement).value).toBe(
+      "FETCH_USER_AGENT=${FETCH_USER_AGENT}",
+    )
     expect((screen.getByRole("textbox", { name: "Tools" }) as HTMLTextAreaElement).value).toBe(
       "fetch",
     )
@@ -162,7 +174,7 @@ describe("LibraryPage, MCP servers", () => {
     const { caller, user } = openServersPage()
 
     await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
-    await screen.findByRole("textbox", { name: "Package" })
+    await screen.findByRole("textbox", { name: "Command" })
     await user.click(screen.getByRole("button", { name: "Delete" }))
     const dialog = await screen.findByRole("alertdialog", { name: "Delete fetch?" })
     await user.click(within(dialog).getByRole("button", { name: "Delete" }))
@@ -173,7 +185,7 @@ describe("LibraryPage, MCP servers", () => {
     expect(serverWrites(caller)).toEqual([
       { method: "library.mcp_server.delete", params: { name: "fetch", hash: "h-1" } },
     ])
-    expect(screen.queryByRole("textbox", { name: "Package" })).toBeNull()
+    expect(screen.queryByRole("textbox", { name: "Command" })).toBeNull()
   })
 
   it("reloads a server that changed since it was opened, and saves over the new version", async () => {
@@ -206,10 +218,14 @@ describe("LibraryPage, MCP servers", () => {
     ])
   })
 
-  it("keeps arguments the form cannot show one a line until they are edited", async () => {
+  it("keeps arguments and env the form cannot show one a line until they are edited", async () => {
     const server: McpServer = {
-      transport: { type: "uvx", package: "odd", args: ["", " --flag ", "two\nlines"] },
-      env: [],
+      entry: {
+        type: "stdio",
+        command: "uvx",
+        args: ["odd", "", " --flag ", "two\nlines"],
+        env: { KEY: "first\nsecond", PADDED: "  value  " },
+      },
       include: ["fetch"],
     }
     const { caller, user } = openServersPage({ server })

@@ -105,7 +105,7 @@ export type ToolName = string;
 export type SearchBackend = "brave" | "tavily" | "exa" | "searxng";
 export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
-export type EnvVariable = string;
+export type McpServerEntry = McpHttpEntry | McpStdioEntry;
 export type CommandListName = string;
 export type PriceSource = "shipped" | "manifest";
 /**
@@ -2132,30 +2132,33 @@ export interface McpServerResult {
   server: McpServer;
 }
 /**
- * An MCP server's definition, as the library keeps it.
+ * An MCP server's definition, as the library keeps it: its entry, and kinby's own fields
+ * beside it.
  */
 export interface McpServer {
-  env?: EnvVariable[];
+  entry: McpServerEntry;
   include?: string[];
-  transport: McpUrlTransport | McpUvxTransport;
 }
 /**
- * A remote server, reached at its URL.
+ * A remote server, reached at its URL over Streamable HTTP.
  */
-export interface McpUrlTransport {
+export interface McpHttpEntry {
   headers?: {
-    [k: string]: EnvVariable;
+    [k: string]: string;
   };
-  type: "url";
+  type: "http";
   url: string;
 }
 /**
- * A local server ``uvx`` runs in the instance's container.
+ * A local server, which a launcher the image ships runs in the instance's container.
  */
-export interface McpUvxTransport {
+export interface McpStdioEntry {
   args?: string[];
-  package: string;
-  type: "uvx";
+  command: string;
+  env?: {
+    [k: string]: string;
+  };
+  type: "stdio";
 }
 /**
  * Write an MCP server's definition, adding the server when ``hash`` is null.

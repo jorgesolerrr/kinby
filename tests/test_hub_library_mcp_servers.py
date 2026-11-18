@@ -1,6 +1,7 @@
 """The library keeps MCP servers beside skills and factories: added, read, edited and deleted."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -25,22 +26,26 @@ from kinby.contracts import (
 )
 from kinby.hub import Hub
 from tests.test_hub import hub_at, hub_client
-from tests.test_hub_library import library
+from tests.test_hub_library import library, reopened
 
 GITHUB = McpServer.model_validate(
     {
-        "transport": {
-            "type": "url",
+        "entry": {
+            "type": "http",
             "url": "https://api.githubcopilot.com/mcp/",
-            "headers": {"Authorization": "GITHUB_AUTHORIZATION"},
+            "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
         },
         "include": ["get_issue", "list_issues"],
     }
 )
 FETCH = McpServer.model_validate(
     {
-        "transport": {"type": "uvx", "package": "mcp-server-fetch", "args": ["--ignore-robots"]},
-        "env": ["FETCH_USER_AGENT"],
+        "entry": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": ["mcp-server-fetch", "--ignore-robots"],
+            "env": {"FETCH_USER_AGENT": "${FETCH_USER_AGENT:-kinby}"},
+        },
         "include": ["fetch"],
     }
 )
@@ -89,22 +94,70 @@ def test_an_http_and_a_uvx_server_written_on_the_hub_are_listed_as_mcp_servers(t
     assert (fetch.name, fetch.server) == ("fetch", FETCH)
 
 
+def dispatched_write(hub: Hub, entry: dict[str, object]) -> object:
+    command = {"name": "pasted", "server": {"entry": entry}, "hash": None}
+    return asyncio.run(hub.dispatcher.dispatch(LIBRARY_MCP_SERVER_WRITE.name, command, HUB_SCOPES))
+
+
 @pytest.mark.parametrize(
-    ("server", "reason"),
+    ("entry", "stored"),
     [
-        ({"transport": {"type": "npx", "package": "@acme/server"}}, "'url', 'uvx'"),
-        ({"transport": {"type": "uvx", "package": "a"}, "env": ["PATH"]}, "PATH"),
-        ({"transport": {"type": "uvx", "package": "a"}, "env": ["LD_PRELOAD"]}, "LD_PRELOAD"),
-        ({"transport": {"type": "uvx", "package": "a"}, "env": ["PYTHONPATH"]}, "PYTHONPATH"),
-        ({"transport": {"type": "uvx", "package": "--index-url=http://evil"}}, "package"),
+        ({"url": "https://mcp.example.com/mcp"}, "http"),
+        ({"command": "uvx", "args": ["mcp-server-fetch"]}, "stdio"),
     ],
-    ids=["npx", "path", "ld-preload", "pythonpath", "uvx-option"],
+    ids=["url", "command"],
 )
-def test_another_transport_or_an_env_key_that_hijacks_the_process_is_refused(
-    tmp_path, server, reason
+def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_path, entry, stored):
+    hub = hub_at(tmp_path / "hub")
+
+    written = dispatched_write(hub, entry)
+
+    assert isinstance(written, McpServerResult), written
+    saved = json.loads((hub.directory / "mcp-servers" / "pasted.json").read_bytes())
+    assert saved["entry"]["type"] == stored
+
+
+@pytest.mark.parametrize(
+    ("entry", "reason"),
+    [
+        ({"type": "sse", "url": "https://mcp.example.com/sse"}, "deprecated"),
+        ({"command": "npx", "args": ["-y", "@acme/server"]}, "uvx"),
+        ({"command": "uvx", "args": ["a"], "env": {"PATH": "/evil"}}, "PATH"),
+        ({"command": "uvx", "args": ["a"], "env": {"LD_PRELOAD": "evil.so"}}, "LD_PRELOAD"),
+        ({"command": "uvx", "args": ["a"], "env": {"PYTHONPATH": "/evil"}}, "PYTHONPATH"),
+        ({"command": "uvx", "args": ["--index-url=http://evil", "a"]}, "package"),
+        ({"command": "uvx", "args": ["${PACKAGE}"]}, "package"),
+        ({"command": "uvx"}, "package"),
+    ],
+    ids=[
+        "sse",
+        "npx",
+        "path",
+        "ld-preload",
+        "pythonpath",
+        "uvx-option",
+        "uvx-variable",
+        "no-package",
+    ],
+)
+def test_an_entry_kinby_cannot_run_or_whose_env_key_hijacks_the_process_is_refused(
+    tmp_path, entry, reason
 ):
     hub = hub_at(tmp_path / "hub")
-    command = {"name": "evil", "server": server, "hash": None}
+
+    answer = dispatched_write(hub, entry)
+
+    assert isinstance(answer, ErrorEnvelope), answer
+    assert answer.code is ErrorCode.INVALID_ARGUMENT
+    assert reason in answer.message
+    assert mcp_servers(hub) == []
+    assert not (hub.directory / "mcp-servers").exists()
+
+
+def test_a_definition_in_the_old_shape_is_refused(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    old = {"transport": {"type": "uvx", "package": "mcp-server-fetch"}, "include": ["fetch"]}
+    command = {"name": "fetch", "server": old, "hash": None}
 
     answer = asyncio.run(
         hub.dispatcher.dispatch(LIBRARY_MCP_SERVER_WRITE.name, command, HUB_SCOPES)
@@ -112,9 +165,59 @@ def test_another_transport_or_an_env_key_that_hijacks_the_process_is_refused(
 
     assert isinstance(answer, ErrorEnvelope), answer
     assert answer.code is ErrorCode.INVALID_ARGUMENT
-    assert reason in answer.message
-    assert mcp_servers(hub) == []
-    assert not (hub.directory / "mcp-servers").exists()
+    assert "transport" in answer.message
+
+
+@pytest.mark.parametrize(
+    ("old", "converted"),
+    [
+        (
+            {
+                "transport": {
+                    "type": "url",
+                    "url": "https://api.githubcopilot.com/mcp/",
+                    "headers": {"Authorization": "GITHUB_AUTHORIZATION"},
+                },
+                "include": ["get_issue"],
+            },
+            {
+                "entry": {
+                    "type": "http",
+                    "url": "https://api.githubcopilot.com/mcp/",
+                    "headers": {"Authorization": "${GITHUB_AUTHORIZATION}"},
+                },
+                "include": ["get_issue"],
+            },
+        ),
+        (
+            {
+                "transport": {"type": "uvx", "package": "mcp-server-fetch", "args": ["--raw"]},
+                "env": ["FETCH_USER_AGENT"],
+                "include": ["fetch"],
+            },
+            {
+                "entry": {
+                    "type": "stdio",
+                    "command": "uvx",
+                    "args": ["mcp-server-fetch", "--raw"],
+                    "env": {"FETCH_USER_AGENT": "${FETCH_USER_AGENT}"},
+                },
+                "include": ["fetch"],
+            },
+        ),
+    ],
+    ids=["url", "uvx"],
+)
+def test_the_hub_converts_a_library_definition_in_the_old_shape(tmp_path, old, converted):
+    hub = hub_at(tmp_path / "hub")
+    (hub.directory / "mcp-servers").mkdir()
+    (hub.directory / "mcp-servers" / "kept.json").write_text(json.dumps(old), encoding="utf-8")
+
+    hub = reopened(hub)
+
+    kept = read(hub_client(hub), "kept")
+    assert isinstance(kept, McpServerResult), kept
+    assert kept.server == McpServer.model_validate(converted)
 
 
 def test_a_name_the_library_already_holds_is_refused_for_a_new_server(tmp_path):

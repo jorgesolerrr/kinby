@@ -312,7 +312,7 @@ describe("Used by", () => {
       "library.skill.read": () => ({ content: tdd, files: [], hash: "h-1" }),
       "library.mcp_server.read": ({ name }) => ({
         name,
-        server: { transport: { type: "url", url: "https://example.com/mcp" } },
+        server: { entry: { type: "http", url: "https://example.com/mcp" } },
         hash: "m-1",
       }),
       "instance.list": () => ({ instances: [ada, coder, broken] }),

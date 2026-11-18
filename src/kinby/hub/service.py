@@ -916,6 +916,7 @@ class Hub:
                 self.registry,
             )
             self.library.receive()
+            self.library.convert(record.path for record in self.registry.managed_instances())
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
             self.browser_profiles = BrowserProfiles(self.directory / "browser-profiles")
             self.vault = Vault(self.directory / "vault")

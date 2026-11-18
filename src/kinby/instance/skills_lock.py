@@ -6,8 +6,14 @@ from __future__ import annotations
 import hashlib
 import string
 from pathlib import Path
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field  # noqa: TID251 - the lock's file boundary
+from pydantic import (
+    BaseModel,  # noqa: TID251 - the lock's file boundary
+    BeforeValidator,
+    ConfigDict,
+    Field,
+)
 from pydantic.alias_generators import to_camel
 
 from kinby.contracts import (
@@ -15,8 +21,10 @@ from kinby.contracts import (
     GitCommit,
     GitSource,
     LibrarySource,
+    McpHttpEntry,
     McpServer,
     McpServerName,
+    McpStdioEntry,
     SkillName,
 )
 from kinby.instance.config_changes import file_hash
@@ -62,6 +70,54 @@ class LockedSkill(BaseModel):
         return cls(source=_SOURCES[source], source_type=source, computed_hash=skill_hash(folder))
 
 
+class _UrlTransport(BaseModel):
+    type: Literal["url"]
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class _UvxTransport(BaseModel):
+    type: Literal["uvx"]
+    package: str
+    args: list[str] = Field(default_factory=list)
+
+
+class _OldMcpServer(BaseModel):
+    """An MCP server's definition as the hub stored it before ADR 0127: each header and env key
+    named a variable of the instance's ``.env``."""
+
+    transport: _UrlTransport | _UvxTransport = Field(discriminator="type")
+    env: list[str] = Field(default_factory=list)
+    include: list[str] = Field(default_factory=list)
+
+    def converted(self) -> McpServer:
+        transport = self.transport
+        entry = (
+            McpHttpEntry(
+                url=transport.url,
+                headers={name: f"${{{variable}}}" for name, variable in transport.headers.items()},
+            )
+            if isinstance(transport, _UrlTransport)
+            else McpStdioEntry(
+                command="uvx",
+                args=[transport.package, *transport.args],
+                env={name: f"${{{name}}}" for name in self.env},
+            )
+        )
+        return McpServer(entry=entry, include=self.include)
+
+
+def _converted(stored: object) -> object:
+    if isinstance(stored, dict) and "transport" in stored:
+        return _OldMcpServer.model_validate(stored).converted()
+    return stored
+
+
+#: An MCP server's definition as the hub stores it, in the library or a lock, converted when it
+#: is still in the shape before ADR 0127.
+type StoredMcpServer = Annotated[McpServer, BeforeValidator(_converted)]
+
+
 class LockedMcpServer(BaseModel):
     """One MCP server pick: the library's definition as copied, and whether the user trusts its
     read-only hints."""
@@ -70,7 +126,7 @@ class LockedMcpServer(BaseModel):
         alias_generator=to_camel, validate_by_name=True, serialize_by_alias=True, frozen=True
     )
 
-    server: McpServer
+    server: StoredMcpServer
     trust_hints: bool = False
 
 
@@ -99,16 +155,18 @@ def lock_hash(instance_path: Path) -> FileHash | None:
 
 
 def write_lock(instance_path: Path, lock: SkillsLock) -> None:
+    (instance_path / SKILLS_LOCK_NAME).write_text(lock_text(lock), encoding="utf-8")
+
+
+def lock_text(lock: SkillsLock) -> str:
+    """The lock as its file holds it."""
     ordered = SkillsLock(
         skills=dict(sorted(lock.skills.items())),
         mcp_servers=dict(sorted(lock.mcp_servers.items())),
     )
     # A lock without MCP servers stays the file the ``skills`` CLI writes.
     excluded = None if lock.mcp_servers else {"mcp_servers"}
-    (instance_path / SKILLS_LOCK_NAME).write_text(
-        ordered.model_dump_json(indent=2, exclude_none=True, exclude=excluded) + "\n",
-        encoding="utf-8",
-    )
+    return ordered.model_dump_json(indent=2, exclude_none=True, exclude=excluded) + "\n"
 
 
 def skill_hash(folder: Path) -> FileHash:

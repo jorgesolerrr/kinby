@@ -6,10 +6,12 @@ import asyncio
 import shutil
 import threading
 from collections.abc import Collection, Iterable, Sequence
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+
+from pydantic import TypeAdapter
 
 from kinby.contracts import (
     ConfigActor,
@@ -68,13 +70,17 @@ from kinby.instance.skills_lock import (
     LockedMcpServer,
     LockedSkill,
     SkillsLock,
+    StoredMcpServer,
     lock_hash,
+    lock_text,
     read_lock,
     skill_hash,
     write_lock,
 )
 from kinby.plugins.instance_tools import validate_name, write_skill
 from kinby.plugins.skills import load_skill_file
+
+_STORED_MCP_SERVER = TypeAdapter(StoredMcpServer)
 
 
 @dataclass(frozen=True)
@@ -143,6 +149,26 @@ class Library:
         for name in self._registry.unhashed_git_skills():
             if (self._directory / name).is_dir():
                 self._registry.record_landed_git_skill(name, directory_hash(self._directory / name))
+
+    def convert(self, instance_paths: Iterable[Path]) -> None:
+        """Write each MCP server definition the library and the locks of the instances in
+        *instance_paths* hold as the hub writes one, so a definition in the shape before ADR 0127
+        is converted. A file that does not parse, and a lock that is a link, are left as they
+        are."""
+        for file in self._mcp_servers.glob("*.json"):
+            with suppress(ValueError):
+                content = file.read_text(encoding="utf-8")
+                server = _STORED_MCP_SERVER.validate_json(content)
+                if _server_text(server) != content:
+                    _write_server(file, server)
+        for path in instance_paths:
+            lock_file = path / SKILLS_LOCK_NAME
+            if lock_file.is_symlink():
+                continue
+            with suppress(ValueError):
+                lock = read_lock(path)
+                if lock.mcp_servers and lock_text(lock) != lock_file.read_text(encoding="utf-8"):
+                    write_lock(path, lock)
 
     async def list(self, command: LibraryListCommand) -> LibraryListResult:
         factories = await self._factories.list(FactoryListCommand())
@@ -233,9 +259,7 @@ class Library:
                 {"name": f'The library already holds an MCP server "{command.name}".'}
             )
         self._mcp_servers.mkdir(exist_ok=True)
-        staging = file.with_name(f".{file.name}.staging")
-        staging.write_text(f"{command.server.model_dump_json(indent=2)}\n", encoding="utf-8")
-        staging.replace(file)
+        _write_server(file, command.server)
         return _mcp_server_result(command.name, file)
 
     async def delete_mcp_server(self, command: LibraryMcpServerDeleteCommand) -> LibraryListResult:
@@ -520,7 +544,7 @@ class Library:
 
     def _library_server(self, name: McpServerName) -> McpServer | None:
         file = self._mcp_servers / f"{name}.json"
-        return McpServer.model_validate_json(file.read_bytes()) if file.is_file() else None
+        return _STORED_MCP_SERVER.validate_json(file.read_bytes()) if file.is_file() else None
 
     def _mcp_server_file(self, name: McpServerName) -> Path:
         file = self._mcp_servers / f"{name}.json"
@@ -577,8 +601,18 @@ class Library:
 def _mcp_server_result(name: McpServerName, file: Path) -> McpServerResult:
     content = file.read_bytes()
     return McpServerResult(
-        name=name, server=McpServer.model_validate_json(content), hash=file_hash(content)
+        name=name, server=_STORED_MCP_SERVER.validate_json(content), hash=file_hash(content)
     )
+
+
+def _server_text(server: McpServer) -> str:
+    return f"{server.model_dump_json(indent=2)}\n"
+
+
+def _write_server(file: Path, server: McpServer) -> None:
+    staging = file.with_name(f".{file.name}.staging")
+    staging.write_text(_server_text(server), encoding="utf-8")
+    staging.replace(file)
 
 
 def _refuse_links(instance_path: Path) -> None:

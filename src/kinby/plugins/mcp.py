@@ -35,7 +35,7 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     # The MCP SDK loads only in an instance that picked a server.
     from kinby.plugins.mcp_connection import NotConnected, connected_tools
 
-    env = {
+    secrets = {
         name: value
         for name, value in dotenv_values(instance.path / ENV_NAME, interpolate=False).items()
         if value is not None
@@ -46,7 +46,7 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     async with AsyncExitStack() as stack:
         for name, pick in sorted(picks.items()):
             try:
-                tools.extend(await connected_tools(name, pick, env, source, stack))
+                tools.extend(await connected_tools(name, pick, secrets, source, stack))
             except NotConnected as failed:
                 failures[name] = (
                     f'MCP server "{name}" did not start or list its tools, so the turn ran '

@@ -4,8 +4,11 @@ gated as writes until the user trusts the server's read-only hints (ADR 0111).""
 import asyncio
 import json
 import os
+import socket
+import subprocess
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -33,27 +36,51 @@ from tests.test_routines import instance_at
 SERVER = Path(__file__).with_name("mcp_echo_server.py")
 
 
-def echo(*include: str, env: tuple[str, ...] = (), package: str = "echo-server") -> McpServer:
+def echo(
+    *include: str,
+    env: dict[str, str] | None = None,
+    package: str = "echo-server",
+    args: tuple[str, ...] = (),
+) -> McpServer:
     return McpServer.model_validate(
         {
-            "transport": {"type": "uvx", "package": package},
-            "env": list(env),
+            "entry": {"command": "uvx", "args": [package, *args], "env": env or {}},
             "include": list(include),
         }
     )
 
 
+@pytest.fixture
+def echo_port() -> Iterator[int]:
+    """The port of an echo server reached over HTTP."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen([sys.executable, str(SERVER), "http", str(port)])
+    try:
+        for _ in range(100):
+            with socket.socket() as attempt:
+                if attempt.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            time.sleep(0.1)
+        yield port
+    finally:
+        process.terminate()
+        process.wait()
+
+
 @pytest.fixture(autouse=True)
 def uvx(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stand in for uvx: it starts the echo server for the package echo-server, starts one that
-    never answers for silent-server, floods stderr before failing for noisy-server, and fails
-    as a package missing from the registry for any other."""
+    """Stand in for uvx: it starts the echo server for the package echo-server, with the
+    arguments after the package, starts one that never answers for silent-server, floods stderr
+    before failing for noisy-server, and fails as a package missing from the registry for any
+    other."""
     folder = tmp_path_factory.mktemp("bin")
     shim = folder / "uvx"
     shim.write_text(
         f"""#!/bin/sh
 case "$1" in
-  echo-server) exec "{sys.executable}" "{SERVER}" ;;
+  echo-server) shift; exec "{sys.executable}" "{SERVER}" "$@" ;;
   silent-server) while read -r _; do :; done; exit ;;
   noisy-server) seq 100000 >&2; exit 1 ;;
   *) echo "error: $1 was not found in the package registry" >&2; exit 1 ;;
@@ -157,13 +184,95 @@ def test_a_local_server_sees_its_declared_variables_and_no_other_env_key(
     # The container's environment holds every key of the instance's .env.
     monkeypatch.setenv("ECHO_KEY", "declared")
     monkeypatch.setenv("OTHER_SECRET", "kept")
-    pick(instance, echo=echo("environment", env=("ECHO_KEY",)))
+    pick(instance, echo=echo("environment", env={"ECHO_KEY": "${ECHO_KEY}"}))
 
     payloads = asyncio.run(turn(instance, [("echo__environment", {})], PermissionMode.FULL_ACCESS))
 
     seen = json.loads(result(payloads).output)
     assert seen["ECHO_KEY"] == "declared"
     assert "OTHER_SECRET" not in seen
+
+
+def test_an_env_value_takes_the_instances_secret_its_default_or_stays_as_written(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    (tmp_path / ".env").write_text("ECHO_KEY=secret\n", encoding="utf-8")
+    env = {
+        "ECHO_KEY": "key-${ECHO_KEY}",
+        "ECHO_SET": "${ECHO_KEY:-unused}",
+        "ECHO_UNSET": "${ECHO_MODE:-quiet}",
+        "ECHO_LITERAL": "$ECHO_KEY ${ECHO_KEY",
+    }
+    pick(instance, echo=echo("environment", env=env))
+
+    payloads = asyncio.run(turn(instance, [("echo__environment", {})], PermissionMode.FULL_ACCESS))
+
+    seen = json.loads(result(payloads).output)
+    assert {name: seen[name] for name in env} == {
+        "ECHO_KEY": "key-secret",
+        "ECHO_SET": "secret",
+        "ECHO_UNSET": "quiet",
+        "ECHO_LITERAL": "$ECHO_KEY ${ECHO_KEY",
+    }
+
+
+def test_an_argument_takes_the_instances_secret(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    (tmp_path / ".env").write_text("ECHO_KEY=secret\n", encoding="utf-8")
+    pick(instance, echo=echo("arguments", args=("--key", "${ECHO_KEY}", "${ECHO_MODE:-quiet}")))
+
+    payloads = asyncio.run(turn(instance, [("echo__arguments", {})], PermissionMode.FULL_ACCESS))
+
+    assert json.loads(result(payloads).output) == ["--key", "secret", "quiet"]
+
+
+def test_a_remote_server_is_reached_at_its_filled_url_with_filled_and_fixed_headers(
+    tmp_path: Path, echo_port: int
+) -> None:
+    instance = instance_at(tmp_path)
+    (tmp_path / ".env").write_text(f"ECHO_PORT={echo_port}\nECHO_TOKEN=secret\n", encoding="utf-8")
+    remote = McpServer.model_validate(
+        {
+            "entry": {
+                "url": "http://127.0.0.1:${ECHO_PORT}/mcp",
+                "headers": {
+                    "Authorization": "Bearer ${ECHO_TOKEN}",
+                    "X-Cockpit-Agent": "kinby",
+                },
+            },
+            "include": ["headers"],
+        }
+    )
+    pick(instance, echo=remote)
+
+    payloads = asyncio.run(turn(instance, [("echo__headers", {})], PermissionMode.FULL_ACCESS))
+
+    seen = json.loads(result(payloads).output)
+    assert (seen["authorization"], seen["x-cockpit-agent"]) == ("Bearer secret", "kinby")
+
+
+def test_a_pick_the_hub_converted_from_the_old_shape_runs_as_before(tmp_path: Path) -> None:
+    async def scenario() -> Instance:
+        hub = hub_at(tmp_path / "hub")
+        created = await started_instance(hub_client(hub), hub)
+        hub.close()
+        return inspect_instance(hub.instances_directory / str(created.instance_id))
+
+    instance = asyncio.run(scenario())
+    old = {"transport": {"type": "uvx", "package": "echo-server"}, "include": ["look"]}
+    (instance.path / "skills-lock.json").write_text(
+        json.dumps({"version": 1, "skills": {}, "mcpServers": {"echo": {"server": old}}}),
+        encoding="utf-8",
+    )
+    hub_at(tmp_path / "hub").close()
+
+    payloads = asyncio.run(
+        turn(instance, [("echo__look", {"text": "hi"})], PermissionMode.FULL_ACCESS)
+    )
+
+    called = result(payloads)
+    assert (called.error, called.output) == (False, "looked: hi")
 
 
 def test_a_server_that_fails_to_start_leaves_the_turn_running_without_its_tools(

@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { McpServerDraft } from "@/lib/mcp-servers"
 
-/** The fields of an MCP server's definition: its transport, the variables it gets, its tools. */
+/** The fields of an MCP server's definition: its entry, then the tools a turn is offered. */
 export function McpServerFields({
   draft,
   disabled,
@@ -25,13 +25,13 @@ export function McpServerFields({
 }) {
   const id = useId()
   const field = (
-    name: Exclude<keyof McpServerDraft, "transport" | "readArgs">,
+    name: Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv">,
     label: string,
     description: string,
   ) => (
     <Field>
       <FieldLabel htmlFor={`${id}-${name}`}>{label}</FieldLabel>
-      {name === "url" || name === "package" ? (
+      {name === "url" || name === "command" ? (
         <Input
           id={`${id}-${name}`}
           value={draft[name]}
@@ -56,35 +56,35 @@ export function McpServerFields({
         <FieldLegend variant="label">Transport</FieldLegend>
         <ToggleGroup
           variant="outline"
-          value={[draft.transport]}
+          value={[draft.type]}
           disabled={disabled}
-          onValueChange={([transport]) => {
-            if (transport === "url" || transport === "uvx") onChange({ ...draft, transport })
+          onValueChange={([type]) => {
+            if (type === "http" || type === "stdio") onChange({ ...draft, type })
           }}
         >
-          <ToggleGroupItem value="url">URL</ToggleGroupItem>
-          <ToggleGroupItem value="uvx">uvx</ToggleGroupItem>
+          <ToggleGroupItem value="http">http</ToggleGroupItem>
+          <ToggleGroupItem value="stdio">stdio</ToggleGroupItem>
         </ToggleGroup>
       </FieldSet>
-      {draft.transport === "url" ? (
+      {draft.type === "http" ? (
         <>
           {field("url", "URL", "A remote server, reached over HTTP.")}
           {field(
             "headers",
             "Headers",
-            "One a line, as Name: VARIABLE. Each value is that variable's, from the instance's .env.",
+            "One a line, as Name: value. ${VAR} in a value is the instance's secret VAR.",
           )}
         </>
       ) : (
         <>
-          {field("package", "Package", "uvx runs it in the instance's container.")}
-          {field("args", "Arguments", "One a line.")}
+          {field("command", "Command", "uvx runs the server in the instance's container.")}
+          {field("args", "Arguments", "One a line. The first is the package uvx runs.")}
+          {field(
+            "env",
+            "Env",
+            "One a line, as NAME=value. ${VAR} in a value is the instance's secret VAR. The server gets no other variable.",
+          )}
         </>
-      )}
-      {field(
-        "env",
-        "Variables",
-        "The variables a local server gets from the instance's .env, one a line. It gets no others.",
       )}
       {field(
         "include",
