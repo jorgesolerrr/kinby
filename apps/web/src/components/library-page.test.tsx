@@ -218,7 +218,7 @@ describe("LibraryPage", () => {
     )
   })
 
-  it("opens Add MCP server at the top of the list, on its name", async () => {
+  it("opens Add MCP server at the top of the list, on its paste box", async () => {
     const { user } = openPage(listed.entries, "/library/mcp-servers")
     await screen.findByText("No MCP servers yet")
     expect(screen.queryByRole("button", { name: /^\d+ in / })).toBeNull()
@@ -226,7 +226,9 @@ describe("LibraryPage", () => {
     await user.click(header().getByRole("button", { name: "Add MCP server" }))
 
     const panel = await screen.findByRole("region", { name: "Add an MCP server" })
-    expect(document.activeElement).toBe(within(panel).getByRole("textbox", { name: "Name" }))
+    expect(document.activeElement).toBe(
+      within(panel).getByRole("textbox", { name: "Paste an entry" }),
+    )
   })
 
   it.each([
