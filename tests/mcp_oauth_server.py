@@ -6,10 +6,11 @@ code, and its token endpoint issues tokens a test can expire or revoke. Its MCP 
 a caller with a live access token the echo server's ``look`` and ``headers``, and ``expire``,
 which expires the caller's token in the middle of a turn. A test can turn registration off
 and register a client itself, make its protected resource metadata name another issuer, issue no
-refresh tokens, and hold a refresh until it releases it.
+refresh tokens, hold a refresh until it releases it, and take clients only by a Basic header.
 """
 
 import asyncio
+import base64
 import json
 import secrets
 import socket
@@ -17,6 +18,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from urllib.parse import parse_qs, unquote, urlencode
 
 import uvicorn
 from mcp.server.auth.provider import (
@@ -33,13 +35,50 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+
+class _BasicAuthOnly:
+    """A token endpoint that refuses a request naming its client twice, in a Basic header and in
+    the body. It passes the header's client on in the body, where the SDK's endpoint reads it."""
+
+    def __init__(self, application: ASGIApp) -> None:
+        self._application = application
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["path"] != "/token":
+            await self._application(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        form = parse_qs((await request.body()).decode())
+        if "client_id" in form:
+            refusal = JSONResponse(
+                {
+                    "error": "invalid_request",
+                    "error_description": "Client must not use multiple authentication methods",
+                },
+                status_code=400,
+            )
+            await refusal(scope, receive, send)
+            return
+        credentials = request.headers["Authorization"].removeprefix("Basic ")
+        client_id = base64.b64decode(credentials).decode().partition(":")[0]
+        body = urlencode({**form, "client_id": [unquote(client_id)]}, doseq=True).encode()
+        headers = [pair for pair in scope["headers"] if pair[0] != b"content-length"]
+        headers.append((b"content-length", str(len(body)).encode()))
+
+        async def replayed() -> Message:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self._application({**scope, "headers": headers}, replayed, send)
 
 
 class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
     """The authorization server's clients, codes and tokens, in memory."""
 
-    def __init__(self, *, refresh_tokens: bool) -> None:
+    def __init__(self, *, refresh_tokens: bool, basic_auth: bool) -> None:
         self.refresh_tokens = refresh_tokens
+        self.basic_auth = basic_auth
         #: Set once a refresh arrives, and the refresh waits until released is.
         self.refreshing = threading.Event()
         self.released = threading.Event()
@@ -54,6 +93,8 @@ class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         assert client_info.client_id is not None
+        if self.basic_auth:
+            client_info.token_endpoint_auth_method = "client_secret_basic"
         self.clients[client_info.client_id] = client_info
 
     async def authorize(
@@ -174,14 +215,14 @@ class OAuthMcpServer:
 
 @contextmanager
 def oauth_mcp_server(
-    *, registration: bool = True, refresh_tokens: bool = True
+    *, registration: bool = True, refresh_tokens: bool = True, basic_auth: bool = False
 ) -> Iterator[OAuthMcpServer]:
     listening = socket.socket()
     listening.bind(("127.0.0.1", 0))
     # Listening before the server runs queues the first requests rather than refusing them.
     listening.listen()
     base = f"http://127.0.0.1:{listening.getsockname()[1]}"
-    provider = _Provider(refresh_tokens=refresh_tokens)
+    provider = _Provider(refresh_tokens=refresh_tokens, basic_auth=basic_auth)
     server = MCPServer(
         "oauth-echo",
         auth_server_provider=provider,
@@ -224,7 +265,8 @@ def oauth_mcp_server(
     application.router.routes.insert(
         0, Route("/.well-known/oauth-protected-resource/mcp", resource_metadata)
     )
-    running = uvicorn.Server(uvicorn.Config(application, log_level="warning"))
+    answering = _BasicAuthOnly(application) if basic_auth else application
+    running = uvicorn.Server(uvicorn.Config(answering, log_level="warning"))
     thread = threading.Thread(target=running.run, kwargs={"sockets": [listening]})
     thread.start()
     try:
