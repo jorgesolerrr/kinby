@@ -3,6 +3,7 @@ import { useId } from "react"
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -11,44 +12,53 @@ import {
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import type { McpServerDraft } from "@/lib/mcp-servers"
+import type { McpServerDraft, McpServerField } from "@/lib/mcp-servers"
 
-/** The fields of an MCP server's definition: its entry, then the tools a turn is offered. */
+/**
+ * The fields of an MCP server's definition: its entry, then the tools a turn is offered. Each
+ * shows the hub's reason, in `refused`, for refusing its value.
+ */
 export function McpServerFields({
   draft,
+  refused,
   disabled,
   onChange,
 }: {
   draft: McpServerDraft
+  refused: Partial<Record<Exclude<McpServerField, "name">, string>>
   disabled: boolean
   onChange: (draft: McpServerDraft) => void
 }) {
   const id = useId()
-  const field = (
-    name: Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv">,
-    label: string,
-    description: string,
-  ) => (
-    <Field>
-      <FieldLabel htmlFor={`${id}-${name}`}>{label}</FieldLabel>
-      {name === "url" || name === "command" ? (
-        <Input
-          id={`${id}-${name}`}
-          value={draft[name]}
-          readOnly={disabled}
-          onChange={(event) => onChange({ ...draft, [name]: event.target.value })}
-        />
-      ) : (
-        <Textarea
-          id={`${id}-${name}`}
-          value={draft[name]}
-          readOnly={disabled}
-          onChange={(event) => onChange({ ...draft, [name]: event.target.value })}
-        />
-      )}
-      <FieldDescription>{description}</FieldDescription>
-    </Field>
-  )
+  const field = (name: Exclude<McpServerField, "name">, label: string, description: string) => {
+    const props = {
+      id: `${id}-${name}`,
+      value: draft[name],
+      readOnly: disabled,
+      "aria-invalid": refused[name] !== undefined || undefined,
+      "aria-describedby": refused[name] === undefined ? undefined : `${id}-${name}-error`,
+    }
+    return (
+      <Field data-invalid={refused[name] !== undefined || undefined}>
+        <FieldLabel htmlFor={`${id}-${name}`}>{label}</FieldLabel>
+        {name === "url" || name === "command" ? (
+          <Input
+            {...props}
+            onChange={(event) => onChange({ ...draft, [name]: event.target.value })}
+          />
+        ) : (
+          <Textarea
+            {...props}
+            onChange={(event) => onChange({ ...draft, [name]: event.target.value })}
+          />
+        )}
+        <FieldDescription>{description}</FieldDescription>
+        {refused[name] !== undefined && (
+          <FieldError id={`${id}-${name}-error`}>{refused[name]}</FieldError>
+        )}
+      </Field>
+    )
+  }
 
   return (
     <FieldGroup>

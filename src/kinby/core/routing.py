@@ -109,6 +109,10 @@ class Dispatcher:
                 code=ErrorCode.INVALID_ARGUMENT,
                 message=f'Invalid payload for "{method}": {exc}',
                 retryable=False,
+                fields={
+                    ".".join(map(str, error["loc"])): error["msg"].removeprefix("Value error, ")
+                    for error in exc.errors()
+                },
             )
         return route, command
 
