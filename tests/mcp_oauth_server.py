@@ -3,7 +3,8 @@
 It is its own authorization server: it serves protected resource metadata, authorization server
 metadata and dynamic client registration, its authorize endpoint redirects back at once with a
 code, and its token endpoint issues tokens a test can expire or revoke. Its MCP endpoint offers
-the echo server's ``look`` to a caller with a live access token.
+the echo server's ``look`` to a caller with a live access token. A test can turn registration off
+and register a client itself, and make its protected resource metadata name another issuer.
 """
 
 import secrets
@@ -25,6 +26,9 @@ from mcp.server.auth.provider import (
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 
 class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
@@ -111,11 +115,28 @@ class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken
 
 
 class OAuthMcpServer:
-    """The running server, at ``url``, and what a test does to the tokens it issued."""
+    """The running server, at ``url``, its clients, and what a test does to the tokens it
+    issued."""
 
-    def __init__(self, url: str, provider: _Provider) -> None:
+    def __init__(self, url: str, provider: _Provider, issuer: str) -> None:
         self.url = url
+        self.issuer = issuer
         self._provider = provider
+        #: The authorization server its protected resource metadata names.
+        self.named_issuer = issuer
+
+    @property
+    def clients(self) -> list[OAuthClientInformationFull]:
+        return list(self._provider.clients.values())
+
+    def add_client(self, client: OAuthClientInformationFull) -> None:
+        """Know *client* without its registering, as a server whose clients are set up by hand."""
+        assert client.client_id is not None
+        self._provider.clients[client.client_id] = client
+
+    def tokens(self) -> list[str]:
+        """Every access and refresh token still live."""
+        return [*self._provider.access, *self._provider.refresh]
 
     def expire(self) -> None:
         """Expire every access token issued so far. Their refresh tokens still work."""
@@ -129,7 +150,7 @@ class OAuthMcpServer:
 
 
 @contextmanager
-def oauth_mcp_server() -> Iterator[OAuthMcpServer]:
+def oauth_mcp_server(*, registration: bool = True) -> Iterator[OAuthMcpServer]:
     listening = socket.socket()
     listening.bind(("127.0.0.1", 0))
     # Listening before the server runs queues the first requests rather than refusing them.
@@ -142,7 +163,7 @@ def oauth_mcp_server() -> Iterator[OAuthMcpServer]:
         auth=AuthSettings(
             issuer_url=base,
             resource_server_url=f"{base}/mcp",
-            client_registration_options=ClientRegistrationOptions(enabled=True),
+            client_registration_options=ClientRegistrationOptions(enabled=registration),
             revocation_options=RevocationOptions(enabled=True),
             validate_token_resource=False,
         ),
@@ -153,11 +174,23 @@ def oauth_mcp_server() -> Iterator[OAuthMcpServer]:
         """Repeat a line of text."""
         return f"looked: {text}"
 
-    running = uvicorn.Server(uvicorn.Config(server.streamable_http_app(), log_level="warning"))
+    served = OAuthMcpServer(f"{base}/mcp", provider, base)
+
+    async def resource_metadata(request: Request) -> Response:
+        return JSONResponse(
+            {"resource": served.url, "authorization_servers": [served.named_issuer]}
+        )
+
+    application = server.streamable_http_app()
+    # Ahead of the SDK's own route, so a test can change the issuer it names.
+    application.router.routes.insert(
+        0, Route("/.well-known/oauth-protected-resource/mcp", resource_metadata)
+    )
+    running = uvicorn.Server(uvicorn.Config(application, log_level="warning"))
     thread = threading.Thread(target=running.run, kwargs={"sockets": [listening]})
     thread.start()
     try:
-        yield OAuthMcpServer(f"{base}/mcp", provider)
+        yield served
     finally:
         running.should_exit = True
         thread.join()

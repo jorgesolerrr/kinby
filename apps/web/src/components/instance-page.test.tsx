@@ -1,3 +1,4 @@
+import { CallError } from "@kinby/contract"
 import type {
   Client,
   InstanceSetup,
@@ -150,6 +151,8 @@ function reached(answers: Answers) {
 
 const card = () => within(screen.getByRole("region", { name: "Finish setting up Ada" }))
 const login = (name: string) => within(screen.getByRole("listitem", { name }))
+const mcpServer = (server: string) =>
+  within(screen.getByRole("listitem", { name: `MCP server ${server}` }))
 const secret = (name: string) =>
   within(within(screen.getByRole("list", { name: "Secrets" })).getByRole("listitem", { name }))
 
@@ -170,12 +173,13 @@ describe("the setup card", () => {
     expect(secret("Webhook secret").getByText("Not set")).toBeDefined()
   })
 
-  it("lists each MCP sign-in with its state, beside the logins", async () => {
+  it("lists each MCP sign-in with its state and a sign-in or sign-out, beside the logins", async () => {
     const signIns: InstanceSetup = {
       ...setup,
       mcp_sign_ins: [
         { server: "cockpit", state: "pending" },
         { server: "linear", state: "signed_in" },
+        { server: "sentry", state: "failed", detail: "The server refused the sign-in: no" },
       ],
     }
     await openPage({ "instance.status": () => status({ setup: signIns }) })
@@ -184,7 +188,83 @@ describe("the setup card", () => {
     const row = (server: string) =>
       within(mcp.getByRole("listitem", { name: `MCP server ${server}` }))
     expect(row("cockpit").getByText("Not signed in")).toBeDefined()
+    expect(row("cockpit").getByRole("button", { name: "Sign in" })).toBeDefined()
     expect(row("linear").getByText("Signed in")).toBeDefined()
+    expect(row("linear").getByRole("button", { name: "Sign out" })).toBeDefined()
+    expect(row("sentry").getByText("Failed")).toBeDefined()
+    expect(row("sentry").getByText("The server refused the sign-in: no")).toBeDefined()
+    expect(row("sentry").getByRole("button", { name: "Sign in" })).toBeDefined()
+  })
+
+  it("opens the MCP server's page to sign in, to come back under this page's origin", async () => {
+    const signIns: InstanceSetup = {
+      ...setup,
+      mcp_sign_ins: [{ server: "cockpit", state: "pending" }],
+    }
+    const authorization_url = "https://cockpit.example.com/authorize?state=s"
+    const { caller, user } = await openPage({
+      "instance.status": () => status({ setup: signIns }),
+      "instance.mcp_sign_in.start": () => ({ authorization_url }),
+    })
+    const assign = vi.fn()
+    vi.stubGlobal("location", { origin: window.location.origin, assign })
+
+    try {
+      await user.click(mcpServer("cockpit").getByRole("button", { name: "Sign in" }))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(caller.calls).toContainEqual({
+      method: "instance.mcp_sign_in.start",
+      params: { instance_id: "instance-1", server: "cockpit", origin: window.location.origin },
+    })
+    expect(assign).toHaveBeenCalledWith(authorization_url)
+  })
+
+  it("says why an MCP sign-in did not start", async () => {
+    const signIns: InstanceSetup = {
+      ...setup,
+      mcp_sign_ins: [{ server: "cockpit", state: "pending" }],
+    }
+    const { user, onChanged } = await openPage({
+      "instance.status": () => status({ setup: signIns }),
+      "instance.mcp_sign_in.start": () => {
+        throw new CallError({
+          code: "INVALID_ARGUMENT",
+          message: "The server offers no way to register kinby.",
+          retryable: false,
+        })
+      },
+    })
+
+    await user.click(mcpServer("cockpit").getByRole("button", { name: "Sign in" }))
+
+    expect(
+      mcpServer("cockpit").getByText("The server offers no way to register kinby."),
+    ).toBeDefined()
+    expect(onChanged).toHaveBeenCalled()
+  })
+
+  it("signs out of an MCP server, and lists the instances again", async () => {
+    const signIns: InstanceSetup = {
+      ...setup,
+      mcp_sign_ins: [{ server: "cockpit", state: "signed_in" }],
+    }
+    const { caller, user, onChanged } = await openPage({
+      "instance.status": () => status({ setup: signIns }),
+      "instance.mcp_sign_in.sign_out": () => ({ server: "cockpit", state: "pending" }),
+    })
+
+    await user.click(mcpServer("cockpit").getByRole("button", { name: "Sign out" }))
+
+    expect(caller.calls).toContainEqual({
+      method: "instance.mcp_sign_in.sign_out",
+      params: { instance_id: "instance-1", server: "cockpit" },
+    })
+    expect(mcpServer("cockpit").getByText("Not signed in")).toBeDefined()
+    expect(mcpServer("cockpit").getByRole("button", { name: "Sign in" })).toBeDefined()
+    expect(onChanged).toHaveBeenCalled()
   })
 
   it("reads a login whose last sign-in failed as failed", async () => {
@@ -459,6 +539,7 @@ describe("what needs the user on a running instance", () => {
 
     const cockpit = within(needsYou().getByRole("listitem", { name: "MCP server cockpit" }))
     expect(cockpit.getByText("Not signed in")).toBeDefined()
+    expect(cockpit.getByRole("button", { name: "Sign in" })).toBeDefined()
     expect(needsYou().queryByRole("listitem", { name: "MCP server linear" })).toBeNull()
   })
 

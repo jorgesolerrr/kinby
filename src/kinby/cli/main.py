@@ -607,7 +607,9 @@ async def _run_hub(
         print(f"directory: {hub.directory}")
         _announce(hub.access.issue())
         _announce_recovery(await hub.recover())
-        server = HubContractServer(hub.dispatcher, hub.access, hub, hub.replies, web_app)
+        server = HubContractServer(
+            hub.dispatcher, hub.access, hub, hub.replies, hub.mcp_sign_ins, web_app
+        )
         address = await server.start(listen)
         print(f"listen: {address.host}:{address.port}")
         await stopping.wait()

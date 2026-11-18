@@ -120,14 +120,15 @@ class Vault:
         path = self._path(instance_id)
         if not path.exists():
             return {}
-        return _KEPT.validate_json(self._key().decrypt(path.read_bytes()))
+        return _KEPT.validate_json(self.key().decrypt(path.read_bytes()))
 
     def _write(self, instance_id: UUID, entries: dict[VaultEntryName, _Kept]) -> None:
-        sealed = self._key().encrypt(_KEPT.dump_json(entries))
+        sealed = self.key().encrypt(_KEPT.dump_json(entries))
         replace_protected(self._path(instance_id), sealed.decode())
 
-    def _key(self) -> Fernet:
-        """The vault's key, made the first time an entry is written."""
+    def key(self) -> Fernet:
+        """The vault's key, made the first time it is used. The hub's MCP sign-ins are encrypted
+        with it too."""
         path = self._directory / "key"
         if not path.exists():
             self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)

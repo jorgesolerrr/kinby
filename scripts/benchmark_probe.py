@@ -60,7 +60,9 @@ async def hub(directory: Path) -> Measures:
         network="kinby_private",
         private_url="http://hub:8080",
     )
-    server = HubContractServer(built.dispatcher, built.access, built, built.replies)
+    server = HubContractServer(
+        built.dispatcher, built.access, built, built.replies, built.mcp_sign_ins
+    )
     await server.start(Serve("127.0.0.1", 0))
     try:
         return {"rss_kb": _kilobytes("VmRSS")}

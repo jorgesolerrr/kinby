@@ -139,7 +139,15 @@ export function InstancePage({
                 />
               ))}
               {signIns.map((signIn) => (
-                <McpSignInRow key={signIn.server} signIn={signIn} variant="default" size="sm" />
+                <McpSignInRow
+                  key={signIn.server}
+                  caller={caller}
+                  instanceId={instance.instance_id}
+                  signIn={signIn}
+                  onChanged={onChanged}
+                  variant="default"
+                  size="sm"
+                />
               ))}
               {failed.map((notice) => (
                 <li key={noticeKey(notice)} aria-label={noticeTitle(notice)}>
@@ -370,7 +378,12 @@ function SetupCard({
             {signIns.length > 0 && (
               <section className="flex flex-col gap-3">
                 <h3 className="font-medium">MCP sign-ins</h3>
-                <McpSignIns signIns={signIns} />
+                <McpSignIns
+                  caller={caller}
+                  instanceId={status.instance_id}
+                  signIns={signIns}
+                  onChanged={onChanged}
+                />
               </section>
             )}
             {secrets.length > 0 && (

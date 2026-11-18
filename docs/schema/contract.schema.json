@@ -3637,6 +3637,48 @@
       "title": "InstanceLogsResult",
       "type": "object"
     },
+    "InstanceMcpSignInStartCommand": {
+      "additionalProperties": false,
+      "description": "Start the MCP sign-in of one of the instance's picked MCP servers.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerName"
+        }
+      },
+      "required": [
+        "instance_id",
+        "server",
+        "origin"
+      ],
+      "title": "InstanceMcpSignInStartCommand",
+      "type": "object"
+    },
+    "InstanceMcpSignOutCommand": {
+      "additionalProperties": false,
+      "description": "Delete what the hub keeps of one picked MCP server's sign-in.",
+      "properties": {
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerName"
+        }
+      },
+      "required": [
+        "instance_id",
+        "server"
+      ],
+      "title": "InstanceMcpSignOutCommand",
+      "type": "object"
+    },
     "InstancePicksGetCommand": {
       "additionalProperties": false,
       "properties": {
@@ -5527,6 +5569,17 @@
           },
           "type": "object"
         },
+        "oauth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpOAuth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "http",
           "default": "http",
@@ -5542,6 +5595,43 @@
         "type"
       ],
       "title": "McpHttpEntry",
+      "type": "object"
+    },
+    "McpOAuth": {
+      "additionalProperties": false,
+      "description": "The OAuth client a remote server's sign-in uses, under the names Claude Code gives it.",
+      "properties": {
+        "clientId": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "clientSecret": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "McpOAuth",
       "type": "object"
     },
     "McpRegistrySearchCommand": {
@@ -5795,6 +5885,17 @@
       "additionalProperties": false,
       "description": "The MCP sign-in of one picked MCP server that asks for one, and how it stands.",
       "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "server": {
           "$ref": "#/$defs/McpServerName"
         },
@@ -5807,6 +5908,19 @@
         "state"
       ],
       "title": "McpSignInSetup",
+      "type": "object"
+    },
+    "McpSignInStartResult": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorization_url"
+      ],
+      "title": "McpSignInStartResult",
       "type": "object"
     },
     "McpStdioEntry": {
@@ -14916,6 +15030,38 @@
           ],
           "type": "object"
         },
+        "instance.mcp_sign_in.sign_out": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceMcpSignOutCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/McpSignInSetup"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.mcp_sign_in.start": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceMcpSignInStartCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/McpSignInStartResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "instance.picks.get": {
           "additionalProperties": false,
           "properties": {
@@ -17038,6 +17184,8 @@
         "instance.relay.read",
         "hub.write",
         "instance.login.start",
+        "instance.mcp_sign_in.start",
+        "instance.mcp_sign_in.sign_out",
         "workbench.create",
         "workbench.list",
         "workbench.get",

@@ -453,6 +453,14 @@ export interface Contract {
       command: InstanceLogsCommand;
       result: InstanceLogsResult;
     };
+    "instance.mcp_sign_in.sign_out": {
+      command: InstanceMcpSignOutCommand;
+      result: McpSignInSetup;
+    };
+    "instance.mcp_sign_in.start": {
+      command: InstanceMcpSignInStartCommand;
+      result: McpSignInStartResult;
+    };
     "instance.picks.get": {
       command: InstancePicksGetCommand;
       result: InstancePicksResult;
@@ -1892,6 +1900,32 @@ export interface InstanceLogsResult {
   instance_id: string;
   text: string;
 }
+/**
+ * Delete what the hub keeps of one picked MCP server's sign-in.
+ */
+export interface InstanceMcpSignOutCommand {
+  instance_id: string;
+  server: McpServerName;
+}
+/**
+ * The MCP sign-in of one picked MCP server that asks for one, and how it stands.
+ */
+export interface McpSignInSetup {
+  detail?: string | null;
+  server: McpServerName;
+  state: LoginState;
+}
+/**
+ * Start the MCP sign-in of one of the instance's picked MCP servers.
+ */
+export interface InstanceMcpSignInStartCommand {
+  instance_id: string;
+  origin: string;
+  server: McpServerName;
+}
+export interface McpSignInStartResult {
+  authorization_url: string;
+}
 export interface InstancePicksGetCommand {
   instance_id: string;
 }
@@ -2004,13 +2038,6 @@ export interface LoginSetup {
   id: string;
   label: string;
   operation_id?: string | null;
-  state: LoginState;
-}
-/**
- * The MCP sign-in of one picked MCP server that asks for one, and how it stands.
- */
-export interface McpSignInSetup {
-  server: McpServerName;
   state: LoginState;
 }
 /**
@@ -2161,8 +2188,17 @@ export interface McpHttpEntry {
   headers?: {
     [k: string]: string;
   };
+  oauth?: McpOAuth | null;
   type: "http";
   url: string;
+}
+/**
+ * The OAuth client a remote server's sign-in uses, under the names Claude Code gives it.
+ */
+export interface McpOAuth {
+  clientId?: string | null;
+  clientSecret?: string | null;
+  scopes?: string[];
 }
 /**
  * A local server, which a launcher the image ships runs in the instance's container.

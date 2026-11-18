@@ -22,6 +22,7 @@ from kinby.contracts import (
 from kinby.core.contract_server import serve_contract
 from kinby.core.routing import Dispatcher
 from kinby.hub.access import SESSION_COOKIE, HubAccess, SessionId
+from kinby.hub.mcp_sign_ins import CALLBACK_PATH, McpSignIns
 from kinby.hub.models import InstanceEndpoint, InstanceRouting, InstanceUnreachable, Signal
 from kinby.hub.relay import (
     forward_signal,
@@ -41,7 +42,7 @@ WEB_APP = Path("/usr/local/share/kinby/web")
 
 class HubContractServer:
     """Serve the hub's contract at ``/ws``, the browser session's routes, the channels' public
-    routes, and the web app."""
+    routes, the route an MCP sign-in comes back to, and the web app."""
 
     def __init__(
         self,
@@ -49,6 +50,7 @@ class HubContractServer:
         access: HubAccess,
         routing: InstanceRouting,
         replies: Replies,
+        mcp_sign_ins: McpSignIns,
         web_app: Path | None = None,
     ) -> None:
         """Serve ``web_app``, or else the app the hub image carries, when that directory exists."""
@@ -56,6 +58,7 @@ class HubContractServer:
         self._access = access
         self._routing = routing
         self._replies = replies
+        self._mcp_sign_ins = mcp_sign_ins
         self._web_app = web_app or WEB_APP
         self._runner: web.AppRunner | None = None
 
@@ -103,6 +106,7 @@ class HubContractServer:
         application.router.add_post("/signals/{routine}", self._aliased_signal)
         application.router.add_post("/lines/{line_id}/signals", self._line_signal)
         application.router.add_post("/channels/{channel_id}/{kind}", self._channel)
+        application.router.add_get(CALLBACK_PATH, self._mcp_sign_in, allow_head=False)
         if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
 
@@ -176,6 +180,17 @@ class HubContractServer:
         return await self._replies.receive(
             request.match_info["channel_id"], request.match_info["kind"], request
         )
+
+    async def _mcp_sign_in(self, request: web.Request) -> web.Response:
+        """An MCP server's page sends the browser back here. The state the hub issued
+        authenticates it, since the session cookie stays behind on a cross-site redirect."""
+        page = await self._mcp_sign_ins.finish(request.query)
+        if page is None:
+            raise web.HTTPBadRequest(
+                text="This sign-in link is not one kinby is waiting for, or it expired. "
+                "Start the sign-in again from kinby."
+            )
+        raise web.HTTPSeeOther(page)
 
     async def _aliased_signal(self, request: web.Request) -> web.Response:
         """The path a webhook was registered with before the hub existed."""
