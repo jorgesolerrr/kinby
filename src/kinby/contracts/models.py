@@ -172,7 +172,8 @@ class ErrorEnvelope(ContractModel):
     message: str
     retryable: bool
     #: What is wrong with each value the client sent, by field name. INVALID_SETUP fills it, and
-    #: so does INVALID_ARGUMENT for a config write.
+    #: so does INVALID_ARGUMENT for a config write, and for a payload the contract refuses, by the
+    #: dotted path of the value, such as ``server.entry.stdio.command``.
     fields: dict[str, str] = Field(default_factory=dict)
 
     @property
@@ -1592,6 +1593,8 @@ class SecretSetup(ContractModel):
     is_set: bool
     #: The hub secret the field is linked to, if any.
     hub_secret: HubSecretName | None = None
+    #: The picked MCP servers whose entries need the variable.
+    mcp_servers: list[McpServerName] = Field(default_factory=list)
 
 
 class InstanceSetup(ContractModel):
@@ -3323,7 +3326,7 @@ class LibraryGitAddResult(ContractModel):
 type McpServerName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 
 _HIJACKING_VARIABLES = frozenset({"PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV"})
-_HIJACKING_PREFIXES = ("LD_", "DYLD_", "PYTHON", "UV_", "PIP_")
+_HIJACKING_PREFIXES = ("LD_", "DYLD_", "PYTHON", "UV_", "PIP_", "NODE_", "NPM_")
 
 
 def _harmless(name: str) -> str:
@@ -3339,16 +3342,16 @@ type EnvVariable = Annotated[
 
 
 def _launcher(command: str) -> str:
-    if command not in {"uvx", "npx"}:
-        raise ValueError(f"kinby runs a local server with uvx or npx, not {command}.")
+    if command not in ("uvx", "npx"):
+        raise ValueError(f"kinby runs a local server with uvx or npx only, not {command}.")
     return command
 
 
 def _package_first(args: list[str]) -> list[str]:
     if not args or not re.fullmatch(r"[^-\s$]\S*", args[0]):
         raise ValueError(
-            "The first argument is the package the launcher runs, never an option or a variable, "
-            "which the launcher would take as its own."
+            "The first argument is the package the command runs, never an option or a variable, "
+            "which the command would take as its own."
         )
     return args
 

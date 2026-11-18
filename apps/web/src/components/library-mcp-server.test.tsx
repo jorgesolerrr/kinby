@@ -1,5 +1,5 @@
 import { CallError } from "@kinby/contract"
-import type { LibraryEntry, McpServer } from "@kinby/contract"
+import type { LibraryEntry, LibraryMcpServerWriteCommand, McpServer } from "@kinby/contract"
 import { stubCaller } from "@kinby/contract/testing"
 import { screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
@@ -18,12 +18,13 @@ const fetchServer: McpServer = {
 
 /**
  * A page over a library holding the MCP server fetch, defined as `server`, which writes and
- * deletes change. Each read of it returns the next hash.
+ * deletes change. Each read of it returns the next hash. Writes wait for `held`.
  */
 function openServersPage({
   write,
   server = fetchServer,
-}: { write?: () => void; server?: McpServer } = {}) {
+  held = Promise.resolve(),
+}: { write?: () => void; server?: McpServer; held?: Promise<void> } = {}) {
   let reads = 0
   let entries: LibraryEntry[] = [
     ...listed.entries,
@@ -44,7 +45,14 @@ function openServersPage({
       return { entries }
     },
   })
-  return { caller, user: openLibrary(caller, "/library/mcp-servers") }
+  const writesHeld: typeof caller = {
+    calls: caller.calls,
+    call: async (method, params) => {
+      if (method === "library.mcp_server.write") await held
+      return caller.call(method, params)
+    },
+  }
+  return { caller, user: openLibrary(writesHeld, "/library/mcp-servers") }
 }
 
 const serverWrites = (caller: ReturnType<typeof openServersPage>["caller"]) =>
@@ -140,6 +148,176 @@ describe("LibraryPage, MCP servers", () => {
     await user.click(screen.getByRole("button", { name: "Add" }))
 
     expect(await screen.findByText('The library already holds an MCP server "fetch".')).toBeTruthy()
+  })
+
+  it("fills the form from a pasted entry, and adds it once reviewed", async () => {
+    const { caller, user } = openServersPage()
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "git")
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste(
+      JSON.stringify({ command: "uvx", args: ["mcp-server-git"], env: { GIT_EDITOR: "true" } }),
+    )
+
+    expect(screen.getByRole("button", { name: "stdio" }).getAttribute("aria-pressed")).toBe("true")
+    expect((screen.getByRole("textbox", { name: "Arguments" }) as HTMLTextAreaElement).value).toBe(
+      "mcp-server-git",
+    )
+    expect((screen.getByRole("textbox", { name: "Env" }) as HTMLTextAreaElement).value).toBe(
+      "GIT_EDITOR=true",
+    )
+    expect(
+      (screen.getByRole("textbox", { name: "Paste an entry" }) as HTMLTextAreaElement).value,
+    ).toBe("")
+    expect(serverWrites(caller)).toEqual([])
+    await user.type(screen.getByRole("textbox", { name: "Tools" }), "git_status")
+    await user.click(screen.getByRole("button", { name: "Add" }))
+
+    expect(await screen.findByRole("button", { name: "git, written MCP server" })).toBeTruthy()
+    expect(serverWrites(caller).map((call) => call.params)).toEqual([
+      {
+        name: "git",
+        server: {
+          entry: {
+            type: "stdio",
+            command: "uvx",
+            args: ["mcp-server-git"],
+            env: { GIT_EDITOR: "true" },
+          },
+          include: ["git_status"],
+        },
+        hash: null,
+      },
+    ])
+  })
+
+  it("offers each server of a pasted block as its own entry, named by its key", async () => {
+    const { caller, user } = openServersPage()
+    const block = {
+      mcpServers: {
+        github: { type: "http", url: "https://api.githubcopilot.com/mcp/" },
+        git: { command: "uvx", args: ["mcp-server-git"] },
+      },
+    }
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste(JSON.stringify(block))
+
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("github")
+    expect((screen.getByRole("textbox", { name: "URL" }) as HTMLInputElement).value).toBe(
+      "https://api.githubcopilot.com/mcp/",
+    )
+    expect(screen.getByText("Next from the paste: git.")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("git"),
+    )
+    expect((screen.getByRole("textbox", { name: "Arguments" }) as HTMLTextAreaElement).value).toBe(
+      "mcp-server-git",
+    )
+    expect(screen.queryByText(/Next from the paste/)).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Add" }))
+
+    expect(await screen.findByRole("button", { name: "git, written MCP server" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "github, written MCP server" })).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull()
+    expect(
+      serverWrites(caller).map((call) => (call.params as LibraryMcpServerWriteCommand).name),
+    ).toEqual(["github", "git"])
+  })
+
+  it("takes no paste while a server is being added, so the write cannot drop it", async () => {
+    let written = () => {}
+    const { user } = openServersPage({ held: new Promise((resolve) => (written = resolve)) })
+    const block = {
+      github: { url: "https://api.githubcopilot.com/mcp/" },
+      git: { command: "uvx", args: ["mcp-server-git"] },
+    }
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste(JSON.stringify(block))
+    await user.click(screen.getByRole("button", { name: "Add" }))
+    const pasteBox = screen.getByRole("textbox", { name: "Paste an entry" }) as HTMLTextAreaElement
+    expect(pasteBox.readOnly).toBe(true)
+    await user.click(pasteBox)
+    await user.paste(JSON.stringify({ fetch: { command: "uvx", args: ["mcp-server-fetch"] } }))
+    written()
+
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("git"),
+    )
+    expect(pasteBox.readOnly).toBe(false)
+  })
+
+  it("skips a server of a pasted block", async () => {
+    const { caller, user } = openServersPage()
+    const block = {
+      github: { url: "https://api.githubcopilot.com/mcp/" },
+      git: { command: "uvx", args: ["mcp-server-git"] },
+    }
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste(JSON.stringify(block))
+    await user.click(screen.getByRole("button", { name: "Skip" }))
+
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("git")
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Add" }))
+    expect(await screen.findByRole("button", { name: "git, written MCP server" })).toBeTruthy()
+    expect(
+      serverWrites(caller).map((call) => (call.params as LibraryMcpServerWriteCommand).name),
+    ).toEqual(["git"])
+  })
+
+  it("shows the hub's reason for refusing a pasted entry beside the field it names", async () => {
+    const reason = "kinby runs a local server with uvx or npx only, not docker."
+    const { user } = openServersPage({
+      write: () => {
+        throw refused({ "server.entry.stdio.command": reason })
+      },
+    })
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "acme")
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste('"acme": {"command": "docker", "args": ["run", "acme/server"]}')
+    await user.click(screen.getByRole("button", { name: "Add" }))
+
+    const command = await screen.findByRole("textbox", { name: "Command", description: reason })
+    expect(command.getAttribute("aria-invalid")).toBe("true")
+    expect(screen.queryByText("The hub refused it")).toBeNull()
+  })
+
+  it("says pasted text is not an entry or a block, and leaves the form as it was", async () => {
+    const { user } = openServersPage()
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.type(screen.getByRole("textbox", { name: "URL" }), "https://example.com/mcp")
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste('{"type": "sse", "url": "https://example.com/sse"}')
+
+    expect(
+      screen.getByText("This is not an http or stdio entry, nor an mcpServers block of them."),
+    ).toBeTruthy()
+    expect((screen.getByRole("textbox", { name: "URL" }) as HTMLInputElement).value).toBe(
+      "https://example.com/mcp",
+    )
+  })
+
+  it("copies a server as an mcpServers entry, without kinby's own fields", async () => {
+    const { user } = openServersPage()
+
+    await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
+    await user.click(await screen.findByRole("button", { name: "Copy as JSON" }))
+
+    expect(JSON.parse(await navigator.clipboard.readText())).toEqual({
+      mcpServers: { fetch: fetchServer.entry },
+    })
   })
 
   it("opens a server's definition and saves an edit over the one it read", async () => {

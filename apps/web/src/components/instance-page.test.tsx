@@ -330,6 +330,29 @@ describe("the setup card", () => {
     expect(secret("GitHub token").getByText("GITHUB_TOKEN")).toBeDefined()
   })
 
+  it("names the MCP servers that need a secret", async () => {
+    const needed: InstanceSetup = {
+      ...setup,
+      secrets: [
+        ...setup.secrets,
+        {
+          name: "FETCH_TOKEN",
+          variable: "FETCH_TOKEN",
+          label: "FETCH_TOKEN",
+          required: true,
+          is_set: false,
+          mcp_servers: ["fetch", "search"],
+        },
+      ],
+    }
+    await openPage({ "instance.status": () => status({ setup: needed }) })
+
+    expect(secret("FETCH_TOKEN").getByText(/^Needed by the MCP servers/).textContent).toBe(
+      "Needed by the MCP servers fetch, search",
+    )
+    expect(secret("GitHub token").queryByText(/^Needed by/)).toBeNull()
+  })
+
   it("says why a secret was not set, and keeps what was typed", async () => {
     const { user, clock, onChanged } = await openPage({
       "instance.secrets.set": () => ({ operation_id: "op-secret", instance_id: "instance-1" }),

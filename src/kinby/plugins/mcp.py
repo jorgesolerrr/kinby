@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 from dotenv import dotenv_values
 from pydantic import TypeAdapter
 
+from kinby.contracts import McpHttpEntry, McpServerEntry
 from kinby.instance import Instance
 from kinby.instance.layout import ENV_NAME, MCP_FAILURES_NAME, SKILLS_LOCK_NAME
 from kinby.instance.skills_lock import read_lock
@@ -18,14 +20,16 @@ if TYPE_CHECKING:
     from kinby.plugins.tools import Tool
 
 _FAILURES = TypeAdapter(dict[str, str])
+_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 @asynccontextmanager
 async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     """The included tools of each MCP server the instance picked, connected while the body runs.
 
-    A server that does not start or list its tools is left out, and recorded for the hub to
-    report as an instance notice until a turn connects to it again.
+    A server that needs a variable the instance's secrets lack, or that does not start or list
+    its tools, is left out, and recorded for the hub to report as an instance notice until a
+    turn connects to it again.
     """
     picks = read_lock(instance.path).mcp_servers
     if not picks:
@@ -45,6 +49,16 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     failures: dict[str, str] = {}
     async with AsyncExitStack() as stack:
         for name, pick in sorted(picks.items()):
+            if missing := sorted(
+                variable
+                for variable in needed_variables(pick.server.entry)
+                if not secrets.get(variable)
+            ):
+                failures[name] = (
+                    f'MCP server "{name}" needs {", ".join(missing)}, which the instance\'s '
+                    "secrets lack, so the turn ran without it."
+                )
+                continue
             try:
                 tools.extend(await connected_tools(name, pick, secrets, source, stack))
             except NotConnected as failed:
@@ -54,6 +68,22 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
                 )
         _record_failures(instance.manifest.state_dir, failures)
         yield tuple(tools)
+
+
+def needed_variables(entry: McpServerEntry) -> set[str]:
+    """The variables *entry*'s values name with no default, which the instance's secrets must
+    hold before the server starts."""
+    if isinstance(entry, McpHttpEntry):
+        values = [entry.url, *entry.headers.values()]
+    else:
+        values = [*entry.args, *entry.env.values()]
+    return {match[1] for value in values for match in _VARIABLE.finditer(value) if match[2] is None}
+
+
+def filled(value: str, secrets: Mapping[str, str]) -> str:
+    """*value* with each ``${VAR}`` the secret's, or ``${VAR:-default}``'s default when the
+    instance holds none."""
+    return _VARIABLE.sub(lambda match: secrets.get(match[1]) or match[2] or "", value)
 
 
 def failed_mcp_servers(state_dir: Path) -> dict[str, str]:

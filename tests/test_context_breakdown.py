@@ -26,7 +26,7 @@ from tests.test_compaction import (
     with_manifest,
     with_skill,
 )
-from tests.test_mcp_servers import echo, pick, uvx  # noqa: F401 - an autouse fixture
+from tests.test_mcp_servers import echo, launchers, pick  # noqa: F401 - an autouse fixture
 from tests.test_routines import signal_runtime
 from tests.test_saved_outputs import instance_at
 from tests.test_scheduler import call

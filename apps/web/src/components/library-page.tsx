@@ -267,7 +267,7 @@ export function LibraryPage({
                   onCancel={() => show(undefined)}
                 />
               ) : (
-                <NewMcpServer client={client} onAdded={closed} onCancel={() => show(undefined)} />
+                <NewMcpServer client={client} onAdded={readAgain} onClose={() => show(undefined)} />
               )}
             </AddPanel>
           )}

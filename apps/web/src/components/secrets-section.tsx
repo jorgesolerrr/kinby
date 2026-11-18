@@ -1,5 +1,5 @@
 import type { Client, Clock, InstanceSetup, SecretSetup } from "@kinby/contract"
-import { useCallback, useId, useState } from "react"
+import { Fragment, useCallback, useId, useState } from "react"
 
 import { HubSecretPicker } from "@/components/hub-secret-picker"
 import { SubscriptionLogins } from "@/components/subscription-logins"
@@ -81,10 +81,10 @@ export function SecretsSection({
 }
 
 /**
- * One row per secret the instance declares, with whether it holds a value, the hub secret it
- * links, and Set or Replace, by typing a value or picking a hub secret. The hub secret named
- * after the secret's variable is picked until the user picks another. No value is ever read
- * back. `onSet` hears each value the hub wrote, and must keep its identity.
+ * One row per secret the instance declares, with whether it holds a value, the MCP servers that
+ * need it, the hub secret it links, and Set or Replace, by typing a value or picking a hub secret.
+ * The hub secret named after the secret's variable is picked until the user picks another. No
+ * value is ever read back. `onSet` hears each value the hub wrote, and must keep its identity.
  */
 export function Secrets({
   caller,
@@ -176,6 +176,7 @@ function SecretRow({
     setRequest(undefined)
   }
   const failed = followed?.state === "failed" || undefined
+  const servers = secret.mcp_servers ?? []
   return (
     <Item render={<li />} aria-label={secret.label} variant="outline" size="sm">
       <ItemContent>
@@ -183,6 +184,17 @@ function SecretRow({
         {secret.variable !== null && (
           <ItemDescription>
             <code className="font-mono">{secret.variable}</code>
+          </ItemDescription>
+        )}
+        {servers.length > 0 && (
+          <ItemDescription>
+            Needed by the MCP {servers.length === 1 ? "server" : "servers"}{" "}
+            {servers.map((server, index) => (
+              <Fragment key={server}>
+                {index > 0 && ", "}
+                <code className="font-mono">{server}</code>
+              </Fragment>
+            ))}
           </ItemDescription>
         )}
         {secret.hub_secret != null && (

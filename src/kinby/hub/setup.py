@@ -16,6 +16,7 @@ from kinby.contracts import (
     InstanceSetup,
     LoginSetup,
     LoginState,
+    McpServerName,
     SecretSetup,
     SetupField,
     SetupFieldKind,
@@ -147,14 +148,16 @@ def instance_setup(
     model: ModelName | None,
     search_key: str | None,
     code_secrets: Sequence[str],
+    mcp_variables: Mapping[str, Sequence[McpServerName]],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
-    the key its web search needs, and each secret its instance code declares as a required one,
-    whether or not the descriptor declares it.
+    the key its web search needs, and each secret its instance code declares or its picked MCP
+    servers need as a required one, whether or not the descriptor declares it.
 
     `running` names the sign-in each login has running, by login id. `links` names the hub
     secret each linked variable took. `search_key` names the variable of the search backend's
-    key, while the instance's manifest leaves web search on.
+    key, while the instance's manifest leaves web search on. `mcp_variables` names the picked
+    MCP servers that need each variable.
 
     A login the hub never tracked belongs to an instance created before it tracked logins, and
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
@@ -168,13 +171,15 @@ def instance_setup(
         return None if model is None else api_key_variable(model)
 
     def secret(name: str, held: str | None, label: str, *, required: bool) -> SecretSetup:
+        servers = [] if held is None else list(mcp_variables.get(held, ()))
         return SecretSetup(
             name=name,
             variable=held,
             label=label,
-            required=required,
+            required=required or bool(servers),
             is_set=held is not None and bool(secrets.get(held, "").strip()),
             hub_secret=None if held is None else links.get(held),
+            mcp_servers=servers,
         )
 
     needed = [
@@ -188,7 +193,10 @@ def instance_setup(
         if field.kind is SetupFieldKind.SECRET
     ]
     held = {row.variable for row in needed}
-    needed += [secret(name, name, name, required=True) for name in code_secrets if name not in held]
+    for name in [*code_secrets, *sorted(mcp_variables)]:
+        if name not in held:
+            needed.append(secret(name, name, name, required=True))
+            held.add(name)
     return InstanceSetup(
         logins=[
             LoginSetup(
