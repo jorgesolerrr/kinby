@@ -225,6 +225,12 @@ class McpRegistryUnreachable(CoreError):
     retryable = True
 
 
+class McpSignInFailed(CoreError):
+    """An MCP sign-in did not start or did not finish. The message says why, for the user."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class InstanceAnswerLost(InstanceUnavailable):
     """The instance took the hub's call and its answer never came, so it may have acted."""
 

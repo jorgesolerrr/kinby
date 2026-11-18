@@ -396,6 +396,51 @@ describe("LibraryPage, MCP servers", () => {
     ])
   })
 
+  it("keeps a remote server's oauth, which the form does not show, through an edit", async () => {
+    const server: McpServer = {
+      entry: {
+        type: "http",
+        url: "https://cockpit.example.com/mcp",
+        headers: {},
+        oauth: { clientId: "kinby", clientSecret: "${COCKPIT_SECRET}", scopes: ["tasks"] },
+      },
+      include: ["look"],
+    }
+    const { caller, user } = openServersPage({ server })
+
+    await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
+    await user.type(await screen.findByRole("textbox", { name: "Tools" }), "\nfind")
+    await user.click(screen.getByRole("button", { name: "Save" }))
+
+    await screen.findByText(/Saved\./)
+    expect(serverWrites(caller).map((call) => call.params)).toEqual([
+      { name: "fetch", server: { ...server, include: ["look", "find"] }, hash: "h-1" },
+    ])
+  })
+
+  it("keeps the oauth of a pasted entry", async () => {
+    const { caller, user } = openServersPage()
+    const oauth = { clientId: "kinby", scopes: ["tasks"] }
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "cockpit")
+    await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
+    await user.paste(JSON.stringify({ url: "https://cockpit.example.com/mcp", oauth }))
+    await user.click(screen.getByRole("button", { name: "Add" }))
+
+    await screen.findByRole("button", { name: "cockpit, written MCP server" })
+    expect(serverWrites(caller).map((call) => call.params)).toEqual([
+      {
+        name: "cockpit",
+        server: {
+          entry: { type: "http", url: "https://cockpit.example.com/mcp", headers: {}, oauth },
+          include: [],
+        },
+        hash: null,
+      },
+    ])
+  })
+
   it("keeps arguments and env the form cannot show one a line until they are edited", async () => {
     const server: McpServer = {
       entry: {

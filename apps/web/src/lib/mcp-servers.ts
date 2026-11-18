@@ -1,4 +1,4 @@
-import type { McpServer, McpServerEntry } from "@kinby/contract"
+import type { McpOAuth, McpServer, McpServerEntry } from "@kinby/contract"
 
 /** An MCP server's definition as its form holds it, each list one item a line. */
 export interface McpServerDraft {
@@ -14,6 +14,8 @@ export interface McpServerDraft {
   env: string
   /** The env as read, which `env` cannot always show: a value with a newline or edge spaces. */
   readEnv: Record<string, string>
+  /** A remote server's OAuth client, which the form does not show, kept as read or pasted. */
+  oauth?: McpOAuth | null
   include: string
 }
 
@@ -32,7 +34,13 @@ export const EMPTY_DRAFT: McpServerDraft = {
 export function draftOf({ entry, include = [] }: McpServer): McpServerDraft {
   const tools = include.join("\n")
   return entry.type === "http"
-    ? { ...EMPTY_DRAFT, include: tools, url: entry.url, headers: textOf(entry.headers, ": ") }
+    ? {
+        ...EMPTY_DRAFT,
+        include: tools,
+        url: entry.url,
+        headers: textOf(entry.headers, ": "),
+        oauth: entry.oauth,
+      }
     : {
         ...EMPTY_DRAFT,
         include: tools,
@@ -49,7 +57,12 @@ export function serverOf(draft: McpServerDraft): McpServer {
   return {
     entry:
       draft.type === "http"
-        ? { type: "http", url: draft.url.trim(), headers: pairsOf(draft.headers, ":") }
+        ? {
+            type: "http",
+            url: draft.url.trim(),
+            headers: pairsOf(draft.headers, ":"),
+            ...(draft.oauth ? { oauth: draft.oauth } : {}),
+          }
         : {
             type: "stdio",
             command: draft.command.trim(),
@@ -61,7 +74,9 @@ export function serverOf(draft: McpServerDraft): McpServer {
 }
 
 /** A field of the MCP server form: the server's name, or one of its draft's. */
-export type McpServerField = "name" | Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv">
+export type McpServerField =
+  | "name"
+  | Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv" | "oauth">
 
 const DRAFT_FIELDS = new Set<string>(["url", "headers", "command", "args", "env"])
 
@@ -134,10 +149,11 @@ export function libraryNameOf(name: string): string {
 /** An entry with no `type` is `http` when it has a `url`, as Cursor writes one. */
 function entryOf(value: unknown): McpServerEntry | undefined {
   if (!isRecord(value)) return undefined
-  const { url, headers = {}, command, args = [], env = {} } = value
+  const { url, headers = {}, oauth, command, args = [], env = {} } = value
   const { type = typeof url === "string" ? "http" : "stdio" } = value
   if (type === "http" && typeof url === "string" && isTextRecord(headers)) {
-    return { type, url, headers }
+    if (oauth === undefined) return { type, url, headers }
+    return isOAuth(oauth) ? { type, url, headers, oauth } : undefined
   }
   if (type === "stdio" && typeof command === "string" && isTexts(args) && isTextRecord(env)) {
     return { type, command, args, env }
@@ -155,6 +171,16 @@ function parsed(text: string): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isOAuth(value: unknown): value is McpOAuth {
+  if (!isRecord(value)) return false
+  const { clientId = null, clientSecret = null, scopes = [] } = value
+  return (
+    (clientId === null || typeof clientId === "string") &&
+    (clientSecret === null || typeof clientSecret === "string") &&
+    isTexts(scopes)
+  )
 }
 
 function isTextRecord(value: unknown): value is Record<string, string> {

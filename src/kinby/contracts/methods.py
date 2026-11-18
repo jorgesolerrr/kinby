@@ -91,6 +91,8 @@ from kinby.contracts.models import (
     InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstanceMcpSignInStartCommand,
+    InstanceMcpSignOutCommand,
     InstancePicksGetCommand,
     InstancePicksResult,
     InstancePicksSetCommand,
@@ -150,6 +152,8 @@ from kinby.contracts.models import (
     McpRegistrySearchCommand,
     McpRegistrySearchResult,
     McpServerResult,
+    McpSignInSetup,
+    McpSignInStartResult,
     MemoryAddCommand,
     MemoryCorrectCommand,
     MemoryForgetCommand,
@@ -569,6 +573,15 @@ HUB_WRITE = Method("hub.write", Scope.HUB_HOME, HubWriteCommand, HubWriteResult)
 INSTANCE_LOGIN_START = Method(
     "instance.login.start", Scope.HUB_ADMIN, InstanceLoginStartCommand, LifecycleOperationResult
 )
+INSTANCE_MCP_SIGN_IN_START = Method(
+    "instance.mcp_sign_in.start",
+    Scope.HUB_ADMIN,
+    InstanceMcpSignInStartCommand,
+    McpSignInStartResult,
+)
+INSTANCE_MCP_SIGN_OUT = Method(
+    "instance.mcp_sign_in.sign_out", Scope.HUB_ADMIN, InstanceMcpSignOutCommand, McpSignInSetup
+)
 WORKBENCH_CREATE = Method(
     "workbench.create", Scope.HUB_ADMIN, WorkbenchCreateCommand, WorkbenchCreateResult
 )
@@ -912,6 +925,8 @@ METHODS = (
     INSTANCE_RELAY_READ,
     HUB_WRITE,
     INSTANCE_LOGIN_START,
+    INSTANCE_MCP_SIGN_IN_START,
+    INSTANCE_MCP_SIGN_OUT,
     WORKBENCH_CREATE,
     WORKBENCH_LIST,
     WORKBENCH_GET,

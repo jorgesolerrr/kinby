@@ -80,7 +80,12 @@ export function SecretsSection({
       {(setup.mcp_sign_ins ?? []).length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-base font-semibold">MCP sign-ins</h2>
-          <McpSignIns signIns={setup.mcp_sign_ins ?? []} />
+          <McpSignIns
+            caller={caller}
+            instanceId={instanceId}
+            signIns={setup.mcp_sign_ins ?? []}
+            onChanged={onChanged}
+          />
         </section>
       )}
     </div>

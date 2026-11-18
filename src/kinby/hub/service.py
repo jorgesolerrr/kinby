@@ -87,6 +87,8 @@ from kinby.contracts import (
     INSTANCE_LIST,
     INSTANCE_LOGIN_START,
     INSTANCE_LOGS,
+    INSTANCE_MCP_SIGN_IN_START,
+    INSTANCE_MCP_SIGN_OUT,
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
     INSTANCE_RECREATE,
@@ -219,6 +221,8 @@ from kinby.contracts import (
     InstanceLoginStartCommand,
     InstanceLogsCommand,
     InstanceLogsResult,
+    InstanceMcpSignInStartCommand,
+    InstanceMcpSignOutCommand,
     InstanceNotice,
     InstancePicksGetCommand,
     InstancePicksResult,
@@ -265,11 +269,13 @@ from kinby.contracts import (
     LoginPrompt,
     LoginSetup,
     LoginState,
+    McpHttpEntry,
     McpRegistrySearchCommand,
     McpRegistrySearchResult,
     McpServerFailed,
     McpServerName,
     McpSignInSetup,
+    McpSignInStartResult,
     Method,
     NewerVersion,
     OperationGetCommand,
@@ -365,6 +371,8 @@ from kinby.core.errors import (
     LineNotFound,
     LoginNotFound,
     ManagedInstanceNotFound,
+    McpServerNotFound,
+    McpSignInFailed,
     NameTaken,
     NotAnIntake,
     PermissionDenied,
@@ -401,7 +409,7 @@ from kinby.hub.control import (
 from kinby.hub.factories import FactoryStore
 from kinby.hub.library import Library
 from kinby.hub.mcp_registry import REGISTRY_URL, search
-from kinby.hub.mcp_sign_ins import sign_in_state
+from kinby.hub.mcp_sign_ins import McpSignIns
 from kinby.hub.models import (
     ContainerRuntime,
     ImageArtifact,
@@ -442,7 +450,7 @@ from kinby.hub.setup import (
 )
 from kinby.hub.takeovers import Takeovers
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
-from kinby.hub.vault import Vault
+from kinby.hub.vault import Vault, origin
 from kinby.instance import (
     PLACEHOLDER_MODEL,
     Instance,
@@ -916,6 +924,7 @@ class Hub:
             self._mcp_registry_url = mcp_registry_url
             # Links and channel routes append a path that starts with a slash.
             public_url = public_url.rstrip("/") if public_url is not None else None
+            self._public_url = public_url
             self.factories = FactoryStore(self.directory / _FACTORIES_DIR, shipped_factories)
             self.library = Library(
                 self.directory / "skills",
@@ -929,6 +938,7 @@ class Hub:
             self.secrets = HubSecrets(self.directory / "hub-secrets.json")
             self.browser_profiles = BrowserProfiles(self.directory / "browser-profiles")
             self.vault = Vault(self.directory / "vault")
+            self.mcp_sign_ins = McpSignIns(self.directory / "mcp-sign-ins", self.vault.key, clock)
             self.approvals = HomeApprovals()
             self.channels = Channels(
                 self.registry,
@@ -1009,6 +1019,8 @@ class Hub:
         dispatcher.register(INSTANCE_STATUS, self.status)
         dispatcher.register(INSTANCE_LOGS, self.logs)
         dispatcher.register(INSTANCE_LOGIN_START, self.start_login)
+        dispatcher.register(INSTANCE_MCP_SIGN_IN_START, self.start_mcp_sign_in)
+        dispatcher.register(INSTANCE_MCP_SIGN_OUT, self.sign_out_of_mcp_server)
         dispatcher.register(WORKBENCH_CREATE, self.create_workbench)
         dispatcher.register(WORKBENCH_LIST, self.list_workbenches)
         dispatcher.register(WORKBENCH_GET, self.get_workbench)
@@ -2199,18 +2211,71 @@ class Hub:
         return HubSecretDeleteResult(unlinked=unlinked)
 
     async def picks(self, command: InstancePicksGetCommand) -> InstancePicksResult:
-        return self.library.picks(self._active_instance(command.instance_id).path)
+        record = self._active_instance(command.instance_id)
+        return self._signed_in_picks(record, self.library.picks(record.path))
 
     async def set_picks(self, command: InstancePicksSetCommand) -> InstancePicksResult:
-        """Change the instance's picks in place. A running instance reads them at its next turn."""
+        """Change the instance's picks in place. A running instance reads them at its next turn.
+        A dropped MCP server's sign-in is deleted."""
         record = self._active_instance(command.instance_id)
-        return await self.library.pick(
+        picked = await self.library.pick(
             inspect_instance(record.path),
             command.skills,
             command.hash,
             command.mcp_servers,
             self._environment(record.path),
         )
+        self.mcp_sign_ins.keep(record.instance_id, [server.name for server in picked.mcp_servers])
+        return self._signed_in_picks(record, picked)
+
+    def _signed_in_picks(
+        self, record: ManagedInstance, picks: InstancePicksResult
+    ) -> InstancePicksResult:
+        """*picks*, each MCP sign-in as the hub keeps it."""
+        servers = [
+            server.model_copy(
+                update={"sign_in": self.mcp_sign_ins.setup(record.instance_id, server.name).state}
+            )
+            if server.sign_in is not None
+            else server
+            for server in picks.mcp_servers
+        ]
+        return picks.model_copy(update={"mcp_servers": servers})
+
+    async def start_mcp_sign_in(
+        self, command: InstanceMcpSignInStartCommand
+    ) -> McpSignInStartResult:
+        """Start the sign-in to one of the instance's picked MCP servers. The server's page sends
+        the browser back under the hub's public URL, or else under the web app's *origin*."""
+        record = self._active_instance(command.instance_id)
+        pick = self._mcp_picks(record).get(command.server)
+        if (
+            pick is None
+            or not pick.needs_sign_in
+            or not isinstance(entry := pick.server.entry, McpHttpEntry)
+        ):
+            raise McpServerNotFound(
+                f'The instance picks no MCP server "{command.server}" that asks for a sign-in.'
+            )
+        hub_url = self._public_url or origin(command.origin)
+        if hub_url is None:
+            raise McpSignInFailed(
+                f'"{command.origin}" is not a web origin, such as https://kinby.example.com.'
+            )
+        return McpSignInStartResult(
+            authorization_url=await self.mcp_sign_ins.start(
+                record.instance_id,
+                command.server,
+                entry,
+                self._environment(record.path),
+                hub_url,
+            )
+        )
+
+    async def sign_out_of_mcp_server(self, command: InstanceMcpSignOutCommand) -> McpSignInSetup:
+        record = self._active_instance(command.instance_id)
+        self.mcp_sign_ins.sign_out(record.instance_id, command.server)
+        return self.mcp_sign_ins.setup(record.instance_id, command.server)
 
     async def search_mcp_registry(
         self, command: McpRegistrySearchCommand
@@ -2239,7 +2304,7 @@ class Hub:
                 variable=variable,
                 is_set=bool(self._environment(record.path).get(variable, "").strip()),
             ),
-            mcp_servers=self.library.picks(record.path).mcp_servers,
+            mcp_servers=self._signed_in_picks(record, self.library.picks(record.path)).mcp_servers,
             packages=list(held),
             authored_tools=[
                 AuthoredTool(name=name, read_only=name in read_only) for name in authored
@@ -2598,7 +2663,11 @@ class Hub:
         lock = read_lock(record.path)
         if lock.skills or lock.mcp_servers:
             self._record(operation_id, "picks", "Bringing the picks up to the library's.")
-            synced = await self.library.sync(record.path, self._environment(record.path))
+            environment = self._environment(record.path)
+            synced = await self.library.sync(record.path, environment)
+            await self.mcp_sign_ins.recheck(
+                record.instance_id, read_lock(record.path).mcp_servers, environment
+            )
             self.registry.succeed_step(operation_id, synced.detail)
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)
@@ -2860,6 +2929,7 @@ class Hub:
             self._record(operation_id, f"volume {volume}", f'Deleting named volume "{volume}".')
             await self._runtime.delete_volume(volume)
             self.registry.release_storage(record.instance_id, entries)
+        self.mcp_sign_ins.forget(record.instance_id)
         self.registry.mark_deleted(record.instance_id)
 
     def _deletion_targets(self, record: ManagedInstance) -> InstanceDeletePreviewResult:
@@ -3373,9 +3443,9 @@ class Hub:
             code_secrets=self._code_secrets(record),
             mcp_variables=self._mcp_variables(picks),
             mcp_sign_ins=[
-                McpSignInSetup(server=name, state=state)
+                self.mcp_sign_ins.setup(record.instance_id, name)
                 for name, pick in sorted(picks.items())
-                if (state := sign_in_state(pick)) is not None
+                if pick.needs_sign_in
             ],
         )
 

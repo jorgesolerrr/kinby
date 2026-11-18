@@ -27,6 +27,7 @@ from pydantic import (
     field_serializer,
     model_validator,
 )
+from pydantic.alias_generators import to_camel
 from pydantic.fields import FieldInfo
 
 NodeId = NewType("NodeId", str)
@@ -1603,6 +1604,30 @@ class McpSignInSetup(ContractModel):
 
     server: McpServerName
     state: LoginState
+    #: Why the last sign-in failed, while it stands failed.
+    detail: str | None = None
+
+
+class InstanceMcpSignInStartCommand(ContractModel):
+    """Start the MCP sign-in of one of the instance's picked MCP servers."""
+
+    instance_id: UUID
+    server: McpServerName
+    #: Where the user reaches the web app, such as https://kinby.example.com. The server's page
+    #: sends the user back under it when the hub has no public URL.
+    origin: str
+
+
+class McpSignInStartResult(ContractModel):
+    #: The server's page where the user approves the sign-in.
+    authorization_url: str
+
+
+class InstanceMcpSignOutCommand(ContractModel):
+    """Delete what the hub keeps of one picked MCP server's sign-in."""
+
+    instance_id: UUID
+    server: McpServerName
 
 
 class InstanceSetup(ContractModel):
@@ -3375,6 +3400,22 @@ class McpHttpEntry(ContractModel):
     url: Annotated[str, Field(pattern=r"^(https?://|\$\{)\S+$")]
     #: Each header sent to the server, by name.
     headers: dict[str, str] = Field(default_factory=dict)
+    #: Left out of the entry when it has none, as other clients write one.
+    oauth: McpOAuth | None = Field(default=None, exclude_if=lambda oauth: oauth is None)
+
+
+class McpOAuth(ContractModel):
+    """The OAuth client a remote server's sign-in uses, under the names Claude Code gives it."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_name=True, serialize_by_alias=True
+    )
+
+    #: The client the server knows kinby as. With it, the hub registers none.
+    client_id: Annotated[str, Field(min_length=1)] | None = None
+    client_secret: str | None = None
+    #: What the sign-in asks for, in place of what the server names.
+    scopes: list[str] = Field(default_factory=list)
 
 
 class McpStdioEntry(ContractModel):

@@ -18,6 +18,8 @@ export default defineConfig({
       "/ws": { target: hub, ws: true },
       "^/instances/[^/]+/ws$": { target: hub, ws: true },
       "/auth": hub,
+      // An MCP server's page sends the browser back to the hub here.
+      "/mcp-sign-ins": hub,
     },
   },
   test: {
