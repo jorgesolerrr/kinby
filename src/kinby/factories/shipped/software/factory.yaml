@@ -60,10 +60,13 @@ work_item: { issue: int }
 # base, named again.
 worktree: { call: agent_branch }
 steps:
-  # Passes the ticket on only once a trusted author wrote all its text (ADR 0073).
+  # Passes the ticket on only once a trusted author wrote all its text (ADR 0073). Records the
+  # commit the run worktree was cut from, so the run's own commits are those past it, even after
+  # a blocker's branch under it was rewritten.
   - id: ticket
     kind: code
     call: vet_ticket
+    results: { base_commit: str }
   # Runs the workbench's setup list of repository commands in the run worktree, which has
   # installs of its own.
   - id: setup

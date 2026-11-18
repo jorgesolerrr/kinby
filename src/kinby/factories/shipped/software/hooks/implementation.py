@@ -54,7 +54,7 @@ def check_implementation(end: StepEnd) -> HookResult | None:
     reason = _taken(end.workspace / NO_CHANGE)
     branch, base = str(end.results["branch"]), str(end.results["base"])
     _check_committed(end.workspace, branch)
-    ahead = bool(_ahead(end.workspace, branch, base))
+    ahead = bool(_ahead(end.workspace, branch, base, str(end.results.get("base_commit", ""))))
     if reason and ahead:
         raise ChangeAndNoChange(
             f"{NO_CHANGE} says the ticket needs no change, but branch {branch} has commits "
@@ -107,7 +107,7 @@ def check_answers(end: StepEnd) -> HookResult | None:
                 "fixed."
             )
     _check_committed(end.workspace, branch)
-    ahead = _ahead(end.workspace, branch, base)
+    ahead = _ahead(end.workspace, branch, base, str(end.results.get("base_commit", "")))
     for thread, reply in replies.items():
         if reply["fixed"]:
             named = reply["commit"]
@@ -154,16 +154,18 @@ def _check_committed(workspace: Path, branch: str) -> None:
         )
 
 
-def _ahead(workspace: Path, branch: str, base: str) -> list[str]:
+def _ahead(workspace: Path, branch: str, base: str, base_commit: str) -> list[str]:
     """The commits of *branch* past its base, or, once the base merged and left origin, past both
-    its last head and the branch it landed on.
+    its last head and the branch it landed on. Past *base_commit* too, the commit the run
+    worktree was cut from, when the run recorded one.
 
     The factory's github tools count them the same way. A plugin file loads alone, so each keeps
     its own copy.
     """
     merged = _merged_base(workspace, base)
     past = (f"origin/{base}",) if merged is None else (merged[0], f"origin/{merged[1]}")
-    return _git(workspace, "rev-list", branch, *(f"^{ref}" for ref in past)).split()
+    refs = (f"^{ref}" for ref in (*past, base_commit) if ref)
+    return _git(workspace, "rev-list", branch, *refs).split()
 
 
 def _merged_base(workspace: Path, base: str) -> tuple[str, str] | None:
