@@ -107,6 +107,13 @@ def test_a_streamable_http_remote_becomes_an_http_entry_with_its_variables_as_se
         "variables": {"tenant": {"description": "Your Acme tenant.", "isRequired": True}},
         "headers": [
             {"name": "Authorization", "value": "Bearer {api_key}", "isSecret": True},
+            {
+                "name": "X-Acme-Key",
+                "value": "Key {key}",
+                "isSecret": True,
+                "isRequired": True,
+                "variables": {"key": {"description": "Your Acme key."}},
+            },
             {"name": "X-Acme-Region", "default": "eu"},
             {"name": "X-Client", "value": "kinby"},
         ],
@@ -119,6 +126,7 @@ def test_a_streamable_http_remote_becomes_an_http_entry_with_its_variables_as_se
         url="https://${TENANT}.acme.com/mcp",
         headers={
             "Authorization": "Bearer ${API_KEY}",
+            "X-Acme-Key": "Key ${KEY}",
             "X-Acme-Region": "${X_ACME_REGION:-eu}",
             "X-Client": "kinby",
         },
@@ -126,6 +134,7 @@ def test_a_streamable_http_remote_becomes_an_http_entry_with_its_variables_as_se
     assert server.variables == [
         McpRegistryVariable(name="TENANT", secret=False, description="Your Acme tenant."),
         McpRegistryVariable(name="API_KEY", secret=True, description=None),
+        McpRegistryVariable(name="KEY", secret=True, description="Your Acme key."),
     ]
 
 

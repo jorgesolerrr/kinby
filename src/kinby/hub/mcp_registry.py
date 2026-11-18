@@ -194,9 +194,22 @@ class _Variables:
         return self.template(item.value, item.variables, item)
 
     def template(self, template: str, inputs: Mapping[str, _Input], owner: _Input) -> str:
-        """*template* with each ``{name}`` a variable, described by *inputs* or else *owner*."""
+        """*template* with each ``{name}`` a variable, described by *inputs* or else *owner*, and
+        required or secret when either says so."""
+
+        def described(name: str) -> _Input:
+            variable = inputs.get(name)
+            if variable is None:
+                return owner
+            return variable.model_copy(
+                update={
+                    "is_required": variable.is_required or owner.is_required,
+                    "is_secret": variable.is_secret or owner.is_secret,
+                }
+            )
+
         return _PLACEHOLDER.sub(
-            lambda match: self.reference(match[1], inputs.get(match[1], owner)), template
+            lambda match: self.reference(match[1], described(match[1])), template
         )
 
     def reference(self, name: str, described: _Input) -> str:
