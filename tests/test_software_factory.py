@@ -1151,6 +1151,27 @@ def test_needs_human_pushes_a_branch_whose_merged_base_is_gone_from_origin(tmp_p
     asyncio.run(scenario())
 
 
+def test_needs_human_pushes_nothing_a_branch_inherited_from_a_rewritten_merged_base(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    workspace = bench.workspace
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    cut_point = stacked_on_a_merged_blocker(bench, github, rewritten=True)
+    git(workspace, "reset", "--hard", cut_point)
+    answer_blocked_behind(github)
+    dispatcher = bench.steps
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step", "base_commit": cut_point}
+        result = await reported(dispatcher, origin("implement"), "Checks failed.", stacked)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert git(workspace, "ls-remote", "origin", BRANCH["branch"]) == ""
+
+    asyncio.run(scenario())
+
+
 def test_needs_human_reports_a_push_that_failed_in_its_comment(tmp_path, monkeypatch):
     bench = coder_at(tmp_path)
     workspace = bench.workspace
@@ -1405,6 +1426,39 @@ def test_the_implement_hook_counts_commits_past_a_merged_base_gone_from_origin(
             assert result.summary.endswith(
                 f"UncommittedWork: Branch {BRANCH['branch']} has no commits ahead of agent/6-step."
             )
+
+    asyncio.run(scenario())
+
+
+def test_the_implement_hook_counts_no_commit_a_branch_inherited_from_a_rewritten_merged_base(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    cut_point = stacked_on_a_merged_blocker(bench, github, rewritten=True)
+    git(bench.workspace, "reset", "--hard", cut_point)
+    dispatcher = bench.steps
+
+    async def scenario() -> None:
+        result = await run_in(
+            dispatcher,
+            StepRunCommand(
+                step=CommandStepRun(run=["true"]),
+                hook="check_implementation",
+                origin=origin("implement"),
+                work_item={"issue": 7},
+                results={
+                    "branch": BRANCH["branch"],
+                    "base": "agent/6-step",
+                    "base_commit": cut_point,
+                },
+            ),
+        )
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary.endswith(
+            f"UncommittedWork: Branch {BRANCH['branch']} has no commits ahead of agent/6-step."
+        )
 
     asyncio.run(scenario())
 
@@ -1667,10 +1721,11 @@ def test_the_first_step_works_in_the_agent_branch_cut_from_the_default_branch_sc
     async def scenario() -> None:
         result = await prepared(dispatcher, 7)
 
+        cut_point = git(workspace, "rev-parse", "origin/main")
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.values == {"branch": "agent/7-add-dark-mode", "base": "main"}
+        assert result.values == {**BRANCH, "base_commit": cut_point}
         assert git(worktree, "branch", "--show-current") == "agent/7-add-dark-mode"
-        assert git(worktree, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
+        assert git(worktree, "rev-parse", "HEAD") == cut_point
         assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
         (worktree / ".scratch").mkdir()
         (worktree / ".scratch" / "pr-body.md").write_text("This run's body.\n")
@@ -1695,7 +1750,8 @@ def test_a_new_run_starts_from_the_base_whatever_an_abandoned_run_left_on_its_br
     result = asyncio.run(prepared(bench.steps, 7))
 
     worktree = run_worktree(bench)
-    assert result.values == BRANCH
+    cut_point = git(bench.workspace, "rev-parse", "origin/main")
+    assert result.values == {**BRANCH, "base_commit": cut_point}
     assert git(worktree, "rev-parse", "HEAD") == git(bench.workspace, "rev-parse", "origin/main")
     assert not (worktree / "theme.py").exists()
 
@@ -1713,14 +1769,18 @@ def test_a_run_sent_back_to_its_first_step_starts_over_from_the_base_named_again
     run = origin("ticket")
 
     async def scenario() -> None:
-        await prepared(dispatcher, 7, run)
+        first = await prepared(dispatcher, 7, run)
         commit(worktree, "theme.py", "DARK = True\n")
         git(worktree, "push", "origin", BRANCH["branch"])
         (worktree / "notes.md").write_text("Half done.\n")
+        commit(workspace, "step6.py", "STEP = 6\n")
+        git(workspace, "push", "origin", "main")
         sent_back = await prepared(dispatcher, 7, run, fresh=True)
 
-        assert sent_back.values == BRANCH
-        assert git(worktree, "rev-parse", "HEAD") == git(workspace, "rev-parse", "origin/main")
+        cut_point = git(workspace, "rev-parse", "origin/main")
+        assert sent_back.values == {**BRANCH, "base_commit": cut_point}
+        assert first.values["base_commit"] != cut_point
+        assert git(worktree, "rev-parse", "HEAD") == cut_point
         assert git(worktree, "status", "--porcelain", "--untracked-files=all") == ""
         assert git(remote, "rev-parse", BRANCH["branch"]) != git(worktree, "rev-parse", "HEAD")
 
@@ -1773,7 +1833,10 @@ def test_the_first_step_trusts_a_comment_linears_github_app_wrote(tmp_path, monk
         result = await prepared(dispatcher, 7)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.values == {"branch": "agent/7-add-dark-mode", "base": "main"}
+        assert result.values == {
+            **BRANCH,
+            "base_commit": git(run_worktree(bench), "rev-parse", "HEAD"),
+        }
 
     asyncio.run(scenario())
 
@@ -1845,8 +1908,13 @@ def test_a_ticket_whose_blocker_has_an_open_agent_pull_request_starts_from_its_b
     result = asyncio.run(prepared(bench.steps, 8))
 
     assert result.ending is StepEnding.CLEAN, result.summary
-    assert result.values == {"branch": "agent/8-dark-theme", "base": "agent/7-step"}
     worktree = run_worktree(bench, "agent/8-dark-theme")
+    cut_point = git(worktree, "rev-parse", "HEAD")
+    assert result.values == {
+        "branch": "agent/8-dark-theme",
+        "base": "agent/7-step",
+        "base_commit": cut_point,
+    }
     assert git(worktree, "log", "-1", "--format=%s") == "Write step7.py"
 
 
@@ -1864,10 +1932,13 @@ def test_the_worktree_call_starts_a_sub_issue_with_no_open_blocker_from_the_defa
         result = await prepared(dispatcher, 8)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.values == {"branch": "agent/8-dark-theme", "base": "main"}
-        assert git(run_worktree(bench, "agent/8-dark-theme"), "rev-parse", "HEAD") == git(
-            workspace, "rev-parse", "origin/main"
-        )
+        cut_point = git(workspace, "rev-parse", "origin/main")
+        assert result.values == {
+            "branch": "agent/8-dark-theme",
+            "base": "main",
+            "base_commit": cut_point,
+        }
+        assert git(run_worktree(bench, "agent/8-dark-theme"), "rev-parse", "HEAD") == cut_point
 
     asyncio.run(scenario())
 
@@ -1886,7 +1957,12 @@ def test_the_worktree_call_stacks_a_sub_issue_on_the_top_of_its_blockers_linear_
         result = await prepared(dispatcher, 9)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.values == {"branch": "agent/9-dark-theme", "base": "agent/8-step"}
+        cut_point = git(workspace, "rev-parse", "origin/agent/8-step")
+        assert result.values == {
+            "branch": "agent/9-dark-theme",
+            "base": "agent/8-step",
+            "base_commit": cut_point,
+        }
         assert (
             git(run_worktree(bench, "agent/9-dark-theme"), "log", "--format=%s")
             == "Write step8.py\nWrite step7.py\nWrite README.md"
@@ -1943,7 +2019,12 @@ def test_the_worktree_call_stacks_on_a_sibling_branch_that_holds_a_forked_stacks
         result = await prepared(dispatcher, 6)
 
         assert result.ending is StepEnding.CLEAN, result.summary
-        assert result.values == {"branch": "agent/6-dark-theme", "base": "agent/7-step"}
+        cut_point = git(workspace, "rev-parse", "origin/agent/7-step")
+        assert result.values == {
+            "branch": "agent/6-dark-theme",
+            "base": "agent/7-step",
+            "base_commit": cut_point,
+        }
 
     asyncio.run(scenario())
 
@@ -2181,17 +2262,31 @@ def test_publish_stacks_no_sub_issues_pull_request_based_on_the_default_branch(
     asyncio.run(scenario())
 
 
-def stacked_on_a_merged_blocker(bench: Bench, github: FakeGitHub, *on_main: str) -> None:
+def stacked_on_a_merged_blocker(
+    bench: Bench, github: FakeGitHub, *on_main: str, rewritten: bool = False
+) -> str:
     """The run's branch, one commit on blocker 6's branch, once 6's pull request squash-merged
     into main and took its branch from origin. Main also holds a theme.py of each of *on_main*.
-    GitHub answers with the merged pull request."""
+    GitHub answers with the merged pull request. Names the commit the run's branch was cut from.
+
+    A *rewritten* 6's branch was force-pushed onto a later main before it merged, and main then
+    rewrote step6.py, so the commit the run's branch inherited conflicts there."""
     workspace = bench.workspace
     blocker = pushed(workspace, 6)
-    head = git(workspace, "rev-parse", f"origin/{blocker}")
+    cut_point = head = git(workspace, "rev-parse", f"origin/{blocker}")
     git(workspace, "switch", "-c", BRANCH["branch"], f"origin/{blocker}")
     commit(workspace, "theme.py", "DARK = True\n")
+    if rewritten:
+        git(workspace, "switch", "--detach", "origin/main")
+        commit(workspace, "notes.py", "NOTES = True\n")
+        git(workspace, "push", "origin", "HEAD:main")
+        git(workspace, "cherry-pick", cut_point)
+        git(workspace, "push", "--force", "origin", f"HEAD:{blocker}")
+        head = git(workspace, "rev-parse", "HEAD")
     git(workspace, "switch", "--detach", "origin/main")
     commit(workspace, "step6.py", "STEP = 6\n")
+    if rewritten:
+        commit(workspace, "step6.py", "STEP = 66\n")
     for content in on_main:
         commit(workspace, "theme.py", content)
     git(workspace, "push", "origin", "HEAD:main", f":{blocker}")
@@ -2201,6 +2296,7 @@ def stacked_on_a_merged_blocker(bench: Bench, github: FakeGitHub, *on_main: str)
     git(Path(origin), "config", "uploadpack.allowAnySHA1InWant", "true")
     merged = [{"headRefOid": head, "baseRefName": "main"}]
     github.answer("pr", "list", "--state", "merged", "--head", blocker, output=merged)
+    return cut_point
 
 
 def test_publish_opens_on_where_a_merged_base_landed_with_only_the_runs_commits(
@@ -2227,18 +2323,19 @@ def test_publish_opens_on_where_a_merged_base_landed_with_only_the_runs_commits(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("rewritten", [False, True], ids=["blocker", "rewritten-blocker"])
 def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_landed(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, rewritten
 ):
     bench = coder_at(tmp_path)
     github = FakeGitHub(tmp_path / "github", monkeypatch)
-    stacked_on_a_merged_blocker(bench, github, "DARK = False\n")
+    cut_point = stacked_on_a_merged_blocker(bench, github, "DARK = False\n", rewritten=rewritten)
     answer_issue(github, issue(7, "Add dark mode"))
     github.answer("repo", "view", output=REPOSITORY)
     dispatcher = bench.steps
 
     async def scenario() -> None:
-        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step"}
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step", "base_commit": cut_point}
         result = await opened(dispatcher, 7, stacked | BODY)
 
         assert result.ending is StepEnding.FAILED
@@ -2250,6 +2347,30 @@ def test_publish_hands_a_human_a_branch_that_conflicts_where_its_merged_base_lan
         assert git(worktree, "status", "--porcelain") == ""
         assert git(worktree, "rev-parse", "HEAD^") != git(worktree, "rev-parse", "origin/main")
         assert not any(arguments[:2] == ["pr", "create"] for arguments in github.calls)
+
+    asyncio.run(scenario())
+
+
+def test_publish_replays_only_the_commits_past_the_runs_cut_point_of_a_rewritten_merged_base(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    cut_point = stacked_on_a_merged_blocker(bench, github, rewritten=True)
+    answer_issue(github, issue(7, "Add dark mode"))
+    github.answer("repos/{owner}/{repo}/pulls", output=[[]])
+    github.answer("repo", "view", output=REPOSITORY)
+    github.answer("pr", "create", output="https://github.com/owner/project/pull/43")
+    dispatcher = bench.steps
+
+    async def scenario() -> None:
+        stacked = {"branch": BRANCH["branch"], "base": "agent/6-step", "base_commit": cut_point}
+        result = await opened(dispatcher, 7, stacked | BODY)
+
+        assert result.ending is StepEnding.CLEAN, result.summary
+        assert created_pull_request(github)[4:6] == ["--base", "main"]
+        origin = tmp_path / "origin.git"
+        assert git(origin, "rev-parse", f"{BRANCH['branch']}^") == git(origin, "rev-parse", "main")
 
     asyncio.run(scenario())
 
@@ -3513,6 +3634,34 @@ def test_the_answer_hook_takes_a_fix_an_already_pushed_commit_holds_by_its_full_
 
         assert result.ending is StepEnding.CLEAN, result.summary
         assert json.loads(str(result.values["replies"])) == fixed_by(pushed)
+
+    asyncio.run(scenario())
+
+
+def test_the_answer_hook_takes_no_fix_from_a_commit_inherited_from_a_rewritten_merged_base(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    cut_point = stacked_on_a_merged_blocker(bench, github, rewritten=True)
+    (bench.workspace / ".git" / "info" / "exclude").write_text(".scratch/\n")
+    stub_client(
+        tmp_path,
+        monkeypatch,
+        "claude",
+        writes_replies(fixed_by(cut_point)) + streaming(CLAUDE_STREAM),
+    )
+    dispatcher = bench.steps
+
+    async def scenario() -> None:
+        stacked = {"base": "agent/6-step", "base_commit": cut_point, "feedback": THREADS}
+        result = await answered(dispatcher, stacked)
+
+        assert result.ending is StepEnding.FAILED
+        assert result.summary.endswith(
+            f"UncommittedWork: The reply to thread T1 names {cut_point}, which is no commit of "
+            f"{BRANCH['branch']} ahead of agent/6-step."
+        )
 
     asyncio.run(scenario())
 

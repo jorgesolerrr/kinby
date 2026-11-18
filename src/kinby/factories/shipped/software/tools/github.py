@@ -181,14 +181,16 @@ def scan_ready_issues(signal: dict[str, object], workspace: Path) -> list[dict[s
 
 
 @tool(write=True)
-def vet_ticket(issue: int, workspace: Path) -> None:
+def vet_ticket(issue: int, workspace: Path, folder: Path) -> dict[str, str]:
     """Pass the issue on only once a trusted author wrote all its text: the issue and its parent,
-    with their comments."""
+    with their comments. Record the commit the run worktree was cut from, the first step running
+    in a fresh one, so the run's own commits are those past it."""
     untrusted = _untrusted_authors(workspace, _issue(workspace, issue))
     if untrusted:
         raise UntrustedTicket(
             f"Ticket text from untrusted authors needs a human: {', '.join(untrusted)}."
         )
+    return {"base_commit": _git(folder, "rev-parse", "HEAD").strip()}
 
 
 @tool(write=True)
@@ -220,6 +222,7 @@ def publish_pull_request(
     replies: str | None = None,
     title: str = "",
     body: str = "",
+    base_commit: str = "",
 ) -> dict[str, int] | str:
     """Push the branch. The first time, open its pull request; after a fix round, apply the title
     and body the session rewrote, and reply on each review thread the round answered.
@@ -227,12 +230,14 @@ def publish_pull_request(
     *title* and *body* are the words this run's coding session wrote, as its steps recorded them
     (ADR 0083). An empty one keeps that part of the pull request as it is.
 
-    A pull request opens on its base, or on where that base landed once it merged.
+    A pull request opens on its base, or on where that base landed once it merged. *base_commit*
+    is the commit the run worktree was cut from, empty for a run that started before the ticket
+    step recorded it.
     """
     if pr is None:
         if not body:
             raise MissingPullRequestBody("The coding session wrote no pull request body.")
-        base = _landed_base(workspace, folder, branch, base)
+        base = _landed_base(workspace, folder, branch, base, base_commit)
         return _open_pull_request(workspace, issue, branch, base, title, body, reviewed=reviewed)
     answered = json.loads(replies or "{}")
     return _push_fix_round(workspace, issue, branch, pr, answered, title, body, reviewed=reviewed)
@@ -358,6 +363,7 @@ def report_needs_human(
     *,
     branch: str | None = None,
     base: str | None = None,
+    base_commit: str = "",
 ) -> None:
     """Hand the issue to a human: push the agent branch if it has commits ahead of its base, label
     the issue ready-for-human, and comment why the run stopped, how to get it going again, and
@@ -373,7 +379,7 @@ def report_needs_human(
     ]
     if branch is not None and base is not None:
         try:
-            if _ahead(workspace, branch, base):
+            if _ahead(workspace, branch, base, base_commit):
                 _push(workspace, branch)
         except (CommandFailed, LostBase) as failed:
             body.append(f"Pushing `{branch}` failed: {failed}")
@@ -453,19 +459,19 @@ def _open_pull_request(
     return {"pr": number}
 
 
-def _landed_base(workspace: Path, worktree: Path, branch: str, base: str) -> str:
+def _landed_base(workspace: Path, worktree: Path, branch: str, base: str, base_commit: str) -> str:
     """*base*, or the branch it landed on when its pull request merged and took it from origin.
 
     A blocker's pull request can merge while the run stacked on it is still coding. The run's
-    own commits, those past the blocker's last head and not already on the branch it merged
-    into, then move onto that branch, as GitHub retargets a pull request already open. A base
-    gone unmerged needs a human, and so do commits that conflict there.
+    own commits, those past the blocker's last head, the commit *base_commit* names and the
+    branch it merged into, then move onto that branch, as GitHub retargets a pull request
+    already open. A base gone unmerged needs a human, and so do commits that conflict there.
     """
     merged = _merged_base(workspace, base)
     if merged is None:
         return base
     head, landed = merged
-    past = (branch, f"^{head}", f"^origin/{landed}")
+    past = (branch, *(f"^{ref}" for ref in (head, f"origin/{landed}", base_commit) if ref))
     own = _git(worktree, "rev-list", "--reverse", "--no-merges", *past).split()
     start = _git(worktree, "rev-parse", "HEAD").strip()
     _git(worktree, "reset", "--hard", f"origin/{landed}")
@@ -505,12 +511,14 @@ def _merged_base(workspace: Path, base: str) -> tuple[str, str] | None:
     return head, base
 
 
-def _ahead(workspace: Path, branch: str, base: str) -> list[str]:
+def _ahead(workspace: Path, branch: str, base: str, base_commit: str) -> list[str]:
     """The commits of *branch* past its base, or, once the base merged and left origin, past both
-    its last head and the branch it landed on."""
+    its last head and the branch it landed on. Past *base_commit* too, the commit the run
+    worktree was cut from, when the run recorded one."""
     merged = _merged_base(workspace, base)
     past = (f"origin/{base}",) if merged is None else (merged[0], f"origin/{merged[1]}")
-    return _git(workspace, "rev-list", branch, *(f"^{ref}" for ref in past)).split()
+    refs = (f"^{ref}" for ref in (*past, base_commit) if ref)
+    return _git(workspace, "rev-list", branch, *refs).split()
 
 
 def _push_fix_round(
