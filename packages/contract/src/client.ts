@@ -472,6 +472,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   ROUTINE_PENDING: true,
   TAKEOVER_ABANDONED: true,
   CONTEXT_OVERFLOW: true,
+  MCP_SIGN_IN_PENDING: true,
   CONNECTION_LOST: true,
   INTERNAL: true,
 }

@@ -87,7 +87,8 @@ def test_an_instance_behind_the_hubs_revision_says_so(tmp_path):
 ROUTE_MISSING = HubRouteMissing(
     message=(
         "The instance cannot reach the hub with the scopes it holds, "
-        "line:intake,line:owner,notification:raise. An instance update gives it the route."
+        "line:intake,line:owner,mcp:token,notification:raise. An instance update gives it the "
+        "route."
     )
 )
 

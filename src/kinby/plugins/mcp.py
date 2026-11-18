@@ -37,7 +37,7 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
         yield ()
         return
     # The MCP SDK loads only in an instance that picked a server.
-    from kinby.plugins.mcp_connection import NotConnected, connected_tools
+    from kinby.plugins.mcp_connection import NotConnected, SignInNeeded, connected_tools
 
     secrets = {
         name: value
@@ -49,9 +49,6 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     failures: dict[str, str] = {}
     async with AsyncExitStack() as stack:
         for name, pick in sorted(picks.items()):
-            if pick.needs_sign_in:
-                failures[name] = f'MCP server "{name}" needs a sign-in, so the turn ran without it.'
-                continue
             if missing := sorted(
                 variable
                 for variable in needed_variables(pick.server.entry)
@@ -64,6 +61,8 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
                 continue
             try:
                 tools.extend(await connected_tools(name, pick, secrets, source, stack))
+            except SignInNeeded:
+                failures[name] = f'MCP server "{name}" needs a sign-in, so the turn ran without it.'
             except NotConnected as failed:
                 failures[name] = (
                     f'MCP server "{name}" did not start or list its tools, so the turn ran '

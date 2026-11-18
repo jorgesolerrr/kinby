@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections import defaultdict
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,7 +24,7 @@ from kinby.contracts import (
     McpServerName,
     McpSignInSetup,
 )
-from kinby.core.errors import McpSignInFailed
+from kinby.core.errors import McpSignInFailed, McpSignInPending
 from kinby.hub.secrets import replace_protected
 from kinby.instance.skills_lock import LockedMcpServer
 from kinby.plugins.mcp import filled
@@ -37,6 +38,8 @@ ASK_SECONDS = 10
 CALLBACK_PATH = "/mcp-sign-ins/callback"
 #: How long a started sign-in waits for the server's page to send the browser back.
 SIGN_IN_TIME = timedelta(minutes=10)
+#: How long before its access token runs out the hub renews a sign-in.
+RENEW_BEFORE = timedelta(minutes=5)
 
 INITIALIZE = {
     "jsonrpc": "2.0",
@@ -115,6 +118,7 @@ class McpSignIns:
         #: The last sign-in started to each server, which may still run after the browser came
         #: back, until its token exchange ends.
         self._last: dict[tuple[UUID, McpServerName], asyncio.Task[None]] = {}
+        self._renewing: defaultdict[UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def setup(self, instance_id: UUID, server: McpServerName) -> McpSignInSetup:
         kept = self._read(instance_id).get(server)
@@ -169,6 +173,39 @@ class McpSignIns:
         running.flow.called_back(state, query)
         await asyncio.wait((running.task,))
         return f"/instances/{running.instance_id}"
+
+    async def token(
+        self, instance_id: UUID, server: McpServerName, refused: str | None = None
+    ) -> str:
+        """A current access token of the instance's sign-in to *server*, renewed first when it
+        runs out within RENEW_BEFORE or the server *refused* it. One with no refresh token stays
+        until it runs out. A sign-in whose refresh token the server refuses turns pending."""
+        from kinby.hub.mcp_sign_in_flow import SignedIn, renewed
+
+        async with self._renewing[instance_id]:
+            signed_in = self._read(instance_id).get(server)
+            if not isinstance(signed_in, SignedIn):
+                raise McpSignInPending(f'MCP server "{server}" needs a sign-in.')
+            expires_at = signed_in.expires_at
+            ahead = RENEW_BEFORE if signed_in.tokens.refresh_token else timedelta(0)
+            if signed_in.tokens.access_token != refused and (
+                expires_at is None or self._clock() < expires_at - ahead
+            ):
+                return signed_in.tokens.access_token
+            renewal = await renewed(signed_in, self._clock)
+            kept = self._read(instance_id)
+            # A sign-in or a sign-out while the renewal ran stands.
+            if kept.get(server) == signed_in:
+                if renewal is None:
+                    del kept[server]
+                else:
+                    kept[server] = renewal
+                self._write(instance_id, kept)
+            if renewal is None:
+                raise McpSignInPending(
+                    f'MCP server "{server}" stopped accepting its sign-in, so it needs a new one.'
+                )
+            return renewal.tokens.access_token
 
     def sign_out(self, instance_id: UUID, server: McpServerName) -> None:
         """Delete the sign-in to *server*, and end one still running."""
@@ -240,7 +277,7 @@ class McpSignIns:
     async def _run(self, instance_id: UUID, server: McpServerName, flow: SignInFlow) -> None:
         """Run the sign-in and keep how it ended. One nobody finished in time leaves the sign-in
         as it was."""
-        ended = await flow.run()
+        ended = await flow.run(self._clock)
         if ended is not None:
             self._write(instance_id, self._read(instance_id) | {server: ended})
 

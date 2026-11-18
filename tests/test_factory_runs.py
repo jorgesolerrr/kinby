@@ -1036,7 +1036,9 @@ def test_an_instance_gets_a_hub_url_to_hand_its_lines_work_and_raise_notificatio
         assert (
             environment["KINBY_HUB_URL"] == f"http://hub:8080/instances/{created.instance_id}/hub"
         )
-        assert environment["KINBY_HUB_SCOPES"] == "line:intake,line:owner,notification:raise"
+        assert (
+            environment["KINBY_HUB_SCOPES"] == "line:intake,line:owner,mcp:token,notification:raise"
+        )
 
     asyncio.run(scenario())
 
