@@ -2038,6 +2038,7 @@
         "ROUTINE_PENDING",
         "TAKEOVER_ABANDONED",
         "CONTEXT_OVERFLOW",
+        "MCP_SIGN_IN_PENDING",
         "CONNECTION_LOST",
         "INTERNAL"
       ],
@@ -5921,6 +5922,44 @@
         "authorization_url"
       ],
       "title": "McpSignInStartResult",
+      "type": "object"
+    },
+    "McpSignInTokenCommand": {
+      "additionalProperties": false,
+      "description": "Get a current access token for the calling instance's MCP sign-in to one server.",
+      "properties": {
+        "refused": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerName"
+        }
+      },
+      "required": [
+        "server"
+      ],
+      "title": "McpSignInTokenCommand",
+      "type": "object"
+    },
+    "McpSignInTokenResult": {
+      "additionalProperties": false,
+      "properties": {
+        "access_token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "access_token"
+      ],
+      "title": "McpSignInTokenResult",
       "type": "object"
     },
     "McpStdioEntry": {
@@ -15702,6 +15741,22 @@
           ],
           "type": "object"
         },
+        "mcp_sign_in.token": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/McpSignInTokenCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/McpSignInTokenResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "memory.add": {
           "additionalProperties": false,
           "properties": {
@@ -17263,6 +17318,7 @@
         "channel.mute",
         "channel.unmute",
         "notification.raise",
+        "mcp_sign_in.token",
         "browser.open",
         "browser.run",
         "browser.snapshot",

@@ -6,8 +6,9 @@ parameter and the token exchange. kinby gives it a token store and the two ends 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 
 import aiohttp
 import httpx2
@@ -16,12 +17,14 @@ from mcp.shared.auth import (
     AuthorizationCodeResult,
     OAuthClientInformationFull,
     OAuthClientMetadata,
+    OAuthMetadata,
     OAuthToken,
     ProtectedResourceMetadata,
 )
 from pydantic import AnyUrl, TypeAdapter
 
 from kinby.contracts import McpHttpEntry, McpOAuth, McpServerName
+from kinby.core.errors import McpSignInUnreachable
 from kinby.hub.mcp_sign_ins import ACCEPT, ASK_SECONDS, INITIALIZE, SIGN_IN_TIME
 from kinby.plugins.mcp import filled
 
@@ -39,6 +42,12 @@ class SignedIn:
     issuer: str
     client: OAuthClientInformationFull
     tokens: OAuthToken
+    #: When the access token runs out, by the hub's clock, or None when the server said not.
+    expires_at: datetime | None = None
+    #: Where a renewal sends the refresh token, and the resource it names, as the sign-in found
+    #: them.
+    metadata: OAuthMetadata | None = None
+    resource: ProtectedResourceMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -123,7 +132,7 @@ class SignInFlow(OAuthClientProvider):
                 )
             )
 
-    async def run(self) -> SignedIn | Failed | None:
+    async def run(self, clock: Callable[[], datetime]) -> SignedIn | Failed | None:
         """Send the server the initialize request through the sign-in, which the server answers
         once signed in, and say how the sign-in ended: None when nobody finished it in time."""
         try:
@@ -138,7 +147,15 @@ class SignInFlow(OAuthClientProvider):
             return Failed("The server did not ask for a sign-in.")
         context = self.context
         issuer = context.auth_server_url or context.get_authorization_base_url(context.server_url)
-        return SignedIn(self.url, issuer, flow.client, flow.tokens)
+        return SignedIn(
+            self.url,
+            issuer,
+            flow.client,
+            flow.tokens,
+            _expiry(flow.tokens, clock()),
+            context.oauth_metadata,
+            context.protected_resource_metadata,
+        )
 
     async def _perform_authorization(self) -> httpx2.Request:
         if self._scopes:
@@ -159,6 +176,50 @@ class SignInFlow(OAuthClientProvider):
                 return f"The hub could not reach the server: {error}"
             case _:
                 return f"The sign-in failed: {error}"
+
+
+class _Renewal(OAuthClientProvider):
+    """The SDK's refresh of the tokens one sign-in keeps."""
+
+    def __init__(self, signed_in: SignedIn) -> None:
+        # The metadata only registers a client, which a renewal never does.
+        metadata = OAuthClientMetadata(redirect_uris=signed_in.client.redirect_uris)
+        super().__init__(signed_in.url, metadata, _Flow(signed_in.client, signed_in.tokens))
+        context = self.context
+        context.client_info, context.current_tokens = signed_in.client, signed_in.tokens
+        context.oauth_metadata = signed_in.metadata
+        context.protected_resource_metadata = signed_in.resource
+
+    async def tokens(self) -> OAuthToken | None:
+        """The tokens the authorization server gives for the refresh token, or None when it
+        refuses it."""
+        try:
+            async with httpx2.AsyncClient(timeout=ASK_SECONDS) as client:
+                answer = await client.send(await self._refresh_token())
+            if answer.is_server_error:
+                answer.raise_for_status()
+        except httpx2.HTTPError as exc:
+            raise McpSignInUnreachable(
+                f"The hub could not reach the server to renew its sign-in: {exc}"
+            ) from exc
+        return self.context.current_tokens if await self._handle_refresh_response(answer) else None
+
+
+async def renewed(signed_in: SignedIn, clock: Callable[[], datetime]) -> SignedIn | None:
+    """*signed_in* with a fresh access token, or None when the server refuses its refresh
+    token or it holds none."""
+    if signed_in.tokens.refresh_token is None:
+        return None
+    tokens = await _Renewal(signed_in).tokens()
+    if tokens is None:
+        return None
+    return replace(signed_in, tokens=tokens, expires_at=_expiry(tokens, clock()))
+
+
+def _expiry(tokens: OAuthToken, now: datetime) -> datetime | None:
+    if tokens.expires_in is None:
+        return None
+    return now + timedelta(seconds=tokens.expires_in)
 
 
 async def issuer(resource_metadata: str) -> str | None:

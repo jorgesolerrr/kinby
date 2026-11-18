@@ -231,6 +231,18 @@ class McpSignInFailed(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class McpSignInPending(CoreError):
+    """The instance holds no MCP sign-in to the server that the server accepts."""
+
+    code = ErrorCode.MCP_SIGN_IN_PENDING
+
+
+class McpSignInUnreachable(CoreError):
+    """The hub could not reach the authorization server to renew an MCP sign-in."""
+
+    retryable = True
+
+
 class InstanceAnswerLost(InstanceUnavailable):
     """The instance took the hub's call and its answer never came, so it may have acted."""
 

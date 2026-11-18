@@ -96,6 +96,9 @@ class Scope(StrEnum):
     #: instance's vault, and list and save its browser profiles and list its vault entries. Only
     #: a browser-on instance holds it, on its hub route (ADR 0114).
     BROWSER_OPEN = "browser:open"
+    #: Get a current access token for one of the instance's MCP sign-ins. Every instance holds it,
+    #: on its hub route (ADR 0128).
+    MCP_TOKEN = "mcp:token"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -120,8 +123,12 @@ NOTIFICATION_SCOPES = frozenset({Scope.NOTIFICATION_RAISE})
 LINE_SCOPES = frozenset({Scope.LINE_INTAKE, Scope.LINE_OWNER})
 #: What an instance whose manifest turns the browser on holds on its hub route (ADR 0113).
 BROWSER_SCOPES = frozenset({Scope.BROWSER_OPEN})
+#: What every instance holds on its hub route, for the MCP servers it signs in to (ADR 0128).
+MCP_TOKEN_SCOPES = frozenset({Scope.MCP_TOKEN})
 #: What a client authenticated against the hub holds: a hub has one user.
-HUB_SCOPES = frozenset(Scope) - NOTIFICATION_SCOPES - BROWSER_SCOPES - {Scope.HUB_HOME}
+HUB_SCOPES = (
+    frozenset(Scope) - NOTIFICATION_SCOPES - BROWSER_SCOPES - MCP_TOKEN_SCOPES - {Scope.HUB_HOME}
+)
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
 
@@ -162,6 +169,9 @@ class ErrorCode(StrEnum):
     #: The provider refused a model call because the prompt was too long. The message names the
     #: turn's largest tool results.
     CONTEXT_OVERFLOW = "CONTEXT_OVERFLOW"
+    #: The MCP sign-in is pending: never done, signed out, or one the server stopped accepting.
+    #: The user signs in again from the web app.
+    MCP_SIGN_IN_PENDING = "MCP_SIGN_IN_PENDING"
     #: Raised by a client, never sent by a server: its connection dropped under a call,
     #: or never came up.
     CONNECTION_LOST = "CONNECTION_LOST"
@@ -1621,6 +1631,18 @@ class InstanceMcpSignInStartCommand(ContractModel):
 class McpSignInStartResult(ContractModel):
     #: The server's page where the user approves the sign-in.
     authorization_url: str
+
+
+class McpSignInTokenCommand(ContractModel):
+    """Get a current access token for the calling instance's MCP sign-in to one server."""
+
+    server: McpServerName
+    #: The access token the server refused, which the hub renews even before it runs out.
+    refused: str | None = None
+
+
+class McpSignInTokenResult(ContractModel):
+    access_token: str
 
 
 class InstanceMcpSignOutCommand(ContractModel):

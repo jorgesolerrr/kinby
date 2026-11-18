@@ -5,8 +5,11 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -21,13 +24,19 @@ from kinby.contracts import (
     PermissionMode,
     ToolResult,
 )
-from kinby.instance import Instance, inspect_instance
+from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
+from kinby.hub import Hub
+from kinby.instance import Instance, Serve, inspect_instance
 from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
 from kinby.plugins import mcp_connection
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.plugins.mcp_connection import STDERR_TAIL
 from tests.mcp_oauth_server import OAuthMcpServer
-from tests.test_hub import hub_at, hub_client, started_instance
+from tests.test_hub import FakeControl, hub_at, hub_client, started_instance
+from tests.test_hub_mcp_sign_ins import _Clock, _picked, _signed_in
+from tests.test_hub_routing import control_token
+from tests.test_hub_server import served, url
 from tests.test_instance_code import turn
 from tests.test_routines import instance_at
 
@@ -399,3 +408,123 @@ def test_a_server_whose_sign_in_is_pending_is_left_out_with_a_notice_that_it_nee
     assert failed_mcp_servers(instance.manifest.state_dir) == {
         "cockpit": 'MCP server "cockpit" needs a sign-in, so the turn ran without it.'
     }
+
+
+@asynccontextmanager
+async def signed_in(
+    tmp_path: Path,
+    oauth_server: OAuthMcpServer,
+    monkeypatch: pytest.MonkeyPatch,
+    clock: Callable[[], datetime] | None = None,
+) -> AsyncIterator[tuple[Hub, Serve, Instance]]:
+    """A served hub, and its instance that picked the server behind a sign-in as cockpit, with
+    a fixed header, and signed in to it, holding its hub route."""
+    hub = hub_at(tmp_path / "hub", control=FakeControl(), **({"clock": clock} if clock else {}))
+    instance_id = await _picked(
+        hub, {"url": oauth_server.url, "headers": {"X-Cockpit-Agent": "kinby"}}
+    )
+    async with served(hub) as address:
+        await _signed_in(hub, instance_id, address)
+        monkeypatch.setenv(HUB_URL_VARIABLE, url(address, f"/instances/{instance_id}/hub"))
+        monkeypatch.setenv(HUB_SCOPES_VARIABLE, ",".join(hub.instance_scopes(instance_id)))
+        monkeypatch.setenv(CONTROL_TOKEN_VARIABLE, control_token(hub, str(instance_id)))
+        yield hub, address, inspect_instance(hub.instances_directory / str(instance_id))
+
+
+def instance_id(instance: Instance) -> UUID:
+    return UUID(instance.path.name)
+
+
+def outputs(payloads: Sequence[object]) -> list[str]:
+    return [payload.output for payload in payloads if isinstance(payload, ToolResult)]
+
+
+def test_a_signed_in_server_is_called_with_the_hubs_token_beside_its_fixed_headers(
+    tmp_path: Path, oauth_server: OAuthMcpServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> tuple[Instance, list[str]]:
+        async with signed_in(tmp_path, oauth_server, monkeypatch) as (_, _, instance):
+            payloads = await turn(
+                instance,
+                [("cockpit__look", {"text": "hi"}), ("cockpit__headers", {})],
+                PermissionMode.FULL_ACCESS,
+            )
+        return instance, outputs(payloads)
+
+    instance, (looked, headers) = asyncio.run(scenario())
+
+    assert looked == "looked: hi"
+    assert json.loads(headers)["x-cockpit-agent"] == "kinby"
+    assert failed_mcp_servers(instance.manifest.state_dir) == {}
+    files = b"".join(path.read_bytes() for path in instance.path.rglob("*") if path.is_file())
+    assert oauth_server.tokens()
+    assert not [token for token in oauth_server.tokens() if token.encode() in files]
+
+
+def test_a_token_the_server_stops_accepting_mid_turn_is_asked_for_once_more_and_the_call_retried(
+    tmp_path: Path, oauth_server: OAuthMcpServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> list[str]:
+        async with signed_in(tmp_path, oauth_server, monkeypatch) as (_, _, instance):
+            payloads = await turn(
+                instance,
+                [("cockpit__expire", {}), ("cockpit__look", {"text": "hi"})],
+                PermissionMode.FULL_ACCESS,
+            )
+        return outputs(payloads)
+
+    assert asyncio.run(scenario()) == ["expired", "looked: hi"]
+
+
+def test_a_turn_after_the_token_ran_out_connects_with_the_one_the_hub_renewed(
+    tmp_path: Path, oauth_server: OAuthMcpServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+
+    async def scenario() -> list[str]:
+        async with signed_in(tmp_path, oauth_server, monkeypatch, clock) as (_, _, instance):
+            clock.now += timedelta(hours=2)
+            oauth_server.expire()
+            payloads = await turn(
+                instance, [("cockpit__look", {"text": "hi"})], PermissionMode.FULL_ACCESS
+            )
+        return outputs(payloads)
+
+    assert asyncio.run(scenario()) == ["looked: hi"]
+
+
+def test_a_refused_sign_in_leaves_the_server_out_with_a_notice_until_jorge_signs_in_again(
+    tmp_path: Path, oauth_server: OAuthMcpServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    needs = 'MCP server "cockpit" needs a sign-in, so the turn ran without it.'
+
+    async def notices(hub: Hub) -> list[tuple[str, str]]:
+        listed = await hub_client(hub).call(INSTANCE_LIST, InstanceListCommand())
+        assert isinstance(listed, InstanceListResult)
+        [summary] = listed.instances
+        return [
+            (notice.server, notice.message)
+            for notice in summary.notices
+            if isinstance(notice, McpServerFailed)
+        ]
+
+    async def scenario() -> None:
+        async with signed_in(tmp_path, oauth_server, monkeypatch) as (hub, address, instance):
+            oauth_server.revoke()
+            refused = await turn(
+                instance, [("cockpit__look", {"text": "hi"})], PermissionMode.FULL_ACCESS
+            )
+
+            assert outputs(refused) == ['Tool "cockpit__look" is not available in this turn.']
+            assert await notices(hub) == [("cockpit", needs)]
+            assert len(oauth_server.clients) == 1
+
+            await _signed_in(hub, instance_id(instance), address)
+            again = await turn(
+                instance, [("cockpit__look", {"text": "hi"})], PermissionMode.FULL_ACCESS
+            )
+
+            assert outputs(again) == ["looked: hi"]
+            assert await notices(hub) == []
+
+    asyncio.run(scenario())

@@ -126,6 +126,8 @@ from kinby.contracts import (
     LINE_SETUP_DESCRIBE,
     LINE_UPDATE,
     MCP_REGISTRY_SEARCH,
+    MCP_SIGN_IN_TOKEN,
+    MCP_TOKEN_SCOPES,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
     NOTIFICATION_REPLY,
@@ -276,6 +278,8 @@ from kinby.contracts import (
     McpServerName,
     McpSignInSetup,
     McpSignInStartResult,
+    McpSignInTokenCommand,
+    McpSignInTokenResult,
     Method,
     NewerVersion,
     OperationGetCommand,
@@ -1122,6 +1126,7 @@ class Hub:
         return (
             NOTIFICATION_SCOPES
             | LINE_SCOPES
+            | MCP_TOKEN_SCOPES
             | (HOME_SCOPES if record.home else frozenset())
             | (BROWSER_SCOPES if self._browser_on(manifest) else frozenset())
         )
@@ -1155,6 +1160,8 @@ class Hub:
             dispatcher.register(
                 NOTIFICATION_RAISE, partial(self.outbox.raise_notification, instance_id)
             )
+        if Scope.MCP_TOKEN in scopes:
+            dispatcher.register(MCP_SIGN_IN_TOKEN, partial(self.mcp_sign_in_token, instance_id))
         if Scope.LINE_INTAKE in scopes:
             dispatcher.register(LINE_INTAKE, partial(self.line_intake, instance_id))
         if Scope.LINE_OWNER in scopes:
@@ -2270,6 +2277,19 @@ class Hub:
                 self._environment(record.path),
                 hub_url,
             )
+        )
+
+    async def mcp_sign_in_token(
+        self, instance_id: UUID, command: McpSignInTokenCommand
+    ) -> McpSignInTokenResult:
+        """A current access token for the instance's sign-in to one server it picked."""
+        pick = self._mcp_picks(self._active_instance(instance_id)).get(command.server)
+        if pick is None or not pick.needs_sign_in:
+            raise McpServerNotFound(
+                f'The instance picks no MCP server "{command.server}" that asks for a sign-in.'
+            )
+        return McpSignInTokenResult(
+            access_token=await self.mcp_sign_ins.token(instance_id, command.server, command.refused)
         )
 
     async def sign_out_of_mcp_server(self, command: InstanceMcpSignOutCommand) -> McpSignInSetup:

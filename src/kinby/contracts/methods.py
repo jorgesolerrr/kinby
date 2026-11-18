@@ -154,6 +154,8 @@ from kinby.contracts.models import (
     McpServerResult,
     McpSignInSetup,
     McpSignInStartResult,
+    McpSignInTokenCommand,
+    McpSignInTokenResult,
     MemoryAddCommand,
     MemoryCorrectCommand,
     MemoryForgetCommand,
@@ -778,6 +780,9 @@ NOTIFICATION_RAISE = Method(
     NotificationRaiseCommand,
     NotificationRaiseResult,
 )
+MCP_SIGN_IN_TOKEN = Method(
+    "mcp_sign_in.token", Scope.MCP_TOKEN, McpSignInTokenCommand, McpSignInTokenResult
+)
 BROWSER_OPEN = Method("browser.open", Scope.BROWSER_OPEN, BrowserOpenCommand, BrowserOpenResult)
 BROWSER_RUN = Method("browser.run", Scope.BROWSER_OPEN, BrowserRunCommand, BrowserPage)
 BROWSER_SNAPSHOT = Method(
@@ -1004,6 +1009,7 @@ METHODS = (
     CHANNEL_MUTE,
     CHANNEL_UNMUTE,
     NOTIFICATION_RAISE,
+    MCP_SIGN_IN_TOKEN,
     BROWSER_OPEN,
     BROWSER_RUN,
     BROWSER_SNAPSHOT,

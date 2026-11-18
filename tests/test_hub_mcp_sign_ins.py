@@ -33,6 +33,7 @@ from kinby.contracts import (
     McpServerChoice,
     McpSignInSetup,
     McpSignInStartResult,
+    Scope,
 )
 from kinby.hub import Hub
 from kinby.hub.mcp_sign_ins import CALLBACK_PATH
@@ -40,8 +41,10 @@ from kinby.instance import Serve
 from tests.mcp_oauth_server import OAuthMcpServer, oauth_mcp_server
 from tests.test_hub import FakeControl, finished_operation, hub_at, hub_client, started_instance
 from tests.test_hub_deletion import deleted, previewed
+from tests.test_hub_home_reads import answers, error_code, result_of
 from tests.test_hub_pick_sync import _update
 from tests.test_hub_removal import removed
+from tests.test_hub_routing import control_token
 from tests.test_hub_server import served, url
 from tests.test_hub_setup import setup_of
 
@@ -63,7 +66,7 @@ def _hub(tmp_path: Path, **options) -> Hub:
 def _library_server(hub: Hub, name: str, entry: dict[str, object]) -> None:
     folder = hub.directory / "mcp-servers"
     folder.mkdir(exist_ok=True)
-    server = McpServer.model_validate({"entry": entry, "include": ["look"]})
+    server = McpServer.model_validate({"entry": entry, "include": ["look", "headers", "expire"]})
     (folder / f"{name}.json").write_text(server.model_dump_json(), encoding="utf-8")
 
 
@@ -464,5 +467,109 @@ def test_only_an_admin_session_starts_a_sign_in_or_signs_out(
         for refused in (started, signed_out):
             assert isinstance(refused, ErrorEnvelope), refused
             assert refused.code is ErrorCode.PERMISSION_DENIED
+
+    asyncio.run(scenario())
+
+
+async def _token(
+    hub: Hub, address: Serve, instance_id: UUID, refused: str | None = None
+) -> dict[str, object]:
+    """Ask the instance's hub route for cockpit's access token, the server having refused
+    *refused*."""
+    (answer,) = await answers(
+        url(address, f"/instances/{instance_id}/hub"),
+        control_token(hub, str(instance_id)),
+        ("mcp_sign_in.token", {"server": "cockpit", "refused": refused}),
+    )
+    return answer
+
+
+def _access_token(answer: dict[str, object]) -> str:
+    token = result_of(answer)["access_token"]
+    assert isinstance(token, str)
+    return token
+
+
+def test_the_instances_hub_route_gives_its_own_sign_ins_access_token_and_no_others(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        alice = await _picked(hub, {"url": oauth_server.url})
+        bob = (await started_instance(hub_client(hub), hub, name="bob")).instance_id
+        await _pick(hub_client(hub), bob, McpServerChoice(name="cockpit"))
+        async with served(hub) as address:
+            await _signed_in(hub, alice, address)
+
+            given = await _token(hub, address, alice)
+            again = await _token(hub, address, alice)
+            refused = await _token(hub, address, bob)
+
+        assert Scope.MCP_TOKEN in hub.instance_scopes(alice)
+        assert _access_token(given) in oauth_server.tokens()
+        assert _access_token(again) == _access_token(given)
+        assert error_code(refused) == ErrorCode.MCP_SIGN_IN_PENDING
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_renews_an_access_token_close_to_expiring_or_one_the_server_refused(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    async def scenario() -> None:
+        clock = _Clock()
+        hub = _hub(tmp_path, clock=clock)
+        instance_id = await _picked(hub, {"url": oauth_server.url})
+        async with served(hub) as address:
+            await _signed_in(hub, instance_id, address)
+            first = _access_token(await _token(hub, address, instance_id))
+            clock.now += timedelta(minutes=58)
+            renewed = _access_token(await _token(hub, address, instance_id))
+            oauth_server.expire()
+            refused = _access_token(await _token(hub, address, instance_id, refused=renewed))
+            stale = _access_token(await _token(hub, address, instance_id, refused=renewed))
+
+        assert len({first, renewed, refused}) == 3
+        assert stale == refused
+        assert await _sign_ins(hub, instance_id) == [
+            McpSignInSetup(server="cockpit", state=LoginState.SIGNED_IN)
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_refresh_token_the_server_refuses_sets_the_sign_in_pending(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        instance_id = await _picked(hub, {"url": oauth_server.url})
+        async with served(hub) as address:
+            await _signed_in(hub, instance_id, address)
+            given = _access_token(await _token(hub, address, instance_id))
+            oauth_server.revoke()
+
+            refused = await _token(hub, address, instance_id, refused=given)
+            again = await _token(hub, address, instance_id)
+
+        assert error_code(refused) == ErrorCode.MCP_SIGN_IN_PENDING
+        assert error_code(again) == ErrorCode.MCP_SIGN_IN_PENDING
+        assert await _sign_ins(hub, instance_id) == [
+            McpSignInSetup(server="cockpit", state=LoginState.PENDING)
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_route_gives_no_token_for_a_server_the_instance_signs_in_to_nowhere(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        instance_id = (await started_instance(hub_client(hub), hub)).instance_id
+        async with served(hub) as address:
+            unpicked = await _token(hub, address, instance_id)
+
+        assert error_code(unpicked) == ErrorCode.NOT_FOUND
 
     asyncio.run(scenario())

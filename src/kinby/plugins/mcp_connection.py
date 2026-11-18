@@ -7,12 +7,13 @@ import json
 import os
 import sys
 import threading
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import AsyncExitStack
 from functools import partial
 from pathlib import Path
 from typing import TextIO
 
+import httpx2
 from langchain_core.tools import StructuredTool
 from mcp import Client, StdioServerParameters
 from mcp.client import Transport
@@ -22,9 +23,18 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import TextContent
 from mcp.types import Tool as McpTool
 
-from kinby.contracts import McpHttpEntry, McpServerEntry
+from kinby.contracts import (
+    MCP_SIGN_IN_TOKEN,
+    ErrorCode,
+    McpHttpEntry,
+    McpServerEntry,
+    McpSignInTokenCommand,
+    McpSignInTokenResult,
+    Scope,
+)
 from kinby.instance.skills_lock import LockedMcpServer
 from kinby.plugins.errors import exception_message
+from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, HubRefused, call_hub
 from kinby.plugins.mcp import filled
 from kinby.plugins.tools import Tool
 
@@ -42,8 +52,16 @@ async def connected_tools(
     stack: AsyncExitStack,
 ) -> list[Tool]:
     """The included tools of the server *pick* names, its entry filled from *secrets*, connected
-    until *stack* closes. A server that does not start or list its tools raises NotConnected."""
-    client, listed = await _connect(pick.server.entry, secrets, stack)
+    until *stack* closes, with the hub's access token when it asks for a sign-in. A server that
+    does not start or list its tools raises NotConnected, and one whose sign-in the hub does not
+    hold, SignInNeeded."""
+    auth = _HubToken(name, await _hub_token(name)) if pick.needs_sign_in else None
+    try:
+        client, listed = await _connect(pick.server.entry, secrets, auth, stack)
+    except NotConnected:
+        if auth is not None and auth.pending:
+            raise SignInNeeded from None
+        raise
     return [
         _adapted(name, pick, each, client, source)
         for each in listed
@@ -53,6 +71,59 @@ async def connected_tools(
 
 class NotConnected(Exception):
     """Why a server did not start or list its tools."""
+
+
+class SignInNeeded(Exception):
+    """The hub holds no sign-in to the server that the server accepts."""
+
+
+async def _hub_token(server: str, refused: str | None = None) -> str:
+    """A current access token for the instance's sign-in to *server*, from its hub route, the
+    server having *refused* the one before."""
+    granted = os.environ.get(HUB_SCOPES_VARIABLE, "").split(",")
+    if not os.environ.get(HUB_URL_VARIABLE) or Scope.MCP_TOKEN not in granted:
+        raise SignInNeeded
+    command = McpSignInTokenCommand(server=server, refused=refused)
+    try:
+        answer = await call_hub(
+            MCP_SIGN_IN_TOKEN.name, command.model_dump(mode="json"), "the MCP sign-in"
+        )
+    except HubRefused as refusal:
+        if refusal.error.code is ErrorCode.MCP_SIGN_IN_PENDING:
+            raise SignInNeeded from refusal
+        raise NotConnected(str(refusal)) from refusal
+    except ConnectionError as exc:
+        raise NotConnected(str(exc)) from exc
+    return McpSignInTokenResult.model_validate(answer).access_token
+
+
+class _HubToken(httpx2.Auth):
+    """The hub's access token for one MCP sign-in, held in memory only. A request the server
+    refuses it on is sent once more with the token the hub gives next."""
+
+    def __init__(self, server: str, token: str) -> None:
+        self._server = server
+        self._token = token
+        #: Whether the hub said the sign-in needs a new one once the server refused its token.
+        self.pending = False
+
+    async def async_auth_flow(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        sent = self._token
+        request.headers["Authorization"] = f"Bearer {sent}"
+        response = yield request
+        if response.status_code != 401:
+            return
+        try:
+            self._token = await _hub_token(self._server, refused=sent)
+        except SignInNeeded:
+            self.pending = True
+            return
+        except NotConnected:
+            return
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        yield request
 
 
 class _Stderr:
@@ -83,7 +154,10 @@ class _Stderr:
 
 
 async def _connect(
-    entry: McpServerEntry, secrets: Mapping[str, str], stack: AsyncExitStack
+    entry: McpServerEntry,
+    secrets: Mapping[str, str],
+    auth: httpx2.Auth | None,
+    stack: AsyncExitStack,
 ) -> tuple[Client, list[McpTool]]:
     """A client of the server *entry* defines that *stack* closes, and every tool it lists. A
     server that fails is closed at once, and raises why, ending with what it last wrote to
@@ -93,7 +167,7 @@ async def _connect(
         async with asyncio.timeout(CONNECT_SECONDS), AsyncExitStack() as connecting:
             connecting.callback(stderr.close)
             client = await connecting.enter_async_context(
-                Client(_transport(entry, secrets, stderr.file))
+                Client(_transport(entry, secrets, auth, stderr.file))
             )
             listed: list[McpTool] = []
             cursor: str | None = None
@@ -114,14 +188,17 @@ async def _connect(
     raise NotConnected(f"{reason}. Its stderr ended with: {tail}" if tail else reason)
 
 
-def _transport(entry: McpServerEntry, secrets: Mapping[str, str], stderr: TextIO) -> Transport:
+def _transport(
+    entry: McpServerEntry, secrets: Mapping[str, str], auth: httpx2.Auth | None, stderr: TextIO
+) -> Transport:
     """How to reach the server *entry* defines, each of its values filled from *secrets*: its
-    URL with its headers, or its command over stdio with only the env it declares and its stderr
-    to *stderr*."""
+    URL with its headers and *auth*, or its command over stdio with only the env it declares and
+    its stderr to *stderr*."""
     if isinstance(entry, McpHttpEntry):
         headers = {name: filled(value, secrets) for name, value in entry.headers.items()}
         return streamable_http_client(
-            filled(entry.url, secrets), http_client=create_mcp_http_client(headers=headers)
+            filled(entry.url, secrets),
+            http_client=create_mcp_http_client(headers=headers, auth=auth),
         )
     parameters = StdioServerParameters(
         command=entry.command,

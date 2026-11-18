@@ -220,6 +220,7 @@ export type ErrorCode =
   | "ROUTINE_PENDING"
   | "TAKEOVER_ABANDONED"
   | "CONTEXT_OVERFLOW"
+  | "MCP_SIGN_IN_PENDING"
   | "CONNECTION_LOST"
   | "INTERNAL";
 export type GateOutcome = "allow" | "deny";
@@ -620,6 +621,10 @@ export interface Contract {
     "mcp_registry.search": {
       command: McpRegistrySearchCommand;
       result: McpRegistrySearchResult;
+    };
+    "mcp_sign_in.token": {
+      command: McpSignInTokenCommand;
+      result: McpSignInTokenResult;
     };
     "memory.add": {
       command: MemoryAddCommand;
@@ -2509,6 +2514,16 @@ export interface McpRegistryVariable {
   description: string | null;
   name: string;
   secret: boolean;
+}
+/**
+ * Get a current access token for the calling instance's MCP sign-in to one server.
+ */
+export interface McpSignInTokenCommand {
+  refused?: string | null;
+  server: McpServerName;
+}
+export interface McpSignInTokenResult {
+  access_token: string;
 }
 export interface MemoryAddCommand {
   body: string;

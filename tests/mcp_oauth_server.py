@@ -3,10 +3,12 @@
 It is its own authorization server: it serves protected resource metadata, authorization server
 metadata and dynamic client registration, its authorize endpoint redirects back at once with a
 code, and its token endpoint issues tokens a test can expire or revoke. Its MCP endpoint offers
-the echo server's ``look`` to a caller with a live access token. A test can turn registration off
+a caller with a live access token the echo server's ``look`` and ``headers``, and ``expire``,
+which expires the caller's token in the middle of a turn. A test can turn registration off
 and register a client itself, and make its protected resource metadata name another issuer.
 """
 
+import json
 import secrets
 import socket
 import threading
@@ -24,7 +26,7 @@ from mcp.server.auth.provider import (
     construct_redirect_uri,
 )
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -173,6 +175,19 @@ def oauth_mcp_server(*, registration: bool = True) -> Iterator[OAuthMcpServer]:
     def look(text: str) -> str:
         """Repeat a line of text."""
         return f"looked: {text}"
+
+    @server.tool()
+    def headers(context: Context) -> str:
+        """The headers of the request that called the tool but its token, as JSON."""
+        sent = dict(context.headers or {})
+        sent.pop("authorization", None)
+        return json.dumps(sent)
+
+    @server.tool()
+    def expire() -> str:
+        """Expire every access token issued so far."""
+        served.expire()
+        return "expired"
 
     served = OAuthMcpServer(f"{base}/mcp", provider, base)
 
