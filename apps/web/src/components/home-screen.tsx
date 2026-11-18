@@ -260,7 +260,7 @@ function Ready({
 
 /**
  * Asks for each required secret the instance lacks, as its page's setup card does, and links to
- * its page while a login is pending there too.
+ * its page while a login or an MCP sign-in is pending there too.
  */
 function SetupCard({
   caller,
@@ -279,7 +279,9 @@ function SetupCard({
 }) {
   const titleId = useId()
   const name = instanceName(instance)
-  const elsewhere = setup.logins.some((login) => login.state !== "signed_in")
+  const elsewhere = [...setup.logins, ...(setup.mcp_sign_ins ?? [])].some(
+    (signIn) => signIn.state !== "signed_in",
+  )
   return (
     <section aria-labelledby={titleId}>
       <Card size="sm" variant="attention">

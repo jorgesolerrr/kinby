@@ -82,6 +82,11 @@ export type IntendedState = "stopped" | "running" | "removed" | "deleted";
 export type McpServerName = string;
 export type ProcessState = "missing" | "created" | "starting" | "running" | "stopped" | "failed" | "unavailable";
 /**
+ * How an instance's subscription login or MCP sign-in stands: not signed in yet, or how its
+ * last one ended.
+ */
+export type LoginState = "pending" | "signed_in" | "failed";
+/**
  * How a pick stands against its lock entry and the library.
  */
 export type PickState = "up-to-date" | "behind" | "edited";
@@ -94,10 +99,6 @@ export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "un
  * A change a running instance applies only once it is recreated.
  */
 export type RecreateReason = "secrets";
-/**
- * How an instance's subscription login stands: not signed in yet, or how its last one ended.
- */
-export type LoginState = "pending" | "signed_in" | "failed";
 export type ToolName = string;
 /**
  * The one service an instance sends its web searches to.
@@ -1901,6 +1902,7 @@ export interface InstancePicksResult {
 }
 export interface McpServerPick {
   name: McpServerName;
+  sign_in?: LoginState | null;
   state: PickState;
   trust_hints: boolean;
 }
@@ -1991,6 +1993,7 @@ export interface InstanceStatusResult {
  */
 export interface InstanceSetup {
   logins: LoginSetup[];
+  mcp_sign_ins?: McpSignInSetup[];
   secrets: SecretSetup[];
 }
 /**
@@ -2001,6 +2004,13 @@ export interface LoginSetup {
   id: string;
   label: string;
   operation_id?: string | null;
+  state: LoginState;
+}
+/**
+ * The MCP sign-in of one picked MCP server that asks for one, and how it stands.
+ */
+export interface McpSignInSetup {
+  server: McpServerName;
   state: LoginState;
 }
 /**

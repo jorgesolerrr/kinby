@@ -4,11 +4,8 @@ gated as writes until the user trusts the server's read-only hints (ADR 0111).""
 import asyncio
 import json
 import os
-import socket
-import subprocess
 import sys
-import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -29,6 +26,7 @@ from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
 from kinby.plugins import mcp_connection
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.plugins.mcp_connection import STDERR_TAIL
+from tests.mcp_oauth_server import OAuthMcpServer
 from tests.test_hub import hub_at, hub_client, started_instance
 from tests.test_instance_code import turn
 from tests.test_routines import instance_at
@@ -49,25 +47,6 @@ def echo(
             "include": list(include),
         }
     )
-
-
-@pytest.fixture
-def echo_port() -> Iterator[int]:
-    """The port of an echo server reached over HTTP."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    process = subprocess.Popen([sys.executable, str(SERVER), "http", str(port)])
-    try:
-        for _ in range(100):
-            with socket.socket() as attempt:
-                if attempt.connect_ex(("127.0.0.1", port)) == 0:
-                    break
-            time.sleep(0.1)
-        yield port
-    finally:
-        process.terminate()
-        process.wait()
 
 
 @pytest.fixture(autouse=True)
@@ -390,3 +369,33 @@ def test_a_server_connects_once_the_instance_holds_the_variable_it_lacked(tmp_pa
 
     assert result(payloads).output == "looked: hi"
     assert failed_mcp_servers(instance.manifest.state_dir) == {}
+
+
+def test_a_server_whose_sign_in_is_pending_is_left_out_with_a_notice_that_it_needs_one(
+    tmp_path: Path, oauth_server: OAuthMcpServer
+) -> None:
+    instance = instance_at(tmp_path)
+    remote = McpServer.model_validate({"entry": {"url": oauth_server.url}, "include": ["look"]})
+    write_lock(
+        instance.path,
+        SkillsLock(
+            mcp_servers={
+                "echo": LockedMcpServer(server=echo("look")),
+                "cockpit": LockedMcpServer(server=remote, needs_sign_in=True),
+            }
+        ),
+    )
+
+    payloads = asyncio.run(
+        turn(
+            instance,
+            [("cockpit__look", {"text": "hi"}), ("echo__look", {"text": "hi"})],
+            PermissionMode.FULL_ACCESS,
+        )
+    )
+
+    outputs = [payload.output for payload in payloads if isinstance(payload, ToolResult)]
+    assert outputs == ['Tool "cockpit__look" is not available in this turn.', "looked: hi"]
+    assert failed_mcp_servers(instance.manifest.state_dir) == {
+        "cockpit": 'MCP server "cockpit" needs a sign-in, so the turn ran without it.'
+    }

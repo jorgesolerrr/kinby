@@ -170,6 +170,23 @@ describe("the setup card", () => {
     expect(secret("Webhook secret").getByText("Not set")).toBeDefined()
   })
 
+  it("lists each MCP sign-in with its state, beside the logins", async () => {
+    const signIns: InstanceSetup = {
+      ...setup,
+      mcp_sign_ins: [
+        { server: "cockpit", state: "pending" },
+        { server: "linear", state: "signed_in" },
+      ],
+    }
+    await openPage({ "instance.status": () => status({ setup: signIns }) })
+
+    const mcp = within(card().getByRole("list", { name: "MCP sign-ins" }))
+    const row = (server: string) =>
+      within(mcp.getByRole("listitem", { name: `MCP server ${server}` }))
+    expect(row("cockpit").getByText("Not signed in")).toBeDefined()
+    expect(row("linear").getByText("Signed in")).toBeDefined()
+  })
+
   it("reads a login whose last sign-in failed as failed", async () => {
     const failed: InstanceSetup = {
       ...setup,
@@ -427,6 +444,22 @@ describe("what needs the user on a running instance", () => {
     expect(login("Editor account").getByText("Failed")).toBeDefined()
     expect(needsYou().queryByRole("listitem", { name: "Claude" })).toBeNull()
     expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("lists the MCP sign-ins not signed in", async () => {
+    const signIns: InstanceSetup = {
+      ...setup,
+      logins: [],
+      mcp_sign_ins: [
+        { server: "cockpit", state: "pending" },
+        { server: "linear", state: "signed_in" },
+      ],
+    }
+    await openPage({ "instance.status": () => status({ setup: signIns }) }, running)
+
+    const cockpit = within(needsYou().getByRole("listitem", { name: "MCP server cockpit" }))
+    expect(cockpit.getByText("Not signed in")).toBeDefined()
+    expect(needsYou().queryByRole("listitem", { name: "MCP server linear" })).toBeNull()
   })
 
   it("signs in from its row, and lists the instances again once it ends", async () => {

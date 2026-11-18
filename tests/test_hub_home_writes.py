@@ -786,7 +786,7 @@ def test_kinby_picks_an_mcp_server_for_another_instance_only_once_the_user_appro
         assert operations(payloads) == ["instance_picks_set"]
         assert isinstance(picks["result"], dict), picks
         assert picks["result"]["mcp_servers"] == [
-            {"name": "fetch", "trust_hints": False, "state": "up-to-date"}
+            {"name": "fetch", "trust_hints": False, "state": "up-to-date", "sign_in": None}
         ]
 
     asyncio.run(scenario())

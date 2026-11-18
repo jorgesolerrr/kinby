@@ -27,9 +27,9 @@ _VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     """The included tools of each MCP server the instance picked, connected while the body runs.
 
-    A server that needs a variable the instance's secrets lack, or that does not start or list
-    its tools, is left out, and recorded for the hub to report as an instance notice until a
-    turn connects to it again.
+    A server that needs a sign-in or a variable the instance's secrets lack, or that does not
+    start or list its tools, is left out, and recorded for the hub to report as an instance notice
+    until a turn connects to it again.
     """
     picks = read_lock(instance.path).mcp_servers
     if not picks:
@@ -49,6 +49,9 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     failures: dict[str, str] = {}
     async with AsyncExitStack() as stack:
         for name, pick in sorted(picks.items()):
+            if pick.needs_sign_in:
+                failures[name] = f'MCP server "{name}" needs a sign-in, so the turn ran without it.'
+                continue
             if missing := sorted(
                 variable
                 for variable in needed_variables(pick.server.entry)

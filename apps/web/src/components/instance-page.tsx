@@ -19,6 +19,7 @@ import { BrowserProfiles } from "@/components/browser-profiles"
 import { PageLink, RunBadge } from "@/components/factories-page"
 import { SectionFrame } from "@/components/section-frame"
 import { Secrets } from "@/components/secrets-section"
+import { McpSignInRow, McpSignIns } from "@/components/mcp-sign-ins"
 import { LoginRow, SubscriptionLogins } from "@/components/subscription-logins"
 import { Toolset } from "@/components/toolset"
 import { Vault } from "@/components/vault"
@@ -46,7 +47,7 @@ import { BotIcon, ChevronRightIcon, CirclePauseIcon, LayoutDashboardIcon } from 
  * An instance's Overview, under its header, which holds its name and lifecycle. A stopped instance
  * with setup pending opens on its setup card, and keeps it until it runs. Any other stopped one
  * says it is stopped. A running one opens on what needs the user: its logins not signed in, each
- * to sign in to, and its MCP servers that failed. Through `client`, its own connection, it lists
+ * to sign in to, its MCP sign-ins not signed in, and its MCP servers that failed. Through `client`, its own connection, it lists
  * its views. Running or stopped, it shows its toolset, and one the hub opens browsers for lists its
  * browser profiles and its vault. `onChanged` hears a sign-in or a secret end, so the instances
  * are listed again. While a stop asked from the header drains, `stopping` keeps the running view.
@@ -112,7 +113,10 @@ export function InstancePage({
   if (intended === "running") {
     if (waiting && status === undefined) return null
     const logins = (status?.setup.logins ?? []).filter((login) => login.state !== "signed_in")
-    const needsYou = logins.length > 0 || failed.length > 0
+    const signIns = (status?.setup.mcp_sign_ins ?? []).filter(
+      (signIn) => signIn.state !== "signed_in",
+    )
+    const needsYou = logins.length > 0 || signIns.length > 0 || failed.length > 0
     return (
       <Sections>
         {needsYou && (
@@ -133,6 +137,9 @@ export function InstancePage({
                   variant="default"
                   size="sm"
                 />
+              ))}
+              {signIns.map((signIn) => (
+                <McpSignInRow key={signIn.server} signIn={signIn} variant="default" size="sm" />
               ))}
               {failed.map((notice) => (
                 <li key={noticeKey(notice)} aria-label={noticeTitle(notice)}>
@@ -335,7 +342,7 @@ function SetupCard({
   onChanged: () => void
 }) {
   const titleId = useId()
-  const { logins, secrets } = status.setup
+  const { logins, secrets, mcp_sign_ins: signIns = [] } = status.setup
   return (
     <section aria-labelledby={titleId} className="py-6">
       <Card>
@@ -358,6 +365,12 @@ function SetupCard({
                   logins={logins}
                   onEnded={onChanged}
                 />
+              </section>
+            )}
+            {signIns.length > 0 && (
+              <section className="flex flex-col gap-3">
+                <h3 className="font-medium">MCP sign-ins</h3>
+                <McpSignIns signIns={signIns} />
               </section>
             )}
             {secrets.length > 0 && (

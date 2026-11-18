@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import shutil
 import threading
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 
 from pydantic import TypeAdapter
 
@@ -57,6 +58,7 @@ from kinby.core.config import skill_result
 from kinby.core.errors import InvalidConfig, McpServerNotFound, SkillNotFound, StaleWrite
 from kinby.hub.factories import FactoryStore
 from kinby.hub.git_skills import Address, checked_out, found_skills, parse_address
+from kinby.hub.mcp_sign_ins import asks_for_sign_in, sign_in_state
 from kinby.hub.registry import HubRegistry
 from kinby.instance import Instance
 from kinby.instance.config_changes import (
@@ -81,6 +83,7 @@ from kinby.plugins.instance_tools import validate_name, write_skill
 from kinby.plugins.skills import load_skill_file
 
 _STORED_MCP_SERVER = TypeAdapter(StoredMcpServer)
+_NO_SECRETS: Mapping[str, str] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -402,18 +405,20 @@ class Library:
                     state=PickState.BEHIND
                     if self._library_server(name) not in (None, entry.server)
                     else PickState.UP_TO_DATE,
+                    sign_in=sign_in_state(entry),
                 )
                 for name, entry in sorted(lock.mcp_servers.items())
             ],
             hash=lock_hash(instance_path),
         )
 
-    def pick(
+    async def pick(
         self,
         holder: Instance | Path,
         skills: Sequence[SkillName],
         read: FileHash | None,
         mcp_servers: Sequence[McpServerChoice] = (),
+        secrets: Mapping[str, str] = _NO_SECRETS,
     ) -> InstancePicksResult:
         """Make *skills* and *mcp_servers* the picks of *holder*: an instance, whose config changes
         record them, or a workbench's directory, which keeps no config changes.
@@ -422,10 +427,20 @@ class Library:
         skill without a lock entry is the agent's own, and is never touched. Every copy and the
         new lock are written aside first, so a failed copy leaves the instance as it was. A new MCP
         server's definition is copied into the lock, and a held one keeps its copy, so a library
-        change reaches it only through an update.
+        change reaches it only through an update. The hub asks each new MCP server whether it
+        needs a sign-in, with its URL and headers filled from the holder's *secrets*, and the lock
+        records it.
         """
         path = holder if isinstance(holder, Path) else holder.path
         _refuse_links(path)
+        locked = read_lock(path).mcp_servers
+        new = {
+            choice.name: server
+            for choice in mcp_servers
+            if choice.name not in locked
+            and (server := self._library_server(choice.name)) is not None
+        }
+        asked = await _sign_ins(new, secrets)
         if lock_hash(path) != read:
             raise StaleWrite(f"{SKILLS_LOCK_NAME} changed since it was read. Read the picks again.")
         held = path / SKILLS_DIR
@@ -438,7 +453,7 @@ class Library:
         )
         if refusal is not None:
             raise InvalidConfig({"skills": refusal})
-        servers = self._picked_servers(lock.mcp_servers, mcp_servers)
+        servers = self._picked_servers(lock.mcp_servers, mcp_servers, asked)
         # The lock is a file the agent can edit, so a name in it must stay inside skills/.
         for name in dropped:
             validate_name(name)
@@ -468,13 +483,22 @@ class Library:
                 (Path(temporary) / SKILLS_LOCK_NAME).replace(path / SKILLS_LOCK_NAME)
         return self.picks(path)
 
-    def sync(self, instance_path: Path) -> PickSync:
+    async def sync(self, instance_path: Path, secrets: Mapping[str, str]) -> PickSync:
         """Bring each pick of the instance in *instance_path* up to the library's (ADR 0091).
 
         A pick behind the library is written from it, unless the instance edited its copy, which
         is kept. A pick the library no longer holds is left alone. A copy that already matches the
-        library, as an interrupted update leaves one, only takes its lock entry.
+        library, as an interrupted update leaves one, only takes its lock entry. Each picked MCP
+        server is asked again whether it needs a sign-in, with its URL and headers filled from
+        *secrets*. The lock is read again once they answer, so a pick changed meanwhile stays.
         """
+        asked = await _sign_ins(
+            {
+                name: self._library_server(name) or entry.server
+                for name, entry in read_lock(instance_path).mcp_servers.items()
+            },
+            secrets,
+        )
         lock = read_lock(instance_path)
         folders = _skill_folders(self._directory)
         held = instance_path / SKILLS_DIR
@@ -496,10 +520,14 @@ class Library:
             lock.skills[name] = LockedSkill.of(held / name, self._origin(name))
             relocked = True
         for name, entry in sorted(lock.mcp_servers.items()):
-            library = self._library_server(name)
-            if library is not None and library != entry.server:
-                lock.mcp_servers[name] = entry.model_copy(update={"server": library})
+            server = self._library_server(name) or entry.server
+            needs_sign_in = asked.get(name, entry.needs_sign_in)
+            if server != entry.server:
                 written.append(name)
+            if (server, needs_sign_in) != (entry.server, entry.needs_sign_in):
+                lock.mcp_servers[name] = entry.model_copy(
+                    update={"server": server, "needs_sign_in": needs_sign_in}
+                )
                 relocked = True
         if relocked:
             write_lock(instance_path, lock)
@@ -521,23 +549,28 @@ class Library:
         return folder
 
     def _picked_servers(
-        self, held: dict[McpServerName, LockedMcpServer], choices: Sequence[McpServerChoice]
+        self,
+        held: dict[McpServerName, LockedMcpServer],
+        choices: Sequence[McpServerChoice],
+        asked: Mapping[McpServerName, bool],
     ) -> dict[McpServerName, LockedMcpServer]:
-        """The lock's MCP servers once *choices* are made: a held server keeps its copy."""
+        """The lock's MCP servers once *choices* are made: a held server keeps its copy, and a new
+        one needs a sign-in as *asked* says."""
         servers: dict[McpServerName, LockedMcpServer] = {}
         missing: list[str] = []
         for choice in choices:
-            server = (
-                held[choice.name].server
-                if choice.name in held
-                else self._library_server(choice.name)
-            )
-            if server is None:
-                missing.append(f'The library has no MCP server "{choice.name}".')
-            else:
-                servers[choice.name] = LockedMcpServer(
-                    server=server, trust_hints=choice.trust_hints
+            if choice.name in held:
+                servers[choice.name] = held[choice.name].model_copy(
+                    update={"trust_hints": choice.trust_hints}
                 )
+            elif (server := self._library_server(choice.name)) is not None:
+                servers[choice.name] = LockedMcpServer(
+                    server=server,
+                    trust_hints=choice.trust_hints,
+                    needs_sign_in=asked.get(choice.name, False),
+                )
+            else:
+                missing.append(f'The library has no MCP server "{choice.name}".')
         if missing:
             raise InvalidConfig({"mcp_servers": " ".join(missing)})
         return servers
@@ -596,6 +629,16 @@ class Library:
         if name in self._registry.shipped_skills():
             return LibrarySource.SHIPPED
         return LibrarySource.WRITTEN
+
+
+async def _sign_ins(
+    servers: Mapping[McpServerName, McpServer], secrets: Mapping[str, str]
+) -> dict[McpServerName, bool]:
+    """Whether each of *servers* needs a sign-in, asked all at once."""
+    answers = await asyncio.gather(
+        *(asks_for_sign_in(server.entry, secrets) for server in servers.values())
+    )
+    return dict(zip(servers, answers, strict=True))
 
 
 def _mcp_server_result(name: McpServerName, file: Path) -> McpServerResult:

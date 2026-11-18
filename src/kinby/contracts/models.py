@@ -1548,7 +1548,7 @@ class InstanceSummary(ContractModel):
     runtime_id: str
     storage: list[StorageItem]
     avatar: Avatar
-    #: A declared login is not signed in, or a required secret is not set.
+    #: A declared login or an MCP sign-in is not signed in, or a required secret is not set.
     setup_pending: bool
     #: What the user may want to act on, such as an update the hub offers. None of them stops
     #: the instance.
@@ -1564,7 +1564,8 @@ class InstanceListResult(ContractModel):
 
 
 class LoginState(StrEnum):
-    """How an instance's subscription login stands: not signed in yet, or how its last one ended."""
+    """How an instance's subscription login or MCP sign-in stands: not signed in yet, or how its
+    last one ended."""
 
     PENDING = "pending"
     SIGNED_IN = "signed_in"
@@ -1597,17 +1598,28 @@ class SecretSetup(ContractModel):
     mcp_servers: list[McpServerName] = Field(default_factory=list)
 
 
+class McpSignInSetup(ContractModel):
+    """The MCP sign-in of one picked MCP server that asks for one, and how it stands."""
+
+    server: McpServerName
+    state: LoginState
+
+
 class InstanceSetup(ContractModel):
     """What an instance declares it needs, as its stored descriptor has it, and what is done."""
 
     logins: list[LoginSetup]
     secrets: list[SecretSetup]
+    #: By server.
+    mcp_sign_ins: list[McpSignInSetup] = Field(default_factory=list)
 
     @property
     def pending(self) -> bool:
-        """A login is not signed in, or a required secret is not set."""
-        return any(login.state is not LoginState.SIGNED_IN for login in self.logins) or any(
-            secret.required and not secret.is_set for secret in self.secrets
+        """A login or an MCP sign-in is not signed in, or a required secret is not set."""
+        return (
+            any(login.state is not LoginState.SIGNED_IN for login in self.logins)
+            or any(sign_in.state is not LoginState.SIGNED_IN for sign_in in self.mcp_sign_ins)
+            or any(secret.required and not secret.is_set for secret in self.secrets)
         )
 
 
@@ -3514,6 +3526,8 @@ class McpServerPick(ContractModel):
     trust_hints: bool
     #: Up to date or behind. The instance holds no copy of its own to edit.
     state: PickState
+    #: How its MCP sign-in stands, or null when the server asks for none.
+    sign_in: LoginState | None = None
 
 
 class InstancePicksResult(ContractModel):

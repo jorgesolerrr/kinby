@@ -3,26 +3,45 @@ in each server's read-only hints."""
 
 import asyncio
 import json
+import socket
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from uuid import UUID
 
 from kinby.contracts import (
+    INSTANCE_PICKS_GET,
+    INSTANCE_PICKS_SET,
     INSTANCE_SECRETS_SET,
+    INSTANCE_TOOLSET_GET,
+    INSTANCE_UPDATE,
     ConfigActor,
     ErrorCode,
     ErrorEnvelope,
+    InstancePicksGetCommand,
     InstancePicksResult,
+    InstancePicksSetCommand,
     InstanceSecretsSetCommand,
     InstanceSetup,
+    InstanceToolsetGetCommand,
+    InstanceToolsetResult,
+    InstanceUpdateCommand,
     LifecycleOperationResult,
+    LoginState,
     McpServer,
     McpServerChoice,
     McpServerPick,
+    McpSignInSetup,
+    OperationState,
     PickState,
     SecretSetup,
 )
 from kinby.hub import Hub
 from kinby.instance import inspect_instance
 from kinby.instance.config_changes import ConfigChangeLog
+from tests.mcp_oauth_server import OAuthMcpServer
 from tests.test_hub import finished_operation, hold_search_key, hub_client
 from tests.test_hub_library import reopened
 from tests.test_hub_library_mcp_servers import FETCH
@@ -62,7 +81,11 @@ def test_a_picked_mcp_server_is_pinned_in_the_lock_without_trusting_its_hints(tm
 
     assert _servers(picked) == [FETCHED]
     assert _locked_servers(directory) == {
-        "fetch": {"server": FETCH.model_dump(mode="json"), "trustHints": False}
+        "fetch": {
+            "server": FETCH.model_dump(mode="json"),
+            "trustHints": False,
+            "needsSignIn": False,
+        }
     }
     assert _picks(hub_client(hub), directory) == picked
 
@@ -132,6 +155,7 @@ def test_a_library_change_to_a_picked_server_reaches_the_instance_only_through_a
     assert _locked_servers(directory)["fetch"] == {
         "server": changed.model_dump(mode="json"),
         "trustHints": True,
+        "needsSignIn": False,
     }
     assert _servers(_picks(hub_client(hub), directory)) == [
         McpServerPick(name="fetch", trust_hints=True, state=PickState.UP_TO_DATE)
@@ -164,6 +188,7 @@ def test_the_hub_converts_a_picks_locked_copy_in_the_old_shape(tmp_path):
             "include": ["fetch"],
         },
         "trustHints": True,
+        "needsSignIn": False,
     }
     assert _servers(_picks(hub_client(hub), directory)) == [
         McpServerPick(name="fetch", trust_hints=True, state=PickState.BEHIND)
@@ -214,3 +239,214 @@ def test_a_variable_a_picked_server_needs_and_the_instance_lacks_is_pending_setu
         token.model_copy(update={"is_set": True})
     ]
     assert not filled.pending
+
+
+def _remote(url: str, headers: dict[str, str] | None = None) -> McpServer:
+    return McpServer.model_validate(
+        {"entry": {"url": url, "headers": headers or {}}, "include": ["look"]}
+    )
+
+
+def _setup_and_toolset(hub: Hub, instance_id: UUID) -> tuple[InstanceSetup, InstanceToolsetResult]:
+    async def scenario() -> tuple[InstanceSetup, InstanceToolsetResult]:
+        toolset = await hub_client(hub).call(
+            INSTANCE_TOOLSET_GET, InstanceToolsetGetCommand(instance_id=instance_id)
+        )
+        assert isinstance(toolset, InstanceToolsetResult), toolset
+        return await setup_of(hub, instance_id), toolset
+
+    return asyncio.run(scenario())
+
+
+def test_a_picked_server_that_asks_for_a_sign_in_records_it_and_its_sign_in_is_pending(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    instance_id = _instance_id(directory)
+    hold_search_key(hub, instance_id)
+    _library_server(hub, "cockpit", _remote(oauth_server.url))
+
+    picked = _pick_servers(hub, directory, McpServerChoice(name="cockpit"))
+
+    pending = McpServerPick(
+        name="cockpit", trust_hints=False, state=PickState.UP_TO_DATE, sign_in=LoginState.PENDING
+    )
+    assert _servers(picked) == [pending]
+    assert _locked_servers(directory)["cockpit"]["needsSignIn"] is True
+    setup, toolset = _setup_and_toolset(hub, instance_id)
+    assert setup.mcp_sign_ins == [McpSignInSetup(server="cockpit", state=LoginState.PENDING)]
+    assert setup.pending
+    assert toolset.mcp_servers == [pending]
+
+
+def test_a_local_server_an_open_one_and_one_with_its_own_authorization_need_no_sign_in(
+    tmp_path, oauth_server: OAuthMcpServer, echo_port: int
+):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    instance_id = _instance_id(directory)
+    hold_search_key(hub, instance_id)
+    _library_server(hub, "fetch", FETCH)
+    _library_server(hub, "open", _remote(f"http://127.0.0.1:{echo_port}/mcp"))
+    _library_server(hub, "keyed", _remote(oauth_server.url, {"authorization": "Bearer api-key"}))
+
+    picked = _pick_servers(
+        hub,
+        directory,
+        McpServerChoice(name="fetch"),
+        McpServerChoice(name="open"),
+        McpServerChoice(name="keyed"),
+    )
+
+    assert [server.sign_in for server in _servers(picked)] == [None, None, None]
+    assert [server["needsSignIn"] for server in _locked_servers(directory).values()] == [
+        False,
+        False,
+        False,
+    ]
+    setup, _ = _setup_and_toolset(hub, instance_id)
+    assert setup.mcp_sign_ins == []
+    assert not setup.pending
+
+
+def test_a_server_the_hub_cannot_reach_is_picked_and_an_update_asks_it_again(
+    tmp_path, oauth_server: OAuthMcpServer
+):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    instance_id = _instance_id(directory)
+    _library_server(hub, "cockpit", _remote("${COCKPIT_URL}"))
+
+    picked = _pick_servers(hub, directory, McpServerChoice(name="cockpit"))
+
+    assert _servers(picked) == [FETCHED.model_copy(update={"name": "cockpit"})]
+
+    async def reachable() -> None:
+        client = hub_client(hub)
+        replaced = await client.call(
+            INSTANCE_SECRETS_SET,
+            InstanceSecretsSetCommand(
+                instance_id=instance_id, secrets={"COCKPIT_URL": oauth_server.url}
+            ),
+        )
+        assert isinstance(replaced, LifecycleOperationResult)
+        await finished_operation(client, replaced)
+
+    asyncio.run(reachable())
+    _update(hub, directory)
+
+    assert _servers(_picks(hub_client(hub), directory)) == [
+        McpServerPick(
+            name="cockpit",
+            trust_hints=False,
+            state=PickState.UP_TO_DATE,
+            sign_in=LoginState.PENDING,
+        )
+    ]
+
+
+class _KeyedHandler(BaseHTTPRequestHandler):
+    """A server that takes an API key in X-Api-Key, and asks anyone without it to sign in."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        if self.headers.get("X-Api-Key") == "key":
+            self.send_response(200)
+        else:
+            self.send_response(401)
+            self.send_header(
+                "WWW-Authenticate",
+                'Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource"',
+            )
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+@contextmanager
+def _keyed_server() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _KeyedHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/mcp"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def test_a_server_is_asked_with_the_headers_its_entry_sets(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    with (directory / ".env").open("a", encoding="utf-8") as env:
+        env.write("API_KEY=key\n")
+    with _keyed_server() as url:
+        _library_server(hub, "keyed", _remote(url, {"X-Api-Key": "${API_KEY}"}))
+
+        picked = _pick_servers(hub, directory, McpServerChoice(name="keyed"))
+
+    assert _servers(picked) == [FETCHED.model_copy(update={"name": "keyed"})]
+
+
+def test_a_pick_changed_while_an_update_asks_its_servers_is_kept(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    instance_id = _instance_id(directory)
+    listening = socket.socket()
+    listening.bind(("127.0.0.1", 0))
+    # Not listening yet, so the pick's own asking is refused at once.
+    remote = _remote(f"http://127.0.0.1:{listening.getsockname()[1]}/mcp")
+    _library_server(hub, "cockpit", remote)
+    _pick_servers(hub, directory, McpServerChoice(name="cockpit"))
+    changed = remote.model_copy(update={"include": ["look", "post"]})
+    _library_server(hub, "cockpit", changed)
+    asked, answer = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        connection, _ = listening.accept()
+        asked.set()
+        answer.wait()
+        connection.close()
+
+    listening.listen()
+    holder = threading.Thread(target=hold)
+    holder.start()
+
+    async def scenario() -> tuple[object, OperationState]:
+        client = hub_client(hub)
+        accepted = await client.call(
+            INSTANCE_UPDATE, InstanceUpdateCommand(instance_id=instance_id, revision="v2")
+        )
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert await asyncio.to_thread(asked.wait, 30)
+        read = await client.call(
+            INSTANCE_PICKS_GET, InstancePicksGetCommand(instance_id=instance_id)
+        )
+        assert isinstance(read, InstancePicksResult), read
+        trusted = await client.call(
+            INSTANCE_PICKS_SET,
+            InstancePicksSetCommand(
+                instance_id=instance_id,
+                skills=[],
+                mcp_servers=[McpServerChoice(name="cockpit", trust_hints=True)],
+                hash=read.hash,
+            ),
+        )
+        answer.set()
+        return trusted, (await finished_operation(client, accepted)).state
+
+    try:
+        trusted, state = asyncio.run(scenario())
+    finally:
+        answer.set()
+        holder.join()
+        listening.close()
+
+    assert isinstance(trusted, InstancePicksResult), trusted
+    assert state is OperationState.SUCCEEDED
+    assert _locked_servers(directory)["cockpit"] == {
+        "server": changed.model_dump(mode="json"),
+        "trustHints": True,
+        "needsSignIn": False,
+    }

@@ -119,8 +119,8 @@ type StoredMcpServer = Annotated[McpServer, BeforeValidator(_converted)]
 
 
 class LockedMcpServer(BaseModel):
-    """One MCP server pick: the library's definition as copied, and whether the user trusts its
-    read-only hints."""
+    """One MCP server pick: the library's definition as copied, whether the user trusts its
+    read-only hints, and whether the server asked the hub for a sign-in."""
 
     model_config = ConfigDict(
         alias_generator=to_camel, validate_by_name=True, serialize_by_alias=True, frozen=True
@@ -128,6 +128,7 @@ class LockedMcpServer(BaseModel):
 
     server: StoredMcpServer
     trust_hints: bool = False
+    needs_sign_in: bool = False
 
 
 class SkillsLock(BaseModel):

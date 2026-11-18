@@ -269,6 +269,7 @@ from kinby.contracts import (
     McpRegistrySearchResult,
     McpServerFailed,
     McpServerName,
+    McpSignInSetup,
     Method,
     NewerVersion,
     OperationGetCommand,
@@ -400,6 +401,7 @@ from kinby.hub.control import (
 from kinby.hub.factories import FactoryStore
 from kinby.hub.library import Library
 from kinby.hub.mcp_registry import REGISTRY_URL, search
+from kinby.hub.mcp_sign_ins import sign_in_state
 from kinby.hub.models import (
     ContainerRuntime,
     ImageArtifact,
@@ -455,7 +457,7 @@ from kinby.instance import (
 from kinby.instance.code import declared_secrets, exposed_tools, packages
 from kinby.instance.layout import SYSTEM_NAME
 from kinby.instance.read_only_tools import read_only_tools
-from kinby.instance.skills_lock import lock_hash, read_lock
+from kinby.instance.skills_lock import LockedMcpServer, lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.memory import GraphStore
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
@@ -1545,7 +1547,7 @@ class Hub:
             )
             if picks:
                 self._record(operation_id, "picks", f"Copying {', '.join(picks)} from the library.")
-                self.library.pick(inspect_instance(staging), picks, lock_hash(staging))
+                await self.library.pick(inspect_instance(staging), picks, lock_hash(staging))
             return declared.logins
 
         operation_id = self._begin_create(record, write, secrets.values(), requester)
@@ -2202,8 +2204,12 @@ class Hub:
     async def set_picks(self, command: InstancePicksSetCommand) -> InstancePicksResult:
         """Change the instance's picks in place. A running instance reads them at its next turn."""
         record = self._active_instance(command.instance_id)
-        return self.library.pick(
-            inspect_instance(record.path), command.skills, command.hash, command.mcp_servers
+        return await self.library.pick(
+            inspect_instance(record.path),
+            command.skills,
+            command.hash,
+            command.mcp_servers,
+            self._environment(record.path),
         )
 
     async def search_mcp_registry(
@@ -2592,7 +2598,8 @@ class Hub:
         lock = read_lock(record.path)
         if lock.skills or lock.mcp_servers:
             self._record(operation_id, "picks", "Bringing the picks up to the library's.")
-            self.registry.succeed_step(operation_id, self.library.sync(record.path).detail)
+            synced = await self.library.sync(record.path, self._environment(record.path))
+            self.registry.succeed_step(operation_id, synced.detail)
         await self._create_container(operation_id, record, artifact.image_id)
         self.registry.record_selection(record.instance_id, revision, artifact)
         running = record.intended_state is IntendedState.RUNNING
@@ -3325,13 +3332,18 @@ class Hub:
             return ()
 
     @staticmethod
-    def _mcp_variables(record: ManagedInstance) -> Mapping[str, Sequence[McpServerName]]:
-        """The picked MCP servers that need each variable, by the variable."""
+    def _mcp_picks(record: ManagedInstance) -> Mapping[McpServerName, LockedMcpServer]:
         try:
-            picks = read_lock(record.path).mcp_servers
+            return read_lock(record.path).mcp_servers
         except ValueError:
             # A lock the hub cannot read never stops it listing the instance.
             return {}
+
+    @staticmethod
+    def _mcp_variables(
+        picks: Mapping[McpServerName, LockedMcpServer],
+    ) -> Mapping[str, Sequence[McpServerName]]:
+        """The picked MCP servers that need each variable, by the variable."""
         needing: dict[str, list[McpServerName]] = {}
         for name, pick in sorted(picks.items()):
             for variable in needed_variables(pick.server.entry):
@@ -3349,6 +3361,7 @@ class Hub:
             if (running := self.registry.running_login(record.instance_id, login.id))
         }
         manifest = files.manifest
+        picks = self._mcp_picks(record)
         return instance_setup(
             description,
             logins=self.registry.login_states(record.instance_id),
@@ -3358,7 +3371,12 @@ class Hub:
             model=manifest.models.main if manifest is not None else None,
             search_key=manifest.tools.search_key if manifest is not None else None,
             code_secrets=self._code_secrets(record),
-            mcp_variables=self._mcp_variables(record),
+            mcp_variables=self._mcp_variables(picks),
+            mcp_sign_ins=[
+                McpSignInSetup(server=name, state=state)
+                for name, pick in sorted(picks.items())
+                if (state := sign_in_state(pick)) is not None
+            ],
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:
@@ -3554,7 +3572,7 @@ class Hub:
         """Change the workbench's picks in its directory, which its container mounts, as an
         instance's are."""
         record = self._active_workbench(command.workbench_id)
-        picks = self.library.pick(record.path, command.skills, command.hash)
+        picks = await self.library.pick(record.path, command.skills, command.hash)
         return WorkbenchPicksResult(picks=picks.picks, hash=picks.hash)
 
     async def delete_workbench(self, command: WorkbenchDeleteCommand) -> WorkbenchOperationResult:
