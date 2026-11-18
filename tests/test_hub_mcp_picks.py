@@ -3,26 +3,38 @@ in each server's read-only hints."""
 
 import asyncio
 import json
+import socket
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
 
 from kinby.contracts import (
+    INSTANCE_PICKS_GET,
+    INSTANCE_PICKS_SET,
     INSTANCE_SECRETS_SET,
     INSTANCE_TOOLSET_GET,
+    INSTANCE_UPDATE,
     ConfigActor,
     ErrorCode,
     ErrorEnvelope,
+    InstancePicksGetCommand,
     InstancePicksResult,
+    InstancePicksSetCommand,
     InstanceSecretsSetCommand,
     InstanceSetup,
     InstanceToolsetGetCommand,
     InstanceToolsetResult,
+    InstanceUpdateCommand,
     LifecycleOperationResult,
     LoginState,
     McpServer,
     McpServerChoice,
     McpServerPick,
     McpSignInSetup,
+    OperationState,
     PickState,
     SecretSetup,
 )
@@ -332,3 +344,109 @@ def test_a_server_the_hub_cannot_reach_is_picked_and_an_update_asks_it_again(
             sign_in=LoginState.PENDING,
         )
     ]
+
+
+class _KeyedHandler(BaseHTTPRequestHandler):
+    """A server that takes an API key in X-Api-Key, and asks anyone without it to sign in."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        if self.headers.get("X-Api-Key") == "key":
+            self.send_response(200)
+        else:
+            self.send_response(401)
+            self.send_header(
+                "WWW-Authenticate",
+                'Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource"',
+            )
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+@contextmanager
+def _keyed_server() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _KeyedHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/mcp"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def test_a_server_is_asked_with_the_headers_its_entry_sets(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    with (directory / ".env").open("a", encoding="utf-8") as env:
+        env.write("API_KEY=key\n")
+    with _keyed_server() as url:
+        _library_server(hub, "keyed", _remote(url, {"X-Api-Key": "${API_KEY}"}))
+
+        picked = _pick_servers(hub, directory, McpServerChoice(name="keyed"))
+
+    assert _servers(picked) == [FETCHED.model_copy(update={"name": "keyed"})]
+
+
+def test_a_pick_changed_while_an_update_asks_its_servers_is_kept(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    instance_id = _instance_id(directory)
+    listening = socket.socket()
+    listening.bind(("127.0.0.1", 0))
+    # Not listening yet, so the pick's own asking is refused at once.
+    remote = _remote(f"http://127.0.0.1:{listening.getsockname()[1]}/mcp")
+    _library_server(hub, "cockpit", remote)
+    _pick_servers(hub, directory, McpServerChoice(name="cockpit"))
+    changed = remote.model_copy(update={"include": ["look", "post"]})
+    _library_server(hub, "cockpit", changed)
+    asked, answer = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        connection, _ = listening.accept()
+        asked.set()
+        answer.wait()
+        connection.close()
+
+    listening.listen()
+    holder = threading.Thread(target=hold)
+    holder.start()
+
+    async def scenario() -> tuple[object, OperationState]:
+        client = hub_client(hub)
+        accepted = await client.call(
+            INSTANCE_UPDATE, InstanceUpdateCommand(instance_id=instance_id, revision="v2")
+        )
+        assert isinstance(accepted, LifecycleOperationResult), accepted
+        assert await asyncio.to_thread(asked.wait, 30)
+        read = await client.call(
+            INSTANCE_PICKS_GET, InstancePicksGetCommand(instance_id=instance_id)
+        )
+        assert isinstance(read, InstancePicksResult), read
+        trusted = await client.call(
+            INSTANCE_PICKS_SET,
+            InstancePicksSetCommand(
+                instance_id=instance_id,
+                skills=[],
+                mcp_servers=[McpServerChoice(name="cockpit", trust_hints=True)],
+                hash=read.hash,
+            ),
+        )
+        answer.set()
+        return trusted, (await finished_operation(client, accepted)).state
+
+    try:
+        trusted, state = asyncio.run(scenario())
+    finally:
+        answer.set()
+        holder.join()
+        listening.close()
+
+    assert isinstance(trusted, InstancePicksResult), trusted
+    assert state is OperationState.SUCCEEDED
+    assert _locked_servers(directory)["cockpit"] == {
+        "server": changed.model_dump(mode="json"),
+        "trustHints": True,
+        "needsSignIn": False,
+    }

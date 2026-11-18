@@ -27,8 +27,9 @@ _INITIALIZE = {
 
 
 async def asks_for_sign_in(entry: McpServerEntry, secrets: Mapping[str, str]) -> bool:
-    """Whether the server *entry* defines, at its URL filled from *secrets*, asks for a sign-in:
-    asked without credentials, it answers 401 and points to its protected resource metadata.
+    """Whether the server *entry* defines asks for a sign-in: asked at its URL with its headers,
+    each filled from *secrets*, and no sign-in's token, it answers 401 and points to its protected
+    resource metadata.
 
     A local server and an entry that sets its own Authorization header are never asked. A server
     that cannot be reached asks for none.
@@ -43,7 +44,10 @@ async def asks_for_sign_in(entry: McpServerEntry, secrets: Mapping[str, str]) ->
             session.post(
                 filled(entry.url, secrets),
                 json=_INITIALIZE,
-                headers={"Accept": "application/json, text/event-stream"},
+                headers={
+                    **{name: filled(value, secrets) for name, value in entry.headers.items()},
+                    "Accept": "application/json, text/event-stream",
+                },
             ) as answer,
         ):
             return answer.status == 401 and "resource_metadata=" in answer.headers.get(

@@ -428,7 +428,8 @@ class Library:
         new lock are written aside first, so a failed copy leaves the instance as it was. A new MCP
         server's definition is copied into the lock, and a held one keeps its copy, so a library
         change reaches it only through an update. The hub asks each new MCP server whether it
-        needs a sign-in, at its URL filled from the holder's *secrets*, and the lock records it.
+        needs a sign-in, with its URL and headers filled from the holder's *secrets*, and the lock
+        records it.
         """
         path = holder if isinstance(holder, Path) else holder.path
         _refuse_links(path)
@@ -488,14 +489,17 @@ class Library:
         A pick behind the library is written from it, unless the instance edited its copy, which
         is kept. A pick the library no longer holds is left alone. A copy that already matches the
         library, as an interrupted update leaves one, only takes its lock entry. Each picked MCP
-        server is asked again whether it needs a sign-in, at its URL filled from *secrets*.
+        server is asked again whether it needs a sign-in, with its URL and headers filled from
+        *secrets*. The lock is read again once they answer, so a pick changed meanwhile stays.
         """
+        asked = await _sign_ins(
+            {
+                name: self._library_server(name) or entry.server
+                for name, entry in read_lock(instance_path).mcp_servers.items()
+            },
+            secrets,
+        )
         lock = read_lock(instance_path)
-        servers = {
-            name: self._library_server(name) or entry.server
-            for name, entry in lock.mcp_servers.items()
-        }
-        asked = await _sign_ins(servers, secrets)
         folders = _skill_folders(self._directory)
         held = instance_path / SKILLS_DIR
         written: list[str] = []
@@ -516,11 +520,13 @@ class Library:
             lock.skills[name] = LockedSkill.of(held / name, self._origin(name))
             relocked = True
         for name, entry in sorted(lock.mcp_servers.items()):
-            if servers[name] != entry.server:
+            server = self._library_server(name) or entry.server
+            needs_sign_in = asked.get(name, entry.needs_sign_in)
+            if server != entry.server:
                 written.append(name)
-            if (servers[name], asked[name]) != (entry.server, entry.needs_sign_in):
+            if (server, needs_sign_in) != (entry.server, entry.needs_sign_in):
                 lock.mcp_servers[name] = entry.model_copy(
-                    update={"server": servers[name], "needs_sign_in": asked[name]}
+                    update={"server": server, "needs_sign_in": needs_sign_in}
                 )
                 relocked = True
         if relocked:
