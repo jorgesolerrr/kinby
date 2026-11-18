@@ -5,9 +5,11 @@ metadata and dynamic client registration, its authorize endpoint redirects back 
 code, and its token endpoint issues tokens a test can expire or revoke. Its MCP endpoint offers
 a caller with a live access token the echo server's ``look`` and ``headers``, and ``expire``,
 which expires the caller's token in the middle of a turn. A test can turn registration off
-and register a client itself, and make its protected resource metadata name another issuer.
+and register a client itself, make its protected resource metadata name another issuer, issue no
+refresh tokens, and hold a refresh until it releases it.
 """
 
+import asyncio
 import json
 import secrets
 import socket
@@ -36,7 +38,12 @@ from starlette.routing import Route
 class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
     """The authorization server's clients, codes and tokens, in memory."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, refresh_tokens: bool) -> None:
+        self.refresh_tokens = refresh_tokens
+        #: Set once a refresh arrives, and the refresh waits until released is.
+        self.refreshing = threading.Event()
+        self.released = threading.Event()
+        self.released.set()
         self.clients: dict[str, OAuthClientInformationFull] = {}
         self.codes: dict[str, AuthorizationCode] = {}
         self.access: dict[str, AccessToken] = {}
@@ -80,6 +87,8 @@ class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
+        self.refreshing.set()
+        await asyncio.to_thread(self.released.wait)
         return self.refresh.get(refresh_token)
 
     async def exchange_refresh_token(
@@ -105,14 +114,16 @@ class _Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken
             scopes=scopes,
             expires_at=int(time.time()) + 3600,
         )
-        refresh = RefreshToken(token=secrets.token_urlsafe(), client_id=client_id, scopes=scopes)
         self.access[access.token] = access
-        self.refresh[refresh.token] = refresh
+        refresh = None
+        if self.refresh_tokens:
+            refresh = secrets.token_urlsafe()
+            self.refresh[refresh] = RefreshToken(token=refresh, client_id=client_id, scopes=scopes)
         return OAuthToken(
             access_token=access.token,
             expires_in=3600,
             scope=" ".join(scopes) or None,
-            refresh_token=refresh.token,
+            refresh_token=refresh,
         )
 
 
@@ -145,6 +156,16 @@ class OAuthMcpServer:
         for token, access in self._provider.access.items():
             self._provider.access[token] = access.model_copy(update={"expires_at": 0})
 
+    def hold_refreshes(self) -> threading.Event:
+        """Hold the next refresh until the test releases it, and return the event set once it
+        arrives."""
+        self._provider.refreshing.clear()
+        self._provider.released.clear()
+        return self._provider.refreshing
+
+    def release_refreshes(self) -> None:
+        self._provider.released.set()
+
     def revoke(self) -> None:
         """Revoke every access and refresh token issued so far, as a user removing the client."""
         self._provider.access.clear()
@@ -152,13 +173,15 @@ class OAuthMcpServer:
 
 
 @contextmanager
-def oauth_mcp_server(*, registration: bool = True) -> Iterator[OAuthMcpServer]:
+def oauth_mcp_server(
+    *, registration: bool = True, refresh_tokens: bool = True
+) -> Iterator[OAuthMcpServer]:
     listening = socket.socket()
     listening.bind(("127.0.0.1", 0))
     # Listening before the server runs queues the first requests rather than refusing them.
     listening.listen()
     base = f"http://127.0.0.1:{listening.getsockname()[1]}"
-    provider = _Provider()
+    provider = _Provider(refresh_tokens=refresh_tokens)
     server = MCPServer(
         "oauth-echo",
         auth_server_provider=provider,
@@ -207,6 +230,7 @@ def oauth_mcp_server(*, registration: bool = True) -> Iterator[OAuthMcpServer]:
     try:
         yield served
     finally:
+        provider.released.set()
         running.should_exit = True
         thread.join()
         listening.close()

@@ -178,8 +178,8 @@ class McpSignIns:
         self, instance_id: UUID, server: McpServerName, refused: str | None = None
     ) -> str:
         """A current access token of the instance's sign-in to *server*, renewed first when it
-        runs out within RENEW_BEFORE or the server *refused* it. A sign-in whose refresh token
-        the server refuses turns pending."""
+        runs out within RENEW_BEFORE or the server *refused* it. One with no refresh token stays
+        until it runs out. A sign-in whose refresh token the server refuses turns pending."""
         from kinby.hub.mcp_sign_in_flow import SignedIn, renewed
 
         async with self._renewing[instance_id]:
@@ -187,20 +187,24 @@ class McpSignIns:
             if not isinstance(signed_in, SignedIn):
                 raise McpSignInPending(f'MCP server "{server}" needs a sign-in.')
             expires_at = signed_in.expires_at
+            ahead = RENEW_BEFORE if signed_in.tokens.refresh_token else timedelta(0)
             if signed_in.tokens.access_token != refused and (
-                expires_at is None or self._clock() < expires_at - RENEW_BEFORE
+                expires_at is None or self._clock() < expires_at - ahead
             ):
                 return signed_in.tokens.access_token
             renewal = await renewed(signed_in, self._clock)
+            kept = self._read(instance_id)
+            # A sign-in or a sign-out while the renewal ran stands.
+            if kept.get(server) == signed_in:
+                if renewal is None:
+                    del kept[server]
+                else:
+                    kept[server] = renewal
+                self._write(instance_id, kept)
             if renewal is None:
-                self.sign_out(instance_id, server)
                 raise McpSignInPending(
                     f'MCP server "{server}" stopped accepting its sign-in, so it needs a new one.'
                 )
-            kept = self._read(instance_id)
-            # Signing out while the renewal ran keeps it signed out.
-            if server in kept:
-                self._write(instance_id, kept | {server: renewal})
             return renewal.tokens.access_token
 
     def sign_out(self, instance_id: UUID, server: McpServerName) -> None:

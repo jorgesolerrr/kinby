@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import aiohttp
+import pytest
 from mcp.shared.auth import OAuthClientInformationFull
 
 from kinby.cli.client import ContractClient
@@ -571,5 +572,56 @@ def test_the_hub_route_gives_no_token_for_a_server_the_instance_signs_in_to_nowh
             unpicked = await _token(hub, address, instance_id)
 
         assert error_code(unpicked) == ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+def test_a_sign_in_with_no_refresh_token_gives_its_access_token_until_it_runs_out(tmp_path):
+    async def scenario() -> None:
+        clock = _Clock()
+        hub = _hub(tmp_path, clock=clock)
+        with oauth_mcp_server(refresh_tokens=False) as server:
+            instance_id = await _picked(hub, {"url": server.url})
+            async with served(hub) as address:
+                await _signed_in(hub, instance_id, address)
+                first = _access_token(await _token(hub, address, instance_id))
+                clock.now += timedelta(minutes=58)
+                close = _access_token(await _token(hub, address, instance_id))
+                clock.now += timedelta(minutes=3)
+                ran_out = await _token(hub, address, instance_id)
+
+        assert close == first
+        assert error_code(ran_out) == ErrorCode.MCP_SIGN_IN_PENDING
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_signing_in_again_while_a_renewal_runs_keeps_the_new_sign_in(
+    tmp_path, oauth_server: OAuthMcpServer, refused: bool
+):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        instance_id = await _picked(hub, {"url": oauth_server.url})
+        async with served(hub) as address:
+            await _signed_in(hub, instance_id, address)
+            given = _access_token(await _token(hub, address, instance_id))
+            if refused:
+                oauth_server.revoke()
+            before = set(oauth_server.tokens())
+            refreshing = oauth_server.hold_refreshes()
+            renewal = asyncio.create_task(_token(hub, address, instance_id, refused=given))
+            assert await asyncio.to_thread(refreshing.wait, 5)
+
+            await _signed_in(hub, instance_id, address)
+            signed_in_again = set(oauth_server.tokens()) - before
+            oauth_server.release_refreshes()
+            await renewal
+            kept = _access_token(await _token(hub, address, instance_id))
+
+        assert kept in signed_in_again
+        assert await _sign_ins(hub, instance_id) == [
+            McpSignInSetup(server="cockpit", state=LoginState.SIGNED_IN)
+        ]
 
     asyncio.run(scenario())
