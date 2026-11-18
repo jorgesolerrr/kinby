@@ -40,6 +40,7 @@ The hub's own reads:
 - Browser: `browser.profile.list` and `browser.vault.list`, an instance's browser profiles and vault entries by name and site. You never see a vault entry's values, and only the user adds, changes or removes a profile or a vault entry.
 - Setup: `image.describe`, `hub.secret.list`.
 - Library: `library.list`, `library.skill.read`, `library.skill.file.read`, `library.skill.check`, `library.git.preview`, `library.mcp_server.read`. A library skill's `SKILL.md` comes from `library.skill.read` and each of its other files from `library.skill.file.read`, by the path `library.skill.read` lists it under. Never fetch library content from the network, or from the hub's files with bash.
+- MCP Registry: `mcp_registry.search` takes search `words` and lists the public catalogue's matching servers. Each comes with the `entry` kinby would write, or the `reason` kinby can't run it, and the `variables` the instance's secrets need. Only the words leave the hub, and nothing joins the library: to add a result, propose its entry with `library_mcp_server_write`.
 - Factories: `factory.list`, `factory.get`, `factory.check`, `factory.run.list`, `factory.run.get`.
 - Lines and workbenches: `line.list`, `line.get`, `line.setup.describe`, `workbench.list`, `workbench.get`. A line's runs come from `factory.run.list` given the line's id alone, and one run with its step attempts from `factory.run.get`.
 - Usage: `stats.summary`.

@@ -123,6 +123,7 @@ from kinby.contracts import (
     LINE_SETUP,
     LINE_SETUP_DESCRIBE,
     LINE_UPDATE,
+    MCP_REGISTRY_SEARCH,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
     NOTIFICATION_REPLY,
@@ -264,6 +265,8 @@ from kinby.contracts import (
     LoginPrompt,
     LoginSetup,
     LoginState,
+    McpRegistrySearchCommand,
+    McpRegistrySearchResult,
     McpServerFailed,
     Method,
     NewerVersion,
@@ -395,6 +398,7 @@ from kinby.hub.control import (
 )
 from kinby.hub.factories import FactoryStore
 from kinby.hub.library import Library
+from kinby.hub.mcp_registry import REGISTRY_URL, search
 from kinby.hub.models import (
     ContainerRuntime,
     ImageArtifact,
@@ -883,11 +887,12 @@ class Hub:
         sleep: Sleep = asyncio.sleep,
         browser: BrowserRuntime | None = None,
         browser_limits: BrowserLimits = _BROWSER_LIMITS,
+        mcp_registry_url: str = REGISTRY_URL,
     ) -> None:
         """*private_url* is where the hub's instances reach it on their private network, and
         *public_url* where the user reaches its web app. *channel_kinds* stand in for the kinds
         installed packages expose. Browser-on instances get browsers on the service *browser*
-        runs, and without it none."""
+        runs, and without it none. *mcp_registry_url* is the MCP Registry the hub searches."""
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self._directory_lock = _acquire_directory(self.directory)
@@ -905,6 +910,7 @@ class Hub:
             self._runtime = runtime
             self._images = images
             self._private_url = private_url
+            self._mcp_registry_url = mcp_registry_url
             # Links and channel routes append a path that starts with a slash.
             public_url = public_url.rstrip("/") if public_url is not None else None
             self.factories = FactoryStore(self.directory / _FACTORIES_DIR, shipped_factories)
@@ -1053,6 +1059,7 @@ class Hub:
         dispatcher.register(LIBRARY_MCP_SERVER_READ, self.library.read_mcp_server)
         dispatcher.register(LIBRARY_MCP_SERVER_WRITE, self.library.write_mcp_server)
         dispatcher.register(LIBRARY_MCP_SERVER_DELETE, self.library.delete_mcp_server)
+        dispatcher.register(MCP_REGISTRY_SEARCH, self.search_mcp_registry)
         dispatcher.register(INSTANCE_PICKS_GET, self.picks)
         dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
         dispatcher.register(INSTANCE_TOOLSET_GET, self.toolset)
@@ -2197,6 +2204,11 @@ class Hub:
         return self.library.pick(
             inspect_instance(record.path), command.skills, command.hash, command.mcp_servers
         )
+
+    async def search_mcp_registry(
+        self, command: McpRegistrySearchCommand
+    ) -> McpRegistrySearchResult:
+        return await search(self._mcp_registry_url, command.words)
 
     async def toolset(self, command: InstanceToolsetGetCommand) -> InstanceToolsetResult:
         """What the instance can do outside its workspace, read from its files, so a stopped

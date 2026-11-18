@@ -219,6 +219,12 @@ class InstanceUnavailable(CoreError):
     retryable = True
 
 
+class McpRegistryUnreachable(CoreError):
+    """The MCP Registry did not answer a search, or answered it with an error."""
+
+    retryable = True
+
+
 class InstanceAnswerLost(InstanceUnavailable):
     """The instance took the hub's call and its answer never came, so it may have acted."""
 

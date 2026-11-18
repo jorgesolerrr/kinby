@@ -3339,16 +3339,16 @@ type EnvVariable = Annotated[
 
 
 def _launcher(command: str) -> str:
-    if command != "uvx":
-        raise ValueError(f"kinby runs a local server with uvx only, not {command}.")
+    if command not in {"uvx", "npx"}:
+        raise ValueError(f"kinby runs a local server with uvx or npx, not {command}.")
     return command
 
 
 def _package_first(args: list[str]) -> list[str]:
     if not args or not re.fullmatch(r"[^-\s$]\S*", args[0]):
         raise ValueError(
-            "The first argument is the package uvx runs, never an option or a variable, which "
-            "uvx would take as its own."
+            "The first argument is the package the launcher runs, never an option or a variable, "
+            "which the launcher would take as its own."
         )
     return args
 
@@ -3430,6 +3430,40 @@ class LibraryMcpServerWriteCommand(ContractModel):
 class LibraryMcpServerDeleteCommand(ContractModel):
     name: McpServerName
     hash: FileHash
+
+
+class McpRegistrySearchCommand(ContractModel):
+    """Search the MCP Registry, the public catalogue of MCP servers. Only the words reach it, and
+    nothing joins the library."""
+
+    words: Annotated[str, Field(min_length=1)]
+
+
+class McpRegistryVariable(ContractModel):
+    """A variable a record marks required or secret, which the instance's secrets fill."""
+
+    name: str
+    secret: bool
+    description: str | None
+
+
+class McpRegistryServer(ContractModel):
+    """One latest record of the MCP Registry, as kinby would add it to the library."""
+
+    #: The record's name, such as ``app.linear/linear``.
+    name: str
+    description: str
+    version: str
+    #: The entry kinby would write: a remote over Streamable HTTP when the record has one, else
+    #: an npm package through npx or a pypi package through uvx. None when kinby can't run it.
+    entry: McpServerEntry | None
+    #: Why kinby can't run the record, when ``entry`` is None.
+    reason: str | None
+    variables: list[McpRegistryVariable]
+
+
+class McpRegistrySearchResult(ContractModel):
+    servers: list[McpRegistryServer]
 
 
 class InstancePicksGetCommand(ContractModel):

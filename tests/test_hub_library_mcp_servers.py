@@ -121,7 +121,7 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
     ("entry", "reason"),
     [
         ({"type": "sse", "url": "https://mcp.example.com/sse"}, "deprecated"),
-        ({"command": "npx", "args": ["-y", "@acme/server"]}, "uvx"),
+        ({"command": "node", "args": ["server.js"]}, "uvx or npx"),
         ({"command": "uvx", "args": ["a"], "env": {"PATH": "/evil"}}, "PATH"),
         ({"command": "uvx", "args": ["a"], "env": {"LD_PRELOAD": "evil.so"}}, "LD_PRELOAD"),
         ({"command": "uvx", "args": ["a"], "env": {"PYTHONPATH": "/evil"}}, "PYTHONPATH"),
@@ -131,7 +131,7 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
     ],
     ids=[
         "sse",
-        "npx",
+        "node",
         "path",
         "ld-preload",
         "pythonpath",
