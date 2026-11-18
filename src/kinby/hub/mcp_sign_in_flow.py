@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import aiohttp
 import httpx2
 from mcp.client.auth import OAuthClientProvider, OAuthRegistrationError
+from mcp.client.auth.oauth2 import OAuthContext
 from mcp.shared.auth import (
     AuthorizationCodeResult,
     OAuthClientInformationFull,
@@ -96,6 +97,20 @@ class _Flow:
         return await asyncio.wait_for(self.answer, SIGN_IN_TIME.total_seconds())
 
 
+class _Context(OAuthContext):
+    """The SDK's context, naming the client once in a token request. The SDK always puts
+    ``client_id`` in the body, and a server may refuse that next to a Basic header, which already
+    names the client."""
+
+    def prepare_token_auth(
+        self, data: dict[str, str], headers: dict[str, str] | None = None
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        data, headers = super().prepare_token_auth(data, headers)
+        if "Authorization" in headers:
+            data = {name: value for name, value in data.items() if name != "client_id"}
+        return data, headers
+
+
 class SignInFlow(OAuthClientProvider):
     """The SDK's sign-in to the server one entry defines, asking for the entry's scopes in place
     of those the server names."""
@@ -113,6 +128,7 @@ class SignInFlow(OAuthClientProvider):
         super().__init__(
             self.url, metadata, self._flow, self._flow.redirect, self._flow.called_back
         )
+        self.context = _Context(**vars(self.context))
 
     @property
     def authorization_url(self) -> asyncio.Future[str]:
@@ -185,7 +201,7 @@ class _Renewal(OAuthClientProvider):
         # The metadata only registers a client, which a renewal never does.
         metadata = OAuthClientMetadata(redirect_uris=signed_in.client.redirect_uris)
         super().__init__(signed_in.url, metadata, _Flow(signed_in.client, signed_in.tokens))
-        context = self.context
+        context = self.context = _Context(**vars(self.context))
         context.client_info, context.current_tokens = signed_in.client, signed_in.tokens
         context.oauth_metadata = signed_in.metadata
         context.protected_resource_metadata = signed_in.resource

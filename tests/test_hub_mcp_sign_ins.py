@@ -539,6 +539,25 @@ def test_the_hub_renews_an_access_token_close_to_expiring_or_one_the_server_refu
     asyncio.run(scenario())
 
 
+def test_a_server_that_takes_its_client_only_by_a_basic_header_signs_in_and_renews(tmp_path):
+    async def scenario() -> None:
+        hub = _hub(tmp_path)
+        with oauth_mcp_server(basic_auth=True) as server:
+            instance_id = await _picked(hub, {"url": server.url})
+            async with served(hub) as address:
+                await _signed_in(hub, instance_id, address)
+                first = _access_token(await _token(hub, address, instance_id))
+                server.expire()
+                renewed = _access_token(await _token(hub, address, instance_id, refused=first))
+
+        assert renewed != first
+        assert await _sign_ins(hub, instance_id) == [
+            McpSignInSetup(server="cockpit", state=LoginState.SIGNED_IN)
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_a_refresh_token_the_server_refuses_sets_the_sign_in_pending(
     tmp_path, oauth_server: OAuthMcpServer
 ):
