@@ -5538,6 +5538,117 @@
       "title": "McpHttpEntry",
       "type": "object"
     },
+    "McpRegistrySearchCommand": {
+      "additionalProperties": false,
+      "description": "Search the MCP Registry, the public catalogue of MCP servers. Only the words reach it, and\nnothing joins the library.",
+      "properties": {
+        "words": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "words"
+      ],
+      "title": "McpRegistrySearchCommand",
+      "type": "object"
+    },
+    "McpRegistrySearchResult": {
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "items": {
+            "$ref": "#/$defs/McpRegistryServer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "servers"
+      ],
+      "title": "McpRegistrySearchResult",
+      "type": "object"
+    },
+    "McpRegistryServer": {
+      "additionalProperties": false,
+      "description": "One latest record of the MCP Registry, as kinby would add it to the library.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpServerEntry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variables": {
+          "items": {
+            "$ref": "#/$defs/McpRegistryVariable"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "version",
+        "entry",
+        "reason",
+        "variables"
+      ],
+      "title": "McpRegistryServer",
+      "type": "object"
+    },
+    "McpRegistryVariable": {
+      "additionalProperties": false,
+      "description": "A variable a record marks required or secret, which the instance's secrets fill.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "secret",
+        "description"
+      ],
+      "title": "McpRegistryVariable",
+      "type": "object"
+    },
     "McpServer": {
       "additionalProperties": false,
       "description": "An MCP server's definition, as the library keeps it: its entry, and kinby's own fields\nbeside it.",
@@ -15394,6 +15505,22 @@
           ],
           "type": "object"
         },
+        "mcp_registry.search": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/McpRegistrySearchCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/McpRegistrySearchResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "memory.add": {
           "additionalProperties": false,
           "properties": {
@@ -16935,6 +17062,7 @@
         "library.mcp_server.read",
         "library.mcp_server.write",
         "library.mcp_server.delete",
+        "mcp_registry.search",
         "instance.picks.get",
         "instance.picks.set",
         "instance.toolset.get",

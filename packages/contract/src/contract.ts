@@ -608,6 +608,10 @@ export interface Contract {
       command: ManifestSetCommand;
       result: ManifestResult;
     };
+    "mcp_registry.search": {
+      command: McpRegistrySearchCommand;
+      result: McpRegistrySearchResult;
+    };
     "memory.add": {
       command: MemoryAddCommand;
       result: MemoryWriteResult;
@@ -2430,6 +2434,35 @@ export interface ManifestSetCommand {
 export interface NewModelPrice {
   input: number;
   output: number;
+}
+/**
+ * Search the MCP Registry, the public catalogue of MCP servers. Only the words reach it, and
+ * nothing joins the library.
+ */
+export interface McpRegistrySearchCommand {
+  words: string;
+}
+export interface McpRegistrySearchResult {
+  servers: McpRegistryServer[];
+}
+/**
+ * One latest record of the MCP Registry, as kinby would add it to the library.
+ */
+export interface McpRegistryServer {
+  description: string;
+  entry: McpServerEntry | null;
+  name: string;
+  reason: string | null;
+  variables: McpRegistryVariable[];
+  version: string;
+}
+/**
+ * A variable a record marks required or secret, which the instance's secrets fill.
+ */
+export interface McpRegistryVariable {
+  description: string | null;
+  name: string;
+  secret: boolean;
 }
 export interface MemoryAddCommand {
   body: string;

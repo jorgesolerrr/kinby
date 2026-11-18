@@ -147,6 +147,8 @@ from kinby.contracts.models import (
     ManifestGetCommand,
     ManifestResult,
     ManifestSetCommand,
+    McpRegistrySearchCommand,
+    McpRegistrySearchResult,
     McpServerResult,
     MemoryAddCommand,
     MemoryCorrectCommand,
@@ -727,6 +729,9 @@ LIBRARY_MCP_SERVER_WRITE = Method(
 LIBRARY_MCP_SERVER_DELETE = Method(
     "library.mcp_server.delete", Scope.HUB_ADMIN, LibraryMcpServerDeleteCommand, LibraryListResult
 )
+MCP_REGISTRY_SEARCH = Method(
+    "mcp_registry.search", Scope.HUB_READ, McpRegistrySearchCommand, McpRegistrySearchResult
+)
 INSTANCE_PICKS_GET = Method(
     "instance.picks.get", Scope.HUB_READ, InstancePicksGetCommand, InstancePicksResult
 )
@@ -966,6 +971,7 @@ METHODS = (
     LIBRARY_MCP_SERVER_READ,
     LIBRARY_MCP_SERVER_WRITE,
     LIBRARY_MCP_SERVER_DELETE,
+    MCP_REGISTRY_SEARCH,
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
     INSTANCE_TOOLSET_GET,

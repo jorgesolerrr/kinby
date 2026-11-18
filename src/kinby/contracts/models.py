@@ -3435,6 +3435,40 @@ class LibraryMcpServerDeleteCommand(ContractModel):
     hash: FileHash
 
 
+class McpRegistrySearchCommand(ContractModel):
+    """Search the MCP Registry, the public catalogue of MCP servers. Only the words reach it, and
+    nothing joins the library."""
+
+    words: Annotated[str, Field(min_length=1)]
+
+
+class McpRegistryVariable(ContractModel):
+    """A variable a record marks required or secret, which the instance's secrets fill."""
+
+    name: str
+    secret: bool
+    description: str | None
+
+
+class McpRegistryServer(ContractModel):
+    """One latest record of the MCP Registry, as kinby would add it to the library."""
+
+    #: The record's name, such as ``app.linear/linear``.
+    name: str
+    description: str
+    version: str
+    #: The entry kinby would write: a remote over Streamable HTTP when the record has one, else
+    #: an npm package through npx or a pypi package through uvx. None when kinby can't run it.
+    entry: McpServerEntry | None
+    #: Why kinby can't run the record, when ``entry`` is None.
+    reason: str | None
+    variables: list[McpRegistryVariable]
+
+
+class McpRegistrySearchResult(ContractModel):
+    servers: list[McpRegistryServer]
+
+
 class InstancePicksGetCommand(ContractModel):
     instance_id: UUID
 
