@@ -41,10 +41,11 @@ def echo(
     env: dict[str, str] | None = None,
     package: str = "echo-server",
     args: tuple[str, ...] = (),
+    command: str = "uvx",
 ) -> McpServer:
     return McpServer.model_validate(
         {
-            "entry": {"command": "uvx", "args": [package, *args], "env": env or {}},
+            "entry": {"command": command, "args": [package, *args], "env": env or {}},
             "include": list(include),
         }
     )
@@ -70,15 +71,16 @@ def echo_port() -> Iterator[int]:
 
 
 @pytest.fixture(autouse=True)
-def uvx(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stand in for uvx: it starts the echo server for the package echo-server, with the
+def launchers(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for uvx and npx: each starts the echo server for the package echo-server, with the
     arguments after the package, starts one that never answers for silent-server, floods stderr
     before failing for noisy-server, and fails as a package missing from the registry for any
     other."""
     folder = tmp_path_factory.mktemp("bin")
-    shim = folder / "uvx"
-    shim.write_text(
-        f"""#!/bin/sh
+    for launcher in ("uvx", "npx"):
+        shim = folder / launcher
+        shim.write_text(
+            f"""#!/bin/sh
 case "$1" in
   echo-server) shift; exec "{sys.executable}" "{SERVER}" "$@" ;;
   silent-server) while read -r _; do :; done; exit ;;
@@ -86,9 +88,9 @@ case "$1" in
   *) echo "error: $1 was not found in the package registry" >&2; exit 1 ;;
 esac
 """,
-        encoding="utf-8",
-    )
-    shim.chmod(0o755)
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
     monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
 
 
@@ -113,11 +115,12 @@ def asked(payloads: Sequence[object]) -> list[str]:
     return [payload.name for payload in payloads if isinstance(payload, ApprovalRequested)]
 
 
+@pytest.mark.parametrize("command", ["uvx", "npx"])
 def test_a_picked_servers_included_tool_is_named_by_its_server_and_a_turn_calls_it(
-    tmp_path: Path,
+    tmp_path: Path, command: str
 ) -> None:
     instance = instance_at(tmp_path)
-    pick(instance, echo=echo("look", "post"))
+    pick(instance, echo=echo("look", "post", command=command))
 
     payloads = asyncio.run(
         turn(instance, [("echo__look", {"text": "hi"})], PermissionMode.FULL_ACCESS)
@@ -275,11 +278,13 @@ def test_a_pick_the_hub_converted_from_the_old_shape_runs_as_before(tmp_path: Pa
     assert (called.error, called.output) == (False, "looked: hi")
 
 
+@pytest.mark.parametrize("command", ["uvx", "npx"])
 def test_a_server_that_fails_to_start_leaves_the_turn_running_without_its_tools(
-    tmp_path: Path,
+    tmp_path: Path, command: str
 ) -> None:
     instance = instance_at(tmp_path)
-    pick(instance, echo=echo("look"), broken=echo("look", package="missing-server"))
+    broken = echo("look", package="missing-server", command=command)
+    pick(instance, echo=echo("look"), broken=broken)
 
     payloads = asyncio.run(
         turn(
@@ -293,13 +298,16 @@ def test_a_server_that_fails_to_start_leaves_the_turn_running_without_its_tools(
     assert outputs == ['Tool "broken__look" is not available in this turn.', "looked: hi"]
 
 
-def test_a_server_that_failed_at_the_last_turn_is_an_instance_notice(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command", ["uvx", "npx"])
+def test_a_server_that_failed_at_the_last_turn_is_an_instance_notice_ending_with_what_it_wrote(
+    tmp_path: Path, command: str
+) -> None:
     async def scenario() -> list[InstanceNotice]:
         hub = hub_at(tmp_path / "hub")
         client = hub_client(hub)
         created = await started_instance(client, hub)
         instance = inspect_instance(hub.instances_directory / str(created.instance_id))
-        pick(instance, broken=echo("look", package="missing-server"))
+        pick(instance, broken=echo("look", package="missing-server", command=command))
         await turn(instance, [], PermissionMode.ASK)
         listed = await client.call(INSTANCE_LIST, InstanceListCommand())
         assert isinstance(listed, InstanceListResult)
@@ -311,6 +319,7 @@ def test_a_server_that_failed_at_the_last_turn_is_an_instance_notice(tmp_path: P
     assert isinstance(notice, McpServerFailed)
     assert notice.server == "broken"
     assert notice.message.startswith('MCP server "broken" did not start or list its tools')
+    assert notice.message.endswith("missing-server was not found in the package registry")
 
 
 def failure(instance: Instance, server: McpServer) -> str:
@@ -319,7 +328,7 @@ def failure(instance: Instance, server: McpServer) -> str:
     return failed_mcp_servers(instance.manifest.state_dir)["broken"]
 
 
-def test_a_missing_package_is_told_by_its_cause_and_what_uvx_said(tmp_path: Path) -> None:
+def test_a_missing_package_is_told_by_its_cause_and_what_its_launcher_said(tmp_path: Path) -> None:
     message = failure(instance_at(tmp_path), echo("look", package="missing-server"))
 
     assert "ExceptionGroup" not in message

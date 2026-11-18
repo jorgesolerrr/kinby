@@ -275,7 +275,7 @@ describe("LibraryPage, MCP servers", () => {
   })
 
   it("shows the hub's reason for refusing a pasted entry beside the field it names", async () => {
-    const reason = "kinby runs a local server with uvx only, not npx."
+    const reason = "kinby runs a local server with uvx or npx only, not docker."
     const { user } = openServersPage({
       write: () => {
         throw refused({ "server.entry.stdio.command": reason })
@@ -285,7 +285,7 @@ describe("LibraryPage, MCP servers", () => {
     await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "acme")
     await user.click(screen.getByRole("textbox", { name: "Paste an entry" }))
-    await user.paste('"acme": {"command": "npx", "args": ["@acme/server"]}')
+    await user.paste('"acme": {"command": "docker", "args": ["run", "acme/server"]}')
     await user.click(screen.getByRole("button", { name: "Add" }))
 
     const command = await screen.findByRole("textbox", { name: "Command", description: reason })

@@ -104,8 +104,9 @@ def dispatched_write(hub: Hub, entry: dict[str, object]) -> object:
     [
         ({"url": "https://mcp.example.com/mcp"}, "http"),
         ({"command": "uvx", "args": ["mcp-server-fetch"]}, "stdio"),
+        ({"command": "npx", "args": ["@acme/server"]}, "stdio"),
     ],
-    ids=["url", "command"],
+    ids=["url", "uvx", "npx"],
 )
 def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_path, entry, stored):
     hub = hub_at(tmp_path / "hub")
@@ -122,9 +123,9 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
     [
         ({"type": "sse", "url": "https://mcp.example.com/sse"}, "server.entry", "deprecated"),
         (
-            {"command": "npx", "args": ["@acme/server"]},
+            {"command": "docker", "args": ["run", "acme/server"]},
             "server.entry.stdio.command",
-            "uvx",
+            "uvx or npx",
         ),
         (
             {"command": "uvx", "args": ["a"], "env": {"PATH": "/evil"}},
@@ -142,22 +143,44 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
             "PYTHONPATH",
         ),
         (
+            {"command": "npx", "args": ["a"], "env": {"NODE_OPTIONS": "-r evil"}},
+            "server.entry.stdio.env.NODE_OPTIONS.[key]",
+            "NODE_OPTIONS",
+        ),
+        (
+            {"command": "npx", "args": ["a"], "env": {"npm_config_registry": "x"}},
+            "server.entry.stdio.env.npm_config_registry.[key]",
+            "npm_config",
+        ),
+        (
             {"command": "uvx", "args": ["--index-url=http://evil", "a"]},
             "server.entry.stdio.args",
             "package",
         ),
         ({"command": "uvx", "args": ["${PACKAGE}"]}, "server.entry.stdio.args", "package"),
         ({"command": "uvx"}, "server.entry.stdio.args", "package"),
+        (
+            {"command": "npx", "args": ["-y", "@acme/server"]},
+            "server.entry.stdio.args",
+            "package",
+        ),
+        ({"command": "npx", "args": ["${PACKAGE}"]}, "server.entry.stdio.args", "package"),
+        ({"command": "npx"}, "server.entry.stdio.args", "package"),
     ],
     ids=[
         "sse",
-        "npx",
+        "other-command",
         "path",
         "ld-preload",
         "pythonpath",
+        "node-options",
+        "npm-config",
         "uvx-option",
         "uvx-variable",
-        "no-package",
+        "uvx-no-package",
+        "npx-option",
+        "npx-variable",
+        "npx-no-package",
     ],
 )
 def test_an_entry_kinby_cannot_run_or_whose_env_key_hijacks_the_process_is_refused(

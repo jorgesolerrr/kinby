@@ -3324,7 +3324,7 @@ class LibraryGitAddResult(ContractModel):
 type McpServerName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 
 _HIJACKING_VARIABLES = frozenset({"PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV"})
-_HIJACKING_PREFIXES = ("LD_", "DYLD_", "PYTHON", "UV_", "PIP_")
+_HIJACKING_PREFIXES = ("LD_", "DYLD_", "PYTHON", "UV_", "PIP_", "NODE_", "NPM_")
 
 
 def _harmless(name: str) -> str:
@@ -3340,16 +3340,16 @@ type EnvVariable = Annotated[
 
 
 def _launcher(command: str) -> str:
-    if command != "uvx":
-        raise ValueError(f"kinby runs a local server with uvx only, not {command}.")
+    if command not in ("uvx", "npx"):
+        raise ValueError(f"kinby runs a local server with uvx or npx only, not {command}.")
     return command
 
 
 def _package_first(args: list[str]) -> list[str]:
     if not args or not re.fullmatch(r"[^-\s$]\S*", args[0]):
         raise ValueError(
-            "The first argument is the package uvx runs, never an option or a variable, which "
-            "uvx would take as its own."
+            "The first argument is the package the command runs, never an option or a variable, "
+            "which the command would take as its own."
         )
     return args
 
