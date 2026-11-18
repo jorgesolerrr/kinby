@@ -611,6 +611,18 @@ describe("ConfigPanel", () => {
       expect(secret("GitHub token").getByRole("button", { name: "Set" })).toBeDefined()
     })
 
+    it("lists each MCP sign-in with its state", async () => {
+      const signIns = { ...setup, mcp_sign_ins: [{ server: "cockpit", state: "pending" as const }] }
+      await openSecrets({ "instance.status": () => status({ setup: signIns }) })
+
+      const mcp = within(screen.getByRole("list", { name: "MCP sign-ins" }))
+      expect(
+        within(mcp.getByRole("listitem", { name: "MCP server cockpit" })).getByText(
+          "Not signed in",
+        ),
+      ).toBeDefined()
+    })
+
     it("names no variable for the API key while the instance's model cannot be read", async () => {
       const unread = setup.secrets.map((each) =>
         each.name === "api_key" ? { ...each, variable: null } : each,

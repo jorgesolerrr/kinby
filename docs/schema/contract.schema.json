@@ -3874,6 +3874,12 @@
           },
           "type": "array"
         },
+        "mcp_sign_ins": {
+          "items": {
+            "$ref": "#/$defs/McpSignInSetup"
+          },
+          "type": "array"
+        },
         "secrets": {
           "items": {
             "$ref": "#/$defs/SecretSetup"
@@ -5239,7 +5245,7 @@
       "type": "object"
     },
     "LoginState": {
-      "description": "How an instance's subscription login stands: not signed in yet, or how its last one ended.",
+      "description": "How an instance's subscription login or MCP sign-in stands: not signed in yet, or how its\nlast one ended.",
       "enum": [
         "pending",
         "signed_in",
@@ -5738,6 +5744,17 @@
         "name": {
           "$ref": "#/$defs/McpServerName"
         },
+        "sign_in": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoginState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "state": {
           "$ref": "#/$defs/PickState"
         },
@@ -5772,6 +5789,24 @@
         "hash"
       ],
       "title": "McpServerResult",
+      "type": "object"
+    },
+    "McpSignInSetup": {
+      "additionalProperties": false,
+      "description": "The MCP sign-in of one picked MCP server that asks for one, and how it stands.",
+      "properties": {
+        "server": {
+          "$ref": "#/$defs/McpServerName"
+        },
+        "state": {
+          "$ref": "#/$defs/LoginState"
+        }
+      },
+      "required": [
+        "server",
+        "state"
+      ],
+      "title": "McpSignInSetup",
       "type": "object"
     },
     "McpStdioEntry": {

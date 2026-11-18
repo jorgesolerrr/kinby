@@ -1,4 +1,4 @@
-import type { InstanceToolsetResult } from "@kinby/contract"
+import type { InstanceToolsetResult, LoginState } from "@kinby/contract"
 import { fakeClock, stubCaller } from "@kinby/contract/testing"
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -26,11 +26,13 @@ const toolset: InstanceToolsetResult = {
 function renderToolset({
   running = true,
   failed = [],
-}: { running?: boolean; failed?: string[] } = {}) {
+  signIn = null,
+}: { running?: boolean; failed?: string[]; signIn?: LoginState | null } = {}) {
   let marked = new Set(["lookup"])
   const hub = stubCaller({
     "instance.toolset.get": () => ({
       ...toolset,
+      mcp_servers: toolset.mcp_servers.map((server) => ({ ...server, sign_in: signIn })),
       authored_tools: toolset.authored_tools.map(({ name }) => ({
         name,
         read_only: marked.has(name),
@@ -84,6 +86,15 @@ describe("the instance's toolset", () => {
 
     renderToolset({ failed: ["fetch"] })
     expect((await item("Toolset", "fetch")).getByText("Failed")).toBeDefined()
+  })
+
+  it("shows a picked MCP server not signed in while its sign-in is pending", async () => {
+    renderToolset({ signIn: "pending", failed: ["fetch"] })
+    expect((await item("Toolset", "fetch")).getByText("Not signed in")).toBeDefined()
+    cleanup()
+
+    renderToolset({ signIn: "signed_in" })
+    expect((await item("Toolset", "fetch")).getByText("Ready")).toBeDefined()
   })
 
   it("shows each authored tool with its read-only mark", async () => {

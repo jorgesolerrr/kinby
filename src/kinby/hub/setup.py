@@ -17,6 +17,7 @@ from kinby.contracts import (
     LoginSetup,
     LoginState,
     McpServerName,
+    McpSignInSetup,
     SecretSetup,
     SetupField,
     SetupFieldKind,
@@ -149,6 +150,7 @@ def instance_setup(
     search_key: str | None,
     code_secrets: Sequence[str],
     mcp_variables: Mapping[str, Sequence[McpServerName]],
+    mcp_sign_ins: Sequence[McpSignInSetup],
 ) -> InstanceSetup:
     """Each login and secret field the instance's stored descriptor declares, and how it stands,
     the key its web search needs, and each secret its instance code declares or its picked MCP
@@ -157,7 +159,7 @@ def instance_setup(
     `running` names the sign-in each login has running, by login id. `links` names the hub
     secret each linked variable took. `search_key` names the variable of the search backend's
     key, while the instance's manifest leaves web search on. `mcp_variables` names the picked
-    MCP servers that need each variable.
+    MCP servers that need each variable. `mcp_sign_ins` are the picked MCP servers' sign-ins.
 
     A login the hub never tracked belongs to an instance created before it tracked logins, and
     reads as signed in. The API key is held under its provider's variable, so it takes the model.
@@ -209,6 +211,7 @@ def instance_setup(
             for login in description.logins
         ],
         secrets=needed,
+        mcp_sign_ins=list(mcp_sign_ins),
     )
 
 

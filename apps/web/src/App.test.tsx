@@ -2226,6 +2226,18 @@ describe("the home screen", () => {
       expect(window.location.pathname).toBe("/instances/hub-ada")
     })
 
+    it("links to the instance's page when an MCP sign-in is pending", async () => {
+      const pending = {
+        logins: [],
+        mcp_sign_ins: [{ server: "cockpit", state: "pending" as const }],
+      }
+      window.history.replaceState(null, "", "/?to=hub-ada")
+      openApp({ signedIn: true, instances: [kinby, ada], setups: { "hub-ada": missing(pending) } })
+
+      const setup = await card("Ada needs setup to answer")
+      expect(setup.getByRole("button", { name: "Open Ada" })).toBeDefined()
+    })
+
     it("does not link to the instance's page with only its secrets left", async () => {
       const signedIn = {
         id: "claude",

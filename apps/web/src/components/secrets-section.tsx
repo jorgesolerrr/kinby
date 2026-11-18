@@ -2,6 +2,7 @@ import type { Client, Clock, InstanceSetup, SecretSetup } from "@kinby/contract"
 import { Fragment, useCallback, useId, useState } from "react"
 
 import { HubSecretPicker } from "@/components/hub-secret-picker"
+import { McpSignIns } from "@/components/mcp-sign-ins"
 import { SubscriptionLogins } from "@/components/subscription-logins"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -27,7 +28,7 @@ import { CircleCheckIcon } from "lucide-react"
 type Caller = Pick<Client, "call">
 
 /**
- * The instance's secrets and subscription logins, as its status has them. `setup` is undefined
+ * The instance's secrets, subscription logins and MCP sign-ins, as its status has them. `setup` is undefined
  * until the status is read. `onChanged` hears a secret set or a sign-in end, and must keep its
  * identity.
  */
@@ -74,6 +75,12 @@ export function SecretsSection({
             logins={setup.logins}
             onEnded={onChanged}
           />
+        </section>
+      )}
+      {(setup.mcp_sign_ins ?? []).length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-base font-semibold">MCP sign-ins</h2>
+          <McpSignIns signIns={setup.mcp_sign_ins ?? []} />
         </section>
       )}
     </div>

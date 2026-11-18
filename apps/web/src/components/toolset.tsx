@@ -11,6 +11,7 @@ import type {
 import { type ReactNode, useCallback, useId, useState } from "react"
 
 import { Refusal } from "@/components/browser-profiles"
+import { SignInState } from "@/components/mcp-sign-ins"
 import { SectionFrame } from "@/components/section-frame"
 import { Badge } from "@/components/ui/badge"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -35,8 +36,9 @@ const BACKENDS: Record<SearchBackend, string> = {
 /**
  * What the instance can do beyond its workspace. `caller` reaches the hub, which reads it from the
  * instance's files, so it shows while the instance is stopped. An MCP server in `failed` failed
- * at the instance's last turn. An authored tool's read-only mark changes through `client`, the
- * instance's own contract, so only while it runs.
+ * at the instance's last turn, and one whose MCP sign-in is not done shows its sign-in's state
+ * instead. An authored tool's read-only mark changes through `client`, the instance's own
+ * contract, so only while it runs.
  */
 export function Toolset({
   caller,
@@ -75,7 +77,9 @@ export function Toolset({
               key={server.name}
               title={server.name}
               actions={
-                failed.includes(server.name) ? (
+                server.sign_in != null && server.sign_in !== "signed_in" ? (
+                  <SignInState state={server.sign_in} />
+                ) : failed.includes(server.name) ? (
                   <Badge variant="destructive">Failed</Badge>
                 ) : (
                   <Badge variant="secondary">Ready</Badge>

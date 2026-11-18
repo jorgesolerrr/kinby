@@ -1,7 +1,43 @@
+import socket
+import subprocess
+import sys
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
 import pytest
 
 from kinby.contracts import SearchBackend
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from tests.mcp_oauth_server import OAuthMcpServer, oauth_mcp_server
+
+
+@pytest.fixture
+def echo_port() -> Iterator[int]:
+    """The port of an echo server reached over HTTP."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen(
+        [sys.executable, str(Path(__file__).with_name("mcp_echo_server.py")), "http", str(port)]
+    )
+    try:
+        for _ in range(100):
+            with socket.socket() as attempt:
+                if attempt.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            time.sleep(0.1)
+        yield port
+    finally:
+        process.terminate()
+        process.wait()
+
+
+@pytest.fixture
+def oauth_server() -> Iterator[OAuthMcpServer]:
+    """A remote MCP server that requires an OAuth sign-in."""
+    with oauth_mcp_server() as server:
+        yield server
 
 
 @pytest.fixture(autouse=True)
