@@ -122,6 +122,15 @@ export function copiedEntry(name: string, server: McpServer): string {
   return JSON.stringify({ mcpServers: { [name]: server.entry } }, null, 2)
 }
 
+/** A library name for the MCP Registry's record `name`: `acme-mcp` for `io.github.acme/acme-mcp`. */
+export function libraryNameOf(name: string): string {
+  return name
+    .slice(name.lastIndexOf("/") + 1)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+}
+
 /** An entry with no `type` is `http` when it has a `url`, as Cursor writes one. */
 function entryOf(value: unknown): McpServerEntry | undefined {
   if (!isRecord(value)) return undefined

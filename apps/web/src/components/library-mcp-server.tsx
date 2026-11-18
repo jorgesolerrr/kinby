@@ -1,5 +1,12 @@
 import { CallError } from "@kinby/contract"
-import type { Client, Clock, LibraryEntry, McpServerResult } from "@kinby/contract"
+import type {
+  Client,
+  Clock,
+  LibraryEntry,
+  McpRegistryVariable,
+  McpServerEntry as Entry,
+  McpServerResult,
+} from "@kinby/contract"
 import { CheckIcon, CircleXIcon, CopyIcon, Trash2Icon } from "lucide-react"
 import { useCallback, useId, useState } from "react"
 
@@ -17,6 +24,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -38,22 +46,25 @@ import type { PastedServer } from "@/lib/mcp-servers"
 type Caller = Pick<Client, "call">
 
 /**
- * A new MCP server: its name and its definition, typed or filled from a pasted entry. A pasted
- * block's servers come one after the other, each added or skipped.
+ * A new MCP server: its name and its definition, typed, filled from a pasted entry, or `chosen`
+ * from the MCP Registry with the variables it needs. A pasted block's servers come one after the
+ * other, each added or skipped.
  */
 export function NewMcpServer({
   client,
+  chosen,
   onAdded,
   onClose,
 }: {
   client: Caller
+  chosen?: { name: string; entry: Entry; variables: McpRegistryVariable[] }
   onAdded: () => void
   onClose: () => void
 }) {
   const id = useId()
   const [pasted, setPasted] = useState("")
-  const [name, setName] = useState("")
-  const [draft, setDraft] = useState(EMPTY_DRAFT)
+  const [name, setName] = useState(chosen?.name ?? "")
+  const [draft, setDraft] = useState(() => (chosen ? draftOf(chosen) : EMPTY_DRAFT))
   const [next, setNext] = useState<PastedServer[]>([])
   const { busy, refused, failure, ask, reset } = useHubCall()
   const { name: nameRefused, other, ...fieldsRefused } = reasonsByField(refused)
@@ -82,25 +93,27 @@ export function NewMcpServer({
     <div className="flex flex-col gap-4">
       {failure !== undefined && <Failure error={failure} />}
       {other !== undefined && <Refusal reason={other} />}
-      <Field data-invalid={unread || undefined}>
-        <FieldLabel htmlFor={`${id}-pasted`}>Paste an entry</FieldLabel>
-        <Textarea
-          id={`${id}-pasted`}
-          value={pasted}
-          readOnly={busy}
-          aria-invalid={unread || undefined}
-          onChange={(event) => paste(event.target.value)}
-        />
-        <FieldDescription>
-          An mcpServers entry or block, as Claude Code or Cursor writes it. It fills the fields
-          below, to review before you add it.
-        </FieldDescription>
-        {unread && (
-          <FieldError>
-            This is not an http or stdio entry, nor an mcpServers block of them.
-          </FieldError>
-        )}
-      </Field>
+      {chosen === undefined && (
+        <Field data-invalid={unread || undefined}>
+          <FieldLabel htmlFor={`${id}-pasted`}>Paste an entry</FieldLabel>
+          <Textarea
+            id={`${id}-pasted`}
+            value={pasted}
+            readOnly={busy}
+            aria-invalid={unread || undefined}
+            onChange={(event) => paste(event.target.value)}
+          />
+          <FieldDescription>
+            An mcpServers entry or block, as Claude Code or Cursor writes it. It fills the fields
+            below, to review before you add it.
+          </FieldDescription>
+          {unread && (
+            <FieldError>
+              This is not an http or stdio entry, nor an mcpServers block of them.
+            </FieldError>
+          )}
+        </Field>
+      )}
       <Field data-invalid={nameRefused !== undefined || undefined}>
         <FieldLabel htmlFor={id}>Name</FieldLabel>
         <Input
@@ -115,6 +128,9 @@ export function NewMcpServer({
         {nameRefused !== undefined && <FieldError>{nameRefused}</FieldError>}
       </Field>
       <McpServerFields draft={draft} refused={fieldsRefused} disabled={busy} onChange={setDraft} />
+      {chosen !== undefined && chosen.variables.length > 0 && (
+        <NeededVariables variables={chosen.variables} />
+      )}
       {next.length > 0 && (
         <p className="text-sm text-muted-foreground">
           Next from the paste: {next.map((server) => server.name).join(", ")}.
@@ -134,6 +150,36 @@ export function NewMcpServer({
           Cancel
         </Button>
       </Field>
+    </div>
+  )
+}
+
+/** The variables a registry server needs, filled from the secrets of each instance that picks it. */
+function NeededVariables({ variables }: { variables: McpRegistryVariable[] }) {
+  const id = useId()
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <h3 id={id} className="font-medium">
+        Variables it needs
+      </h3>
+      <p className="text-muted-foreground">
+        An instance that picks it fills them from its secrets.
+      </p>
+      <ul aria-labelledby={id} className="flex flex-col gap-1">
+        {variables.map((variable) => (
+          <li
+            key={variable.name}
+            aria-label={variable.name}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span className="font-mono">{variable.name}</span>
+            {variable.secret && <Badge variant="secondary">Secret</Badge>}
+            {variable.description !== null && (
+              <span className="text-muted-foreground">{variable.description}</span>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
