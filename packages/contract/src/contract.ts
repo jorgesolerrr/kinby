@@ -2006,6 +2006,7 @@ export interface SecretSetup {
   hub_secret?: HubSecretName | null;
   is_set: boolean;
   label: string;
+  mcp_servers?: McpServerName[];
   name: string;
   required: boolean;
   variable: string | null;

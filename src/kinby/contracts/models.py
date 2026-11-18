@@ -1593,6 +1593,8 @@ class SecretSetup(ContractModel):
     is_set: bool
     #: The hub secret the field is linked to, if any.
     hub_secret: HubSecretName | None = None
+    #: The picked MCP servers whose entries need the variable.
+    mcp_servers: list[McpServerName] = Field(default_factory=list)
 
 
 class InstanceSetup(ContractModel):

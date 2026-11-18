@@ -265,6 +265,7 @@ from kinby.contracts import (
     LoginSetup,
     LoginState,
     McpServerFailed,
+    McpServerName,
     Method,
     NewerVersion,
     OperationGetCommand,
@@ -467,7 +468,7 @@ from kinby.plugins.hub import (
     requested_write,
 )
 from kinby.plugins.intake import run_line_intake
-from kinby.plugins.mcp import failed_mcp_servers
+from kinby.plugins.mcp import failed_mcp_servers, needed_variables
 from kinby.plugins.routines import HmacSignalConfig, TokenSignalConfig
 from kinby.setup import (
     API_KEY_FIELD,
@@ -3311,6 +3312,20 @@ class Hub:
             # code_run reports a malformed project to the agent; setup reads it as declaring none.
             return ()
 
+    @staticmethod
+    def _mcp_variables(record: ManagedInstance) -> Mapping[str, Sequence[McpServerName]]:
+        """The picked MCP servers that need each variable, by the variable."""
+        try:
+            picks = read_lock(record.path).mcp_servers
+        except ValueError:
+            # A lock the hub cannot read never stops it listing the instance.
+            return {}
+        needing: dict[str, list[McpServerName]] = {}
+        for name, pick in sorted(picks.items()):
+            for variable in needed_variables(pick.server.entry):
+                needing.setdefault(variable, []).append(name)
+        return needing
+
     def _setup(self, record: ManagedInstance, files: _InstanceFiles) -> InstanceSetup:
         """The logins and secrets the instance's stored descriptor declares, and how they
         stand."""
@@ -3331,6 +3346,7 @@ class Hub:
             model=manifest.models.main if manifest is not None else None,
             search_key=manifest.tools.search_key if manifest is not None else None,
             code_secrets=self._code_secrets(record),
+            mcp_variables=self._mcp_variables(record),
         )
 
     async def logs(self, command: InstanceLogsCommand) -> InstanceLogsResult:
