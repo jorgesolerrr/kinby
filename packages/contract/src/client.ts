@@ -96,7 +96,7 @@ export interface InstanceClient extends Pick<
 export class CallError extends Error {
   readonly code: ErrorCode
   readonly retryable: boolean
-  /** What is wrong with each value the call sent, by field name. INVALID_SETUP fills it, and so does INVALID_ARGUMENT for a config write. */
+  /** What is wrong with each value the call sent, by field name. INVALID_SETUP fills it, and so does INVALID_ARGUMENT for a config write, and for a payload the contract refuses, by the dotted path of the value. */
   readonly fields: Record<string, string>
 
   constructor({ code, message, retryable, fields = {} }: ErrorEnvelope) {

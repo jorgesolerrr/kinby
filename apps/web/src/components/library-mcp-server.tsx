@@ -1,6 +1,6 @@
 import { CallError } from "@kinby/contract"
 import type { Client, Clock, LibraryEntry, McpServerResult } from "@kinby/contract"
-import { CircleXIcon, Trash2Icon } from "lucide-react"
+import { CheckIcon, CircleXIcon, CopyIcon, Trash2Icon } from "lucide-react"
 import { useCallback, useId, useState } from "react"
 
 import { Failure, Refusal } from "@/components/config-alerts"
@@ -18,55 +18,119 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { Textarea } from "@/components/ui/textarea"
 import { useHubCall } from "@/hooks/use-hub-call"
 import { useRead } from "@/hooks/use-read"
-import { draftOf, EMPTY_DRAFT, serverOf } from "@/lib/mcp-servers"
+import {
+  copiedEntry,
+  draftOf,
+  EMPTY_DRAFT,
+  pastedServers,
+  reasonsByField,
+  serverOf,
+} from "@/lib/mcp-servers"
+import type { PastedServer } from "@/lib/mcp-servers"
 
 type Caller = Pick<Client, "call">
 
-/** A new MCP server: its name and its definition. */
+/**
+ * A new MCP server: its name and its definition, typed or filled from a pasted entry. A pasted
+ * block's servers come one after the other, each added or skipped.
+ */
 export function NewMcpServer({
   client,
   onAdded,
-  onCancel,
+  onClose,
 }: {
   client: Caller
   onAdded: () => void
-  onCancel: () => void
+  onClose: () => void
 }) {
   const id = useId()
+  const [pasted, setPasted] = useState("")
   const [name, setName] = useState("")
   const [draft, setDraft] = useState(EMPTY_DRAFT)
-  const { busy, refusal, failure, ask } = useHubCall()
+  const [next, setNext] = useState<PastedServer[]>([])
+  const { busy, refused, failure, ask, reset } = useHubCall()
+  const { name: nameRefused, other, ...fieldsRefused } = reasonsByField(refused)
+  const unread = pasted.trim() !== ""
 
+  const fill = ([server, ...rest]: PastedServer[]) => {
+    if (server === undefined) return onClose()
+    if (server.name !== undefined) setName(server.name)
+    setDraft(draftOf({ entry: server.entry }))
+    setNext(rest)
+    reset()
+  }
+  const paste = (text: string) => {
+    const servers = pastedServers(text)
+    setPasted(servers === undefined ? text : "")
+    if (servers !== undefined) fill(servers)
+  }
   const add = () =>
     ask(async () => {
       await client.call("library.mcp_server.write", { name, server: serverOf(draft), hash: null })
       onAdded()
+      fill(next)
     })
 
   return (
     <div className="flex flex-col gap-4">
       {failure !== undefined && <Failure error={failure} />}
-      {refusal !== undefined && <Refusal reason={refusal} />}
-      <Field>
+      {other !== undefined && <Refusal reason={other} />}
+      <Field data-invalid={unread || undefined}>
+        <FieldLabel htmlFor={`${id}-pasted`}>Paste an entry</FieldLabel>
+        <Textarea
+          id={`${id}-pasted`}
+          value={pasted}
+          readOnly={busy}
+          aria-invalid={unread || undefined}
+          onChange={(event) => paste(event.target.value)}
+        />
+        <FieldDescription>
+          An mcpServers entry or block, as Claude Code or Cursor writes it. It fills the fields
+          below, to review before you add it.
+        </FieldDescription>
+        {unread && (
+          <FieldError>
+            This is not an http or stdio entry, nor an mcpServers block of them.
+          </FieldError>
+        )}
+      </Field>
+      <Field data-invalid={nameRefused !== undefined || undefined}>
         <FieldLabel htmlFor={id}>Name</FieldLabel>
-        <Input id={id} value={name} onChange={(event) => setName(event.target.value)} />
+        <Input
+          id={id}
+          value={name}
+          aria-invalid={nameRefused !== undefined || undefined}
+          onChange={(event) => setName(event.target.value)}
+        />
         <FieldDescription>
           Lowercase letters, digits and hyphens. Its tools are named after it.
         </FieldDescription>
+        {nameRefused !== undefined && <FieldError>{nameRefused}</FieldError>}
       </Field>
-      <McpServerFields draft={draft} disabled={busy} onChange={setDraft} />
+      <McpServerFields draft={draft} refused={fieldsRefused} disabled={busy} onChange={setDraft} />
+      {next.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Next from the paste: {next.map((server) => server.name).join(", ")}.
+        </p>
+      )}
       <Field orientation="horizontal">
         <Button disabled={busy || name === ""} onClick={() => void add()}>
           {busy && <Spinner data-icon="inline-start" />}
           Add
         </Button>
-        <Button variant="outline" onClick={onCancel}>
+        {next.length > 0 && (
+          <Button variant="outline" disabled={busy} onClick={() => fill(next)}>
+            Skip
+          </Button>
+        )}
+        <Button variant="outline" onClick={onClose}>
           Cancel
         </Button>
       </Field>
@@ -118,7 +182,10 @@ function McpServerEditor({
   const [draft, setDraft] = useState(() => draftOf(opened.server))
   const [saved, setSaved] = useState(false)
   const [stale, setStale] = useState(false)
-  const { busy, refusal, failure, ask } = useHubCall()
+  const [copied, setCopied] = useState(false)
+  const { busy, refused, failure, ask } = useHubCall()
+  const { name: named, other, ...fieldsRefused } = reasonsByField(refused)
+  const unshown = [named, other].filter((reason) => reason !== undefined).join(" ")
   const { name, hash } = current
 
   const unlessStale = (call: () => Promise<void>) =>
@@ -150,11 +217,17 @@ function McpServerEditor({
       setDraft(draftOf(read.server))
       setStale(false)
     })
+  const copy = async () => {
+    await navigator.clipboard.writeText(copiedEntry(name, serverOf(draft)))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2_000)
+  }
 
   return (
     <>
       <McpServerFields
         draft={draft}
+        refused={fieldsRefused}
         disabled={busy}
         onChange={(changed) => {
           setDraft(changed)
@@ -178,8 +251,12 @@ function McpServerEditor({
         </Alert>
       )}
       {failure !== undefined && <Failure error={failure} />}
-      {refusal !== undefined && <Refusal reason={refusal} />}
+      {unshown !== "" && <Refusal reason={unshown} />}
       <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={() => void copy()}>
+          {copied ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
+          Copy as JSON
+        </Button>
         <AlertDialog>
           <AlertDialogTrigger render={<Button variant="destructive" size="sm" disabled={busy} />}>
             <Trash2Icon data-icon="inline-start" />

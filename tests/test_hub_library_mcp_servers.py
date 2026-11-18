@@ -119,21 +119,53 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("entry", "reason"),
+    ("entry", "field", "reason"),
     [
-        ({"type": "sse", "url": "https://mcp.example.com/sse"}, "deprecated"),
-        ({"command": "docker", "args": ["run", "acme/server"]}, "uvx or npx"),
-        ({"command": "uvx", "args": ["a"], "env": {"PATH": "/evil"}}, "PATH"),
-        ({"command": "uvx", "args": ["a"], "env": {"LD_PRELOAD": "evil.so"}}, "LD_PRELOAD"),
-        ({"command": "uvx", "args": ["a"], "env": {"PYTHONPATH": "/evil"}}, "PYTHONPATH"),
-        ({"command": "npx", "args": ["a"], "env": {"NODE_OPTIONS": "-r evil"}}, "NODE_OPTIONS"),
-        ({"command": "npx", "args": ["a"], "env": {"npm_config_registry": "x"}}, "npm_config"),
-        ({"command": "uvx", "args": ["--index-url=http://evil", "a"]}, "package"),
-        ({"command": "uvx", "args": ["${PACKAGE}"]}, "package"),
-        ({"command": "uvx"}, "package"),
-        ({"command": "npx", "args": ["-y", "@acme/server"]}, "package"),
-        ({"command": "npx", "args": ["${PACKAGE}"]}, "package"),
-        ({"command": "npx"}, "package"),
+        ({"type": "sse", "url": "https://mcp.example.com/sse"}, "server.entry", "deprecated"),
+        (
+            {"command": "docker", "args": ["run", "acme/server"]},
+            "server.entry.stdio.command",
+            "uvx or npx",
+        ),
+        (
+            {"command": "uvx", "args": ["a"], "env": {"PATH": "/evil"}},
+            "server.entry.stdio.env.PATH.[key]",
+            "PATH",
+        ),
+        (
+            {"command": "uvx", "args": ["a"], "env": {"LD_PRELOAD": "evil.so"}},
+            "server.entry.stdio.env.LD_PRELOAD.[key]",
+            "LD_PRELOAD",
+        ),
+        (
+            {"command": "uvx", "args": ["a"], "env": {"PYTHONPATH": "/evil"}},
+            "server.entry.stdio.env.PYTHONPATH.[key]",
+            "PYTHONPATH",
+        ),
+        (
+            {"command": "npx", "args": ["a"], "env": {"NODE_OPTIONS": "-r evil"}},
+            "server.entry.stdio.env.NODE_OPTIONS.[key]",
+            "NODE_OPTIONS",
+        ),
+        (
+            {"command": "npx", "args": ["a"], "env": {"npm_config_registry": "x"}},
+            "server.entry.stdio.env.npm_config_registry.[key]",
+            "npm_config",
+        ),
+        (
+            {"command": "uvx", "args": ["--index-url=http://evil", "a"]},
+            "server.entry.stdio.args",
+            "package",
+        ),
+        ({"command": "uvx", "args": ["${PACKAGE}"]}, "server.entry.stdio.args", "package"),
+        ({"command": "uvx"}, "server.entry.stdio.args", "package"),
+        (
+            {"command": "npx", "args": ["-y", "@acme/server"]},
+            "server.entry.stdio.args",
+            "package",
+        ),
+        ({"command": "npx", "args": ["${PACKAGE}"]}, "server.entry.stdio.args", "package"),
+        ({"command": "npx"}, "server.entry.stdio.args", "package"),
     ],
     ids=[
         "sse",
@@ -152,7 +184,7 @@ def test_an_entry_without_a_type_is_stored_with_the_type_its_fields_name(tmp_pat
     ],
 )
 def test_an_entry_kinby_cannot_run_or_whose_env_key_hijacks_the_process_is_refused(
-    tmp_path, entry, reason
+    tmp_path, entry, field, reason
 ):
     hub = hub_at(tmp_path / "hub")
 
@@ -160,7 +192,9 @@ def test_an_entry_kinby_cannot_run_or_whose_env_key_hijacks_the_process_is_refus
 
     assert isinstance(answer, ErrorEnvelope), answer
     assert answer.code is ErrorCode.INVALID_ARGUMENT
-    assert reason in answer.message
+    assert list(answer.fields) == [field]
+    assert reason in answer.fields[field]
+    assert not answer.fields[field].startswith("Value error")
     assert mcp_servers(hub) == []
     assert not (hub.directory / "mcp-servers").exists()
 
