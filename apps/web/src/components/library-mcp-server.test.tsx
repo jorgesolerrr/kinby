@@ -396,13 +396,13 @@ describe("LibraryPage, MCP servers", () => {
     ])
   })
 
-  it("keeps arguments the form cannot show one a line until they are edited", async () => {
+  it("keeps arguments and env the form cannot show one a line until they are edited", async () => {
     const server: McpServer = {
       entry: {
         type: "stdio",
         command: "uvx",
         args: ["odd", "", " --flag ", "two\nlines"],
-        env: {},
+        env: { KEY: "first\nsecond", PADDED: "  value  " },
       },
       include: ["fetch"],
     }
