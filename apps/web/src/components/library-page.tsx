@@ -16,6 +16,7 @@ import { type ReactNode, useCallback, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { FactoryEntry } from "@/components/library-factory"
+import { McpRegistrySearch } from "@/components/library-mcp-registry"
 import { McpServerEntry, NewMcpServer } from "@/components/library-mcp-server"
 import { AddFromGit, SkillEntry, WriteSkill } from "@/components/library-skill"
 import { PickedAvatars, UsedBy } from "@/components/library-used-by"
@@ -56,7 +57,7 @@ import { homePath, navigate, openLibraryTab, useLibraryTab } from "@/lib/selecti
 
 type Caller = Pick<Client, "call">
 
-type Form = "write" | "git" | "mcp_server"
+type Form = "write" | "git" | "mcp_server" | "mcp_registry"
 
 const KINDS: {
   kind: LibraryKind
@@ -101,6 +102,7 @@ const FORMS: Record<Form, string> = {
   write: "Write a skill",
   git: "Add from git",
   mcp_server: "Add an MCP server",
+  mcp_registry: "Search the MCP Registry",
 }
 
 /** What the open tab has open: one of its add forms, or one entry unfolded. One at a time. */
@@ -266,8 +268,15 @@ export function LibraryPage({
                   onAdded={closed}
                   onCancel={() => show(undefined)}
                 />
-              ) : (
+              ) : open.form === "mcp_server" ? (
                 <NewMcpServer client={client} onAdded={readAgain} onClose={() => show(undefined)} />
+              ) : (
+                <McpRegistrySearch
+                  client={client}
+                  onAdded={readAgain}
+                  onAddByHand={() => show({ form: "mcp_server" })}
+                  onClose={() => show(undefined)}
+                />
               )}
             </AddPanel>
           )}
@@ -384,7 +393,10 @@ function EmptyKind({
   )
 }
 
-/** The open tab's one action: New skill's two ways, Add MCP server, or how a factory is made. */
+/**
+ * The open tab's action: New skill's two ways, searching the MCP Registry beside Add MCP server, or
+ * how a factory is made.
+ */
 function TabAction({ kind, onAdd }: { kind: LibraryKind; onAdd: (form: Form) => void }) {
   if (kind === "factory") {
     return (
@@ -395,10 +407,16 @@ function TabAction({ kind, onAdd }: { kind: LibraryKind; onAdd: (form: Form) => 
   }
   if (kind === "mcp_server") {
     return (
-      <Button size="sm" onClick={() => onAdd("mcp_server")}>
-        <PlusIcon data-icon="inline-start" />
-        Add MCP server
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={() => onAdd("mcp_registry")}>
+          <SearchIcon data-icon="inline-start" />
+          Search the MCP Registry
+        </Button>
+        <Button size="sm" onClick={() => onAdd("mcp_server")}>
+          <PlusIcon data-icon="inline-start" />
+          Add MCP server
+        </Button>
+      </div>
     )
   }
   return (
