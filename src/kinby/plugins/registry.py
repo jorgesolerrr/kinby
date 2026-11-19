@@ -222,8 +222,6 @@ def _load_entry_points(
     warnings: list[Warning] = []
     for entry_point in entry_points(group="kinby.tools"):
         defaults = _is_kinby_defaults(entry_point)
-        if defaults and not configured.defaults:
-            continue
         try:
             loaded = _entry_point_tools(entry_point)
         except Exception as exc:
@@ -245,11 +243,11 @@ def _is_kinby_defaults(entry_point: EntryPoint) -> bool:
 
 
 def _offered(configured: Tools, name: str) -> bool:
-    """Whether the manifest leaves the default tool on. Web search also needs its backend's key."""
+    """Whether the default tool can run: web search needs its backend's key. The tool's state
+    applies at turn start, so a turn resumed later keeps the tools it started with."""
     if name == "web_search":
-        key = configured.search_key
-        return key is not None and bool(os.environ.get(key, "").strip())
-    return configured.offers(name)
+        return bool(os.environ.get(configured.search.key_variable, "").strip())
+    return True
 
 
 def _entry_point_tools(entry_point: EntryPoint) -> tuple[Tool, ...]:

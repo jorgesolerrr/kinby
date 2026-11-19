@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import JsonValue
 
 from kinby.contracts import (
     ApprovalDecision,
@@ -15,6 +16,7 @@ from kinby.contracts import (
     Payload,
     PermissionMode,
     SystemPrompt,
+    ToolResult,
     TurnFailed,
 )
 from kinby.core.turn_runner import LangGraphRunner
@@ -176,16 +178,13 @@ def test_a_tool_outside_the_groups_stays_loaded_whatever_state_it_is_given(
     assert {"routine_list", "skill"} <= sent(instance)
 
 
-def test_a_turn_resumed_from_an_approval_keeps_the_states_it_started_with(
-    tmp_path: Path,
-) -> None:
-    instance = instance_with(tmp_path)
-    runner = LangGraphRunner(
-        instance,
-        model_factory=lambda _: scripted(
-            [("remember", {"description": "Tea", "subjects": ["Jorge"], "body": "Green."})]
-        ),
-    )
+def resumed(
+    instance: Instance, path: Path, call: tuple[str, dict[str, JsonValue]], changed: str
+) -> ToolResult:
+    """The result of *call*, which parks a turn of *instance* on an approval, when the manifest's
+    `[tools]` table is *changed* and another turn prepared before the approval resumes it."""
+    model = scripted([call])
+    runner = LangGraphRunner(instance, model_factory=lambda _: model)
     payloads: list[Payload] = []
 
     async def scenario() -> None:
@@ -193,7 +192,7 @@ def test_a_turn_resumed_from_an_approval_keeps_the_states_it_started_with(
         request = PreparedTurnRequest(
             thread_id=uuid4(),
             turn_id=uuid4(),
-            message="Remember my tea.",
+            message="Go.",
             model=preparation.model,
             permission_mode=PermissionMode.ASK,
             system_prompt=SystemPrompt("System prompt"),
@@ -211,10 +210,28 @@ def test_a_turn_resumed_from_an_approval_keeps_the_states_it_started_with(
 
         context = TurnContext(preparation.budgets, emit)
         assert isinstance(await runner.run(request, context), ParkedTurn)
-        instance_with(tmp_path, 'default_states = { memory = "searchable" }')
+        instance_with(path, changed)
         runner.prepare_for_turn()
         await runner.resume(request, ApprovalAnswer(ApprovalDecision.APPROVE), context)
 
     asyncio.run(scenario())
+    return result(payloads)
 
-    assert result(payloads).error is False
+
+@pytest.mark.parametrize(
+    ("call", "changed"),
+    [
+        (
+            ("remember", {"description": "Tea", "subjects": ["Jorge"], "body": "Green."}),
+            'default_states = { memory = "searchable" }',
+        ),
+        (("write", {"path": "note.txt", "content": "hi"}), 'states = { write = "off" }'),
+        (("write", {"path": "note.txt", "content": "hi"}), "defaults = false"),
+    ],
+)
+def test_a_turn_resumed_from_an_approval_keeps_the_states_it_started_with(
+    tmp_path: Path, call: tuple[str, dict[str, JsonValue]], changed: str
+) -> None:
+    called = resumed(instance_with(tmp_path), tmp_path, call, changed)
+
+    assert called.error is False, called.output

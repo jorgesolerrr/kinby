@@ -102,7 +102,7 @@ from kinby.memory import (
     hits_json,
     open_memory,
 )
-from kinby.plugins.core import core_tools
+from kinby.plugins.core import built_in_states, by_state, core_tools
 from kinby.plugins.hub_browser import HubBrowser, lends_a_browser
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
@@ -170,6 +170,7 @@ def _print_turn_inputs(instance: Instance, today: date) -> None:
     registry = ToolRegistry(instance.path, tools=instance.manifest.tools)
     discovered_tools, tool_warnings = registry.refresh()
     tools, core_tool_warnings = discovered_tools.with_core(*core_tools(instance, skills))
+    tools, _ = by_state(tools, built_in_states(instance.manifest.tools))
 
     print("tools:")
     for tool in tools.tools:
