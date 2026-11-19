@@ -112,7 +112,7 @@ export type BuiltInToolGroup = "defaults" | "memory" | "browser" | "authored";
 /**
  * Where a tool's state came from.
  */
-export type ToolStateSource = "group" | "library" | "instance";
+export type ToolStateSource = "group" | "library" | "instance" | "unavailable";
 /**
  * The one service an instance sends its web searches to.
  */

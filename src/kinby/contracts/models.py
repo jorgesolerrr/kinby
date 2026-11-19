@@ -3656,6 +3656,9 @@ class ToolStateSource(StrEnum):
     LIBRARY = "library"
     #: Its own state, as the instance changed it.
     INSTANCE = "instance"
+    #: Off whatever its state, as the instance lacks what it needs: web_search its search
+    #: backend's key.
+    UNAVAILABLE = "unavailable"
 
 
 class GroupTool(ContractModel):

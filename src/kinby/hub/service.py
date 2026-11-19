@@ -2314,14 +2314,11 @@ class Hub:
             # code_run reports a malformed project to the agent; the toolset reads it as empty.
             authored, held = (), ()
         read_only = read_only_tools(record.path)
+        is_set = bool(self._environment(record.path).get(variable, "").strip())
         return InstanceToolsetResult(
-            built_in_groups=built_in_groups(record.path, manifest),
+            built_in_groups=built_in_groups(record.path, manifest, search_key_held=is_set),
             mcp_server_groups=mcp_server_groups(record.path, manifest),
-            search=SearchSetup(
-                backend=tools.search,
-                variable=variable,
-                is_set=bool(self._environment(record.path).get(variable, "").strip()),
-            ),
+            search=SearchSetup(backend=tools.search, variable=variable, is_set=is_set),
             mcp_servers=self._signed_in_picks(record, self.library.picks(record.path)).mcp_servers,
             packages=list(held),
             authored_tools=[

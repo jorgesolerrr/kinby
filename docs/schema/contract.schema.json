@@ -11988,7 +11988,8 @@
       "enum": [
         "group",
         "library",
-        "instance"
+        "instance",
+        "unavailable"
       ],
       "title": "ToolStateSource",
       "type": "string"

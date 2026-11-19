@@ -37,7 +37,7 @@ from kinby.instance import Instance, inspect_instance
 from kinby.instance.layout import AUTHORED_TOOLS_NAME, MCP_TOOLS_NAME
 from kinby.instance.read_only_tools import set_read_only
 from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
-from tests.test_hub import created_instance, hub_at, hub_client
+from tests.test_hub import created_instance, hold_search_key, hub_at, hub_client
 from tests.test_hub_browser import _LIMITS, browser_hub
 from tests.test_hub_home_reads import answers, error_code, home_hub
 from tests.test_hub_library_mcp_servers import FETCH
@@ -165,6 +165,28 @@ def test_a_stopped_instance_gives_each_built_in_group_its_tools_states_and_loade
     assert (browser.on, browser.loaded_tokens) == (False, 0)
     assert {each.state for each in browser.tools or ()} == {ToolState.OFF}
     assert (authored.on, authored.tools, authored.loaded_tokens) == (False, None, 0)
+
+
+def test_web_search_is_off_and_adds_nothing_until_the_instance_holds_its_backends_key(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> tuple[BuiltInGroup, BuiltInGroup]:
+        hub = hub_at(tmp_path / "hub")
+        instance_id, _ = await stopped_instance(hub)
+        without = (await toolset_of(hub, instance_id)).built_in_groups[0]
+        hold_search_key(hub, instance_id)
+        return without, (await toolset_of(hub, instance_id)).built_in_groups[0]
+
+    without, held = asyncio.run(scenario())
+
+    unavailable = tool(without, "web_search")
+    assert (unavailable.state, unavailable.source) == (ToolState.OFF, ToolStateSource.UNAVAILABLE)
+    assert without.loaded_tokens == loaded_tokens(without)
+    assert (tool(held, "web_search").state, tool(held, "web_search").source) == (
+        ToolState.LOADED,
+        ToolStateSource.GROUP,
+    )
+    assert held.loaded_tokens == without.loaded_tokens + tool(held, "web_search").tokens
 
 
 def test_the_toolset_lists_a_servers_tools_as_the_last_turn_connected_to_it_listed_them(

@@ -17,6 +17,7 @@ from kinby.instance.skills_lock import read_lock
 from kinby.memory import GraphStore, memory_tools
 from kinby.plugins.browser_tools import BROWSER_TOOLS
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
+from kinby.plugins.defaults.web import web_search
 from kinby.plugins.listed_tools import (
     ListedTool,
     authored_tools_listed,
@@ -26,18 +27,22 @@ from kinby.plugins.listed_tools import (
 from kinby.plugins.tools import Tool
 
 
-def built_in_groups(instance_path: Path, manifest: Manifest) -> list[BuiltInGroup]:
-    """Each built-in group: kinby's own tools, and the authored tools the last turn loaded."""
+def built_in_groups(
+    instance_path: Path, manifest: Manifest, *, search_key_held: bool
+) -> list[BuiltInGroup]:
+    """Each built-in group: kinby's own tools, and the authored tools the last turn loaded. A turn
+    offers web_search only while the instance holds its search backend's key."""
     listed_tools = {
         BuiltInToolGroup.DEFAULTS: _listed(DEFAULT_TOOLS),
         BuiltInToolGroup.MEMORY: _listed(memory_tools(GraphStore(instance_path))),
         BuiltInToolGroup.BROWSER: _listed(BROWSER_TOOLS),
         BuiltInToolGroup.AUTHORED: authored_tools_listed(manifest.state_dir),
     }
+    unavailable = frozenset() if search_key_held else frozenset({web_search.name})
     groups = []
     for group in BuiltInToolGroup:
         states = manifest.tools.states(group)
-        tools = _group_tools(listed_tools[group], states, own=states.tools)
+        tools = _group_tools(listed_tools[group], states, own=states.tools, unavailable=unavailable)
         groups.append(
             BuiltInGroup(
                 group=group,
@@ -78,20 +83,31 @@ def _group_tools(
     listed_tools: Iterable[ListedTool] | None,
     states: ToolStates,
     own: Mapping[str, ToolState],
+    unavailable: frozenset[str] = frozenset(),
 ) -> list[GroupTool] | None:
-    """The group's *listed_tools* in its *states*, where the instance set the *own* states."""
+    """The group's *listed_tools* in its *states*, where the instance set the *own* states. An
+    *unavailable* tool is off whatever its state."""
     if listed_tools is None:
         return None
-    return [
-        GroupTool(
-            name=tool.name,
-            description=tool.description,
-            state=states.of(tool.name),
-            source=_source(tool.name, states, own),
-            tokens=tool.tokens,
-        )
-        for tool in listed_tools
-    ]
+    return [_group_tool(tool, states, own, unavailable) for tool in listed_tools]
+
+
+def _group_tool(
+    tool: ListedTool,
+    states: ToolStates,
+    own: Mapping[str, ToolState],
+    unavailable: frozenset[str],
+) -> GroupTool:
+    state, source = states.of(tool.name), _source(tool.name, states, own)
+    if tool.name in unavailable and state is not ToolState.OFF:
+        state, source = ToolState.OFF, ToolStateSource.UNAVAILABLE
+    return GroupTool(
+        name=tool.name,
+        description=tool.description,
+        state=state,
+        source=source,
+        tokens=tool.tokens,
+    )
 
 
 def _source(tool: str, states: ToolStates, own: Mapping[str, ToolState]) -> ToolStateSource:
