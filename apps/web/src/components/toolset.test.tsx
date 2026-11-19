@@ -112,8 +112,9 @@ function renderToolset({
   signIn = null,
 }: { running?: boolean; failed?: string[]; signIn?: LoginState | null } = {}) {
   let marked = new Set(["lookup"])
+  let sets = 0
   const hub = stubCaller({
-    "instance.tool_states.set": () => toolset,
+    "instance.tool_states.set": () => ({ ...toolset, hash: `set-${++sets}` }),
     "instance.toolset.get": () => ({
       ...toolset,
       mcp_servers: toolset.mcp_servers.map((server) => ({ ...server, sign_in: signIn })),
@@ -189,7 +190,7 @@ describe("the instance's toolset", () => {
     ).toBeDefined()
   })
 
-  it("switches a group off through the hub, and reads the toolset again", async () => {
+  it("switches a group off through the hub, and goes on from the toolset the set returns", async () => {
     const { hub } = renderToolset()
     const user = userEvent.setup()
 
@@ -211,12 +212,10 @@ describe("the instance's toolset", () => {
         mcp_servers: {
           linear: { on: false, default_state: "off", tool_states: { list_issues: "loaded" } },
         },
-        hash: "read-hash",
+        hash: "set-1",
       },
     ])
-    await waitFor(() =>
-      expect(hub.calls.filter((call) => call.method === "instance.toolset.get")).toHaveLength(3),
-    )
+    expect(hub.calls.filter((call) => call.method === "instance.toolset.get")).toHaveLength(1)
   })
 
   it("gives a tool its own state, and the group a default state", async () => {
@@ -247,7 +246,7 @@ describe("the instance's toolset", () => {
       {
         instance_id: "ada",
         built_in_groups: { memory: { on: true, default_state: "loaded", tool_states: {} } },
-        hash: "read-hash",
+        hash: "set-1",
       },
     ])
   })
@@ -290,7 +289,7 @@ describe("the instance's toolset", () => {
         mcp_servers: {
           linear: { on: true, default_state: null, tool_states: { list_issues: "loaded" } },
         },
-        hash: "read-hash",
+        hash: "set-1",
       },
     ])
     expect(

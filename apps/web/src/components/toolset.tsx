@@ -5,6 +5,7 @@ import type {
   Clock,
   GroupTool,
   InstanceClient,
+  InstanceToolsetResult,
   InstanceToolStatesSetCommand,
   McpServerName,
   SearchBackend,
@@ -78,7 +79,13 @@ export function Toolset({
     () => caller.call("instance.toolset.get", { instance_id: instanceId }),
     [caller, instanceId],
   )
-  const { value, failure, readAgain } = useRead(read, clock)
+  const { value: lastRead, failure, readAgain } = useRead(read, clock)
+  // A set returns the toolset, with its new hash, which stands until the next read.
+  const [lastSet, setLastSet] = useState<{
+    over: InstanceToolsetResult | undefined
+    toolset: InstanceToolsetResult
+  }>()
+  const value = lastSet !== undefined && lastSet.over === lastRead ? lastSet.toolset : lastRead
   const [saving, setSaving] = useState(false)
   const [refusal, setRefusal] = useState<unknown>()
   const setStates = (
@@ -89,10 +96,13 @@ export function Toolset({
     setRefusal(undefined)
     caller
       .call("instance.tool_states.set", { instance_id: instanceId, ...groups, hash: value.hash })
-      .then(readAgain, (error: unknown) => {
-        setRefusal(error)
-        readAgain()
-      })
+      .then(
+        (toolset) => setLastSet({ over: lastRead, toolset }),
+        (error: unknown) => {
+          setRefusal(error)
+          readAgain()
+        },
+      )
       .finally(() => setSaving(false))
   }
 

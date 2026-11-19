@@ -21,7 +21,7 @@ from kinby.instance import Instance, Manifest, ToolStates
 from kinby.instance.config_changes import files_hash, recorded_changes
 from kinby.instance.layout import MANIFEST_NAME, SKILLS_LOCK_NAME
 from kinby.instance.manifest import built_in_group_states, parse_manifest, with_tool_states
-from kinby.instance.skills_lock import lock_text, read_lock, write_lock
+from kinby.instance.skills_lock import lock_text, read_lock
 from kinby.memory import GraphStore, memory_tools
 from kinby.plugins.browser_tools import BROWSER_TOOLS
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
@@ -145,11 +145,17 @@ def set_tool_states(instance: Instance, command: InstanceToolStatesSetCommand) -
     ]
     with recorded_changes(instance, changed, ConfigActor.APP):
         if edited != text:
-            staging = manifest.with_name(f".{manifest.name}.staging")
-            staging.write_text(edited, encoding="utf-8")
-            staging.replace(manifest)
+            _replace(manifest, edited)
         if relocked:
-            write_lock(path, lock)
+            _replace(path / SKILLS_LOCK_NAME, lock_text(lock))
+
+
+def _replace(path: Path, text: str) -> None:
+    """Write *text* over the file at *path*, staged beside it, so a turn of the running instance
+    reading it never sees half a file."""
+    staging = path.with_name(f".{path.name}.staging")
+    staging.write_text(text, encoding="utf-8")
+    staging.replace(path)
 
 
 def _kinby_tools(instance_path: Path) -> dict[BuiltInToolGroup, tuple[Tool, ...]]:
