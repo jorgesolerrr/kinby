@@ -11,6 +11,7 @@ Grilling [#1215](https://github.com/jorgesolerrr/kinby/issues/1215), research in
 - **Tool search is three fixed tools:** search the searchable tools, read one's definition, and call one by name. kinby searches by keyword over names and descriptions. The three tools never change while tools come and go, so the prompt cache holds.
 - **Code mode is one tool, `run_code`.** The model writes Python, which runs in Monty inside the turn's process and reaches nothing but the turn's tools.
 - **The gate checks every call as a call to the real tool,** whether the model made it directly, through tool search, or from a script. A routine grant and a trusted read-only hint hold in all three. A call from a script that the gate would ask about fails inside the script, and the model makes it directly.
+- **A script reaches only the tools it can call unasked.** A tool the gate asks about on every call, whatever its arguments, is left out of scripts, and a turn with no tool left offers no `run_code`. A tool whose answer turns on its arguments, such as bash or a URL read, stays in, and its asked calls fail as above ([#1446](https://github.com/jorgesolerrr/kinby/issues/1446)).
 
 ## Considered options
 

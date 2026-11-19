@@ -93,7 +93,14 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, GateDecision, evaluate
+from kinby.core.gate import (
+    AUTHORED_RULE,
+    INVALID_ARGUMENTS,
+    URL_READS,
+    GateDecision,
+    asks_every_call,
+    evaluate,
+)
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import SHIPPED_WINDOWS, price_map
@@ -186,6 +193,7 @@ from kinby.plugins.routines import (
 from kinby.plugins.skills import Skill, load_skills, referenced_skills, skill_tool
 from kinby.plugins.tool_search import (
     CALL_TOOL,
+    RUN_CODE,
     TOOL_SEARCH_NAMES,
     SearchableGroup,
     called,
@@ -291,6 +299,8 @@ class ModelContext:
     #: The tools a call through tool search or from a script reaches: the loaded ones but tool
     #: search's own, and the searchable ones.
     reachable: ToolSnapshot
+    #: The reachable tools a script calls, by Python name.
+    scripted: Mapping[str, Tool]
     tool_context: ToolContext
     user_message: HumanMessage
     budgets: Budgets
@@ -731,6 +741,28 @@ class LangGraphRunner:
         grants = RoutineGrants(self._instance.manifest.state_dir).of(turn.origin.name)
         return tuple(grant.tool for grant in grants)
 
+    def _unasked_script_tools(
+        self, turn: PreparedTurnRequest, tools: _TurnTools
+    ) -> dict[str, Tool]:
+        """The tools of *tools* a script calls, by Python name, but those the gate asks about on
+        every call, as a script cannot ask for an approval."""
+        granted = self._granted_tools(turn)
+        read_only = read_only_tools(self._instance.path)
+        return {
+            name: tool
+            for name, tool in script_tools(
+                ToolSnapshot((*tools.loaded.tools, *tools.search_set.tools))
+            ).items()
+            if not asks_every_call(
+                self._gate_policy,
+                turn.permission_mode,
+                tool,
+                self._instance.manifest.workspace.path,
+                granted=tool.name in granted,
+                marked_read_only=tool.name in read_only,
+            )
+        }
+
     def _routine_revision(self, turn: PreparedTurnRequest) -> FileHash | None:
         if not isinstance(turn.origin, RoutineOrigin):
             return None
@@ -860,7 +892,11 @@ class LangGraphRunner:
         )
         if isinstance(prepared, TurnOutcome):
             return prepared
-        tools, reachable = await _with_tool_search(prepared.tools, emit)
+        scripted = self._unasked_script_tools(turn, prepared.tools)
+        turn_tools = (
+            prepared.tools if scripted else prepared.tools.kept(lambda tool: tool.name != RUN_CODE)
+        )
+        tools, reachable = await _with_tool_search(turn_tools, emit)
         progress = prepared.progress
         budgets = progress.budgets
         window = {**SHIPPED_WINDOWS, **self._manifest().windows}.get(turn.model)
@@ -910,6 +946,7 @@ class LangGraphRunner:
                             permission_mode=turn.permission_mode,
                             tools=tools,
                             reachable=reachable,
+                            scripted=scripted,
                             tool_context=ToolContext(
                                 instance=self._instance,
                                 thread_id=turn.thread_id,
@@ -1727,9 +1764,7 @@ class LangGraphRunner:
                 error=True,
             )
         else:
-            broker = ToolBroker(
-                script_tools(step.context.reachable), partial(self._call_from_script, step, call)
-            )
+            broker = ToolBroker(step.context.scripted, partial(self._call_from_script, step, call))
             result = cut_to_cap(
                 await self._run_tool(
                     call,

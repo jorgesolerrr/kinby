@@ -18,11 +18,12 @@ from kinby.plugins.registry import ToolSnapshot
 from kinby.plugins.tools import Tool, tool
 
 CALL_TOOL = "call_tool"
+RUN_CODE = "run_code"
 #: The names of tool search's own tools, which a turn with tool search holds no other tool by.
 TOOL_SEARCH_NAMES = frozenset({"search_tools", "describe_tool", CALL_TOOL})
 #: The tools a script never calls: code mode itself, the takeover, which waits on the user, and
 #: tool search's own.
-_UNSCRIPTED = frozenset({"run_code", "browser_takeover"}) | TOOL_SEARCH_NAMES
+_UNSCRIPTED = frozenset({RUN_CODE, "browser_takeover"}) | TOOL_SEARCH_NAMES
 _WORD = re.compile(r"[a-z0-9]+")
 #: A character a Python name cannot hold: any but a letter, a digit or `_`, or a leading digit.
 _NOT_IN_A_NAME = re.compile(r"^\d|\W")

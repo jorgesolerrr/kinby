@@ -154,8 +154,55 @@ def test_a_script_calls_a_write_the_gate_allows(tmp_path: Path) -> None:
     assert ran_once(payloads).output == "posted: hi"
 
 
-def test_a_call_the_gate_would_ask_about_raises_in_the_script_and_asks_nothing(
-    tmp_path: Path,
+@pytest.mark.parametrize(("trust_hints", "returned"), [(False, "left out"), (True, "looked: hi")])
+def test_a_tool_the_gate_asks_about_on_every_call_is_no_function_of_a_script(
+    tmp_path: Path, trust_hints: bool, returned: str
+) -> None:
+    instance = scripting(tmp_path, "look", trust_hints=trust_hints)
+    instance.manifest.workspace.path.mkdir(exist_ok=True)
+    (instance.manifest.workspace.path / "note.txt").write_text("hello", encoding="utf-8")
+    model = scripted(
+        [
+            script(
+                "note = await read(path='note.txt')\n"
+                "try:\n"
+                "    return await echo__look(text='hi')\n"
+                "except NameError:\n"
+                "    return 'left out' if 'hello' in note else 'unread'"
+            )
+        ]
+    )
+
+    payloads = asyncio.run(model_turn(instance, model, PermissionMode.ASK))
+
+    assert asked(payloads) == []
+    assert ran_once(payloads).output == returned
+    [run_code] = [tool for tool in model.bound_tools[0] if tool.name == "run_code"]
+    assert "need an approval" in run_code.description
+
+
+def test_a_turn_whose_every_tool_needs_an_approval_offers_no_run_code(tmp_path: Path) -> None:
+    (tmp_path / "all").mkdir()
+    (tmp_path / "asking").mkdir()
+    names = sent(instance_with(tmp_path / "all", browser=False)) - {"run_code"}
+    instance = instance_with(tmp_path / "asking", browser=False)
+    (instance.path / "permissions.toml").write_text(
+        "[tools]\n" + "".join(f'{name} = "ask"\n' for name in sorted(names)), encoding="utf-8"
+    )
+
+    assert "run_code" not in sent(instance)
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "mode"),
+    [
+        ("web_fetch", "url='https://example.com/unseen'", PermissionMode.ASK),
+        ("bash", "command='touch note.txt'", PermissionMode.ASK),
+        ("write", "path='/elsewhere/note.txt', content='hi'", PermissionMode.AUTO),
+    ],
+)
+def test_a_call_the_gate_asks_about_for_its_arguments_raises_in_the_script_and_asks_nothing(
+    tmp_path: Path, name: str, arguments: str, mode: PermissionMode
 ) -> None:
     instance = scripting(tmp_path)
 
@@ -165,21 +212,21 @@ def test_a_call_the_gate_would_ask_about_raises_in_the_script_and_asks_nothing(
             [
                 script(
                     "try:\n"
-                    "    await echo__post(text='hi')\n"
+                    f"    await {name}({arguments})\n"
                     "except Exception as error:\n"
                     "    return str(error)"
                 )
             ],
-            PermissionMode.ASK,
+            mode,
         )
     )
 
     assert asked(payloads) == []
-    output = ran_once(payloads).output
-    assert "echo__post" in output
-    assert "directly" in output
-    assert "posted" not in output
-    assert gated(payloads, "echo__post") == GateOutcome.ASK
+    assert (
+        f'Tool "{name}" needs an approval, which a script cannot ask for. Call it directly.'
+        in ran_once(payloads).output
+    )
+    assert gated(payloads, name) == GateOutcome.ASK
 
 
 def test_a_denied_call_raises_with_the_gates_reason(tmp_path: Path) -> None:
