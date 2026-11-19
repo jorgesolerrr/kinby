@@ -129,6 +129,36 @@ def evaluate(
     )
 
 
+def asks_every_call(
+    policy: GatePolicy,
+    mode: PermissionMode,
+    tool: Tool,
+    workspace: Path,
+    *,
+    granted: bool = False,
+    marked_read_only: bool = False,
+) -> bool:
+    """Whether the gate asks about every call to *tool* it does not deny, whatever the call's
+    arguments: it asks about a call without any, and no other arguments could have it allow the
+    call, as a seen URL, a shell read or a write inside the workspace in auto mode would."""
+    call = ToolCall(call_id="", name=tool.name, arguments={}, write=tool.write)
+    decision = evaluate(
+        policy,
+        mode,
+        call,
+        tool,
+        workspace,
+        granted=granted,
+        marked_read_only=marked_read_only,
+    )
+    allowed_by_arguments = (
+        decision.rule == "web.unseen_url"
+        or (decision.rule.startswith("mode.") and tool.name == "bash")
+        or (decision.rule == "mode.auto.write" and bool(tool.paths))
+    )
+    return decision.action is GateAction.ASK and not allowed_by_arguments
+
+
 def _paths_are_inside_workspace(tool: Tool, call: ToolCall, workspace: Path) -> bool:
     if not tool.paths:
         return False
