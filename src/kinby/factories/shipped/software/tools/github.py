@@ -7,6 +7,7 @@ remotes. gh runs as the GH_TOKEN the workbench holds.
 """
 
 import json
+import logging
 import re
 import subprocess
 from contextlib import suppress
@@ -81,6 +82,7 @@ mutation($thread: ID!) {
 """
 _CLOSES_ISSUE = re.compile(r"(?im)^Closes #(\d+)\s*$")
 _ISSUE_URL_NUMBER = re.compile(r"/issues/(\d+)$")
+_logger = logging.getLogger(__name__)
 
 
 class CommandFailed(RuntimeError):
@@ -163,7 +165,7 @@ def scan_ready_issues(signal: dict[str, object], workspace: Path) -> list[dict[s
     """Find the oldest eligible issue for the factory, after a wake that can change which it is.
 
     An eligible issue is open and labeled ready-for-agent, has no agent pull request, and each
-    open issue that blocks it has one in the same stack. The oldest stays eligible until its pull
+    open issue that blocks it has one. The oldest stays eligible until its pull
     request opens or it goes to a human, and finding it again returns its run, so the factory
     implements one issue at a time. Runs babysitting their pull requests go on meanwhile.
 
@@ -695,11 +697,17 @@ def _eligible_issues(workspace: Path, labeled: int | None) -> tuple[list[int], i
             issue.number in covered or oldest is not None
         ):
             continue
-        stack = issue.parent or issue.number
-        if not all(
-            blocker["number"] in covered and (_parent(blocker) or blocker["number"]) == stack
+        waiting = [
+            blocker["number"]
             for blocker in _open_blockers(workspace, issue.number)
-        ):
+            if blocker["number"] not in covered
+        ]
+        if waiting:
+            _logger.info(
+                "#%d waits on blockers with no agent pull request: %s.",
+                issue.number,
+                ", ".join(f"#{number}" for number in waiting),
+            )
             continue
         found = issue if issue.number in confirmed else _ready_issue(workspace, issue.number)
         if found is None:

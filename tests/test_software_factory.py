@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -2001,6 +2002,24 @@ def test_the_worktree_call_hands_a_human_blockers_on_a_forked_stack_no_branch_ho
     asyncio.run(scenario())
 
 
+def test_the_worktree_call_hands_a_human_top_level_blockers_no_branch_holds(tmp_path, monkeypatch):
+    bench = coder_at(tmp_path)
+    forked(bench.workspace)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    answer_issue(github, issue(6, "Dark theme"))
+    github.answer(ISSUE.format(number=6) + "/dependencies/blocked_by", output=blockers(3, 4))
+    pulls = [pull_request(40 + closes, f"agent/{closes}-step", closes) for closes in (4, 3)]
+    github.answer("repos/{owner}/{repo}/pulls", output=[pulls])
+
+    result = asyncio.run(prepared(bench.steps, 6))
+
+    assert result.ending is StepEnding.FAILED
+    assert result.summary == (
+        'Tool "agent_branch" failed: DivergedBlockers: No agent branch holds every open '
+        "blocker's agent branch, so a human picks the base: agent/3-step, agent/4-step."
+    )
+
+
 def test_the_worktree_call_stacks_on_a_sibling_branch_that_holds_a_forked_stacks_blockers(
     tmp_path, monkeypatch
 ):
@@ -2709,6 +2728,37 @@ def test_the_scan_reads_an_issue_just_labeled_that_the_issue_list_does_not_show_
     dispatcher = bench.steps
 
     assert asyncio.run(scanned(dispatcher, labeled)) == [{"issue": 5}]
+
+
+def test_the_scan_finds_an_issue_whose_blocker_in_no_shared_stack_has_an_agent_pull_request(
+    tmp_path, monkeypatch
+):
+    bench = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    github.answer("repos/{owner}/{repo}/issues", output=[[issue(8, "Dark theme")]])
+    github.answer("repos/{owner}/{repo}/pulls", output=[[pull_request(47, "agent/7-step", 7)]])
+    github.answer(ISSUE.format(number=8) + "/dependencies/blocked_by", output=blockers(7))
+    github.answer(ISSUE.format(number=8), output=issue(8, "Dark theme"))
+    dispatcher = bench.steps
+
+    assert asyncio.run(scanned(dispatcher)) == [{"issue": 8}]
+
+
+def test_the_scan_logs_an_issue_that_waits_on_a_blocker_with_no_agent_pull_request(
+    tmp_path, monkeypatch, caplog
+):
+    bench = coder_at(tmp_path)
+    github = FakeGitHub(tmp_path / "github", monkeypatch)
+    github.answer("repos/{owner}/{repo}/issues", output=[[issue(8, "Dark theme")]])
+    github.answer("repos/{owner}/{repo}/pulls", output=[[pull_request(46, "agent/6-step", 6)]])
+    github.answer(ISSUE.format(number=8) + "/dependencies/blocked_by", output=blockers(6, 7))
+    dispatcher = bench.steps
+
+    with caplog.at_level(logging.INFO):
+        found = asyncio.run(scanned(dispatcher))
+
+    assert found == []
+    assert "#8 waits on blockers with no agent pull request: #7." in caplog.messages
 
 
 @pytest.mark.parametrize(
