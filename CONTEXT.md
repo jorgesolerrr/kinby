@@ -878,17 +878,32 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no workbench until the signal, a deadline or the user moves it on. So does an **approval** or a **takeover** a kinby **agent step**'s turn requests, until the user answers it or finishes the takeover. A wait on the user's approval tells the user by itself, with a summary that can name the run's values. The user approves the run, or sends it back to an earlier step, with notes or none. It ends with a **step result**.
 
+### Off
+
+A **step** the **factory** keeps but its runs pass over, going on to the next step. The **factory check** treats an off step as missing, so a step another step resumes, routes back to, or takes a value only it records cannot be turned off. Only an off step can be deleted.
+_Avoid_: disabled, skipped (a run's path, not the step's state), removed
+
+### Step editor
+
+Where the user sees one **step** of a **factory** and changes it in the web app: what the step does, how it runs, where its failures and outcomes send the run, and its prompt. It lives on the factory, so a change reaches every **line** on it; a **step attempt** of a run links to it. It also adds a step after another, and turns a step **off** or on. Every change it saves passes the **factory check**.
+_Avoid_: step view (a **view** is an **instance**'s UI), step settings
+
 ### Work item
 
 The unit of work a **factory** carries, such as one issue.
 
 ### Factory run
 
-One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run made before lines belongs to the **instance** that handed its work item in, and still reads through the **hub**, though its steps never run again. A work item that matches an unfinished run of the same line returns that run, so two lines can each carry a work item with the same values. A line's run counts as unfinished until the **factory**'s ended call for it went through, since its **run folder** goes only then. The **hub** keeps it between steps: the current step, the **step results** so far, and the attempts per step.
+One **work item**'s trip through a **factory**'s **steps**. It belongs to the **line** the work item was handed to, and works on that line's **workbench** only. A run made before lines belongs to the **instance** that handed its work item in, and still reads through the **hub**, though its steps never run again. A work item that matches an unfinished run of the same line returns that run, so two lines can each carry a work item with the same values. A line's run counts as unfinished until the **factory**'s ended call for it went through, since its **run folder** goes only then. The **hub** keeps it between steps: the current step, the **step results** so far, the attempts per step, and its **factory version**.
+
+### Factory version
+
+One saved state of a **factory**, its file and its folder. Every change the user saves, from the **step editor**, from chat or by hand in its folder, makes a new one, and the factory keeps them all: the user can go back to an earlier one, or to the one kinby ships, as a new version. A **factory run** keeps the version it started on, and moves to the latest only when the user retries or sends back a run that **needs human** and chooses to. Each **step attempt** names the version it ran. A shipped factory the user changed takes kinby's later version of it by itself when the two merge cleanly and the **factory check** passes; otherwise the user's version stays, and the steps that differ show kinby's to take one by one. A change from chat is an **approval** that shows what changes and every **line** on the factory, and the owner of any of those lines may ask for one.
+_Avoid_: revision, snapshot, edit (for the saved state)
 
 ### Run folder
 
-The folder one **factory run** works in on its **workbench**: a **run worktree** when the workspace is a git clone, and a directory named for the run otherwise. kinby cuts it when the run's first step starts and passes it with every step. A **stop** for a human, a retry and a park leave it as it is, with its uncommitted files. Sending the run back to its first step cuts it again from the base, so the run starts over. It goes when the run ends done or cancelled, once the **factory**'s ended call, if it declares one, went through. The factory's needs_human and ended calls run on the workbench, in the run folder. Nothing copies the **factory** into it: a step runs the factory's **tools** from the factory's own folder, as they are then.
+The folder one **factory run** works in on its **workbench**: a **run worktree** when the workspace is a git clone, and a directory named for the run otherwise. kinby cuts it when the run's first step starts and passes it with every step. A **stop** for a human, a retry and a park leave it as it is, with its uncommitted files. Sending the run back to its first step cuts it again from the base, so the run starts over. It goes when the run ends done or cancelled, once the **factory**'s ended call, if it declares one, went through. The factory's needs_human and ended calls run on the workbench, in the run folder. Nothing copies the **factory** into it: a step runs the factory's **tools** as they are in the run's **factory version**.
 
 ### Run worktree
 
