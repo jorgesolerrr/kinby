@@ -161,6 +161,7 @@ from kinby.plugins.core import built_in_states, by_state, core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hub_browser import HubBrowser
 from kinby.plugins.instance_tools import routine_config_file
+from kinby.plugins.listed_tools import record_authored_tools
 from kinby.plugins.mcp import McpTools, mcp_tool_states, mcp_tools
 from kinby.plugins.notify import (
     UNTITLED,
@@ -774,6 +775,10 @@ class LangGraphRunner:
         emit = context.emit
         skills, skill_warnings = self._skills()
         discovered_tools, tool_warnings = self._tools.refresh()
+        record_authored_tools(
+            self._instance.manifest.state_dir,
+            (tool for tool in discovered_tools.tools if tool.authored),
+        )
         discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked.loaded))
         tools, core_tool_warnings = discovered_tools.with_core(*self._core_tools(skills))
         tools, searchable = by_state(tools, groups)

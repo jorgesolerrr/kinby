@@ -22,6 +22,7 @@ from kinby.contracts import (
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ApprovalAnswer, ParkedTurn, PreparedTurnRequest, TurnContext
 from kinby.instance import Instance, load_instance
+from kinby.plugins.listed_tools import authored_tools_listed
 from tests.test_authored_tools import expose, offline_uv  # noqa: F401
 from tests.test_instance_code import model_turn, scripted
 from tests.test_mcp_servers import result
@@ -176,6 +177,22 @@ def test_a_tool_outside_the_groups_stays_loaded_whatever_state_it_is_given(
     )
 
     assert {"routine_list", "skill"} <= sent(instance)
+
+
+def test_a_turn_records_the_authored_tools_it_loaded_with_their_descriptions(
+    tmp_path: Path,
+) -> None:
+    instance = instance_with(tmp_path)
+    expose(instance)
+    assert authored_tools_listed(instance.manifest.state_dir) is None
+
+    sent(instance)
+
+    listed = authored_tools_listed(instance.manifest.state_dir)
+    assert listed is not None
+    [echo] = listed
+    assert (echo.name, echo.description) == ("echo", "Repeat a line of text.")
+    assert echo.tokens > 0
 
 
 def resumed(

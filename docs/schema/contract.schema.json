@@ -1026,6 +1026,56 @@
       "title": "BrowserWait",
       "type": "object"
     },
+    "BuiltInGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "default_state": {
+          "$ref": "#/$defs/ToolState"
+        },
+        "group": {
+          "$ref": "#/$defs/BuiltInToolGroup"
+        },
+        "loaded_tokens": {
+          "type": "integer"
+        },
+        "on": {
+          "type": "boolean"
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/GroupTool"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "on",
+        "default_state",
+        "tools",
+        "loaded_tokens",
+        "group"
+      ],
+      "title": "BuiltInGroup",
+      "type": "object"
+    },
+    "BuiltInToolGroup": {
+      "description": "A tool group kinby ships, whose states the manifest holds (ADR 0129). Each MCP server an\ninstance picks is a tool group too.",
+      "enum": [
+        "defaults",
+        "memory",
+        "browser",
+        "authored"
+      ],
+      "title": "BuiltInToolGroup",
+      "type": "string"
+    },
     "CallFrame": {
       "additionalProperties": false,
       "properties": {
@@ -1780,23 +1830,6 @@
         "setup_fields"
       ],
       "title": "DeclaredSetup",
-      "type": "object"
-    },
-    "DefaultTool": {
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "$ref": "#/$defs/ToolName"
-        },
-        "on": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "name",
-        "on"
-      ],
-      "title": "DefaultTool",
       "type": "object"
     },
     "DelegatedRun": {
@@ -2986,6 +3019,35 @@
       "title": "GitSource",
       "type": "object"
     },
+    "GroupTool": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ToolStateSource"
+        },
+        "state": {
+          "$ref": "#/$defs/ToolState"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "state",
+        "source",
+        "tokens"
+      ],
+      "title": "GroupTool",
+      "type": "object"
+    },
     "HomeInstanceOrigin": {
       "additionalProperties": false,
       "description": "The home instance, which asked the hub to start the turn after the user approved it.",
@@ -4164,9 +4226,15 @@
         "browser": {
           "type": "boolean"
         },
-        "default_tools": {
+        "built_in_groups": {
           "items": {
-            "$ref": "#/$defs/DefaultTool"
+            "$ref": "#/$defs/BuiltInGroup"
+          },
+          "type": "array"
+        },
+        "mcp_server_groups": {
+          "items": {
+            "$ref": "#/$defs/McpServerGroup"
           },
           "type": "array"
         },
@@ -4187,7 +4255,8 @@
         }
       },
       "required": [
-        "default_tools",
+        "built_in_groups",
+        "mcp_server_groups",
         "search",
         "mcp_servers",
         "packages",
@@ -5826,6 +5895,45 @@
         "code"
       ],
       "title": "McpServerFailed",
+      "type": "object"
+    },
+    "McpServerGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "default_state": {
+          "$ref": "#/$defs/ToolState"
+        },
+        "loaded_tokens": {
+          "type": "integer"
+        },
+        "on": {
+          "type": "boolean"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerName"
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/GroupTool"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "on",
+        "default_state",
+        "tools",
+        "loaded_tokens",
+        "server"
+      ],
+      "title": "McpServerGroup",
       "type": "object"
     },
     "McpServerName": {
@@ -11873,6 +11981,17 @@
         "off"
       ],
       "title": "ToolState",
+      "type": "string"
+    },
+    "ToolStateSource": {
+      "description": "Where a tool's state came from.",
+      "enum": [
+        "group",
+        "library",
+        "instance",
+        "unavailable"
+      ],
+      "title": "ToolStateSource",
       "type": "string"
     },
     "ToolSummary": {

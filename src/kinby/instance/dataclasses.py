@@ -81,13 +81,14 @@ class Feedback:
 @dataclass(frozen=True)
 class ToolStates:
     """The states of one tool group's tools: its *default*, and the *tools* with a state of their
-    own, by name."""
+    own, by name, while the group is *on*. A group that is off has every tool off."""
 
     default: ToolState
     tools: Mapping[str, ToolState] = field(default_factory=dict)
+    on: bool = True
 
     def of(self, tool: str) -> ToolState:
-        return self.tools.get(tool, self.default)
+        return self.tools.get(tool, self.default) if self.on else ToolState.OFF
 
 
 @dataclass(frozen=True)

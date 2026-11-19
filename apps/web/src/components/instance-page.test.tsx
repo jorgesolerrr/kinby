@@ -70,7 +70,16 @@ const stopped = instanceSummary({
 })
 
 const toolset: InstanceToolsetResult = {
-  default_tools: [{ name: "bash", on: false }],
+  built_in_groups: [
+    {
+      group: "defaults",
+      on: true,
+      default_state: "loaded",
+      loaded_tokens: 0,
+      tools: [{ name: "bash", description: "Run.", state: "off", source: "instance", tokens: 9 }],
+    },
+  ],
+  mcp_server_groups: [],
   search: { backend: "brave", variable: "BRAVE_API_KEY", is_set: true },
   mcp_servers: [],
   packages: [],
@@ -892,19 +901,19 @@ describe("the toolset of an instance", () => {
         onChanged={vi.fn()}
       />,
     )
-    return screen.findByRole("list", { name: "Toolset" })
+    return screen.findByRole("list", { name: "Default tools" })
   }
 
   it("shows it on a running instance", async () => {
     const toolset = await openWithToolset(running)
 
-    expect(within(toolset).getByText("Off: bash")).toBeDefined()
+    expect(within(toolset).getByRole("listitem", { name: "bash" })).toBeDefined()
   })
 
   it("shows it on a stopped instance too, since the hub reads it from the instance's files", async () => {
     const toolset = await openWithToolset({ ...stopped, setup_pending: false })
 
-    expect(within(toolset).getByText("Off: bash")).toBeDefined()
+    expect(within(toolset).getByRole("listitem", { name: "bash" })).toBeDefined()
   })
 })
 

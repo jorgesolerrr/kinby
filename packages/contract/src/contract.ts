@@ -101,15 +101,24 @@ export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "un
 export type RecreateReason = "secrets";
 export type ToolName = string;
 /**
+ * How one tool reaches an instance's turns (ADR 0129).
+ */
+export type ToolState = "loaded" | "searchable" | "off";
+/**
+ * A tool group kinby ships, whose states the manifest holds (ADR 0129). Each MCP server an
+ * instance picks is a tool group too.
+ */
+export type BuiltInToolGroup = "defaults" | "memory" | "browser" | "authored";
+/**
+ * Where a tool's state came from.
+ */
+export type ToolStateSource = "group" | "library" | "instance" | "unavailable";
+/**
  * The one service an instance sends its web searches to.
  */
 export type SearchBackend = "brave" | "tavily" | "exa" | "searxng";
 export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
-/**
- * How one tool reaches an instance's turns (ADR 0129).
- */
-export type ToolState = "loaded" | "searchable" | "off";
 export type McpServerEntry = McpHttpEntry | McpStdioEntry;
 export type CommandListName = string;
 export type PriceSource = "shipped" | "manifest";
@@ -2074,7 +2083,8 @@ export interface InstanceToolsetGetCommand {
 export interface InstanceToolsetResult {
   authored_tools: AuthoredTool[];
   browser: boolean;
-  default_tools: DefaultTool[];
+  built_in_groups: BuiltInGroup[];
+  mcp_server_groups: McpServerGroup[];
   mcp_servers: McpServerPick[];
   packages: string[];
   search: SearchSetup;
@@ -2083,9 +2093,26 @@ export interface AuthoredTool {
   name: ToolName;
   read_only: boolean;
 }
-export interface DefaultTool {
-  name: ToolName;
+export interface BuiltInGroup {
+  default_state: ToolState;
+  group: BuiltInToolGroup;
+  loaded_tokens: number;
   on: boolean;
+  tools: GroupTool[] | null;
+}
+export interface GroupTool {
+  description: string;
+  name: string;
+  source: ToolStateSource;
+  state: ToolState;
+  tokens: number;
+}
+export interface McpServerGroup {
+  default_state: ToolState;
+  loaded_tokens: number;
+  on: boolean;
+  server: McpServerName;
+  tools: GroupTool[] | null;
 }
 export interface SearchSetup {
   backend: SearchBackend;

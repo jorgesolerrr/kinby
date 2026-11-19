@@ -154,11 +154,10 @@ class LockedMcpServer(BaseModel):
 
     def states(self) -> ToolStates:
         """The states the server's tools take: the pick's, then the library's."""
-        if not self.on:
-            return ToolStates(default=ToolState.OFF)
         return ToolStates(
             default=self.default_state or self.server.default_state,
             tools=self.server.tool_states | self.tool_states,
+            on=self.on,
         )
 
 

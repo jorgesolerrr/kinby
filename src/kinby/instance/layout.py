@@ -30,5 +30,9 @@ CODE_TOOLS_DIR = "tools"
 READ_ONLY_TOOLS_NAME = "read-only-tools.json"
 #: Why each MCP server the last turn picked did not start or list its tools, in the state dir.
 MCP_FAILURES_NAME = "mcp-failures.json"
+#: The tools each MCP server listed at the last turn connected to it, in the state dir.
+MCP_TOOLS_NAME = "mcp-tools.json"
+#: The authored tools the last turn loaded, in the state dir.
+AUTHORED_TOOLS_NAME = "authored-tools.json"
 #: The saved outputs of each open turn, a folder per turn, in the state dir (ADR 0121).
 SAVED_OUTPUTS_DIR = "saved-outputs"

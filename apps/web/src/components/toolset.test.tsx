@@ -7,10 +7,49 @@ import { describe, expect, it } from "vitest"
 import { Toolset } from "@/components/toolset"
 
 const toolset: InstanceToolsetResult = {
-  default_tools: [
-    { name: "read", on: true },
-    { name: "bash", on: false },
-    { name: "web_search", on: true },
+  built_in_groups: [
+    {
+      group: "defaults",
+      on: true,
+      default_state: "loaded",
+      loaded_tokens: 1234,
+      tools: [
+        {
+          name: "bash",
+          description: "Run a shell command.",
+          state: "off",
+          source: "instance",
+          tokens: 300,
+        },
+        {
+          name: "read",
+          description: "Read a file.",
+          state: "loaded",
+          source: "group",
+          tokens: 1234,
+        },
+      ],
+    },
+    {
+      group: "memory",
+      on: true,
+      default_state: "searchable",
+      loaded_tokens: 0,
+      tools: [
+        {
+          name: "memory_search",
+          description: "Search facts.",
+          state: "searchable",
+          source: "group",
+          tokens: 90,
+        },
+      ],
+    },
+    { group: "browser", on: false, default_state: "loaded", loaded_tokens: 0, tools: [] },
+    { group: "authored", on: true, default_state: "loaded", loaded_tokens: 0, tools: null },
+  ],
+  mcp_server_groups: [
+    { server: "fetch", on: true, default_state: "searchable", loaded_tokens: 0, tools: null },
   ],
   search: { backend: "brave", variable: "BRAVE_API_KEY", is_set: false },
   mcp_servers: [{ name: "fetch", trust_hints: true, state: "up-to-date" }],
@@ -61,11 +100,49 @@ const item = async (list: string, name: string) =>
   within(within(await screen.findByRole("list", { name: list })).getByRole("listitem", { name }))
 
 describe("the instance's toolset", () => {
-  it("shows each default tool on or off, the search key, and the browser", async () => {
+  it("shows each tool group with its default state and what its loaded tools add", async () => {
     renderToolset()
 
-    expect((await item("Toolset", "Default tools")).getByText("On: read, web_search")).toBeDefined()
-    expect((await item("Toolset", "Default tools")).getByText("Off: bash")).toBeDefined()
+    expect(
+      (await item("Tool groups", "Default tools")).getByText(
+        "Loaded by default. Its loaded tools add 1,234 tokens to every call.",
+      ),
+    ).toBeDefined()
+    expect(
+      (await item("Tool groups", "Memory tools")).getByText(
+        "Searchable by default. Its loaded tools add 0 tokens to every call.",
+      ),
+    ).toBeDefined()
+    expect((await item("Tool groups", "Browser tools")).getByText("Off.")).toBeDefined()
+  })
+
+  it("shows each tool of a group with its state and description", async () => {
+    renderToolset()
+
+    const bash = await item("Default tools", "bash")
+    expect(bash.getByText("Off")).toBeDefined()
+    expect(bash.getByText("Run a shell command.")).toBeDefined()
+    expect((await item("Memory tools", "memory_search")).getByText("Searchable")).toBeDefined()
+  })
+
+  it("says an MCP server's tools are listed after the first turn connected to it", async () => {
+    renderToolset()
+
+    expect(
+      (await item("Tool groups", "fetch")).getByText(
+        "Its tools are listed after the first turn connected to it.",
+      ),
+    ).toBeDefined()
+    expect(
+      (await item("Tool groups", "Authored tools")).getByText(
+        "Its tools are listed after the instance's next turn.",
+      ),
+    ).toBeDefined()
+  })
+
+  it("shows the search key, the packages and the browser", async () => {
+    renderToolset()
+
     expect(
       (await item("Toolset", "Web search")).getByText("Brave. Its key, BRAVE_API_KEY, is not set."),
     ).toBeDefined()
