@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from kinby.contracts import FeedbackPolicy, RecapPolicy, SearchBackend
+from kinby.contracts import BuiltInToolGroup, FeedbackPolicy, RecapPolicy, SearchBackend, ToolState
 
 MatchingRule = Literal[
     "explicit directory",
@@ -79,18 +79,37 @@ class Feedback:
 
 
 @dataclass(frozen=True)
+class ToolStates:
+    """The states of one tool group's tools: its *default*, and the *tools* with a state of their
+    own, by name."""
+
+    default: ToolState
+    tools: Mapping[str, ToolState] = field(default_factory=dict)
+
+    def of(self, tool: str) -> ToolState:
+        return self.tools.get(tool, self.default)
+
+
+@dataclass(frozen=True)
 class Tools:
     """How the manifest configures kinby's tools."""
 
+    #: The default tools' switch, which kinby's default skills follow.
     defaults: bool = True
-    #: Default tools switched off by name, while the others stay on.
-    off: frozenset[str] = frozenset()
+    #: The states of each built-in group's tools, by group. A group left out has every tool
+    #: loaded.
+    groups: Mapping[BuiltInToolGroup, ToolStates] = field(default_factory=dict)
     search: SearchBackend = SearchBackend.BRAVE
     bash_timeout_seconds: int = 120
 
+    def states(self, group: BuiltInToolGroup) -> ToolStates:
+        return self.groups.get(group, ToolStates(ToolState.LOADED))
+
     def offers(self, name: str) -> bool:
         """Whether the manifest leaves the default tool *name* on."""
-        return self.defaults and name not in self.off
+        return (
+            self.defaults and self.states(BuiltInToolGroup.DEFAULTS).of(name) is not ToolState.OFF
+        )
 
     @property
     def search_key(self) -> str | None:

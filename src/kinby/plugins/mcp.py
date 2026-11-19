@@ -14,9 +14,9 @@ from dotenv import dotenv_values
 from pydantic import TypeAdapter
 
 from kinby.contracts import McpHttpEntry, McpServerEntry, McpServerName, ToolState
-from kinby.instance import Instance
+from kinby.instance import Instance, ToolStates
 from kinby.instance.layout import ENV_NAME, MCP_FAILURES_NAME, SKILLS_LOCK_NAME
-from kinby.instance.skills_lock import ToolStates, read_lock
+from kinby.instance.skills_lock import read_lock
 
 if TYPE_CHECKING:
     from kinby.plugins.tools import Tool

@@ -15,6 +15,7 @@ from kinby.contracts import (
     AnsweredAsk,
     ApiUse,
     ApprovalRequested,
+    BuiltInToolGroup,
     ErrorCode,
     Event,
     FeedbackPolicy,
@@ -27,6 +28,7 @@ from kinby.contracts import (
     StepUsage,
     TakeoverRequested,
     TokenTotals,
+    ToolState,
     TurnCompleted,
     TurnFailed,
     TurnStarted,
@@ -51,6 +53,7 @@ from kinby.instance import (
     Memory,
     Models,
     Tools,
+    ToolStates,
     Workspace,
 )
 from kinby.instance.dataclasses import Compaction
@@ -59,7 +62,13 @@ from kinby.plugins.browser import BrowserService
 from kinby.plugins.skills import Skill
 
 #: The default tools a workbench's turn is offered: bash and the file tools.
-_TOOLS = Tools(off=frozenset({"web_search", "web_fetch"}))
+_TOOLS = Tools(
+    groups={
+        BuiltInToolGroup.DEFAULTS: ToolStates(
+            ToolState.LOADED, dict.fromkeys(("web_search", "web_fetch"), ToolState.OFF)
+        )
+    }
+)
 
 _logger = logging.getLogger(__name__)
 

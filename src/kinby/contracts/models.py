@@ -3487,6 +3487,16 @@ class ToolState(StrEnum):
     OFF = "off"
 
 
+class BuiltInToolGroup(StrEnum):
+    """A tool group kinby ships, whose states the manifest holds (ADR 0129). Each MCP server an
+    instance picks is a tool group too."""
+
+    DEFAULTS = "defaults"
+    MEMORY = "memory"
+    BROWSER = "browser"
+    AUTHORED = "authored"
+
+
 class McpServer(ContractModel):
     """An MCP server's definition, as the library keeps it: its entry, and kinby's own fields
     beside it."""

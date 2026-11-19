@@ -3,7 +3,7 @@ import os
 import signal
 from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
-from dataclasses import asdict, replace
+from dataclasses import replace
 from importlib import import_module
 from importlib.metadata import entry_points as installed_entry_points
 from itertools import count
@@ -38,7 +38,7 @@ from kinby.contracts import (
 )
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.turn_runner import LangGraphRunner
-from kinby.instance import Instance, SearchBackend, load_instance
+from kinby.instance import Instance, load_instance
 from kinby.plugins import Tool, ToolContext, tool
 from kinby.plugins.defaults.files import grep
 from kinby.plugins.defaults.shell import bash
@@ -573,12 +573,7 @@ def test_manifest_can_disable_default_tools(tmp_path: Path) -> None:
 
         await _start_turn(instance, model)
 
-        assert asdict(instance.manifest)["tools"] == {
-            "defaults": False,
-            "off": frozenset(),
-            "search": SearchBackend.BRAVE,
-            "bash_timeout_seconds": 120,
-        }
+        assert instance.manifest.tools.defaults is False
         assert [[tool.name for tool in turn] for turn in model.bound_tools] == [
             [
                 "code_write",

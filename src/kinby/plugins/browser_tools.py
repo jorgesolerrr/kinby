@@ -42,25 +42,7 @@ DOWNLOADS_DIR = "downloads"
 
 def browser_tools(instance: Instance) -> tuple[Tool, ...]:
     """The browser tools, in an instance whose manifest turns the browser on."""
-    if not instance.manifest.browser:
-        return ()
-    return (
-        browser_open,
-        browser_snapshot,
-        browser_text,
-        browser_screenshot,
-        browser_scroll,
-        browser_wait,
-        browser_click,
-        browser_type,
-        browser_select,
-        browser_press,
-        browser_upload,
-        browser_fill_credential,
-        browser_takeover,
-        browser_profiles,
-        browser_vault,
-    )
+    return BROWSER_TOOLS if instance.manifest.browser else ()
 
 
 @tool(write=False)
@@ -210,6 +192,25 @@ async def browser_vault(context: ToolContext) -> str:
     if not listed.entries:
         return "Your vault is empty. The user adds sign-ins to it from the instance page."
     return "\n".join(f"{entry.name}: {entry.site}" for entry in listed.entries)
+
+
+BROWSER_TOOLS = (
+    browser_open,
+    browser_snapshot,
+    browser_text,
+    browser_screenshot,
+    browser_scroll,
+    browser_wait,
+    browser_click,
+    browser_type,
+    browser_select,
+    browser_press,
+    browser_upload,
+    browser_fill_credential,
+    browser_takeover,
+    browser_profiles,
+    browser_vault,
+)
 
 
 async def _act(context: ToolContext, action: BrowserAction, done: str) -> str:

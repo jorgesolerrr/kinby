@@ -14,6 +14,7 @@ from kinby.instance.dataclasses import (
     SearchBackend,
     Serve,
     Tools,
+    ToolStates,
     Workspace,
 )
 from kinby.instance.discovery import discover_instance
@@ -47,6 +48,7 @@ __all__ = [
     "RecapPolicy",
     "SearchBackend",
     "Serve",
+    "ToolStates",
     "Tools",
     "Workspace",
     "api_key_variable",
