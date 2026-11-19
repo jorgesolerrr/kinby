@@ -99,6 +99,7 @@ from kinby.contracts import (
     INSTANCE_START,
     INSTANCE_STATUS,
     INSTANCE_STOP,
+    INSTANCE_TOOL_STATES_SET,
     INSTANCE_TOOLSET_GET,
     INSTANCE_UPDATE,
     LIBRARY_GIT_ADD,
@@ -242,6 +243,7 @@ from kinby.contracts import (
     InstanceSummary,
     InstanceToolsetGetCommand,
     InstanceToolsetResult,
+    InstanceToolStatesSetCommand,
     InstanceUpdateCommand,
     IntakeRunCommand,
     IntendedState,
@@ -452,7 +454,7 @@ from kinby.hub.setup import (
     setup_errors,
 )
 from kinby.hub.takeovers import Takeovers
-from kinby.hub.toolset import built_in_groups, mcp_server_groups
+from kinby.hub.toolset import built_in_groups, mcp_server_groups, set_tool_states, toolset_hash
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.hub.vault import Vault, origin
 from kinby.instance import (
@@ -1081,6 +1083,7 @@ class Hub:
         dispatcher.register(INSTANCE_PICKS_GET, self.picks)
         dispatcher.register(INSTANCE_PICKS_SET, self.set_picks)
         dispatcher.register(INSTANCE_TOOLSET_GET, self.toolset)
+        dispatcher.register(INSTANCE_TOOL_STATES_SET, self.set_tool_states)
         dispatcher.register(HUB_SECRET_LIST, self.list_hub_secrets)
         dispatcher.register(HUB_SECRET_SET, self.set_hub_secret)
         dispatcher.register(HUB_SECRET_DELETE, self.delete_hub_secret)
@@ -2325,7 +2328,15 @@ class Hub:
                 AuthoredTool(name=name, read_only=name in read_only) for name in authored
             ],
             browser=self._browser_on(manifest),
+            hash=toolset_hash(record.path),
         )
+
+    async def set_tool_states(self, command: InstanceToolStatesSetCommand) -> InstanceToolsetResult:
+        """Set tool groups' states for the instance, as config changes the user made. Its next
+        turn takes them, and a running turn keeps the states it started with."""
+        record = self._active_instance(command.instance_id)
+        set_tool_states(inspect_instance(record.path), command)
+        return await self.toolset(InstanceToolsetGetCommand(instance_id=command.instance_id))
 
     async def stop(
         self, command: InstanceStopCommand, requester: UUID | None = None

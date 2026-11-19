@@ -268,7 +268,8 @@ const STATES: Record<SkillPick["state"], string> = {
 
 /**
  * The instance's picks, each to drop, and the library's other skills and MCP servers, each to
- * add. A picked server's switch trusts its read-only hints. A change carries the hash of the
+ * add. A picked server's switch trusts its read-only hints, and a change sends back the tool
+ * states the instance set for each server, so it keeps them. A change carries the hash of the
  * picks it read, so one over a change made since is refused, and "Load theirs" reads them again.
  */
 function Picks({
@@ -292,7 +293,11 @@ function Picks({
   const names = picks.map((pick) => pick.name)
   const offered = picked.library.filter((entry) => !names.includes(entry.name))
   const servers = picked.held.mcp_servers
-  const choices: McpServerChoice[] = servers.map(({ name, trust_hints }) => ({ name, trust_hints }))
+  const choices: McpServerChoice[] = servers.map(({ name, trust_hints, states }) => ({
+    name,
+    trust_hints,
+    states,
+  }))
   const offeredServers = picked.servers.filter(
     (entry) => !servers.some((server) => server.name === entry.name),
   )

@@ -3497,6 +3497,18 @@ class BuiltInToolGroup(StrEnum):
     AUTHORED = "authored"
 
 
+class ToolGroupStates(ContractModel):
+    """What an instance set for one tool group (ADR 0129). What it leaves unset takes the
+    group's own: the library MCP server's, or kinby's for a built-in group."""
+
+    #: The group's switch. Off, every tool of the group is off.
+    on: bool = True
+    #: The state of each tool with none of its own, or null for the group's own.
+    default_state: ToolState | None = None
+    #: The tools the instance gave a state of their own, by name.
+    tool_states: dict[str, ToolState] = Field(default_factory=dict)
+
+
 class McpServer(ContractModel):
     """An MCP server's definition, as the library keeps it: its entry, and kinby's own fields
     beside it."""
@@ -3571,10 +3583,12 @@ class InstancePicksGetCommand(ContractModel):
 
 
 class McpServerChoice(ContractModel):
-    """An MCP server an instance should hold, and whether the user trusts its read-only hints."""
+    """An MCP server an instance should hold, whether the user trusts its read-only hints, and
+    the tool states the instance set for it."""
 
     name: McpServerName
     trust_hints: bool = False
+    states: ToolGroupStates = Field(default_factory=ToolGroupStates)
 
 
 class InstancePicksSetCommand(ContractModel):
@@ -3613,6 +3627,8 @@ class McpServerPick(ContractModel):
     state: PickState
     #: How its MCP sign-in stands, or null when the server asks for none.
     sign_in: LoginState | None = None
+    #: The tool states the instance set for it, which a picks set sends back.
+    states: ToolGroupStates = Field(default_factory=ToolGroupStates)
 
 
 class InstancePicksResult(ContractModel):
@@ -3682,6 +3698,8 @@ class ToolGroup(ContractModel):
     tools: list[GroupTool] | None
     #: What the definitions of its loaded tools add to every model call, in tokens.
     loaded_tokens: int
+    #: What the instance set for it, which a tool states set sends back changed.
+    instance_states: ToolGroupStates
 
 
 class BuiltInGroup(ToolGroup):
@@ -3721,6 +3739,20 @@ class InstanceToolsetResult(ContractModel):
     authored_tools: list[AuthoredTool]
     #: Whether the hub opens browsers for the instance.
     browser: bool
+    #: The hash of the instance's kinby.toml and skills-lock.json, which hold its tool states.
+    hash: FileHash
+
+
+class InstanceToolStatesSetCommand(ContractModel):
+    """Set the tool states of some of an instance's tool groups. Its next turn takes them."""
+
+    instance_id: UUID
+    #: The built-in groups to set, by group. A group left out keeps what it holds.
+    built_in_groups: dict[BuiltInToolGroup, ToolGroupStates] = Field(default_factory=dict)
+    #: The picked MCP servers to set, by name. A server left out keeps what it holds.
+    mcp_servers: dict[McpServerName, ToolGroupStates] = Field(default_factory=dict)
+    #: The toolset's hash the client read. The set is refused as STALE when it changed since.
+    hash: FileHash
 
 
 class HubSecretListCommand(ContractModel):

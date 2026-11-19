@@ -91,6 +91,10 @@ export type LoginState = "pending" | "signed_in" | "failed";
  */
 export type PickState = "up-to-date" | "behind" | "edited";
 /**
+ * How one tool reaches an instance's turns (ADR 0129).
+ */
+export type ToolState = "loaded" | "searchable" | "off";
+/**
  * Where a library entry came from.
  */
 export type LibrarySource = "shipped" | "written" | "git";
@@ -100,10 +104,6 @@ export type Readiness = "not-running" | "starting" | "ready" | "unhealthy" | "un
  */
 export type RecreateReason = "secrets";
 export type ToolName = string;
-/**
- * How one tool reaches an instance's turns (ADR 0129).
- */
-export type ToolState = "loaded" | "searchable" | "off";
 /**
  * A tool group kinby ships, whose states the manifest holds (ADR 0129). Each MCP server an
  * instance picks is a tool group too.
@@ -518,6 +518,10 @@ export interface Contract {
     "instance.stop": {
       command: InstanceStopCommand;
       result: LifecycleOperationResult;
+    };
+    "instance.tool_states.set": {
+      command: InstanceToolStatesSetCommand;
+      result: InstanceToolsetResult;
     };
     "instance.toolset.get": {
       command: InstanceToolsetGetCommand;
@@ -1956,7 +1960,19 @@ export interface McpServerPick {
   name: McpServerName;
   sign_in?: LoginState | null;
   state: PickState;
+  states?: ToolGroupStates;
   trust_hints: boolean;
+}
+/**
+ * What an instance set for one tool group (ADR 0129). What it leaves unset takes the
+ * group's own: the library MCP server's, or kinby's for a built-in group.
+ */
+export interface ToolGroupStates {
+  default_state?: ToolState | null;
+  on?: boolean;
+  tool_states?: {
+    [k: string]: ToolState;
+  };
 }
 export interface SkillPick {
   name: string;
@@ -1970,10 +1986,12 @@ export interface InstancePicksSetCommand {
   skills: string[];
 }
 /**
- * An MCP server an instance should hold, and whether the user trusts its read-only hints.
+ * An MCP server an instance should hold, whether the user trusts its read-only hints, and
+ * the tool states the instance set for it.
  */
 export interface McpServerChoice {
   name: McpServerName;
+  states?: ToolGroupStates;
   trust_hints?: boolean;
 }
 export interface InstanceProbeCommand {}
@@ -2074,8 +2092,18 @@ export interface InstanceStopCommand {
   force?: boolean;
   instance_id: string;
 }
-export interface InstanceToolsetGetCommand {
+/**
+ * Set the tool states of some of an instance's tool groups. Its next turn takes them.
+ */
+export interface InstanceToolStatesSetCommand {
+  built_in_groups?: {
+    [k: string]: ToolGroupStates;
+  };
+  hash: string;
   instance_id: string;
+  mcp_servers?: {
+    [k: string]: ToolGroupStates;
+  };
 }
 /**
  * What an instance can do outside its workspace, as its files have it.
@@ -2084,6 +2112,7 @@ export interface InstanceToolsetResult {
   authored_tools: AuthoredTool[];
   browser: boolean;
   built_in_groups: BuiltInGroup[];
+  hash: string;
   mcp_server_groups: McpServerGroup[];
   mcp_servers: McpServerPick[];
   packages: string[];
@@ -2096,6 +2125,7 @@ export interface AuthoredTool {
 export interface BuiltInGroup {
   default_state: ToolState;
   group: BuiltInToolGroup;
+  instance_states: ToolGroupStates;
   loaded_tokens: number;
   on: boolean;
   tools: GroupTool[] | null;
@@ -2109,6 +2139,7 @@ export interface GroupTool {
 }
 export interface McpServerGroup {
   default_state: ToolState;
+  instance_states: ToolGroupStates;
   loaded_tokens: number;
   on: boolean;
   server: McpServerName;
@@ -2118,6 +2149,9 @@ export interface SearchSetup {
   backend: SearchBackend;
   is_set: boolean;
   variable: string;
+}
+export interface InstanceToolsetGetCommand {
+  instance_id: string;
 }
 /**
  * Move one instance to the image a revision prepares.

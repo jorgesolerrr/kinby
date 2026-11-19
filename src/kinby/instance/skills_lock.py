@@ -27,6 +27,7 @@ from kinby.contracts import (
     McpServerName,
     McpStdioEntry,
     SkillName,
+    ToolGroupStates,
     ToolState,
 )
 from kinby.instance.config_changes import file_hash
@@ -159,6 +160,16 @@ class LockedMcpServer(BaseModel):
             tools=self.server.tool_states | self.tool_states,
             on=self.on,
         )
+
+    @property
+    def instance_states(self) -> ToolGroupStates:
+        """What the instance set for the server's tools."""
+        return ToolGroupStates(
+            on=self.on, default_state=self.default_state, tool_states=self.tool_states
+        )
+
+    def with_states(self, states: ToolGroupStates) -> LockedMcpServer:
+        return self.model_copy(update=states.model_dump())
 
 
 class SkillsLock(BaseModel):

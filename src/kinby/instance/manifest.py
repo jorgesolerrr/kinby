@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import tomllib
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -32,6 +32,7 @@ from kinby.contracts import (
     ContractModel,
     ManifestValues,
     NewModelPrice,
+    ToolGroupStates,
     ToolState,
 )
 from kinby.instance.dataclasses import (
@@ -241,25 +242,94 @@ def parse_manifest(text: str) -> RawManifest:
     return RawManifest.model_validate(tomllib.loads(text))
 
 
-def _tools(raw: RawManifest) -> Tools:
+def _switches(raw: RawManifest) -> dict[BuiltInToolGroup, bool]:
     tools = raw.tools
-    switches = {
+    return {
         BuiltInToolGroup.DEFAULTS: tools.defaults,
         BuiltInToolGroup.MEMORY: tools.memory,
         BuiltInToolGroup.BROWSER: raw.browser,
         BuiltInToolGroup.AUTHORED: tools.authored,
     }
+
+
+def _tools(raw: RawManifest) -> Tools:
+    tools = raw.tools
     return Tools(
         defaults=tools.defaults,
         groups={
             group: ToolStates(
                 tools.default_states.get(group, ToolState.LOADED), tools.states, on=on
             )
-            for group, on in switches.items()
+            for group, on in _switches(raw).items()
         },
         search=tools.search,
         bash_timeout_seconds=tools.bash_timeout_seconds,
     )
+
+
+def built_in_group_states(
+    raw: RawManifest, group_of: Callable[[str], BuiltInToolGroup]
+) -> dict[BuiltInToolGroup, ToolGroupStates]:
+    """What the manifest *raw* sets for each built-in group, a tool's own state going to the group
+    *group_of* names."""
+    tools = raw.tools
+    return {
+        group: ToolGroupStates(
+            on=on,
+            default_state=tools.default_states.get(group),
+            tool_states={
+                name: state for name, state in tools.states.items() if group_of(name) is group
+            },
+        )
+        for group, on in _switches(raw).items()
+    }
+
+
+def with_tool_states(
+    text: str,
+    groups: Mapping[BuiltInToolGroup, ToolGroupStates],
+    group_of: Callable[[str], BuiltInToolGroup],
+) -> str:
+    """The text of ``kinby.toml`` with each of the built-in *groups* set to its states, keeping
+    its comments. A tool's own state goes to the group *group_of* names. An old ``off`` list joins
+    the tools' own states.
+
+    Raises ``ValidationError`` when the result is not a valid manifest.
+    """
+    raw = parse_manifest(text)
+    tools = raw.tools
+    document = tomlkit.parse(text)
+    held = "tools" in document
+    table = document.setdefault("tools", tomlkit.table())
+    switches = _switches(raw)
+    default_states = {
+        group: state for group, state in tools.default_states.items() if group not in groups
+    }
+    states = {name: state for name, state in tools.states.items() if group_of(name) not in groups}
+    for group, chosen in groups.items():
+        if chosen.on != switches[group]:
+            (document if group is BuiltInToolGroup.BROWSER else table)[group.value] = chosen.on
+        if chosen.default_state is not None:
+            default_states[group] = chosen.default_state
+        states |= chosen.tool_states
+    if default_states != tools.default_states:
+        _put(table, "default_states", _inline(default_states))
+    if states != tools.states or "off" in table:
+        table.pop("off", None)
+        _put(table, "states", _inline(states))
+    if not held and not table:
+        del document["tools"]
+    edited = tomlkit.dumps(document)
+    parse_manifest(edited)
+    return edited
+
+
+def _inline[Name: str](values: Mapping[Name, ToolState]) -> InlineTable | None:
+    if not values:
+        return None
+    table = tomlkit.inline_table()
+    table.update({str(name): str(state) for name, state in sorted(values.items())})
+    return table
 
 
 def offered_values(raw: RawManifest) -> ManifestValues:
