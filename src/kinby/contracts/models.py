@@ -356,6 +356,7 @@ class CallVia(StrEnum):
     itself (ADR 0129)."""
 
     TOOL_SEARCH = "tool_search"
+    SCRIPT = "script"
 
 
 class ToolCall(ContractModel):

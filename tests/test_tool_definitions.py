@@ -19,7 +19,7 @@ from kinby.plugins.views import view_patch, view_write
 #: The most characters one tool's definition takes, as compact JSON.
 TOOL_BUDGET = 2_000
 #: The most characters a home user turn's whole tool list takes, as compact JSON.
-HOME_BUDGET = 9_000
+HOME_BUDGET = 9_500
 
 
 def definition(tool: Tool) -> str:
@@ -35,7 +35,7 @@ def test_the_tools_of_a_home_user_turn_fit_the_budgets(tmp_path, monkeypatch):
 
     sizes = {tool.name: len(definition(tool)) for tool in tools}
 
-    assert {"hub_write", "search_tools", "describe_tool", "call_tool"} <= sizes.keys()
+    assert {"hub_write", "search_tools", "describe_tool", "call_tool", "run_code"} <= sizes.keys()
     assert {name: size for name, size in sizes.items() if size > TOOL_BUDGET} == {}
     assert sum(sizes.values()) <= HOME_BUDGET
 

@@ -337,6 +337,28 @@ def test_a_url_web_search_returns_through_tool_search_is_seen(tmp_path, monkeypa
     assert (fetch.action, fetch.rule) == (GateOutcome.ALLOW, "web.seen_url")
 
 
+def test_a_script_fetches_a_url_its_own_search_returned_without_asking(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("BRAVE_API_KEY", "secret-key")
+    _fake_http(monkeypatch, _web)
+    model = _calls(
+        (
+            "run_code",
+            {"code": f"await web_search(query='kinby')\nreturn await web_fetch(url='{_RESULT}')"},
+        )
+    )
+
+    payloads = _turn(_instance(tmp_path), model, "Find kinby and read its page.")
+
+    assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+    [fetch] = _fetches(payloads)
+    assert (fetch.action, fetch.rule) == (GateOutcome.ALLOW, "web.seen_url")
+    script = next(p for p in payloads if isinstance(p, ToolResult) and p.name == "run_code")
+    assert not script.error, script.output
+    assert _TEXT.strip() in script.output
+
+
 def test_a_url_from_the_users_message_is_fetched_without_asking(tmp_path, monkeypatch) -> None:
     _fake_http(monkeypatch, _web)
     model = _calls(("web_fetch", {"url": _ARTICLE}))

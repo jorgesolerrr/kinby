@@ -270,6 +270,7 @@ def test_fresh_instance_binds_the_default_tools(tmp_path: Path) -> None:
             "routine_read",
             "routine_set_enabled",
             "routine_write",
+            "run_code",
             "skill",
             "skill_delete",
             "skill_write",
@@ -305,6 +306,7 @@ def test_default_entry_point_declares_tool_gate_metadata() -> None:
         ("bash", True, ()),
         ("web_search", False, ()),
         ("web_fetch", False, ()),
+        ("run_code", False, ()),
     ]
 
 
@@ -629,6 +631,7 @@ def test_broken_instance_tool_keeps_default_tools_on_the_first_turn(tmp_path: Pa
             "routine_read",
             "routine_set_enabled",
             "routine_write",
+            "run_code",
             "skill",
             "skill_delete",
             "skill_write",

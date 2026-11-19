@@ -43,8 +43,15 @@ import kinby.hub
 {_LOADED}
 """
 
-_UNUSED_BY_AN_INSTANCE = {"mcp", "trafilatura", "playwright"}
-_UNUSED_BY_THE_HUB = {"langchain", "langgraph", "mcp", "playwright", "trafilatura"}
+_UNUSED_BY_AN_INSTANCE = {"mcp", "pydantic_monty", "trafilatura", "playwright"}
+_UNUSED_BY_THE_HUB = {
+    "langchain",
+    "langgraph",
+    "mcp",
+    "playwright",
+    "pydantic_monty",
+    "trafilatura",
+}
 
 
 def _loaded(script: str, *arguments: str) -> set[str]:

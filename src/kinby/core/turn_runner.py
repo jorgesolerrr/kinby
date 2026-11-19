@@ -189,10 +189,18 @@ from kinby.plugins.tool_search import (
     TOOL_SEARCH_NAMES,
     SearchableGroup,
     called,
+    script_tools,
     tool_search,
     wrong_arguments,
 )
-from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
+from kinby.plugins.tools import (
+    RecallReporter,
+    RunReporter,
+    ScriptCallFailed,
+    Tool,
+    ToolBroker,
+    ToolContext,
+)
 from kinby.plugins.views import view_write
 
 logger = logging.getLogger(__name__)
@@ -280,8 +288,8 @@ class ModelContext:
     gate_policy: GatePolicy
     permission_mode: PermissionMode
     tools: ToolSnapshot
-    #: The tools a call through tool search reaches: the loaded ones but tool search's own, and
-    #: the searchable ones.
+    #: The tools a call through tool search or from a script reaches: the loaded ones but tool
+    #: search's own, and the searchable ones.
     reachable: ToolSnapshot
     tool_context: ToolContext
     user_message: HumanMessage
@@ -292,9 +300,9 @@ class ModelContext:
     window: int | None
 
     def tool(self, call: ToolCall) -> Tool | None:
-        """The tool *call* calls: one the model was sent, or through tool search any reachable
-        one."""
-        tools = self.reachable if call.via is CallVia.TOOL_SEARCH else self.tools
+        """The tool *call* calls: one the model was sent, or through tool search or from a script
+        any reachable one."""
+        tools = self.tools if call.via is None else self.reachable
         return tools.get(call.name)
 
 
@@ -320,14 +328,14 @@ class GateAnswer:
 
 @dataclass
 class _ToolStep:
-    """The tool calls of one model message: what the gate reads for them, and the routine grants
-    and read-only marks their approvals add."""
+    """The tool calls of one model message: what the gate reads for them, the routine grants
+    and read-only marks their approvals add, and the URLs its scripts' web reads bring in."""
 
     turn: PreparedTurnRequest
     context: ModelContext
     granted: list[str]
     read_only: list[str]
-    seen_urls: frozenset[str]
+    seen_urls: set[str]
     saved_outputs: Path
 
     def call(self, call_id: str, name: str, arguments: dict[str, JsonValue]) -> ToolCall:
@@ -355,11 +363,11 @@ class _ToolStep:
 
     def gate(self, call: ToolCall) -> GateAnswer:
         """The gate's answer to *call*, without raising an approval when it asks. A call
-        through tool search is refused first when its tool's schema refuses its arguments, as
-        the model was never sent that schema."""
+        through tool search or from a script is refused first when its tool's schema refuses its
+        arguments, as the model may never have been sent that schema."""
         tool = self.context.tool(call)
         refusal = None
-        if tool is not None and call.via is CallVia.TOOL_SEARCH:
+        if tool is not None and call.via is not None:
             refusal = wrong_arguments(tool, call.arguments)
         if refusal is None and tool is not None and tool.check is not None:
             refusal = tool.check(call.arguments)
@@ -1719,13 +1727,70 @@ class LangGraphRunner:
                 error=True,
             )
         else:
+            broker = ToolBroker(
+                script_tools(step.context.reachable), partial(self._call_from_script, step)
+            )
             result = cut_to_cap(
-                await self._run_tool(call, step.context, resolution.approval_id),
+                await self._run_tool(
+                    call,
+                    step.context,
+                    replace(
+                        step.context.tool_context,
+                        approval_id=resolution.approval_id,
+                        broker=broker,
+                    ),
+                ),
                 step.saved_outputs,
             )
         await step.context.emit(result)
         self._forget_tool_call(step.turn, call)
         return result
+
+    async def _call_from_script(
+        self, step: _ToolStep, tool: Tool, arguments: Mapping[str, JsonValue]
+    ) -> str:
+        """Make a script's call to *tool* as a call the model made, but raise no approval: a call
+        the gate would ask about fails, for the model to make directly. The script gets the
+        tool's whole output, and the call's result event the output cut to the cap."""
+        call = ToolCall(
+            call_id=str(uuid4()),
+            name=tool.name,
+            arguments=dict(arguments),
+            write=tool.write,
+            via=CallVia.SCRIPT,
+        )
+        await step.context.emit(call)
+        answer = step.gate(call)
+        action = answer.decision.action
+        gate = ToolGated(
+            call_id=call.call_id,
+            name=call.name,
+            action=_gate_outcome(action),
+            rule=answer.decision.rule,
+            decided_by=GateDecider.POLICY,
+        )
+        await step.context.emit(gate)
+        if action is GateAction.ALLOW:
+            result = await self._run_tool(call, step.context, step.context.tool_context)
+        else:
+            result = ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                output=answer.refusal
+                or (
+                    f'Tool "{call.name}" needs an approval, which a script cannot ask for. '
+                    "Call it directly."
+                    if action is GateAction.ASK
+                    else _denial(gate)
+                ),
+                error=True,
+            )
+        await step.context.emit(cut_to_cap(result, step.saved_outputs))
+        if result.error:
+            raise ScriptCallFailed(result.output)
+        if call.name in _URL_SOURCES:
+            step.seen_urls.update(_urls(result.output))
+        return result.output
 
     async def _emit_tool_call_once(
         self,
@@ -1755,7 +1820,7 @@ class LangGraphRunner:
         self._emitted_tool_calls.discard((turn.thread_id, turn.turn_id, call.call_id))
 
     async def _run_tool(
-        self, call: ToolCall, context: ModelContext, approval_id: UUID | None
+        self, call: ToolCall, context: ModelContext, tool_context: ToolContext
     ) -> ToolResult:
         selected = context.tool(call)
         if selected is None:
@@ -1768,9 +1833,7 @@ class LangGraphRunner:
         started_at = asyncio.get_running_loop().time()
         try:
             # A tool is user code. Turn its failures into model-visible tool errors.
-            output = await selected.ainvoke(
-                call.arguments, replace(context.tool_context, approval_id=approval_id)
-            )
+            output = await selected.ainvoke(call.arguments, tool_context)
         except Exception as exc:
             return ToolResult(
                 call_id=call.call_id,
@@ -1809,13 +1872,13 @@ async def _with_tool_search(tools: _TurnTools, emit: Emit) -> tuple[ToolSnapshot
     return ToolSnapshot((*kept.loaded.tools, *searching)), reachable
 
 
-def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:
+def _seen_urls(messages: Sequence[AnyMessage]) -> set[str]:
     """The URLs the thread's user messages, routine prompts and web reads brought in (ADR 0110).
 
     Another tool's result can echo the arguments the model gave it, so it brings in none.
     """
-    return frozenset(
-        url.rstrip(".,;:!?")
+    return {
+        url
         for message in messages
         if isinstance(message, HumanMessage)
         or (
@@ -1823,8 +1886,12 @@ def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:
             and message.name in _URL_SOURCES
             and message.status == "success"
         )
-        for url in _URL.findall(message.text)
-    )
+        for url in _urls(message.text)
+    }
+
+
+def _urls(text: str) -> set[str]:
+    return {url.rstrip(".,;:!?") for url in _URL.findall(text)}
 
 
 def _elapsed_ms(started_at: float) -> int:
