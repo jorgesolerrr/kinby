@@ -4,6 +4,8 @@ import type {
   InstanceSetup,
   InstanceStatusResult,
   InstanceSummary,
+  McpServerPick,
+  McpSignInSetup,
   OperationGetResult,
   PermissionsResult,
   PermissionsSetCommand,
@@ -621,6 +623,66 @@ describe("ConfigPanel", () => {
           "Not signed in",
         ),
       ).toBeDefined()
+    })
+
+    /** The panel with `linear` picked and its sign-in failed, the hub ending it on a drop. */
+    function pickedLinear() {
+      const linear: McpServerPick = {
+        name: "linear",
+        trust_hints: false,
+        state: "up-to-date",
+        states: { on: true, default_state: "loaded", tool_states: {} },
+      }
+      let picked = [linear]
+      let signIns: McpSignInSetup[] = [
+        {
+          server: "linear",
+          state: "failed",
+          detail: "The server refused the sign-in: access_denied",
+        },
+      ]
+      return openPanel({
+        "instance.status": () => status({ setup: { ...setup, mcp_sign_ins: signIns } }),
+        "skill.list": () => ({ skills: [], warnings: [] }),
+        "library.list": () => ({
+          entries: [{ kind: "mcp_server", name: "linear", description: null, source: "shipped" }],
+        }),
+        "instance.picks.get": () => ({ picks: [], mcp_servers: picked, hash: "lock-1" }),
+        "instance.picks.set": ({ mcp_servers }) => {
+          picked = mcp_servers.map(({ name }) => ({ ...linear, name }))
+          signIns = picked.map(({ name }) => ({ server: name, state: "pending" }))
+          return { picks: [], mcp_servers: picked, hash: "lock-2" }
+        },
+      })
+    }
+
+    const linearSignIn = () => screen.queryByRole("listitem", { name: "MCP server linear" })
+
+    it("drops an MCP server's sign-in once Skills drops its pick", async () => {
+      const { user } = pickedLinear()
+      await user.click(screen.getByRole("button", { name: "Secrets and login" }))
+      expect(await screen.findByText("The server refused the sign-in: access_denied")).toBeDefined()
+
+      await user.click(screen.getByRole("button", { name: "Skills" }))
+      await user.click(await screen.findByRole("button", { name: "Drop linear" }))
+      await screen.findByText("The instance has picked no MCP server.")
+      await user.click(screen.getByRole("button", { name: "Secrets and login" }))
+
+      await screen.findByRole("list", { name: "Secrets" })
+      expect(linearSignIn()).toBeNull()
+    })
+
+    it("shows an MCP server picked again as not signed in", async () => {
+      const { user } = pickedLinear()
+      await user.click(screen.getByRole("button", { name: "Skills" }))
+      await user.click(await screen.findByRole("button", { name: "Drop linear" }))
+      await user.click(await screen.findByRole("button", { name: "Add linear" }))
+      await screen.findByRole("button", { name: "Drop linear" })
+      await user.click(screen.getByRole("button", { name: "Secrets and login" }))
+
+      await waitFor(() => expect(within(linearSignIn()!).getByText("Not signed in")).toBeDefined())
+      expect(within(linearSignIn()!).getByRole("button", { name: "Sign in" })).toBeDefined()
+      expect(screen.queryByText("The server refused the sign-in: access_denied")).toBeNull()
     })
 
     it("names no variable for the API key while the instance's model cannot be read", async () => {

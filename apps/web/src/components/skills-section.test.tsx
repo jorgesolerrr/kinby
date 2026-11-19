@@ -77,7 +77,13 @@ function openSection(answers: Answers) {
     ...answers,
   })
   render(
-    <SkillsSection client={caller} caller={caller} clock={fakeClock()} instanceId="instance-1" />,
+    <SkillsSection
+      client={caller}
+      caller={caller}
+      clock={fakeClock()}
+      instanceId="instance-1"
+      onPicked={() => {}}
+    />,
   )
   return { caller, user: userEvent.setup() }
 }
