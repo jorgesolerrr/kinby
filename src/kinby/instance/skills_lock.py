@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import string
-from collections.abc import Mapping
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -32,6 +30,7 @@ from kinby.contracts import (
     ToolState,
 )
 from kinby.instance.config_changes import file_hash
+from kinby.instance.dataclasses import ToolStates
 from kinby.instance.layout import SKILLS_LOCK_NAME
 
 # The order JavaScript's localeCompare puts these characters in. The `skills` CLI sorts a
@@ -161,18 +160,6 @@ class LockedMcpServer(BaseModel):
             default=self.default_state or self.server.default_state,
             tools=self.server.tool_states | self.tool_states,
         )
-
-
-@dataclass(frozen=True)
-class ToolStates:
-    """The states of one tool group's tools: its *default*, and the *tools* with a state of their
-    own, by name."""
-
-    default: ToolState
-    tools: Mapping[str, ToolState] = field(default_factory=dict)
-
-    def of(self, tool: str) -> ToolState:
-        return self.tools.get(tool, self.default)
 
 
 class SkillsLock(BaseModel):

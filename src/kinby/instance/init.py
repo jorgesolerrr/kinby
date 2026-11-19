@@ -108,8 +108,10 @@ def _write_starter_tree(directory: Path, model: str) -> None:
             "# usd_per_day = 5.0\n"
             "\n"
             "# [tools]\n"
-            "# Switch off one default tool by name, or all of them with defaults = false.\n"
-            '# off = ["web_search"]\n'
+            "# Each tool is loaded, searchable or off. Switch a tool group off with defaults,\n"
+            "# memory or authored = false, set a group's state, or set one tool's.\n"
+            '# default_states = { memory = "searchable" }\n'
+            '# states = { web_search = "off" }\n'
             "# Where web_search sends queries: brave, tavily, exa or searxng.\n"
             '# search = "brave"\n'
             "\n"

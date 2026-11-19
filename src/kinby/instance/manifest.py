@@ -16,15 +16,24 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    Strict,
     StringConstraints,
     TypeAdapter,
     ValidationError,
     WithJsonSchema,
     field_validator,
+    model_validator,
 )
 from tomlkit.items import InlineTable
 
-from kinby.contracts import CommandListName, ContractModel, ManifestValues, NewModelPrice
+from kinby.contracts import (
+    BuiltInToolGroup,
+    CommandListName,
+    ContractModel,
+    ManifestValues,
+    NewModelPrice,
+    ToolState,
+)
 from kinby.instance.dataclasses import (
     Budgets,
     Compaction,
@@ -42,6 +51,7 @@ from kinby.instance.dataclasses import (
     SearchBackend,
     Serve,
     Tools,
+    ToolStates,
     Workspace,
 )
 from kinby.instance.errors import ManifestError
@@ -60,6 +70,8 @@ ModelName = Annotated[
     StringConstraints(min_length=1, pattern=_MODEL_PATTERN),
 ]
 _MODEL_NAME_ADAPTER = TypeAdapter(ModelName)
+_NAMES = TypeAdapter(list[NonEmpty])
+_State = Annotated[ToolState, Strict(strict=False)]
 
 
 def api_key_variable(model: ModelName) -> str:
@@ -117,11 +129,34 @@ class RawCompaction(_Section):
 
 
 class RawTools(_Section):
+    """The `[tools]` table. Each built-in tool group is on and loaded unless it changes that
+    (ADR 0129)."""
+
+    #: The switches of the default tools, the memory tools and the authored tools. The browser
+    #: tools' switch is the manifest's `browser`.
     defaults: bool = True
-    #: Default tools switched off by name, while the others stay on.
-    off: list[NonEmpty] = []
+    memory: bool = True
+    authored: bool = True
+    #: The state of each built-in group's tools that have none of their own, by group.
+    default_states: dict[Annotated[BuiltInToolGroup, Strict(strict=False)], _State] = {}
+    #: The built-in tools with a state of their own, by name.
+    states: dict[NonEmpty, _State] = {}
     search: SearchBackend = Field(default=SearchBackend.BRAVE, strict=False)
     bash_timeout_seconds: Annotated[int, Field(gt=0)] = 120
+
+    @model_validator(mode="before")
+    @classmethod
+    def switched_off(cls, data: object) -> object:
+        """Read the list of default tools switched off, from before tool states, as those tools
+        being off."""
+        if not isinstance(data, dict) or "off" not in data:
+            return data
+        kept = {key: value for key, value in data.items() if key != "off"}
+        states = kept.get("states", {})
+        if not isinstance(states, dict):
+            return data
+        off = _NAMES.validate_python(data["off"])
+        return {**kept, "states": dict.fromkeys(off, ToolState.OFF) | states}
 
 
 class RawBudgets(_Section):
@@ -206,12 +241,24 @@ def parse_manifest(text: str) -> RawManifest:
     return RawManifest.model_validate(tomllib.loads(text))
 
 
-def _tools(raw: RawTools) -> Tools:
+def _tools(raw: RawManifest) -> Tools:
+    tools = raw.tools
+    switches = {
+        BuiltInToolGroup.DEFAULTS: tools.defaults,
+        BuiltInToolGroup.MEMORY: tools.memory,
+        BuiltInToolGroup.BROWSER: raw.browser,
+        BuiltInToolGroup.AUTHORED: tools.authored,
+    }
     return Tools(
-        defaults=raw.defaults,
-        off=frozenset(raw.off),
-        search=raw.search,
-        bash_timeout_seconds=raw.bash_timeout_seconds,
+        defaults=tools.defaults,
+        groups={
+            group: ToolStates(tools.default_states.get(group, ToolState.LOADED), tools.states)
+            if on
+            else ToolStates(ToolState.OFF)
+            for group, on in switches.items()
+        },
+        search=tools.search,
+        bash_timeout_seconds=tools.bash_timeout_seconds,
     )
 
 
@@ -350,7 +397,7 @@ def _manifest(instance_path: Path, raw: RawManifest, model_override: str | None)
         memory=Memory(recap=raw.memory.recap),
         feedback=Feedback(ask=raw.feedback.ask),
         compaction=Compaction(trigger=raw.compaction.trigger if raw.compaction.automatic else None),
-        tools=_tools(raw.tools),
+        tools=_tools(raw),
         routines=Routines(timezone=ZoneInfo(raw.routines.timezone)),
         serve=raw.serve.listen if raw.serve is not None else None,
         browser=raw.browser,

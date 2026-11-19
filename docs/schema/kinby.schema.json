@@ -1,5 +1,16 @@
 {
   "$defs": {
+    "BuiltInToolGroup": {
+      "description": "A tool group kinby ships, whose states the manifest holds (ADR 0129). Each MCP server an\ninstance picks is a tool group too.",
+      "enum": [
+        "defaults",
+        "memory",
+        "browser",
+        "authored"
+      ],
+      "title": "BuiltInToolGroup",
+      "type": "string"
+    },
     "CommandListName": {
       "pattern": "^[a-z0-9][a-z0-9_-]*$",
       "type": "string"
@@ -279,30 +290,54 @@
     },
     "RawTools": {
       "additionalProperties": false,
+      "description": "The `[tools]` table. Each built-in tool group is on and loaded unless it changes that\n(ADR 0129).",
       "properties": {
+        "authored": {
+          "default": true,
+          "title": "Authored",
+          "type": "boolean"
+        },
         "bash_timeout_seconds": {
           "default": 120,
           "exclusiveMinimum": 0,
           "title": "Bash Timeout Seconds",
           "type": "integer"
         },
+        "default_states": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolState"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/BuiltInToolGroup"
+          },
+          "title": "Default States",
+          "type": "object"
+        },
         "defaults": {
           "default": true,
           "title": "Defaults",
           "type": "boolean"
         },
-        "off": {
-          "default": [],
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "title": "Off",
-          "type": "array"
+        "memory": {
+          "default": true,
+          "title": "Memory",
+          "type": "boolean"
         },
         "search": {
           "$ref": "#/$defs/SearchBackend",
           "default": "brave"
+        },
+        "states": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolState"
+          },
+          "default": {},
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "States",
+          "type": "object"
         }
       },
       "title": "RawTools",
@@ -383,6 +418,16 @@
         "searxng"
       ],
       "title": "SearchBackend",
+      "type": "string"
+    },
+    "ToolState": {
+      "description": "How one tool reaches an instance's turns (ADR 0129).",
+      "enum": [
+        "loaded",
+        "searchable",
+        "off"
+      ],
+      "title": "ToolState",
       "type": "string"
     }
   },
@@ -478,10 +523,13 @@
     "tools": {
       "$ref": "#/$defs/RawTools",
       "default": {
+        "authored": true,
         "bash_timeout_seconds": 120,
+        "default_states": {},
         "defaults": true,
-        "off": [],
-        "search": "brave"
+        "memory": true,
+        "search": "brave",
+        "states": {}
       }
     },
     "workspace": {

@@ -39,6 +39,7 @@ from pydantic import JsonValue, TypeAdapter
 from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
+    BuiltInToolGroup,
     CompletionOutcome,
     DeliveryArrival,
     Event,
@@ -131,7 +132,15 @@ from kinby.core.turns import (
     TurnRequest,
     TurnResult,
 )
-from kinby.instance import Budgets, Instance, Manifest, ModelName, ModelPrice, reload_manifest
+from kinby.instance import (
+    Budgets,
+    Instance,
+    Manifest,
+    ModelName,
+    ModelPrice,
+    ToolStates,
+    reload_manifest,
+)
 from kinby.instance.config_changes import directory_hash
 from kinby.instance.permissions import (
     SHIPPED_POLICY,
@@ -142,14 +151,13 @@ from kinby.instance.permissions import (
 )
 from kinby.instance.read_only_tools import read_only_tools, set_read_only
 from kinby.instance.routine_grants import RoutineGrants
-from kinby.instance.skills_lock import ToolStates
 from kinby.memory import GraphStore, MemoryDelivery, deliver_memory, memory_index
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
 from kinby.memory.reflection import reflection_step
 from kinby.plugins.browser import BrowserService
 from kinby.plugins.browser_tools import browser_takeover, browser_tools
-from kinby.plugins.core import core_tools
+from kinby.plugins.core import built_in_states, by_state, core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hub_browser import HubBrowser
 from kinby.plugins.instance_tools import routine_config_file
@@ -208,6 +216,7 @@ _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
         FactoryRunOrigin,
         ToolState,
         ToolStates,
+        BuiltInToolGroup,
     )
 )
 
@@ -244,6 +253,8 @@ class ModelState:
     #: The states of each MCP server's tools when the turn started, kept so a resume offers the
     #: tools the turn started with.
     tool_states: dict[McpServerName, ToolStates] = field(default_factory=dict)
+    #: The states of each built-in group's tools when the turn started, kept for the same reason.
+    built_in_states: dict[BuiltInToolGroup, ToolStates] = field(default_factory=dict)
 
 
 _MODEL_STATE = TypeAdapter(ModelState)
@@ -331,6 +342,14 @@ class _ToolStep:
                 saved_outputs=self.saved_outputs,
             )
         )
+
+
+@dataclass(frozen=True)
+class _StartedStates:
+    """The tool states a turn started with: each MCP server's, and each built-in group's."""
+
+    mcp: Mapping[McpServerName, ToolStates]
+    built_in: Mapping[BuiltInToolGroup, ToolStates]
 
 
 @dataclass(frozen=True)
@@ -538,21 +557,16 @@ class LangGraphRunner:
         await self._count_profiles(turn.model, context.emit)
         config, start_step = await self._start_config(turn)
         progress = _BudgetProgress(context.budgets, start_step)
-        tool_states = mcp_tool_states(self._instance)
-        return await self._invoke(
-            turn,
-            context,
-            ModelState(
-                turn=turn,
-                granted=self._granted_tools(turn),
-                revision=self._routine_revision(turn),
-                read_only=tuple(sorted(read_only_tools(self._instance.path))),
-                tool_states=tool_states,
-            ),
-            config,
-            progress,
-            tool_states,
+        state = ModelState(
+            turn=turn,
+            granted=self._granted_tools(turn),
+            revision=self._routine_revision(turn),
+            read_only=tuple(sorted(read_only_tools(self._instance.path))),
+            tool_states=mcp_tool_states(self._instance),
+            built_in_states=built_in_states(self._instance.manifest.tools),
         )
+        started = _StartedStates(state.tool_states, state.built_in_states)
+        return await self._invoke(turn, context, state, config, progress, started)
 
     async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
         config: RunnableConfig = {"configurable": {"thread_id": str(thread_id)}}
@@ -605,15 +619,15 @@ class LangGraphRunner:
             Command(resume=answer),
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
-            await self._started_tool_states(turn),
+            await self._started_states(turn),
         )
 
-    async def _started_tool_states(
-        self, turn: PreparedTurnRequest
-    ) -> dict[McpServerName, ToolStates]:
+    async def _started_states(self, turn: PreparedTurnRequest) -> _StartedStates:
         async with self._graph() as (graph, _):
             state = await graph.aget_state(_graph_config(turn))
-        return state.values.get("tool_states", {})
+        return _StartedStates(
+            state.values.get("tool_states", {}), state.values.get("built_in_states", {})
+        )
 
     async def _closing_browser(self, turn_id: UUID, running: Awaitable[TurnResult]) -> TurnResult:
         """Await the turn *running*, and close its browser once the turn ends. A park is not an
@@ -736,10 +750,13 @@ class LangGraphRunner:
         graph_input: ModelState | Command,
         config: RunnableConfig,
         progress: _BudgetProgress,
-        tool_states: Mapping[McpServerName, ToolStates],
+        started: _StartedStates,
     ) -> TurnResult:
-        async with mcp_tools(self._instance, tool_states) as picked:
-            return await self._invoke_with(turn, context, graph_input, config, progress, picked)
+        """Run the turn with the tools in the states it *started* with."""
+        async with mcp_tools(self._instance, started.mcp) as picked:
+            return await self._invoke_with(
+                turn, context, graph_input, config, progress, picked, started.built_in
+            )
 
     async def _invoke_with(
         self,
@@ -749,18 +766,27 @@ class LangGraphRunner:
         config: RunnableConfig,
         progress: _BudgetProgress,
         picked: McpTools,
+        groups: Mapping[BuiltInToolGroup, ToolStates],
     ) -> TurnResult:
-        """Run the turn with the tools of the MCP servers the instance *picked*."""
+        """Run the turn with the tools of the MCP servers the instance *picked*, and the others
+        in the states of their built-in *groups*."""
         budgets = progress.budgets
         emit = context.emit
         skills, skill_warnings = self._skills()
         discovered_tools, tool_warnings = self._tools.refresh()
         discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked.loaded))
         tools, core_tool_warnings = discovered_tools.with_core(*self._core_tools(skills))
+        tools, searchable = by_state(tools, groups)
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         prepared = await self._prepare_turn(
-            turn, graph_input, tools, picked.searchable, progress, emit, context.delivery_body
+            turn,
+            graph_input,
+            tools,
+            (*picked.searchable, *searchable),
+            progress,
+            emit,
+            context.delivery_body,
         )
         if isinstance(prepared, TurnOutcome):
             return prepared
@@ -1192,6 +1218,7 @@ class LangGraphRunner:
         skills, _ = self._skills()
         discovered, _ = self._tools.refresh()
         tools, _ = discovered.with_core(*self._core_tools(skills))
+        tools, _ = by_state(tools, built_in_states(self._instance.manifest.tools))
         async with mcp_tools(self._instance, {}) as picked:
             rows = context_rows(
                 size,
@@ -1460,6 +1487,7 @@ class LangGraphRunner:
             read_only=state.read_only,
             cut=cut,
             tool_states=state.tool_states,
+            built_in_states=state.built_in_states,
         )
 
     async def _send(
@@ -1537,6 +1565,7 @@ class LangGraphRunner:
             read_only=tuple(step.read_only),
             cut=state.cut,
             tool_states=state.tool_states,
+            built_in_states=state.built_in_states,
         )
 
     async def _decide(self, step: _ToolStep, call: ToolCall) -> ToolCallResolution:
