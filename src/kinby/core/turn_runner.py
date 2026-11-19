@@ -328,14 +328,14 @@ class GateAnswer:
 
 @dataclass
 class _ToolStep:
-    """The tool calls of one model message: what the gate reads for them, and the routine grants
-    and read-only marks their approvals add."""
+    """The tool calls of one model message: what the gate reads for them, the routine grants
+    and read-only marks their approvals add, and the URLs its scripts' web reads bring in."""
 
     turn: PreparedTurnRequest
     context: ModelContext
     granted: list[str]
     read_only: list[str]
-    seen_urls: frozenset[str]
+    seen_urls: set[str]
     saved_outputs: Path
 
     def call(self, call_id: str, name: str, arguments: dict[str, JsonValue]) -> ToolCall:
@@ -1788,6 +1788,8 @@ class LangGraphRunner:
         await step.context.emit(cut_to_cap(result, step.saved_outputs))
         if result.error:
             raise ScriptCallFailed(result.output)
+        if call.name in _URL_SOURCES:
+            step.seen_urls.update(_urls(result.output))
         return result.output
 
     async def _emit_tool_call_once(
@@ -1870,13 +1872,13 @@ async def _with_tool_search(tools: _TurnTools, emit: Emit) -> tuple[ToolSnapshot
     return ToolSnapshot((*kept.loaded.tools, *searching)), reachable
 
 
-def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:
+def _seen_urls(messages: Sequence[AnyMessage]) -> set[str]:
     """The URLs the thread's user messages, routine prompts and web reads brought in (ADR 0110).
 
     Another tool's result can echo the arguments the model gave it, so it brings in none.
     """
-    return frozenset(
-        url.rstrip(".,;:!?")
+    return {
+        url
         for message in messages
         if isinstance(message, HumanMessage)
         or (
@@ -1884,8 +1886,12 @@ def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:
             and message.name in _URL_SOURCES
             and message.status == "success"
         )
-        for url in _URL.findall(message.text)
-    )
+        for url in _urls(message.text)
+    }
+
+
+def _urls(text: str) -> set[str]:
+    return {url.rstrip(".,;:!?") for url in _URL.findall(text)}
 
 
 def _elapsed_ms(started_at: float) -> int:
