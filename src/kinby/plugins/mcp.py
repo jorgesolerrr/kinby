@@ -17,6 +17,7 @@ from kinby.contracts import McpHttpEntry, McpServerEntry, McpServerName, ToolSta
 from kinby.instance import Instance, ToolStates
 from kinby.instance.layout import ENV_NAME, MCP_FAILURES_NAME, SKILLS_LOCK_NAME
 from kinby.instance.skills_lock import read_lock
+from kinby.plugins.listed_tools import listed, mcp_tools_listed, record_mcp_tools
 
 if TYPE_CHECKING:
     from kinby.plugins.tools import Tool
@@ -46,13 +47,16 @@ async def mcp_tools(
     body runs, in the states the turn *started* with. A server the turn started without takes
     the states the instance holds now.
 
-    A server that needs a sign-in or a variable the instance's secrets lack, or that does not
-    start or list its tools, is left out, and recorded for the hub to report as an instance notice
-    until a turn connects to it again.
+    The tools each server lists are recorded for the hub's toolset. A server that needs a sign-in
+    or a variable the instance's secrets lack, or that does not start or list its tools, is left
+    out, keeps what it listed at the last turn connected to it, and is recorded for the hub to
+    report as an instance notice until a turn connects to it again.
     """
+    state_dir = instance.manifest.state_dir
     picks = read_lock(instance.path).mcp_servers
     if not picks:
-        _record_failures(instance.manifest.state_dir, {})
+        _record_failures(state_dir, {})
+        record_mcp_tools(state_dir, {})
         yield McpTools()
         return
     # The MCP SDK loads only in an instance that picked a server.
@@ -65,6 +69,8 @@ async def mcp_tools(
     }
     source = (instance.path / SKILLS_LOCK_NAME).resolve()
     tools: dict[ToolState, list[Tool]] = {state: [] for state in ToolState}
+    before = mcp_tools_listed(state_dir)
+    listed_tools = {name: before[name] for name in picks if name in before}
     failures: dict[str, str] = {}
     raised: Exception | None = None
     async with AsyncExitStack() as stack:
@@ -81,16 +87,21 @@ async def mcp_tools(
                 continue
             states = started.get(name) or pick.states()
             try:
-                for tool, adapted in await connected_tools(name, pick, secrets, source, stack):
-                    tools[states.of(tool)].append(adapted)
+                connected = await connected_tools(name, pick, secrets, source, stack)
             except SignInNeeded:
                 failures[name] = f'MCP server "{name}" needs a sign-in, so the turn ran without it.'
+                continue
             except NotConnected as failed:
                 failures[name] = (
                     f'MCP server "{name}" did not start or list its tools, so the turn ran '
                     f"without them: {failed}"
                 )
-        _record_failures(instance.manifest.state_dir, failures)
+                continue
+            for tool, adapted in connected:
+                tools[states.of(tool)].append(adapted)
+            listed_tools[name] = tuple(listed(tool, adapted) for tool, adapted in connected)
+        _record_failures(state_dir, failures)
+        record_mcp_tools(state_dir, listed_tools)
         try:
             yield McpTools(tuple(tools[ToolState.LOADED]), tuple(tools[ToolState.SEARCHABLE]))
         except Exception as exc:

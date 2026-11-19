@@ -185,7 +185,6 @@ from kinby.contracts import (
     ContractModel,
     ControlToken,
     DeclaredSetup,
-    DefaultTool,
     DrainState,
     ErrorCode,
     FactoryEditCommand,
@@ -453,6 +452,7 @@ from kinby.hub.setup import (
     setup_errors,
 )
 from kinby.hub.takeovers import Takeovers
+from kinby.hub.toolset import built_in_groups, mcp_server_groups
 from kinby.hub.usage import Uncounted, run_usage, summed_usage
 from kinby.hub.vault import Vault, origin
 from kinby.instance import (
@@ -472,7 +472,6 @@ from kinby.instance.read_only_tools import read_only_tools
 from kinby.instance.skills_lock import LockedMcpServer, lock_hash, read_lock
 from kinby.library import HOME_SKILLS, SHIPPED_SKILLS
 from kinby.memory import GraphStore
-from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
 from kinby.plugins.hub import (
     HUB_SCOPES_VARIABLE,
     HUB_URL_VARIABLE,
@@ -2316,9 +2315,8 @@ class Hub:
             authored, held = (), ()
         read_only = read_only_tools(record.path)
         return InstanceToolsetResult(
-            default_tools=[
-                DefaultTool(name=each.name, on=tools.offers(each.name)) for each in DEFAULT_TOOLS
-            ],
+            built_in_groups=built_in_groups(record.path, manifest),
+            mcp_server_groups=mcp_server_groups(record.path, manifest),
             search=SearchSetup(
                 backend=tools.search,
                 variable=variable,

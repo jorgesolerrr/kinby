@@ -40,6 +40,7 @@ from kinby.instance import Instance, Serve, inspect_instance
 from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
 from kinby.plugins import mcp_connection
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from kinby.plugins.listed_tools import mcp_tools_listed
 from kinby.plugins.mcp import failed_mcp_servers
 from kinby.plugins.mcp_connection import STDERR_TAIL
 from tests.mcp_oauth_server import OAuthMcpServer
@@ -458,6 +459,35 @@ def failure(instance: Instance, server: McpServer) -> str:
     pick(instance, broken=server)
     asyncio.run(turn(instance, [], PermissionMode.ASK))
     return failed_mcp_servers(instance.manifest.state_dir)["broken"]
+
+
+def test_a_turn_records_each_tool_a_server_listed_with_its_description_and_size(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo("look"))
+
+    asyncio.run(turn(instance, [], PermissionMode.ASK))
+
+    listed = mcp_tools_listed(instance.manifest.state_dir)["echo"]
+    assert [tool.name for tool in listed] == ["arguments", "environment", "headers", "look", "post"]
+    assert listed[3].description == "Repeat a line of text."
+    assert all(tool.tokens > 0 for tool in listed)
+
+
+def test_a_server_that_fails_keeps_what_it_listed_at_the_last_turn_connected_to_it(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo("look"))
+    asyncio.run(turn(instance, [], PermissionMode.ASK))
+    first = mcp_tools_listed(instance.manifest.state_dir)
+    broken = echo("look", package="missing-server")
+    pick(instance, echo=broken, other=broken)
+
+    asyncio.run(turn(instance, [], PermissionMode.ASK))
+
+    assert mcp_tools_listed(instance.manifest.state_dir) == first
 
 
 def test_a_missing_package_is_told_by_its_cause_and_what_its_launcher_said(tmp_path: Path) -> None:

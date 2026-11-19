@@ -252,9 +252,9 @@ def _tools(raw: RawManifest) -> Tools:
     return Tools(
         defaults=tools.defaults,
         groups={
-            group: ToolStates(tools.default_states.get(group, ToolState.LOADED), tools.states)
-            if on
-            else ToolStates(ToolState.OFF)
+            group: ToolStates(
+                tools.default_states.get(group, ToolState.LOADED), tools.states, on=on
+            )
             for group, on in switches.items()
         },
         search=tools.search,

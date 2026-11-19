@@ -3647,10 +3647,46 @@ class InstanceToolsetGetCommand(ContractModel):
     instance_id: UUID
 
 
-class DefaultTool(ContractModel):
-    name: ToolName
-    #: Whether the manifest leaves it on.
+class ToolStateSource(StrEnum):
+    """Where a tool's state came from."""
+
+    #: Its tool group's default state, or the group's switch when it is off.
+    GROUP = "group"
+    #: Its own state in the library's MCP server.
+    LIBRARY = "library"
+    #: Its own state, as the instance changed it.
+    INSTANCE = "instance"
+
+
+class GroupTool(ContractModel):
+    #: For an MCP server's tool, the name the server gives it.
+    name: str
+    description: str
+    state: ToolState
+    source: ToolStateSource
+    #: About how many tokens its definition adds to a model call that is sent it.
+    tokens: int
+
+
+class ToolGroup(ContractModel):
+    """A tool group, with each tool in the state the instance's next turn gives it (ADR 0129)."""
+
     on: bool
+    #: The state of each tool with none of its own, while the group is on.
+    default_state: ToolState
+    #: By name. Null until a turn lists them: an MCP server's until the first turn connected to
+    #: it, and the authored tools until the instance's first turn.
+    tools: list[GroupTool] | None
+    #: What the definitions of its loaded tools add to every model call, in tokens.
+    loaded_tokens: int
+
+
+class BuiltInGroup(ToolGroup):
+    group: BuiltInToolGroup
+
+
+class McpServerGroup(ToolGroup):
+    server: McpServerName
 
 
 class SearchSetup(ContractModel):
@@ -3669,7 +3705,10 @@ class AuthoredTool(ContractModel):
 class InstanceToolsetResult(ContractModel):
     """What an instance can do outside its workspace, as its files have it."""
 
-    default_tools: list[DefaultTool]
+    #: In the order of BuiltInToolGroup.
+    built_in_groups: list[BuiltInGroup]
+    #: Each picked MCP server's, by name.
+    mcp_server_groups: list[McpServerGroup]
     search: SearchSetup
     #: By name.
     mcp_servers: list[McpServerPick]

@@ -1,12 +1,14 @@
 import type {
   AuthoredTool,
+  BuiltInToolGroup,
   Client,
   Clock,
-  DefaultTool,
+  GroupTool,
   InstanceClient,
   McpServerName,
   SearchBackend,
   SearchSetup,
+  ToolState,
 } from "@kinby/contract"
 import { type ReactNode, useCallback, useId, useState } from "react"
 
@@ -25,6 +27,7 @@ import {
 } from "@/components/ui/item"
 import { Switch } from "@/components/ui/switch"
 import { useRead } from "@/hooks/use-read"
+import { tokens } from "@/lib/stats"
 
 const BACKENDS: Record<SearchBackend, string> = {
   brave: "Brave",
@@ -32,6 +35,25 @@ const BACKENDS: Record<SearchBackend, string> = {
   exa: "Exa",
   searxng: "SearXNG",
 }
+
+const GROUPS: Record<BuiltInToolGroup, string> = {
+  defaults: "Default tools",
+  memory: "Memory tools",
+  browser: "Browser tools",
+  authored: "Authored tools",
+}
+
+const STATES: Record<ToolState, string> = {
+  loaded: "Loaded",
+  searchable: "Searchable",
+  off: "Off",
+}
+
+const STATE_BADGES = {
+  loaded: "secondary",
+  searchable: "outline",
+  off: "ghost",
+} as const satisfies Record<ToolState, string>
 
 /**
  * What the instance can do beyond its workspace. `caller` reaches the hub, which reads it from the
@@ -67,11 +89,27 @@ export function Toolset({
     >
       {failure !== undefined && <Refusal title="Could not read the toolset" error={failure} />}
       {value !== undefined && (
+        <ItemGroup variant="outline" aria-label="Tool groups">
+          {value.built_in_groups.map((group) => (
+            <ToolGroupItem
+              key={group.group}
+              title={GROUPS[group.group]}
+              group={group}
+              unlisted="Its tools are listed after the instance's next turn."
+            />
+          ))}
+          {value.mcp_server_groups.map((group) => (
+            <ToolGroupItem
+              key={group.server}
+              title={group.server}
+              group={group}
+              unlisted="Its tools are listed after the first turn connected to it."
+            />
+          ))}
+        </ItemGroup>
+      )}
+      {value !== undefined && (
         <ItemGroup variant="outline" aria-label="Toolset">
-          <Row title="Default tools">
-            <ItemDescription>{named("On", value.default_tools, true)}</ItemDescription>
-            <ItemDescription>{named("Off", value.default_tools, false)}</ItemDescription>
-          </Row>
           {value.mcp_servers.map((server) => (
             <Row
               key={server.name}
@@ -131,6 +169,53 @@ function Row({
   )
 }
 
+/**
+ * A tool group: its default state, what its loaded tools add to every model call, and its tools,
+ * or `unlisted` until a turn lists them.
+ */
+function ToolGroupItem({
+  title,
+  group,
+  unlisted,
+}: {
+  title: string
+  group: { on: boolean; default_state: ToolState; loaded_tokens: number; tools: GroupTool[] | null }
+  unlisted: string
+}) {
+  return (
+    <li aria-label={title}>
+      <Item size="sm">
+        <ItemContent>
+          <ItemTitle>{title}</ItemTitle>
+          <ItemDescription>
+            {group.on
+              ? `${STATES[group.default_state]} by default. Its loaded tools add ${tokens(group.loaded_tokens)} tokens to every call.`
+              : "Off."}
+          </ItemDescription>
+          {group.tools === null && <ItemDescription>{unlisted}</ItemDescription>}
+        </ItemContent>
+      </Item>
+      {group.tools !== null && group.tools.length > 0 && (
+        <ItemGroup aria-label={title} className="mx-3.5 mb-3 w-auto">
+          {group.tools.map((tool) => (
+            <li key={tool.name} aria-label={tool.name}>
+              <Item size="xs" variant="muted">
+                <ItemContent>
+                  <ItemTitle>{tool.name}</ItemTitle>
+                  <ItemDescription>{tool.description}</ItemDescription>
+                </ItemContent>
+                <ItemActions>
+                  <Badge variant={STATE_BADGES[tool.state]}>{STATES[tool.state]}</Badge>
+                </ItemActions>
+              </Item>
+            </li>
+          ))}
+        </ItemGroup>
+      )}
+    </li>
+  )
+}
+
 /** An authored tool. Until it is marked read-only, every call to it asks. */
 function AuthoredToolItem({
   client,
@@ -178,11 +263,6 @@ function AuthoredToolItem({
       </Item>
     </li>
   )
-}
-
-function named(state: string, tools: DefaultTool[], on: boolean): string {
-  const names = tools.filter((tool) => tool.on === on).map((tool) => tool.name)
-  return `${state}: ${names.join(", ") || "none"}`
 }
 
 function search({ backend, variable, is_set }: SearchSetup): string {
