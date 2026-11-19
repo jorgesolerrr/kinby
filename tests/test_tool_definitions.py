@@ -19,7 +19,7 @@ from kinby.plugins.views import view_patch, view_write
 #: The most characters one tool's definition takes, as compact JSON.
 TOOL_BUDGET = 2_000
 #: The most characters a home user turn's whole tool list takes, as compact JSON.
-HOME_BUDGET = 9_000
+HOME_BUDGET = 9_500
 
 
 def definition(tool: Tool) -> str:
