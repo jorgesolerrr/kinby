@@ -62,12 +62,14 @@ class ScriptedModel:
     def __init__(self, responses: Sequence[AIMessageChunk]) -> None:
         self._responses = iter(responses)
         self.bound_tools: list[tuple[StructuredTool, ...]] = []
+        self.sent: list[list[BaseMessage]] = []
 
     def bind_tools(self, tools: Sequence[StructuredTool]) -> Self:
         self.bound_tools.append(tuple(tools))
         return self
 
     async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        self.sent.append(list(messages))
         yield next(self._responses)
 
 

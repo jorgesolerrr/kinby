@@ -100,6 +100,68 @@ describe("a thread's panel", () => {
     expect(screen.getByText(/^Routine nightly-digest ·/)).toBeDefined()
   })
 
+  it("shows a call made through tool search as the real tool, and its approval as the real tool's", async () => {
+    const events = thread(
+      ["turn-1", started("Post hi")],
+      [
+        "turn-1",
+        { type: "tool.call", call_id: "c1", name: "search_tools", arguments: { query: "post" } },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.gated",
+          call_id: "c1",
+          name: "search_tools",
+          action: "allow",
+          decided_by: "policy",
+          rule: "reads are allowed",
+        },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.result",
+          call_id: "c1",
+          name: "search_tools",
+          output: "echo__post (writes): Post a line of text.",
+          error: false,
+        },
+      ],
+      [
+        "turn-1",
+        {
+          type: "tool.call",
+          call_id: "c2",
+          name: "echo__post",
+          arguments: { text: "hi" },
+          write: true,
+          via: "tool_search",
+        },
+      ],
+      [
+        "turn-1",
+        {
+          type: "approval.requested",
+          approval_id: "a1",
+          name: "echo__post",
+          arguments: { text: "hi" },
+          rule: "ask mode asks before writes",
+        },
+      ],
+    )
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    await userEvent.click(traceLine("Waiting for you to approve echo__post"))
+    expect(within(traceLine("echo__post hi")).getByText("waiting for you")).toBeDefined()
+    expect(screen.queryByText(/call_tool/)).toBeNull()
+  })
+
   describe("the line a turn opens with", () => {
     async function opened(origin: Extract<Payload, { type: "turn.started" }>["origin"]) {
       const events = thread([

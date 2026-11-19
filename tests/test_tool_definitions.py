@@ -11,6 +11,8 @@ from kinby.instance import init_instance, inspect_instance
 from kinby.plugins import defaults
 from kinby.plugins.core import core_tools
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, HubWriteOperation, hub_write
+from kinby.plugins.registry import ToolSnapshot
+from kinby.plugins.tool_search import tool_search
 from kinby.plugins.tools import Tool
 from kinby.plugins.views import view_patch, view_write
 
@@ -28,11 +30,12 @@ def test_the_tools_of_a_home_user_turn_fit_the_budgets(tmp_path, monkeypatch):
     monkeypatch.setenv(HUB_URL_VARIABLE, "ws://hub/instances/home/hub")
     monkeypatch.setenv(HUB_SCOPES_VARIABLE, Scope.HUB_HOME)
     directory = init_instance(tmp_path / "home")
-    tools = (*core_tools(inspect_instance(directory), ()), *defaults.TOOLS)
+    loaded = (*core_tools(inspect_instance(directory), ()), *defaults.TOOLS)
+    tools = (*loaded, *tool_search(ToolSnapshot(), ToolSnapshot(loaded)))
 
     sizes = {tool.name: len(definition(tool)) for tool in tools}
 
-    assert "hub_write" in sizes
+    assert {"hub_write", "search_tools", "describe_tool", "call_tool"} <= sizes.keys()
     assert {name: size for name, size in sizes.items() if size > TOOL_BUDGET} == {}
     assert sum(sizes.values()) <= HOME_BUDGET
 

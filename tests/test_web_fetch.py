@@ -3,7 +3,7 @@ rule the gate judges it by (ADR 0110)."""
 
 import asyncio
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -240,7 +240,7 @@ def test_a_url_with_userinfo_is_refused(fetch, monkeypatch) -> None:
     assert sent == []
 
 
-def _calls(*steps: tuple[str, dict[str, str]]) -> ScriptedModel:
+def _calls(*steps: tuple[str, Mapping[str, JsonValue]]) -> ScriptedModel:
     """A model that makes one tool call per step, then finishes."""
     return ScriptedModel(
         [
@@ -248,7 +248,12 @@ def _calls(*steps: tuple[str, dict[str, str]]) -> ScriptedModel:
                 AIMessageChunk(
                     content="",
                     tool_calls=[
-                        {"name": name, "args": args, "id": f"call-{index}", "type": "tool_call"}
+                        {
+                            "name": name,
+                            "args": dict(args),
+                            "id": f"call-{index}",
+                            "type": "tool_call",
+                        }
                     ],
                 )
                 for index, (name, args) in enumerate(steps)
@@ -312,6 +317,24 @@ def test_in_ask_mode_a_turn_searches_and_fetches_a_results_url_without_asking(
     result = next(p for p in payloads if isinstance(p, ToolResult) and p.name == "web_fetch")
     assert not result.error
     assert _TEXT.strip() in result.output
+
+
+def test_a_url_web_search_returns_through_tool_search_is_seen(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BRAVE_API_KEY", "secret-key")
+    _fake_http(monkeypatch, _web)
+    instance = _instance(tmp_path)
+    with (instance.path / "kinby.toml").open("a", encoding="utf-8") as manifest:
+        manifest.write('[tools]\nstates = { web_search = "searchable" }\n')
+    model = _calls(
+        ("call_tool", {"name": "web_search", "arguments": {"query": "kinby"}}),
+        ("web_fetch", {"url": _RESULT}),
+    )
+
+    payloads = _turn(load_instance(instance.path), model, "Find kinby and read its page.")
+
+    assert not any(isinstance(payload, ApprovalRequested) for payload in payloads)
+    [fetch] = _fetches(payloads)
+    assert (fetch.action, fetch.rule) == (GateOutcome.ALLOW, "web.seen_url")
 
 
 def test_a_url_from_the_users_message_is_fetched_without_asking(tmp_path, monkeypatch) -> None:

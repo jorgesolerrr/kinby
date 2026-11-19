@@ -236,6 +236,11 @@ export type ErrorCode =
   | "MCP_SIGN_IN_PENDING"
   | "CONNECTION_LOST"
   | "INTERNAL";
+/**
+ * What a tool call went through to reach its tool, when the model did not call the tool
+ * itself (ADR 0129).
+ */
+export type CallVia = "tool_search";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
 export type ViewChange = "created" | "changed" | "deleted";
@@ -4112,6 +4117,7 @@ export interface ToolCall {
   call_id: string;
   name: string;
   type: "tool.call";
+  via?: CallVia | null;
   write?: boolean | null;
 }
 export interface ToolGated {
