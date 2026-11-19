@@ -13,7 +13,8 @@ const fetchServer: McpServer = {
     args: ["mcp-server-fetch", "--ignore-robots"],
     env: { FETCH_USER_AGENT: "${FETCH_USER_AGENT}" },
   },
-  include: ["fetch"],
+  default_state: "off",
+  tool_states: { fetch: "loaded" },
 }
 
 /**
@@ -77,7 +78,7 @@ describe("LibraryPage, MCP servers", () => {
       screen.getByRole("textbox", { name: "Headers" }),
       "Authorization: Bearer ${{GITHUB_TOKEN}\nX-Agent: kinby",
     )
-    await user.type(screen.getByRole("textbox", { name: "Tools" }), "get_issue\nlist_issues")
+    await user.type(screen.getByRole("textbox", { name: "Loaded tools" }), "get_issue\nlist_issues")
     await user.click(screen.getByRole("button", { name: "Add" }))
 
     expect(await screen.findByRole("button", { name: "github, written MCP server" })).toBeTruthy()
@@ -92,7 +93,8 @@ describe("LibraryPage, MCP servers", () => {
               url: "https://example.com/mcp",
               headers: { Authorization: "Bearer ${GITHUB_TOKEN}", "X-Agent": "kinby" },
             },
-            include: ["get_issue", "list_issues"],
+            default_state: "off",
+            tool_states: { get_issue: "loaded", list_issues: "loaded" },
           },
           hash: null,
         },
@@ -128,7 +130,39 @@ describe("LibraryPage, MCP servers", () => {
             args: ["mcp-server-git", "--repository", "/workspace"],
             env: { GIT_AUTHOR_NAME: "${GIT_AUTHOR_NAME}", GIT_EDITOR: "true" },
           },
-          include: [],
+          default_state: "off",
+          tool_states: {},
+        },
+        hash: null,
+      },
+    ])
+  })
+
+  it("sets the server's default state and the tools with a state of their own", async () => {
+    const { caller, user } = openServersPage()
+
+    await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "github")
+    await user.type(screen.getByRole("textbox", { name: "URL" }), "https://example.com/mcp")
+    expect(screen.getByRole("button", { name: "off" }).getAttribute("aria-pressed")).toBe("true")
+    await user.click(screen.getByRole("button", { name: "searchable" }))
+    await user.type(screen.getByRole("textbox", { name: "Loaded tools" }), "get_issue")
+    await user.type(screen.getByRole("textbox", { name: "Searchable tools" }), "list_issues")
+    await user.type(screen.getByRole("textbox", { name: "Off tools" }), "merge_pull_request")
+    await user.click(screen.getByRole("button", { name: "Add" }))
+
+    await screen.findByRole("button", { name: "github, written MCP server" })
+    expect(serverWrites(caller).map((call) => call.params)).toEqual([
+      {
+        name: "github",
+        server: {
+          entry: { type: "http", url: "https://example.com/mcp", headers: {} },
+          default_state: "searchable",
+          tool_states: {
+            get_issue: "loaded",
+            list_issues: "searchable",
+            merge_pull_request: "off",
+          },
         },
         hash: null,
       },
@@ -171,7 +205,7 @@ describe("LibraryPage, MCP servers", () => {
       (screen.getByRole("textbox", { name: "Paste an entry" }) as HTMLTextAreaElement).value,
     ).toBe("")
     expect(serverWrites(caller)).toEqual([])
-    await user.type(screen.getByRole("textbox", { name: "Tools" }), "git_status")
+    await user.type(screen.getByRole("textbox", { name: "Loaded tools" }), "git_status")
     await user.click(screen.getByRole("button", { name: "Add" }))
 
     expect(await screen.findByRole("button", { name: "git, written MCP server" })).toBeTruthy()
@@ -185,7 +219,8 @@ describe("LibraryPage, MCP servers", () => {
             args: ["mcp-server-git"],
             env: { GIT_EDITOR: "true" },
           },
-          include: ["git_status"],
+          default_state: "off",
+          tool_states: { git_status: "loaded" },
         },
         hash: null,
       },
@@ -329,10 +364,10 @@ describe("LibraryPage, MCP servers", () => {
     expect((screen.getByRole("textbox", { name: "Env" }) as HTMLTextAreaElement).value).toBe(
       "FETCH_USER_AGENT=${FETCH_USER_AGENT}",
     )
-    expect((screen.getByRole("textbox", { name: "Tools" }) as HTMLTextAreaElement).value).toBe(
-      "fetch",
-    )
-    await user.type(screen.getByRole("textbox", { name: "Tools" }), "\nfetch_many")
+    expect(
+      (screen.getByRole("textbox", { name: "Loaded tools" }) as HTMLTextAreaElement).value,
+    ).toBe("fetch")
+    await user.type(screen.getByRole("textbox", { name: "Loaded tools" }), "\nfetch_many")
     await user.click(screen.getByRole("button", { name: "Save" }))
 
     expect(await screen.findByText(/Saved\./)).toBeTruthy()
@@ -341,7 +376,7 @@ describe("LibraryPage, MCP servers", () => {
         method: "library.mcp_server.write",
         params: {
           name: "fetch",
-          server: { ...fetchServer, include: ["fetch", "fetch_many"] },
+          server: { ...fetchServer, tool_states: { fetch: "loaded", fetch_many: "loaded" } },
           hash: "h-1",
         },
       },
@@ -377,21 +412,25 @@ describe("LibraryPage, MCP servers", () => {
     })
 
     await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
-    await user.type(await screen.findByRole("textbox", { name: "Tools" }), "\nfetch_many")
+    await user.type(await screen.findByRole("textbox", { name: "Loaded tools" }), "\nfetch_many")
     await user.click(screen.getByRole("button", { name: "Save" }))
     expect(await screen.findByText("Changed since you opened it")).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Load again" }))
 
     await waitFor(() =>
-      expect((screen.getByRole("textbox", { name: "Tools" }) as HTMLTextAreaElement).value).toBe(
-        "fetch",
-      ),
+      expect(
+        (screen.getByRole("textbox", { name: "Loaded tools" }) as HTMLTextAreaElement).value,
+      ).toBe("fetch"),
     )
     expect(screen.queryByText("Changed since you opened it")).toBeNull()
     await user.click(screen.getByRole("button", { name: "Save" }))
     await screen.findByText(/Saved\./)
     expect(serverWrites(caller).map((call) => call.params)).toEqual([
-      { name: "fetch", server: { ...fetchServer, include: ["fetch", "fetch_many"] }, hash: "h-1" },
+      {
+        name: "fetch",
+        server: { ...fetchServer, tool_states: { fetch: "loaded", fetch_many: "loaded" } },
+        hash: "h-1",
+      },
       { name: "fetch", server: fetchServer, hash: "h-2" },
     ])
   })
@@ -404,17 +443,22 @@ describe("LibraryPage, MCP servers", () => {
         headers: {},
         oauth: { clientId: "kinby", clientSecret: "${COCKPIT_SECRET}", scopes: ["tasks"] },
       },
-      include: ["look"],
+      default_state: "off",
+      tool_states: { look: "loaded" },
     }
     const { caller, user } = openServersPage({ server })
 
     await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
-    await user.type(await screen.findByRole("textbox", { name: "Tools" }), "\nfind")
+    await user.type(await screen.findByRole("textbox", { name: "Loaded tools" }), "\nfind")
     await user.click(screen.getByRole("button", { name: "Save" }))
 
     await screen.findByText(/Saved\./)
     expect(serverWrites(caller).map((call) => call.params)).toEqual([
-      { name: "fetch", server: { ...server, include: ["look", "find"] }, hash: "h-1" },
+      {
+        name: "fetch",
+        server: { ...server, tool_states: { look: "loaded", find: "loaded" } },
+        hash: "h-1",
+      },
     ])
   })
 
@@ -434,7 +478,8 @@ describe("LibraryPage, MCP servers", () => {
         name: "cockpit",
         server: {
           entry: { type: "http", url: "https://cockpit.example.com/mcp", headers: {}, oauth },
-          include: [],
+          default_state: "off",
+          tool_states: {},
         },
         hash: null,
       },
@@ -449,17 +494,22 @@ describe("LibraryPage, MCP servers", () => {
         args: ["odd", "", " --flag ", "two\nlines"],
         env: { KEY: "first\nsecond", PADDED: "  value  " },
       },
-      include: ["fetch"],
+      default_state: "off",
+      tool_states: { fetch: "loaded" },
     }
     const { caller, user } = openServersPage({ server })
 
     await user.click(await screen.findByRole("button", { name: "fetch, written MCP server" }))
-    await user.type(await screen.findByRole("textbox", { name: "Tools" }), "\nfetch_many")
+    await user.type(await screen.findByRole("textbox", { name: "Loaded tools" }), "\nfetch_many")
     await user.click(screen.getByRole("button", { name: "Save" }))
 
     await screen.findByText(/Saved\./)
     expect(serverWrites(caller).map((call) => call.params)).toEqual([
-      { name: "fetch", server: { ...server, include: ["fetch", "fetch_many"] }, hash: "h-1" },
+      {
+        name: "fetch",
+        server: { ...server, tool_states: { fetch: "loaded", fetch_many: "loaded" } },
+        hash: "h-1",
+      },
     ])
   })
 })

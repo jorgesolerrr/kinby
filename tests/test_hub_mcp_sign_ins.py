@@ -67,7 +67,9 @@ def _hub(tmp_path: Path, **options) -> Hub:
 def _library_server(hub: Hub, name: str, entry: dict[str, object]) -> None:
     folder = hub.directory / "mcp-servers"
     folder.mkdir(exist_ok=True)
-    server = McpServer.model_validate({"entry": entry, "include": ["look", "headers", "expire"]})
+    server = McpServer.model_validate(
+        {"entry": entry, "tool_states": dict.fromkeys(("look", "headers", "expire"), "loaded")}
+    )
     (folder / f"{name}.json").write_text(server.model_dump_json(), encoding="utf-8")
 
 

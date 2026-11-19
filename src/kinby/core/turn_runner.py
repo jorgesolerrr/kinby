@@ -47,6 +47,7 @@ from kinby.contracts import (
     FileHash,
     GateDecider,
     GateOutcome,
+    McpServerName,
     MemoryRecalled,
     MessageDelta,
     ModelCompleted,
@@ -65,6 +66,7 @@ from kinby.contracts import (
     ToolCall,
     ToolGated,
     ToolResult,
+    ToolState,
     TurnStarted,
     UserOrigin,
     Warning,
@@ -140,6 +142,7 @@ from kinby.instance.permissions import (
 )
 from kinby.instance.read_only_tools import read_only_tools, set_read_only
 from kinby.instance.routine_grants import RoutineGrants
+from kinby.instance.skills_lock import ToolStates
 from kinby.memory import GraphStore, MemoryDelivery, deliver_memory, memory_index
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
@@ -150,7 +153,7 @@ from kinby.plugins.core import core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hub_browser import HubBrowser
 from kinby.plugins.instance_tools import routine_config_file
-from kinby.plugins.mcp import mcp_tools
+from kinby.plugins.mcp import McpTools, mcp_tool_states, mcp_tools
 from kinby.plugins.notify import (
     UNTITLED,
     approval_notification,
@@ -203,6 +206,8 @@ _CHECKPOINT_SERIALIZER = JsonPlusSerializer(
         RoutineOrigin,
         RoutineTrigger,
         FactoryRunOrigin,
+        ToolState,
+        ToolStates,
     )
 )
 
@@ -236,6 +241,9 @@ class ModelState:
     #: messages before the cut, while the compaction is recorded at the turn's start: a turn that
     #: does not complete keeps none of its messages.
     cut: int | None = None
+    #: The states of each MCP server's tools when the turn started, kept so a resume offers the
+    #: tools the turn started with.
+    tool_states: dict[McpServerName, ToolStates] = field(default_factory=dict)
 
 
 _MODEL_STATE = TypeAdapter(ModelState)
@@ -530,6 +538,7 @@ class LangGraphRunner:
         await self._count_profiles(turn.model, context.emit)
         config, start_step = await self._start_config(turn)
         progress = _BudgetProgress(context.budgets, start_step)
+        tool_states = mcp_tool_states(self._instance)
         return await self._invoke(
             turn,
             context,
@@ -538,9 +547,11 @@ class LangGraphRunner:
                 granted=self._granted_tools(turn),
                 revision=self._routine_revision(turn),
                 read_only=tuple(sorted(read_only_tools(self._instance.path))),
+                tool_states=tool_states,
             ),
             config,
             progress,
+            tool_states,
         )
 
     async def restore(self, thread_id: UUID, turn_id: UUID) -> PreparedTurnRequest | None:
@@ -594,7 +605,15 @@ class LangGraphRunner:
             Command(resume=answer),
             _graph_config(turn),
             replace(progress, resumes=progress.resumes + 1),
+            await self._started_tool_states(turn),
         )
+
+    async def _started_tool_states(
+        self, turn: PreparedTurnRequest
+    ) -> dict[McpServerName, ToolStates]:
+        async with self._graph() as (graph, _):
+            state = await graph.aget_state(_graph_config(turn))
+        return state.values.get("tool_states", {})
 
     async def _closing_browser(self, turn_id: UUID, running: Awaitable[TurnResult]) -> TurnResult:
         """Await the turn *running*, and close its browser once the turn ends. A park is not an
@@ -717,8 +736,9 @@ class LangGraphRunner:
         graph_input: ModelState | Command,
         config: RunnableConfig,
         progress: _BudgetProgress,
+        tool_states: Mapping[McpServerName, ToolStates],
     ) -> TurnResult:
-        async with mcp_tools(self._instance) as picked:
+        async with mcp_tools(self._instance, tool_states) as picked:
             return await self._invoke_with(turn, context, graph_input, config, progress, picked)
 
     async def _invoke_with(
@@ -728,19 +748,19 @@ class LangGraphRunner:
         graph_input: ModelState | Command,
         config: RunnableConfig,
         progress: _BudgetProgress,
-        picked: tuple[Tool, ...],
+        picked: McpTools,
     ) -> TurnResult:
         """Run the turn with the tools of the MCP servers the instance *picked*."""
         budgets = progress.budgets
         emit = context.emit
         skills, skill_warnings = self._skills()
         discovered_tools, tool_warnings = self._tools.refresh()
-        discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked))
+        discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked.loaded))
         tools, core_tool_warnings = discovered_tools.with_core(*self._core_tools(skills))
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         prepared = await self._prepare_turn(
-            turn, graph_input, tools, progress, emit, context.delivery_body
+            turn, graph_input, tools, picked.searchable, progress, emit, context.delivery_body
         )
         if isinstance(prepared, TurnOutcome):
             return prepared
@@ -884,10 +904,13 @@ class LangGraphRunner:
         turn: PreparedTurnRequest,
         graph_input: ModelState | Command,
         tools: ToolSnapshot,
+        search_set: tuple[Tool, ...],
         progress: _BudgetProgress,
         emit: Emit,
         delivery_body: str | None,
     ) -> _PreparedTurn | TurnOutcome:
+        """The turn's *tools*, message and payload once its routine's code step, if any, ran. A
+        code step may name a tool of the turn's *search_set*."""
         budgets = progress.budgets
         message = turn.message
         payload = None
@@ -951,7 +974,9 @@ class LangGraphRunner:
                 tools = ToolSnapshot(tuple(tool for tool in tools.tools if not tool.write))
             else:
                 try:
-                    code_step = resolve_code_step(declared, tools)
+                    code_step = resolve_code_step(
+                        declared, ToolSnapshot((*tools.tools, *search_set))
+                    )
                 except ValueError as exc:
                     raise CodeStepNotFound(
                         f'Code step tool "{declared.name}" is not available in this turn.'
@@ -1167,12 +1192,12 @@ class LangGraphRunner:
         skills, _ = self._skills()
         discovered, _ = self._tools.refresh()
         tools, _ = discovered.with_core(*self._core_tools(skills))
-        async with mcp_tools(self._instance) as picked:
+        async with mcp_tools(self._instance, {}) as picked:
             rows = context_rows(
                 size,
                 self._prompt_sections(skills),
                 tools.tools,
-                picked,
+                picked.loaded,
                 messages,
                 compaction,
                 completed.values.get("cut"),
@@ -1434,6 +1459,7 @@ class LangGraphRunner:
             revision=state.revision,
             read_only=state.read_only,
             cut=cut,
+            tool_states=state.tool_states,
         )
 
     async def _send(
@@ -1510,6 +1536,7 @@ class LangGraphRunner:
             revision=state.revision,
             read_only=tuple(step.read_only),
             cut=state.cut,
+            tool_states=state.tool_states,
         )
 
     async def _decide(self, step: _ToolStep, call: ToolCall) -> ToolCallResolution:

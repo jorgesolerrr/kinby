@@ -23,6 +23,7 @@ from kinby.contracts import (
     LibrarySource,
     McpServer,
     McpServerResult,
+    ToolState,
 )
 from kinby.hub import Hub
 from tests.test_hub import hub_at, hub_client
@@ -35,7 +36,8 @@ GITHUB = McpServer.model_validate(
             "url": "https://api.githubcopilot.com/mcp/",
             "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
         },
-        "include": ["get_issue", "list_issues"],
+        "default_state": "off",
+        "tool_states": {"get_issue": "loaded", "list_issues": "loaded"},
     }
 )
 FETCH = McpServer.model_validate(
@@ -46,7 +48,8 @@ FETCH = McpServer.model_validate(
             "args": ["mcp-server-fetch", "--ignore-robots"],
             "env": {"FETCH_USER_AGENT": "${FETCH_USER_AGENT:-kinby}"},
         },
-        "include": ["fetch"],
+        "default_state": "off",
+        "tool_states": {"fetch": "loaded"},
     }
 )
 
@@ -231,7 +234,8 @@ def test_a_definition_in_the_old_shape_is_refused(tmp_path):
                     "url": "https://api.githubcopilot.com/mcp/",
                     "headers": {"Authorization": "${GITHUB_AUTHORIZATION}"},
                 },
-                "include": ["get_issue"],
+                "default_state": "off",
+                "tool_states": {"get_issue": "loaded"},
             },
         ),
         (
@@ -247,11 +251,20 @@ def test_a_definition_in_the_old_shape_is_refused(tmp_path):
                     "args": ["mcp-server-fetch", "--raw"],
                     "env": {"FETCH_USER_AGENT": "${FETCH_USER_AGENT}"},
                 },
-                "include": ["fetch"],
+                "default_state": "off",
+                "tool_states": {"fetch": "loaded"},
+            },
+        ),
+        (
+            {"entry": {"url": "https://mcp.example.com/"}, "include": ["look", "post"]},
+            {
+                "entry": {"url": "https://mcp.example.com/"},
+                "default_state": "off",
+                "tool_states": {"look": "loaded", "post": "loaded"},
             },
         ),
     ],
-    ids=["url", "uvx"],
+    ids=["url", "uvx", "include"],
 )
 def test_the_hub_converts_a_library_definition_in_the_old_shape(tmp_path, old, converted):
     hub = hub_at(tmp_path / "hub")
@@ -263,6 +276,21 @@ def test_the_hub_converts_a_library_definition_in_the_old_shape(tmp_path, old, c
     kept = read(hub_client(hub), "kept")
     assert isinstance(kept, McpServerResult), kept
     assert kept.server == McpServer.model_validate(converted)
+
+
+def test_a_new_server_that_names_no_states_has_every_tool_off(tmp_path):
+    hub = hub_at(tmp_path / "hub")
+    command = {"name": "fetch", "server": {"entry": {"url": "https://mcp.example.com/"}}}
+
+    asyncio.run(
+        hub.dispatcher.dispatch(
+            LIBRARY_MCP_SERVER_WRITE.name, {**command, "hash": None}, HUB_SCOPES
+        )
+    )
+
+    fetch = read(hub_client(hub), "fetch")
+    assert isinstance(fetch, McpServerResult), fetch
+    assert (fetch.server.default_state, fetch.server.tool_states) == (ToolState.OFF, {})
 
 
 def test_a_name_the_library_already_holds_is_refused_for_a_new_server(tmp_path):
@@ -283,7 +311,7 @@ def test_a_server_is_edited_and_deleted_only_as_it_was_read(tmp_path):
     client = hub_client(hub)
     added = write(client, "fetch", FETCH, None)
     assert isinstance(added, McpServerResult), added
-    narrowed = FETCH.model_copy(update={"include": []})
+    narrowed = FETCH.model_copy(update={"tool_states": {}})
 
     edited = write(client, "fetch", narrowed, added.hash)
     stale_edit = write(client, "fetch", FETCH, added.hash)

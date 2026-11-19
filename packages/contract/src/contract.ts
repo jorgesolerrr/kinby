@@ -106,6 +106,10 @@ export type ToolName = string;
 export type SearchBackend = "brave" | "tavily" | "exa" | "searxng";
 export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
+/**
+ * How one tool reaches an instance's turns (ADR 0129).
+ */
+export type ToolState = "loaded" | "searchable" | "off";
 export type McpServerEntry = McpHttpEntry | McpStdioEntry;
 export type CommandListName = string;
 export type PriceSource = "shipped" | "manifest";
@@ -2183,8 +2187,11 @@ export interface McpServerResult {
  * beside it.
  */
 export interface McpServer {
+  default_state?: ToolState;
   entry: McpServerEntry;
-  include?: string[];
+  tool_states?: {
+    [k: string]: ToolState;
+  };
 }
 /**
  * A remote server, reached at its URL over Streamable HTTP.

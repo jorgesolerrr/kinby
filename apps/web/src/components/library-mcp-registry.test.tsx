@@ -134,12 +134,20 @@ describe("LibraryPage, the MCP Registry", () => {
 
     await user.clear(screen.getByRole("textbox", { name: "Name" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "acme")
-    await user.type(screen.getByRole("textbox", { name: "Tools" }), "list_tickets")
+    await user.type(screen.getByRole("textbox", { name: "Loaded tools" }), "list_tickets")
     await user.click(screen.getByRole("button", { name: "Add" }))
 
     await screen.findByRole("list", { name: "MCP Registry results" })
     expect(writes(caller).map((call) => call.params)).toEqual([
-      { name: "acme", server: { entry: acme.entry, include: ["list_tickets"] }, hash: null },
+      {
+        name: "acme",
+        server: {
+          entry: acme.entry,
+          default_state: "off",
+          tool_states: { list_tickets: "loaded" },
+        },
+        hash: null,
+      },
     ])
   })
 

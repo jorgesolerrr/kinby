@@ -407,6 +407,7 @@ async def fire(
     after_turn: ClosedTurnHook = no_recap,
     *,
     trigger: RoutineTrigger = RoutineTrigger.MANUAL,
+    seconds: float = 5,
 ) -> list[Event]:
     log = EventLog(instance.manifest.state_dir)
     store = ThreadStore(instance.manifest.state_dir)
@@ -422,7 +423,7 @@ async def fire(
     )
     subscription = (await log.subscribe(thread.id)).items
     events: list[Event] = []
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(seconds):
         async for event in subscription:
             events.append(event)
             if is_turn_closing(event.payload):

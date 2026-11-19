@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import string
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -13,6 +15,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    TypeAdapter,
 )
 from pydantic.alias_generators import to_camel
 
@@ -26,6 +29,7 @@ from kinby.contracts import (
     McpServerName,
     McpStdioEntry,
     SkillName,
+    ToolState,
 )
 from kinby.instance.config_changes import file_hash
 from kinby.instance.layout import SKILLS_LOCK_NAME
@@ -90,7 +94,7 @@ class _OldMcpServer(BaseModel):
     env: list[str] = Field(default_factory=list)
     include: list[str] = Field(default_factory=list)
 
-    def converted(self) -> McpServer:
+    def converted(self) -> dict[str, object]:
         transport = self.transport
         entry = (
             McpHttpEntry(
@@ -104,23 +108,36 @@ class _OldMcpServer(BaseModel):
                 env={name: f"${{{name}}}" for name in self.env},
             )
         )
-        return McpServer(entry=entry, include=self.include)
+        return {"entry": entry, "include": self.include}
+
+
+#: The tools a turn was offered, by name, before tool states replaced the list (ADR 0129).
+_INCLUDE = TypeAdapter(list[str])
 
 
 def _converted(stored: object) -> object:
     if isinstance(stored, dict) and "transport" in stored:
-        return _OldMcpServer.model_validate(stored).converted()
+        stored = _OldMcpServer.model_validate(stored).converted()
+    if isinstance(stored, dict) and "include" in stored:
+        kept = {key: value for key, value in stored.items() if key != "include"}
+        include = _INCLUDE.validate_python(stored["include"])
+        return {
+            **kept,
+            "default_state": ToolState.OFF,
+            "tool_states": dict.fromkeys(include, ToolState.LOADED),
+        }
     return stored
 
 
 #: An MCP server's definition as the hub stores it, in the library or a lock, converted when it
-#: is still in the shape before ADR 0127.
+#: is still in the shape before ADR 0127 or holds an include list.
 type StoredMcpServer = Annotated[McpServer, BeforeValidator(_converted)]
 
 
 class LockedMcpServer(BaseModel):
     """One MCP server pick: the library's definition as copied, whether the user trusts its
-    read-only hints, and whether the server asked the hub for a sign-in."""
+    read-only hints, whether the server asked the hub for a sign-in, and the tool states the
+    instance changed from the definition's."""
 
     model_config = ConfigDict(
         alias_generator=to_camel, validate_by_name=True, serialize_by_alias=True, frozen=True
@@ -129,6 +146,33 @@ class LockedMcpServer(BaseModel):
     server: StoredMcpServer
     trust_hints: bool = False
     needs_sign_in: bool = False
+    #: The server's switch. Off, every tool of the server is off, one with its own state too.
+    on: bool = Field(default=True, exclude_if=lambda on: on)
+    default_state: ToolState | None = None
+    tool_states: dict[str, ToolState] = Field(
+        default_factory=dict, exclude_if=lambda states: not states
+    )
+
+    def states(self) -> ToolStates:
+        """The states the server's tools take: the pick's, then the library's."""
+        if not self.on:
+            return ToolStates(default=ToolState.OFF)
+        return ToolStates(
+            default=self.default_state or self.server.default_state,
+            tools=self.server.tool_states | self.tool_states,
+        )
+
+
+@dataclass(frozen=True)
+class ToolStates:
+    """The states of one tool group's tools: its *default*, and the *tools* with a state of their
+    own, by name."""
+
+    default: ToolState
+    tools: Mapping[str, ToolState] = field(default_factory=dict)
+
+    def of(self, tool: str) -> ToolState:
+        return self.tools.get(tool, self.default)
 
 
 class SkillsLock(BaseModel):

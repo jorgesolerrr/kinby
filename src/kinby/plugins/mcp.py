@@ -1,20 +1,22 @@
-"""Connect a turn to the MCP servers its instance picked, and offer their tools (ADR 0111)."""
+"""Connect a turn to the MCP servers its instance picked, and offer their tools in the states the
+turn started with (ADR 0111, ADR 0129)."""
 
 from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dotenv import dotenv_values
 from pydantic import TypeAdapter
 
-from kinby.contracts import McpHttpEntry, McpServerEntry
+from kinby.contracts import McpHttpEntry, McpServerEntry, McpServerName, ToolState
 from kinby.instance import Instance
 from kinby.instance.layout import ENV_NAME, MCP_FAILURES_NAME, SKILLS_LOCK_NAME
-from kinby.instance.skills_lock import read_lock
+from kinby.instance.skills_lock import ToolStates, read_lock
 
 if TYPE_CHECKING:
     from kinby.plugins.tools import Tool
@@ -23,9 +25,26 @@ _FAILURES = TypeAdapter(dict[str, str])
 _VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
+@dataclass(frozen=True)
+class McpTools:
+    """The tools of a turn's MCP servers: those the model is sent, and the turn's search set."""
+
+    loaded: tuple[Tool, ...] = ()
+    searchable: tuple[Tool, ...] = ()
+
+
+def mcp_tool_states(instance: Instance) -> dict[McpServerName, ToolStates]:
+    """The states of the tools of each MCP server the instance picked, by the server's name."""
+    return {name: pick.states() for name, pick in read_lock(instance.path).mcp_servers.items()}
+
+
 @asynccontextmanager
-async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
-    """The included tools of each MCP server the instance picked, connected while the body runs.
+async def mcp_tools(
+    instance: Instance, started: Mapping[McpServerName, ToolStates]
+) -> AsyncIterator[McpTools]:
+    """The loaded and searchable tools of each MCP server the instance picked, connected while the
+    body runs, in the states the turn *started* with. A server the turn started without takes
+    the states the instance holds now.
 
     A server that needs a sign-in or a variable the instance's secrets lack, or that does not
     start or list its tools, is left out, and recorded for the hub to report as an instance notice
@@ -34,7 +53,7 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
     picks = read_lock(instance.path).mcp_servers
     if not picks:
         _record_failures(instance.manifest.state_dir, {})
-        yield ()
+        yield McpTools()
         return
     # The MCP SDK loads only in an instance that picked a server.
     from kinby.plugins.mcp_connection import NotConnected, SignInNeeded, connected_tools
@@ -45,8 +64,9 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
         if value is not None
     }
     source = (instance.path / SKILLS_LOCK_NAME).resolve()
-    tools: list[Tool] = []
+    tools: dict[ToolState, list[Tool]] = {state: [] for state in ToolState}
     failures: dict[str, str] = {}
+    raised: Exception | None = None
     async with AsyncExitStack() as stack:
         for name, pick in sorted(picks.items()):
             if missing := sorted(
@@ -59,8 +79,10 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
                     "secrets lack, so the turn ran without it."
                 )
                 continue
+            states = started.get(name) or pick.states()
             try:
-                tools.extend(await connected_tools(name, pick, secrets, source, stack))
+                for tool, adapted in await connected_tools(name, pick, secrets, source, stack):
+                    tools[states.of(tool)].append(adapted)
             except SignInNeeded:
                 failures[name] = f'MCP server "{name}" needs a sign-in, so the turn ran without it.'
             except NotConnected as failed:
@@ -69,7 +91,13 @@ async def mcp_tools(instance: Instance) -> AsyncIterator[tuple[Tool, ...]]:
                     f"without them: {failed}"
                 )
         _record_failures(instance.manifest.state_dir, failures)
-        yield tuple(tools)
+        try:
+            yield McpTools(tuple(tools[ToolState.LOADED]), tuple(tools[ToolState.SEARCHABLE]))
+        except Exception as exc:
+            # Closing the servers' clients with it would wrap it in their task group's exception.
+            raised = exc
+    if raised is not None:
+        raise raised
 
 
 def needed_variables(entry: McpServerEntry) -> set[str]:
