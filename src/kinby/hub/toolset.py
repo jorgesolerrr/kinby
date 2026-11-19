@@ -1,19 +1,27 @@
 """The tool groups of an instance's toolset, each tool in the state its next turn gives it, read
-from the instance's files (ADR 0129)."""
+from the instance's files, and the user's changes to their states (ADR 0129)."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from kinby.contracts import (
     BuiltInGroup,
     BuiltInToolGroup,
+    ConfigActor,
+    ConfigFile,
+    FileHash,
     GroupTool,
+    InstanceToolStatesSetCommand,
     McpServerGroup,
     ToolState,
     ToolStateSource,
 )
-from kinby.instance import Manifest, ToolStates
-from kinby.instance.skills_lock import read_lock
+from kinby.core.errors import InvalidConfig, StaleWrite
+from kinby.instance import Instance, Manifest, ToolStates
+from kinby.instance.config_changes import files_hash, recorded_changes
+from kinby.instance.layout import MANIFEST_NAME, SKILLS_LOCK_NAME
+from kinby.instance.manifest import built_in_group_states, parse_manifest, with_tool_states
+from kinby.instance.skills_lock import lock_text, read_lock, write_lock
 from kinby.memory import GraphStore, memory_tools
 from kinby.plugins.browser_tools import BROWSER_TOOLS
 from kinby.plugins.defaults import TOOLS as DEFAULT_TOOLS
@@ -26,19 +34,27 @@ from kinby.plugins.listed_tools import (
 )
 from kinby.plugins.tools import Tool
 
+_GROUP_NAMES = {
+    BuiltInToolGroup.DEFAULTS: "default tools",
+    BuiltInToolGroup.MEMORY: "memory tools",
+    BuiltInToolGroup.BROWSER: "browser tools",
+    BuiltInToolGroup.AUTHORED: "authored tools",
+}
+
 
 def built_in_groups(
     instance_path: Path, manifest: Manifest, *, search_key_held: bool
 ) -> list[BuiltInGroup]:
     """Each built-in group: kinby's own tools, and the authored tools the last turn loaded. A turn
     offers web_search only while the instance holds its search backend's key."""
+    kinby = _kinby_tools(instance_path)
     listed_tools = {
-        BuiltInToolGroup.DEFAULTS: _listed(DEFAULT_TOOLS),
-        BuiltInToolGroup.MEMORY: _listed(memory_tools(GraphStore(instance_path))),
-        BuiltInToolGroup.BROWSER: _listed(BROWSER_TOOLS),
+        **{group: _listed(tools) for group, tools in kinby.items()},
         BuiltInToolGroup.AUTHORED: authored_tools_listed(manifest.state_dir),
     }
     unavailable = frozenset() if search_key_held else frozenset({web_search.name})
+    raw = parse_manifest((instance_path / MANIFEST_NAME).read_text(encoding="utf-8"))
+    instance_states = built_in_group_states(raw, _group_of(kinby))
     groups = []
     for group in BuiltInToolGroup:
         states = manifest.tools.states(group)
@@ -50,6 +66,7 @@ def built_in_groups(
                 default_state=states.default,
                 tools=tools,
                 loaded_tokens=_loaded_tokens(tools),
+                instance_states=instance_states[group],
             )
         )
     return groups
@@ -70,9 +87,87 @@ def mcp_server_groups(instance_path: Path, manifest: Manifest) -> list[McpServer
                 default_state=states.default,
                 tools=tools,
                 loaded_tokens=_loaded_tokens(tools),
+                instance_states=pick.instance_states,
             )
         )
     return groups
+
+
+def toolset_hash(instance_path: Path) -> FileHash:
+    """The hash of the files that hold the instance's tool states."""
+    return files_hash(
+        {
+            name: instance_path / name
+            for name in (MANIFEST_NAME, SKILLS_LOCK_NAME)
+            if (instance_path / name).is_file()
+        }
+    )
+
+
+def set_tool_states(instance: Instance, command: InstanceToolStatesSetCommand) -> None:
+    """Set the states of the groups *command* names, each file it changes a config change the
+    user made."""
+    path = instance.path
+    if toolset_hash(path) != command.hash:
+        raise StaleWrite(
+            f"{MANIFEST_NAME} or {SKILLS_LOCK_NAME} changed since the toolset was read. "
+            "Read it again."
+        )
+    group_of = _group_of(_kinby_tools(path))
+    lock = read_lock(path)
+    refusals: dict[str, str] = {}
+    if outside := [
+        f'"{name}" is not one of the {_GROUP_NAMES[group]}.'
+        for group, states in command.built_in_groups.items()
+        for name in states.tool_states
+        if group_of(name) is not group
+    ]:
+        refusals["built_in_groups"] = " ".join(outside)
+    if unpicked := [
+        f'The instance picks no MCP server "{name}".'
+        for name in command.mcp_servers
+        if name not in lock.mcp_servers
+    ]:
+        refusals["mcp_servers"] = " ".join(unpicked)
+    if refusals:
+        raise InvalidConfig(refusals)
+    manifest = path / MANIFEST_NAME
+    text = manifest.read_text(encoding="utf-8")
+    edited = with_tool_states(text, command.built_in_groups, group_of)
+    locked = lock_text(lock)
+    for name, states in command.mcp_servers.items():
+        lock.mcp_servers[name] = lock.mcp_servers[name].with_states(states)
+    relocked = lock_text(lock) != locked
+    changed = [
+        ConfigFile(file)
+        for file, differs in ((MANIFEST_NAME, edited != text), (SKILLS_LOCK_NAME, relocked))
+        if differs
+    ]
+    with recorded_changes(instance, changed, ConfigActor.APP):
+        if edited != text:
+            staging = manifest.with_name(f".{manifest.name}.staging")
+            staging.write_text(edited, encoding="utf-8")
+            staging.replace(manifest)
+        if relocked:
+            write_lock(path, lock)
+
+
+def _kinby_tools(instance_path: Path) -> dict[BuiltInToolGroup, tuple[Tool, ...]]:
+    """The tools of each built-in group kinby defines."""
+    return {
+        BuiltInToolGroup.DEFAULTS: DEFAULT_TOOLS,
+        BuiltInToolGroup.MEMORY: tuple(memory_tools(GraphStore(instance_path))),
+        BuiltInToolGroup.BROWSER: BROWSER_TOOLS,
+    }
+
+
+def _group_of(
+    kinby: Mapping[BuiltInToolGroup, Iterable[Tool]],
+) -> Callable[[str], BuiltInToolGroup]:
+    """The built-in group a tool's own state in the manifest belongs to: one of *kinby*'s, else
+    the authored tools'."""
+    groups = {tool.name: group for group, tools in kinby.items() for tool in tools}
+    return lambda name: groups.get(name, BuiltInToolGroup.AUTHORED)
 
 
 def _listed(tools: Iterable[Tool]) -> tuple[ListedTool, ...]:

@@ -1035,6 +1035,9 @@
         "group": {
           "$ref": "#/$defs/BuiltInToolGroup"
         },
+        "instance_states": {
+          "$ref": "#/$defs/ToolGroupStates"
+        },
         "loaded_tokens": {
           "type": "integer"
         },
@@ -1060,6 +1063,7 @@
         "default_state",
         "tools",
         "loaded_tokens",
+        "instance_states",
         "group"
       ],
       "title": "BuiltInGroup",
@@ -4199,6 +4203,43 @@
       "title": "InstanceSummary",
       "type": "object"
     },
+    "InstanceToolStatesSetCommand": {
+      "additionalProperties": false,
+      "description": "Set the tool states of some of an instance's tool groups. Its next turn takes them.",
+      "properties": {
+        "built_in_groups": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolGroupStates"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/BuiltInToolGroup"
+          },
+          "type": "object"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "instance_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "mcp_servers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolGroupStates"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/McpServerName"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "instance_id",
+        "hash"
+      ],
+      "title": "InstanceToolStatesSetCommand",
+      "type": "object"
+    },
     "InstanceToolsetGetCommand": {
       "additionalProperties": false,
       "properties": {
@@ -4232,6 +4273,9 @@
           },
           "type": "array"
         },
+        "hash": {
+          "type": "string"
+        },
         "mcp_server_groups": {
           "items": {
             "$ref": "#/$defs/McpServerGroup"
@@ -4261,7 +4305,8 @@
         "mcp_servers",
         "packages",
         "authored_tools",
-        "browser"
+        "browser",
+        "hash"
       ],
       "title": "InstanceToolsetResult",
       "type": "object"
@@ -5840,10 +5885,13 @@
     },
     "McpServerChoice": {
       "additionalProperties": false,
-      "description": "An MCP server an instance should hold, and whether the user trusts its read-only hints.",
+      "description": "An MCP server an instance should hold, whether the user trusts its read-only hints, and\nthe tool states the instance set for it.",
       "properties": {
         "name": {
           "$ref": "#/$defs/McpServerName"
+        },
+        "states": {
+          "$ref": "#/$defs/ToolGroupStates"
         },
         "trust_hints": {
           "default": false,
@@ -5903,6 +5951,9 @@
         "default_state": {
           "$ref": "#/$defs/ToolState"
         },
+        "instance_states": {
+          "$ref": "#/$defs/ToolGroupStates"
+        },
         "loaded_tokens": {
           "type": "integer"
         },
@@ -5931,6 +5982,7 @@
         "default_state",
         "tools",
         "loaded_tokens",
+        "instance_states",
         "server"
       ],
       "title": "McpServerGroup",
@@ -5959,6 +6011,9 @@
         },
         "state": {
           "$ref": "#/$defs/PickState"
+        },
+        "states": {
+          "$ref": "#/$defs/ToolGroupStates"
         },
         "trust_hints": {
           "type": "boolean"
@@ -11858,6 +11913,35 @@
       "title": "ToolGated",
       "type": "object"
     },
+    "ToolGroupStates": {
+      "additionalProperties": false,
+      "description": "What an instance set for one tool group (ADR 0129). What it leaves unset takes the\ngroup's own: the library MCP server's, or kinby's for a built-in group.",
+      "properties": {
+        "default_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "on": {
+          "default": true,
+          "type": "boolean"
+        },
+        "tool_states": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolState"
+          },
+          "type": "object"
+        }
+      },
+      "title": "ToolGroupStates",
+      "type": "object"
+    },
     "ToolListCommand": {
       "additionalProperties": false,
       "properties": {},
@@ -15409,6 +15493,22 @@
           ],
           "type": "object"
         },
+        "instance.tool_states.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/InstanceToolStatesSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/InstanceToolsetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "instance.toolset.get": {
           "additionalProperties": false,
           "properties": {
@@ -17436,6 +17536,7 @@
         "instance.picks.get",
         "instance.picks.set",
         "instance.toolset.get",
+        "instance.tool_states.set",
         "hub.secret.list",
         "hub.secret.set",
         "hub.secret.delete",

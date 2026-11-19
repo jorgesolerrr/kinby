@@ -37,6 +37,7 @@ from kinby.contracts import (
     OperationState,
     PickState,
     SecretSetup,
+    ToolGroupStates,
     ToolState,
 )
 from kinby.hub import Hub
@@ -246,7 +247,17 @@ def test_an_update_takes_the_librarys_new_definition_and_keeps_the_picks_states(
         "needsSignIn": False,
         **changes,
     }
-    assert _servers(_picks(hub_client(hub), directory)) == [FETCHED]
+    assert _servers(_picks(hub_client(hub), directory)) == [
+        FETCHED.model_copy(
+            update={
+                "states": ToolGroupStates(
+                    on=False,
+                    default_state=ToolState.SEARCHABLE,
+                    tool_states={"fetch": ToolState.OFF},
+                )
+            }
+        )
+    ]
 
 
 def test_a_variable_a_picked_server_needs_and_the_instance_lacks_is_pending_setup(tmp_path):

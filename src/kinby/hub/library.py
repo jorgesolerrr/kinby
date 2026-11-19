@@ -406,6 +406,7 @@ class Library:
                     if self._library_server(name) not in (None, entry.server)
                     else PickState.UP_TO_DATE,
                     sign_in=sign_in_state(entry),
+                    states=entry.instance_states,
                 )
                 for name, entry in sorted(lock.mcp_servers.items())
             ],
@@ -554,21 +555,23 @@ class Library:
         choices: Sequence[McpServerChoice],
         asked: Mapping[McpServerName, bool],
     ) -> dict[McpServerName, LockedMcpServer]:
-        """The lock's MCP servers once *choices* are made: a held server keeps its copy, and a new
-        one needs a sign-in as *asked* says."""
+        """The lock's MCP servers once *choices* are made, each with the tool states its choice
+        carries: a held server keeps its copy, and a new one needs a sign-in as *asked* says."""
         servers: dict[McpServerName, LockedMcpServer] = {}
         missing: list[str] = []
         for choice in choices:
             if choice.name in held:
-                servers[choice.name] = held[choice.name].model_copy(
-                    update={"trust_hints": choice.trust_hints}
+                servers[choice.name] = (
+                    held[choice.name]
+                    .model_copy(update={"trust_hints": choice.trust_hints})
+                    .with_states(choice.states)
                 )
             elif (server := self._library_server(choice.name)) is not None:
                 servers[choice.name] = LockedMcpServer(
                     server=server,
                     trust_hints=choice.trust_hints,
                     needs_sign_in=asked.get(choice.name, False),
-                )
+                ).with_states(choice.states)
             else:
                 missing.append(f'The library has no MCP server "{choice.name}".')
         if missing:

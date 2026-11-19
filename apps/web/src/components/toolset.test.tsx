@@ -29,6 +29,7 @@ const toolset: InstanceToolsetResult = {
           tokens: 1234,
         },
       ],
+      instance_states: { on: true, default_state: null, tool_states: { bash: "off" } },
     },
     {
       group: "memory",
@@ -44,12 +45,54 @@ const toolset: InstanceToolsetResult = {
           tokens: 90,
         },
       ],
+      instance_states: { on: true, default_state: "searchable", tool_states: {} },
     },
-    { group: "browser", on: false, default_state: "loaded", loaded_tokens: 0, tools: [] },
-    { group: "authored", on: true, default_state: "loaded", loaded_tokens: 0, tools: null },
+    {
+      group: "browser",
+      on: false,
+      default_state: "loaded",
+      loaded_tokens: 0,
+      tools: [],
+      instance_states: { on: false, default_state: null, tool_states: {} },
+    },
+    {
+      group: "authored",
+      on: true,
+      default_state: "loaded",
+      loaded_tokens: 0,
+      tools: null,
+      instance_states: { on: true, default_state: null, tool_states: {} },
+    },
   ],
   mcp_server_groups: [
-    { server: "fetch", on: true, default_state: "searchable", loaded_tokens: 0, tools: null },
+    {
+      server: "fetch",
+      on: true,
+      default_state: "searchable",
+      loaded_tokens: 0,
+      tools: null,
+      instance_states: { on: true, default_state: null, tool_states: {} },
+    },
+    {
+      server: "linear",
+      on: true,
+      default_state: "off",
+      loaded_tokens: 50,
+      tools: [
+        {
+          name: "list_issues",
+          description: "List issues.",
+          state: "loaded",
+          source: "instance",
+          tokens: 50,
+        },
+      ],
+      instance_states: {
+        on: true,
+        default_state: "off",
+        tool_states: { list_issues: "loaded" },
+      },
+    },
   ],
   search: { backend: "brave", variable: "BRAVE_API_KEY", is_set: false },
   mcp_servers: [{ name: "fetch", trust_hints: true, state: "up-to-date" }],
@@ -59,6 +102,7 @@ const toolset: InstanceToolsetResult = {
     { name: "post", read_only: false },
   ],
   browser: true,
+  hash: "read-hash",
 }
 
 /** Ada's toolset on a hub that reads `toolset`, and, while she runs, her own contract. */
@@ -69,6 +113,7 @@ function renderToolset({
 }: { running?: boolean; failed?: string[]; signIn?: LoginState | null } = {}) {
   let marked = new Set(["lookup"])
   const hub = stubCaller({
+    "instance.tool_states.set": () => toolset,
     "instance.toolset.get": () => ({
       ...toolset,
       mcp_servers: toolset.mcp_servers.map((server) => ({ ...server, sign_in: signIn })),
@@ -95,6 +140,10 @@ function renderToolset({
   )
   return { hub, instance }
 }
+
+/** What each tool states set sent the hub, in order. */
+const states = (hub: ReturnType<typeof renderToolset>["hub"]) =>
+  hub.calls.filter((call) => call.method === "instance.tool_states.set").map((call) => call.params)
 
 const item = async (list: string, name: string) =>
   within(within(await screen.findByRole("list", { name: list })).getByRole("listitem", { name }))
@@ -138,6 +187,125 @@ describe("the instance's toolset", () => {
         "Its tools are listed after the instance's next turn.",
       ),
     ).toBeDefined()
+  })
+
+  it("switches a group off through the hub, and reads the toolset again", async () => {
+    const { hub } = renderToolset()
+    const user = userEvent.setup()
+
+    await user.click(
+      (await item("Tool groups", "Memory tools")).getByRole("switch", { name: "On" }),
+    )
+    await user.click((await item("Tool groups", "linear")).getByRole("switch", { name: "On" }))
+
+    expect(states(hub)).toEqual([
+      {
+        instance_id: "ada",
+        built_in_groups: {
+          memory: { on: false, default_state: "searchable", tool_states: {} },
+        },
+        hash: "read-hash",
+      },
+      {
+        instance_id: "ada",
+        mcp_servers: {
+          linear: { on: false, default_state: "off", tool_states: { list_issues: "loaded" } },
+        },
+        hash: "read-hash",
+      },
+    ])
+    await waitFor(() =>
+      expect(hub.calls.filter((call) => call.method === "instance.toolset.get")).toHaveLength(3),
+    )
+  })
+
+  it("gives a tool its own state, and the group a default state", async () => {
+    const { hub } = renderToolset()
+    const user = userEvent.setup()
+
+    const read = await item("Default tools", "read")
+    await user.click(read.getByRole("button", { name: "Searchable" }))
+    const memory = await item("Tool groups", "Memory tools")
+    await user.click(
+      within(memory.getByRole("group", { name: "Default state" })).getByRole("button", {
+        name: "Loaded",
+      }),
+    )
+
+    expect(states(hub)).toEqual([
+      {
+        instance_id: "ada",
+        built_in_groups: {
+          defaults: {
+            on: true,
+            default_state: null,
+            tool_states: { bash: "off", read: "searchable" },
+          },
+        },
+        hash: "read-hash",
+      },
+      {
+        instance_id: "ada",
+        built_in_groups: { memory: { on: true, default_state: "loaded", tool_states: {} } },
+        hash: "read-hash",
+      },
+    ])
+  })
+
+  it("marks a state the instance changed, and resets it to the group's", async () => {
+    const { hub } = renderToolset()
+    const user = userEvent.setup()
+
+    const bash = await item("Default tools", "bash")
+    expect(bash.getByText("Changed")).toBeDefined()
+    expect((await item("Default tools", "read")).queryByText("Changed")).toBeNull()
+    await user.click(bash.getByRole("button", { name: "Reset" }))
+
+    expect(states(hub)).toEqual([
+      {
+        instance_id: "ada",
+        built_in_groups: { defaults: { on: true, default_state: null, tool_states: {} } },
+        hash: "read-hash",
+      },
+    ])
+  })
+
+  it("resets a built-in group's default state to kinby's, and a server's to the library's", async () => {
+    const { hub } = renderToolset()
+    const user = userEvent.setup()
+
+    const memory = await item("Tool groups", "Memory tools")
+    await user.click(memory.getByRole("button", { name: "Reset to kinby's default" }))
+    const linear = await item("Tool groups", "linear")
+    await user.click(linear.getByRole("button", { name: "Reset to the library's default" }))
+
+    expect(states(hub)).toEqual([
+      {
+        instance_id: "ada",
+        built_in_groups: { memory: { on: true, default_state: null, tool_states: {} } },
+        hash: "read-hash",
+      },
+      {
+        instance_id: "ada",
+        mcp_servers: {
+          linear: { on: true, default_state: null, tool_states: { list_issues: "loaded" } },
+        },
+        hash: "read-hash",
+      },
+    ])
+    expect(
+      (await item("Tool groups", "Default tools")).queryByRole("button", {
+        name: "Reset to kinby's default",
+      }),
+    ).toBeNull()
+  })
+
+  it("keeps a switched-off group's tools fixed", async () => {
+    renderToolset()
+
+    const browser = await item("Tool groups", "Browser tools")
+    expect(browser.queryByRole("group", { name: "Default state" })).toBeNull()
+    expect(browser.getByRole("switch", { name: "On" }).ariaChecked).toBe("false")
   })
 
   it("shows the search key, the packages and the browser", async () => {

@@ -110,6 +110,7 @@ from kinby.contracts.models import (
     InstanceStopCommand,
     InstanceToolsetGetCommand,
     InstanceToolsetResult,
+    InstanceToolStatesSetCommand,
     InstanceUpdateCommand,
     IntakeRunCommand,
     IntakeRunResult,
@@ -756,6 +757,12 @@ INSTANCE_PICKS_SET = Method(
 INSTANCE_TOOLSET_GET = Method(
     "instance.toolset.get", Scope.HUB_READ, InstanceToolsetGetCommand, InstanceToolsetResult
 )
+INSTANCE_TOOL_STATES_SET = Method(
+    "instance.tool_states.set",
+    Scope.HUB_ADMIN,
+    InstanceToolStatesSetCommand,
+    InstanceToolsetResult,
+)
 HUB_SECRET_LIST = Method(
     "hub.secret.list", Scope.HUB_READ, HubSecretListCommand, HubSecretListResult
 )
@@ -995,6 +1002,7 @@ METHODS = (
     INSTANCE_PICKS_GET,
     INSTANCE_PICKS_SET,
     INSTANCE_TOOLSET_GET,
+    INSTANCE_TOOL_STATES_SET,
     HUB_SECRET_LIST,
     HUB_SECRET_SET,
     HUB_SECRET_DELETE,

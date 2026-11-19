@@ -6,6 +6,7 @@ import type {
   SkillPick,
   SkillResult,
   SkillSummary,
+  ToolGroupStates,
 } from "@kinby/contract"
 import { type Answers, fakeClock, stubCaller } from "@kinby/contract/testing"
 import { render, screen, waitFor, within } from "@testing-library/react"
@@ -333,7 +334,17 @@ describe("SkillsSection", () => {
       { kind: "mcp_server", name: "github", description: null, source: "written" },
     ]
     const pickedTdd: SkillPick = { name: "tdd", source: "shipped", state: "up-to-date" }
-    const pickedFetch: McpServerPick = { name: "fetch", trust_hints: false, state: "up-to-date" }
+    const fetchStates: ToolGroupStates = {
+      on: false,
+      default_state: "searchable",
+      tool_states: { fetch: "loaded" },
+    }
+    const pickedFetch: McpServerPick = {
+      name: "fetch",
+      trust_hints: false,
+      state: "up-to-date",
+      states: fetchStates,
+    }
 
     function openWithPicks(answers: Answers = {}) {
       let picks = [pickedTdd]
@@ -349,10 +360,11 @@ describe("SkillsSection", () => {
         "library.list": () => ({ entries: library }),
         "instance.picks.set": ({ skills, mcp_servers }) => {
           picks = skills.map((name) => ({ name, source: "shipped", state: "up-to-date" }))
-          servers = mcp_servers.map(({ name, trust_hints = false }) => ({
+          servers = mcp_servers.map(({ name, trust_hints = false, states }) => ({
             name,
             trust_hints,
             state: "up-to-date",
+            states,
           }))
           hash = `lock-${skills.length + 2}`
           return { picks, mcp_servers: servers, hash }
@@ -435,7 +447,7 @@ describe("SkillsSection", () => {
         {
           instance_id: "instance-1",
           skills: ["tdd", "unslop"],
-          mcp_servers: [{ name: "fetch", trust_hints: false }],
+          mcp_servers: [{ name: "fetch", trust_hints: false, states: fetchStates }],
           hash: "lock-1",
         },
       ])
@@ -453,7 +465,7 @@ describe("SkillsSection", () => {
         {
           instance_id: "instance-1",
           skills: [],
-          mcp_servers: [{ name: "fetch", trust_hints: false }],
+          mcp_servers: [{ name: "fetch", trust_hints: false, states: fetchStates }],
           hash: "lock-1",
         },
       ])
@@ -488,7 +500,7 @@ describe("SkillsSection", () => {
       expect(called(caller, "instance.picks.set").at(-1)).toEqual({
         instance_id: "instance-1",
         skills: ["unslop"],
-        mcp_servers: [{ name: "fetch", trust_hints: false }],
+        mcp_servers: [{ name: "fetch", trust_hints: false, states: fetchStates }],
         hash: "lock-4",
       })
     })
@@ -524,7 +536,7 @@ describe("SkillsSection", () => {
       expect(screen.queryByRole("alert")).toBeNull()
     })
 
-    it("shows the picked MCP servers and trusts one's read-only hints", async () => {
+    it("shows the picked MCP servers and trusts one's read-only hints, keeping its tool states", async () => {
       const { caller, user } = openWithPicks()
 
       const servers = await screen.findByRole("list", { name: "MCP server picks" })
@@ -536,7 +548,7 @@ describe("SkillsSection", () => {
         {
           instance_id: "instance-1",
           skills: ["tdd"],
-          mcp_servers: [{ name: "fetch", trust_hints: true }],
+          mcp_servers: [{ name: "fetch", trust_hints: true, states: fetchStates }],
           hash: "lock-1",
         },
       ])
@@ -553,7 +565,10 @@ describe("SkillsSection", () => {
 
       expect(called(caller, "instance.picks.set")).toEqual([
         expect.objectContaining({
-          mcp_servers: [{ name: "fetch", trust_hints: false }, { name: "github" }],
+          mcp_servers: [
+            { name: "fetch", trust_hints: false, states: fetchStates },
+            { name: "github" },
+          ],
         }),
         expect.objectContaining({ mcp_servers: [{ name: "github", trust_hints: false }] }),
       ])

@@ -77,6 +77,7 @@ const toolset: InstanceToolsetResult = {
       default_state: "loaded",
       loaded_tokens: 0,
       tools: [{ name: "bash", description: "Run.", state: "off", source: "instance", tokens: 9 }],
+      instance_states: { on: true, default_state: null, tool_states: { bash: "off" } },
     },
   ],
   mcp_server_groups: [],
@@ -85,6 +86,7 @@ const toolset: InstanceToolsetResult = {
   packages: [],
   authored_tools: [],
   browser: false,
+  hash: "read-hash",
 }
 
 function status(fields: Partial<InstanceStatusResult> = {}): InstanceStatusResult {
