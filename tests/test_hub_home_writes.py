@@ -18,6 +18,7 @@ from kinby.contracts import (
     ApprovalRequested,
     CallFrame,
     Channel,
+    ConfigActor,
     ControlToken,
     ErrorCode,
     Event,
@@ -52,8 +53,9 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn
 from kinby.hub import Hub
 from kinby.hub.approvals import HomeApprovals
-from kinby.instance import Serve
-from kinby.instance.config_changes import file_hash
+from kinby.hub.toolset import toolset_hash
+from kinby.instance import Serve, inspect_instance
+from kinby.instance.config_changes import ConfigChangeLog, file_hash
 from kinby.instance.permissions import GatePolicy
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, hub_tools
 from tests.test_factory_runs import factory_hub, started
@@ -804,6 +806,76 @@ def test_kinby_picks_an_mcp_server_for_another_instance_only_once_the_user_appro
     asyncio.run(scenario())
 
 
+def memory_off(alice: UUID, instances: Path) -> dict[str, object]:
+    """The tool states that switch alice's memory tools off, over her toolset as it is now."""
+    return {
+        "instance_id": str(alice),
+        "built_in_groups": {"memory": {"on": False}},
+        "hash": toolset_hash(instances / str(alice)),
+    }
+
+
+def memory_on(answer: dict[str, object]) -> object:
+    assert isinstance(answer["result"], dict), answer
+    [memory] = [
+        group for group in answer["result"]["built_in_groups"] if group["group"] == "memory"
+    ]
+    return memory["on"]
+
+
+def test_kinby_sets_another_instances_tool_states_only_once_the_user_approves_in_full_access(
+    tmp_path, monkeypatch
+):
+    instances = tmp_path / "hub" / "instances"
+
+    def script(alice: UUID) -> list[AIMessageChunk]:
+        return [
+            writing("states-1", "instance_tool_states_set", memory_off(alice, instances)),
+            AIMessageChunk(content="Alice's memory tools are off."),
+        ]
+
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, script) as kinby:
+            (tmp_path / "instance" / "permissions.toml").write_text(
+                'mode = "full-access"\n', encoding="utf-8"
+            )
+            payloads = await relayed_turn(kinby)
+            [toolset] = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                ("instance.toolset.get", {"instance_id": str(kinby.alice)}),
+            )
+            alice = inspect_instance(instances / str(kinby.alice))
+
+        tool_results(payloads)
+        assert operations(payloads) == ["instance_tool_states_set"]
+        assert memory_on(toolset) is False
+        [change] = ConfigChangeLog(alice.manifest.state_dir).history(None, 10)
+        assert (change.file, change.actor) == ("kinby.toml", ConfigActor.APP)
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_refuses_tool_states_without_an_approval(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with kinby_hub(tmp_path, monkeypatch, lambda _: []) as kinby:
+            set_, toolset = await answers(
+                kinby.route(kinby.home),
+                kinby.home_token,
+                written(
+                    uuid4(),
+                    "instance_tool_states_set",
+                    memory_off(kinby.alice, tmp_path / "hub" / "instances"),
+                ),
+                ("instance.toolset.get", {"instance_id": str(kinby.alice)}),
+            )
+
+        assert error_code(set_) == ErrorCode.PERMISSION_DENIED.value
+        assert memory_on(toolset) is True
+
+    asyncio.run(scenario())
+
+
 def test_kinby_previews_a_repository_and_adds_its_skill_once_the_user_approves(
     tmp_path, monkeypatch
 ):
@@ -1084,9 +1156,23 @@ def test_read_only_denies_a_hub_write(tmp_path, monkeypatch):
             {"factory": "reviews", "workbench_id": str(uuid4()), "secrets": {"GH_TOKEN": "sk-bob"}},
             ["secrets: "],
         ),
+        (
+            "instance_tool_states_set",
+            {"built_in_groups": {"memory": {"default_state": "hidden"}}},
+            ["instance_id: ", "built_in_groups.memory.default_state: ", "hash: "],
+        ),
         ("instance_destroy", {}, ['"instance_destroy"']),
     ],
-    ids=["lifecycle", "relayed", "move", "secret", "saved-secret", "line-secret", "unknown"],
+    ids=[
+        "lifecycle",
+        "relayed",
+        "move",
+        "secret",
+        "saved-secret",
+        "line-secret",
+        "tool-states",
+        "unknown",
+    ],
 )
 def test_an_invalid_hub_write_names_each_wrong_field_without_asking(
     tmp_path, monkeypatch, operation, arguments, named

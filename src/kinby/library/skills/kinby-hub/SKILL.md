@@ -59,14 +59,14 @@ Every write is one `hub_write` call: `operation` is one of the names below, and 
 
 - Instances: `instance_create`, `instance_lifecycle` (start, stop, recreate).
 - Image: `image_prepare` prepares the image an instance runs on, when `image.describe` says it is not prepared. It returns a lifecycle operation to follow with `kinby hub wait`.
-- Another instance's setup: `instance_picks_set` (its skills and MCP servers, each server with `trust_hints`, which the user decides), `instance_prompt_set`, `instance_routine_write`, `instance_routine_set_enabled`, `instance_routine_run`, `instance_routine_delete`.
+- Another instance's setup: `instance_picks_set` (its skills and MCP servers, each server with `trust_hints`, which the user decides), `instance_tool_states_set` (each tool group's switch, default state and tools' own states, such as moving a server's tools to `searchable`; its next turn takes them), `instance_prompt_set`, `instance_routine_write`, `instance_routine_set_enabled`, `instance_routine_run`, `instance_routine_delete`.
 - Work in another instance: `instance_ask` starts a turn there on a new thread. Use it for work that needs that instance's own judgment or memory, and give the user the link it returns as a Markdown link, `[a short label](<link>)`, never as code, so the web app opens the thread on a click.
 - Library: `library_skill_write` writes a skill's whole `SKILL.md`, whose frontmatter `name` is the skill's name. `library_git_add` takes the address and commit `library.git.preview` returned. `library_move` takes the hash, commit and diff `library.skill.check` returned, so the approval shows the user the diff. `library_mcp_server_write` writes an MCP server's definition: its `entry`, the `mcpServers` entry other MCP clients use, its `default_state`, the state of each of its tools that has none of its own, and its `tool_states`, each tool's own state by name. A state is `loaded`, sent to the model on every call, `searchable` or `off`. An entry the user sends you for another client goes in `entry` as it is, and `${VAR}` in its values stays as written.
 - Factories: `factory_write`.
 - Lines: `line_setup`, as Setting a line up below runs it.
 - Channels: `channel_mute` and `channel_unmute` take a channel's `channel_id` from `channel.list` and an `instance_id`.
 
-A write that takes a `hash` takes the one its read returned: `instance.picks.get` for picks, `prompt.get` for a prompt, `routine.read` for a routine, `library.skill.read` for a skill, `library.mcp_server.read` for an MCP server, `factory.get` for a factory. A stale hash is refused. Read again, redo the change on what you read, and write again.
+A write that takes a `hash` takes the one its read returned: `instance.picks.get` for picks, `instance.toolset.get` for tool states, `prompt.get` for a prompt, `routine.read` for a routine, `library.skill.read` for a skill, `library.mcp_server.read` for an MCP server, `factory.get` for a factory. A stale hash is refused. Read again, redo the change on what you read, and write again.
 
 ## Setting a line up
 
