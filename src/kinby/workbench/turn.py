@@ -65,7 +65,7 @@ from kinby.plugins.skills import Skill
 _TOOLS = Tools(
     groups={
         BuiltInToolGroup.DEFAULTS: ToolStates(
-            ToolState.LOADED, dict.fromkeys(("web_search", "web_fetch"), ToolState.OFF)
+            ToolState.LOADED, dict.fromkeys(("web_search", "web_fetch", "run_code"), ToolState.OFF)
         )
     }
 )

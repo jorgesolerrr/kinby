@@ -20,6 +20,9 @@ from kinby.plugins.tools import Tool, tool
 CALL_TOOL = "call_tool"
 #: The names of tool search's own tools, which a turn with tool search holds no other tool by.
 TOOL_SEARCH_NAMES = frozenset({"search_tools", "describe_tool", CALL_TOOL})
+#: The tools a script never calls: code mode itself, the takeover, which waits on the user, and
+#: tool search's own.
+_UNSCRIPTED = frozenset({"run_code", "browser_takeover"}) | TOOL_SEARCH_NAMES
 _WORD = re.compile(r"[a-z0-9]+")
 #: A character a Python name cannot hold: any but a letter, a digit or `_`, or a leading digit.
 _NOT_IN_A_NAME = re.compile(r"^\d|\W")
@@ -118,6 +121,24 @@ def wrong_arguments(target: Tool, arguments: Mapping[str, JsonValue]) -> str | N
 def python_name(name: str) -> str:
     """The name a script calls the tool *name* by."""
     return _NOT_IN_A_NAME.sub("_", name)
+
+
+def script_tools(reachable: ToolSnapshot) -> dict[str, Tool]:
+    """The tools of *reachable* a script calls, by Python name: all but those it never calls,
+    and those whose Python name another tool takes too."""
+    taken = Counter(python_name(each.name) for each in reachable.tools)
+    return {
+        python_name(each.name): each
+        for each in reachable.tools
+        if each.name not in _UNSCRIPTED and taken[python_name(each.name)] == 1
+    }
+
+
+def argument_names(described: Tool) -> dict[str, str]:
+    """Each argument of *described*, by the Python name a script passes it by."""
+    properties = _input_schema(described).get("properties")
+    fields = properties if isinstance(properties, dict) else {}
+    return {python_name(field): field for field in fields}
 
 
 def _unknown(name: str) -> str:

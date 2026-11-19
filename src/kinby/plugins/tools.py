@@ -36,6 +36,22 @@ ViewReporter = Callable[[ViewChanged], Awaitable[object]]
 Preview = Callable[[Mapping[str, JsonValue], Instance], str | None]
 #: What is wrong with a call's arguments, or None when the tool takes them.
 ArgumentCheck = Callable[[Mapping[str, JsonValue]], str | None]
+#: Makes a script's call to a tool as the turn makes the model's, and returns the tool's output.
+#: Raises ScriptCallFailed when the call does not run or the tool fails.
+ScriptCall = Callable[["Tool", Mapping[str, JsonValue]], Awaitable[str]]
+
+
+class ScriptCallFailed(Exception):
+    """A script's tool call that the gate refused or whose tool failed. The script reads why."""
+
+
+@dataclass(frozen=True)
+class ToolBroker:
+    """The tools a turn's scripts call, by the Python name a script calls each by, and what makes
+    each call (ADR 0129)."""
+
+    tools: Mapping[str, Tool]
+    call: ScriptCall
 
 
 @dataclass(frozen=True)
@@ -61,6 +77,8 @@ class ToolContext:
     view_reporter: ViewReporter | None = field(default=None, repr=False)
     #: Where the browser tools open the turn's browser. None outside a turn.
     browser: BrowserService | None = field(default=None, repr=False)
+    #: How the scripts run_code runs call the turn's tools. None outside a turn.
+    broker: ToolBroker | None = field(default=None, repr=False)
 
     @property
     def workspace(self) -> Path:

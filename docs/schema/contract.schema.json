@@ -1112,7 +1112,8 @@
     "CallVia": {
       "description": "What a tool call went through to reach its tool, when the model did not call the tool\nitself (ADR 0129).",
       "enum": [
-        "tool_search"
+        "tool_search",
+        "script"
       ],
       "title": "CallVia",
       "type": "string"

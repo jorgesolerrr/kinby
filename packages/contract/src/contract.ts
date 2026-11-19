@@ -240,7 +240,7 @@ export type ErrorCode =
  * What a tool call went through to reach its tool, when the model did not call the tool
  * itself (ADR 0129).
  */
-export type CallVia = "tool_search";
+export type CallVia = "tool_search" | "script";
 export type GateOutcome = "allow" | "deny";
 export type GateDecider = "policy" | "user";
 export type ViewChange = "created" | "changed" | "deleted";
