@@ -8,7 +8,7 @@ import sys
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import ToolAnnotations
 
-server = MCPServer("echo")
+server = MCPServer("echo", description="Repeats and posts lines of text.")
 
 
 @server.tool(annotations=ToolAnnotations(read_only_hint=True))

@@ -40,6 +40,7 @@ from kinby.contracts import (
     ApprovalDecision,
     ApprovalRequested,
     BuiltInToolGroup,
+    CallVia,
     CompletionOutcome,
     DeliveryArrival,
     Event,
@@ -105,6 +106,7 @@ from kinby.core.prompt import (
     render_skill_references,
     render_system_prompt,
     render_wake,
+    with_searchable_groups,
 )
 from kinby.core.saved_outputs import cut_to_cap, turn_outputs
 from kinby.core.sent_history import (
@@ -182,6 +184,14 @@ from kinby.plugins.routines import (
     resolve_code_step,
 )
 from kinby.plugins.skills import Skill, load_skills, referenced_skills, skill_tool
+from kinby.plugins.tool_search import (
+    CALL_TOOL,
+    TOOL_SEARCH_NAMES,
+    SearchableGroup,
+    called,
+    tool_search,
+    wrong_arguments,
+)
 from kinby.plugins.tools import RecallReporter, RunReporter, Tool, ToolContext
 from kinby.plugins.views import view_write
 
@@ -270,6 +280,9 @@ class ModelContext:
     gate_policy: GatePolicy
     permission_mode: PermissionMode
     tools: ToolSnapshot
+    #: The tools a call through tool search reaches: the loaded ones but tool search's own, and
+    #: the searchable ones.
+    reachable: ToolSnapshot
     tool_context: ToolContext
     user_message: HumanMessage
     budgets: Budgets
@@ -277,6 +290,12 @@ class ModelContext:
     compaction: ThreadCompacted | None
     #: The model's window in tokens, when it is known.
     window: int | None
+
+    def tool(self, call: ToolCall) -> Tool | None:
+        """The tool *call* calls: one the model was sent, or through tool search any reachable
+        one."""
+        tools = self.reachable if call.via is CallVia.TOOL_SEARCH else self.tools
+        return tools.get(call.name)
 
 
 @dataclass(frozen=True)
@@ -313,7 +332,19 @@ class _ToolStep:
 
     def call(self, call_id: str, name: str, arguments: dict[str, JsonValue]) -> ToolCall:
         """A call to the tool *name*, which writes when that tool does or when the turn has no
-        tool by that name."""
+        tool by that name. A call to call_tool is a call to the tool it names, when the turn can
+        reach it."""
+        if name == CALL_TOOL and not isinstance(
+            found := called(arguments, self.context.reachable), str
+        ):
+            tool, passed = found
+            return ToolCall(
+                call_id=call_id,
+                name=tool.name,
+                arguments=passed,
+                write=tool.write,
+                via=CallVia.TOOL_SEARCH,
+            )
         tool = self.context.tools.get(name)
         return ToolCall(
             call_id=call_id,
@@ -323,11 +354,15 @@ class _ToolStep:
         )
 
     def gate(self, call: ToolCall) -> GateAnswer:
-        """The gate's answer to *call*, without raising an approval when it asks."""
-        tool = self.context.tools.get(call.name)
-        refusal = (
-            tool.check(call.arguments) if tool is not None and tool.check is not None else None
-        )
+        """The gate's answer to *call*, without raising an approval when it asks. A call
+        through tool search is refused first when its tool's schema refuses its arguments, as
+        the model was never sent that schema."""
+        tool = self.context.tool(call)
+        refusal = None
+        if tool is not None and call.via is CallVia.TOOL_SEARCH:
+            refusal = wrong_arguments(tool, call.arguments)
+        if refusal is None and tool is not None and tool.check is not None:
+            refusal = tool.check(call.arguments)
         if refusal is not None:
             return GateAnswer(GateDecision(GateAction.DENY, INVALID_ARGUMENTS), refusal)
         return GateAnswer(
@@ -375,8 +410,31 @@ class _BudgetProgress:
 
 
 @dataclass(frozen=True)
+class _TurnTools:
+    """The tools a turn offers: those the model is sent, and the searchable ones by group."""
+
+    loaded: ToolSnapshot
+    searchable: tuple[SearchableGroup, ...]
+
+    @property
+    def search_set(self) -> ToolSnapshot:
+        return ToolSnapshot(tuple(tool for group in self.searchable for tool in group.tools))
+
+    def kept(self, keep: Callable[[Tool], bool]) -> _TurnTools:
+        """The tools *keep* keeps, loaded or searchable."""
+        return _TurnTools(
+            ToolSnapshot(tuple(filter(keep, self.loaded.tools))),
+            tuple(
+                replace(group, tools=found)
+                for group in self.searchable
+                if (found := tuple(filter(keep, group.tools)))
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class _PreparedTurn:
-    tools: ToolSnapshot
+    tools: _TurnTools
     progress: _BudgetProgress
     message: str
     payload: str | None
@@ -781,21 +839,20 @@ class LangGraphRunner:
         )
         discovered_tools = ToolSnapshot((*discovered_tools.tools, *picked.loaded))
         tools, core_tool_warnings = discovered_tools.with_core(*self._core_tools(skills))
-        tools, searchable = by_state(tools, groups)
+        loaded, searchable = by_state(tools, groups)
         for warning in (*tool_warnings, *core_tool_warnings, *skill_warnings):
             await emit(warning)
         prepared = await self._prepare_turn(
             turn,
             graph_input,
-            tools,
-            (*picked.searchable, *searchable),
+            _TurnTools(loaded, (*picked.searchable, *searchable)),
             progress,
             emit,
             context.delivery_body,
         )
         if isinstance(prepared, TurnOutcome):
             return prepared
-        tools = prepared.tools
+        tools, reachable = await _with_tool_search(prepared.tools, emit)
         progress = prepared.progress
         budgets = progress.budgets
         window = {**SHIPPED_WINDOWS, **self._manifest().windows}.get(turn.model)
@@ -836,10 +893,15 @@ class LangGraphRunner:
                         context=ModelContext(
                             emit=emit,
                             model=bound_model,
-                            system_message=SystemMessage(content=turn.system_prompt),
+                            system_message=SystemMessage(
+                                content=with_searchable_groups(
+                                    turn.system_prompt, prepared.tools.searchable
+                                )
+                            ),
                             gate_policy=self._gate_policy,
                             permission_mode=turn.permission_mode,
                             tools=tools,
+                            reachable=reachable,
                             tool_context=ToolContext(
                                 instance=self._instance,
                                 thread_id=turn.thread_id,
@@ -934,19 +996,18 @@ class LangGraphRunner:
         self,
         turn: PreparedTurnRequest,
         graph_input: ModelState | Command,
-        tools: ToolSnapshot,
-        search_set: tuple[Tool, ...],
+        tools: _TurnTools,
         progress: _BudgetProgress,
         emit: Emit,
         delivery_body: str | None,
     ) -> _PreparedTurn | TurnOutcome:
         """The turn's *tools*, message and payload once its routine's code step, if any, ran. A
-        code step may name a tool of the turn's *search_set*."""
+        code step may name a loaded or a searchable tool, and is offered as neither."""
         budgets = progress.budgets
         message = turn.message
         payload = None
         if not isinstance(turn.origin, UserOrigin):
-            tools = ToolSnapshot(tuple(tool for tool in tools.tools if not tool.hub))
+            tools = tools.kept(lambda tool: not tool.hub)
         if isinstance(turn.origin, RoutineOrigin):
             routines, warnings = load_routines(self._instance, policy=self._gate_policy)
             for warning in warnings:
@@ -1002,22 +1063,21 @@ class LangGraphRunner:
                     GraphStore(self._instance.path), self._event_log, today=self._today
                 )
                 # The review only reports, so it is offered nothing that writes (ADR 0101).
-                tools = ToolSnapshot(tuple(tool for tool in tools.tools if not tool.write))
+                tools = tools.kept(lambda tool: not tool.write)
             else:
                 try:
                     code_step = resolve_code_step(
-                        declared, ToolSnapshot((*tools.tools, *search_set))
+                        declared, ToolSnapshot((*tools.loaded.tools, *tools.search_set.tools))
                     )
                 except ValueError as exc:
                     raise CodeStepNotFound(
                         f'Code step tool "{declared.name}" is not available in this turn.'
                     ) from exc
             if code_step is not None:
-                tools = ToolSnapshot(
-                    tuple(tool for tool in tools.tools if tool.name != code_step.name)
-                )
+                step_name = code_step.name
+                tools = tools.kept(lambda tool: tool.name != step_name)
             if consolidate is not None:
-                tools = ToolSnapshot((*tools.tools, consolidate))
+                tools = replace(tools, loaded=ToolSnapshot((*tools.loaded.tools, consolidate)))
             if code_step is not None and isinstance(graph_input, ModelState):
                 code_started = asyncio.get_running_loop().time()
                 output = await self._run_code_step(
@@ -1577,7 +1637,7 @@ class LangGraphRunner:
         """Decide a call the model made directly, raising the approval or the takeover the gate's
         answer asks for. A resume runs this again, so its ids come out the same both times."""
         await self._emit_tool_call_once(step.turn, call, step.context.emit)
-        tool = step.context.tools.get(call.name)
+        tool = step.context.tool(call)
         answer = step.gate(call)
         decision = answer.decision
         approval_id = None
@@ -1697,7 +1757,7 @@ class LangGraphRunner:
     async def _run_tool(
         self, call: ToolCall, context: ModelContext, approval_id: UUID | None
     ) -> ToolResult:
-        selected = context.tools.get(call.name)
+        selected = context.tool(call)
         if selected is None:
             return ToolResult(
                 call_id=call.call_id,
@@ -1726,6 +1786,27 @@ class LangGraphRunner:
             error=False,
             duration_ms=_elapsed_ms(started_at),
         )
+
+
+async def _with_tool_search(tools: _TurnTools, emit: Emit) -> tuple[ToolSnapshot, ToolSnapshot]:
+    """The tools the model is sent, and those a call through tool search reaches. A turn with a
+    searchable tool is sent tool search's own tools too, and any other tool by their names is
+    left out of both, with a warning."""
+    kept = tools.kept(lambda tool: tool.name not in TOOL_SEARCH_NAMES)
+    search_set = kept.search_set
+    if not search_set.tools:
+        return tools.loaded, ToolSnapshot((*tools.loaded.tools, *tools.search_set.tools))
+    reachable = ToolSnapshot((*kept.loaded.tools, *search_set.tools))
+    searching = tool_search(search_set, reachable)
+    for namesake in (*tools.loaded.tools, *tools.search_set.tools):
+        if namesake.name in TOOL_SEARCH_NAMES:
+            await emit(
+                Warning(
+                    sources=(str(namesake.source),),
+                    message=f'Tool "{namesake.name}" was replaced by tool search\'s own.',
+                )
+            )
+    return ToolSnapshot((*kept.loaded.tools, *searching)), reachable
 
 
 def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:

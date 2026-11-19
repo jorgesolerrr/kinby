@@ -1109,6 +1109,14 @@
       "title": "CallFrame",
       "type": "object"
     },
+    "CallVia": {
+      "description": "What a tool call went through to reach its tool, when the model did not call the tool\nitself (ADR 0129).",
+      "enum": [
+        "tool_search"
+      ],
+      "title": "CallVia",
+      "type": "string"
+    },
     "CancelFrame": {
       "additionalProperties": false,
       "properties": {
@@ -11845,6 +11853,17 @@
           "const": "tool.call",
           "default": "tool.call",
           "type": "string"
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallVia"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "write": {
           "anyOf": [

@@ -18,11 +18,19 @@ from kinby.plugins.lines import line_tools
 from kinby.plugins.notify import notify_tools
 from kinby.plugins.registry import ToolSnapshot
 from kinby.plugins.skills import Skill, skill_tool
+from kinby.plugins.tool_search import SearchableGroup
 from kinby.plugins.tools import Tool
 from kinby.plugins.views import view_tools
 
 #: Where the memory tools are defined. They are built per turn, so their source tells them apart.
 _MEMORY_SOURCE = Path(memory_tools.__code__.co_filename).resolve()
+#: What the system prompt calls each built-in group, and says of it.
+_DESCRIBED = {
+    BuiltInToolGroup.DEFAULTS: ("default tools", "Files, the shell and the web."),
+    BuiltInToolGroup.MEMORY: ("memory tools", "Search, read and change what you remember."),
+    BuiltInToolGroup.BROWSER: ("browser tools", "Drive a web browser."),
+    BuiltInToolGroup.AUTHORED: ("authored tools", "The tools written for this instance."),
+}
 
 
 def core_tools(
@@ -53,13 +61,18 @@ def built_in_states(tools: Tools) -> dict[BuiltInToolGroup, ToolStates]:
 
 def by_state(
     tools: ToolSnapshot, groups: Mapping[BuiltInToolGroup, ToolStates]
-) -> tuple[ToolSnapshot, tuple[Tool, ...]]:
-    """The loaded tools of *tools*, and the searchable ones, in the states of their built-in
-    *groups*. A tool of no group is always loaded."""
+) -> tuple[ToolSnapshot, tuple[SearchableGroup, ...]]:
+    """The loaded tools of *tools*, and the searchable ones by group, in the states of their
+    built-in *groups*. A tool of no group is always loaded."""
     states = {tool.name: _state(tool, groups) for tool in tools.tools}
+    searchable = [tool for tool in tools.tools if states[tool.name] is ToolState.SEARCHABLE]
     return (
         ToolSnapshot(tuple(tool for tool in tools.tools if states[tool.name] is ToolState.LOADED)),
-        tuple(tool for tool in tools.tools if states[tool.name] is ToolState.SEARCHABLE),
+        tuple(
+            SearchableGroup(name, line, found)
+            for group, (name, line) in _DESCRIBED.items()
+            if (found := tuple(tool for tool in searchable if _group(tool) is group))
+        ),
     )
 
 

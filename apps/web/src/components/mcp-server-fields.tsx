@@ -115,8 +115,8 @@ export function McpServerFields({
         </ToggleGroup>
         <FieldDescription>
           The state of each tool not named below, one the server adds later too. A loaded tool is
-          sent to the model on every call. A searchable tool reaches no turn until kinby has tool
-          search. An off tool is left out.
+          sent to the model on every call. A searchable tool is found through tool search. An off
+          tool is left out.
         </FieldDescription>
       </FieldSet>
       {field("loaded", "Loaded tools", "One a line.")}

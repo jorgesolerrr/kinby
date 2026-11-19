@@ -143,7 +143,7 @@ describe("LibraryPage, the MCP Registry", () => {
         name: "acme",
         server: {
           entry: acme.entry,
-          default_state: "off",
+          default_state: "searchable",
           tool_states: { list_tickets: "loaded" },
         },
         hash: null,

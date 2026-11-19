@@ -93,7 +93,7 @@ describe("LibraryPage, MCP servers", () => {
               url: "https://example.com/mcp",
               headers: { Authorization: "Bearer ${GITHUB_TOKEN}", "X-Agent": "kinby" },
             },
-            default_state: "off",
+            default_state: "searchable",
             tool_states: { get_issue: "loaded", list_issues: "loaded" },
           },
           hash: null,
@@ -130,7 +130,7 @@ describe("LibraryPage, MCP servers", () => {
             args: ["mcp-server-git", "--repository", "/workspace"],
             env: { GIT_AUTHOR_NAME: "${GIT_AUTHOR_NAME}", GIT_EDITOR: "true" },
           },
-          default_state: "off",
+          default_state: "searchable",
           tool_states: {},
         },
         hash: null,
@@ -144,8 +144,10 @@ describe("LibraryPage, MCP servers", () => {
     await user.click(await screen.findByRole("button", { name: "Add MCP server" }))
     await user.type(screen.getByRole("textbox", { name: "Name" }), "github")
     await user.type(screen.getByRole("textbox", { name: "URL" }), "https://example.com/mcp")
-    expect(screen.getByRole("button", { name: "off" }).getAttribute("aria-pressed")).toBe("true")
-    await user.click(screen.getByRole("button", { name: "searchable" }))
+    expect(screen.getByRole("button", { name: "searchable" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    )
+    await user.click(screen.getByRole("button", { name: "loaded" }))
     await user.type(screen.getByRole("textbox", { name: "Loaded tools" }), "get_issue")
     await user.type(screen.getByRole("textbox", { name: "Searchable tools" }), "list_issues")
     await user.type(screen.getByRole("textbox", { name: "Off tools" }), "merge_pull_request")
@@ -157,7 +159,7 @@ describe("LibraryPage, MCP servers", () => {
         name: "github",
         server: {
           entry: { type: "http", url: "https://example.com/mcp", headers: {} },
-          default_state: "searchable",
+          default_state: "loaded",
           tool_states: {
             get_issue: "loaded",
             list_issues: "searchable",
@@ -219,7 +221,7 @@ describe("LibraryPage, MCP servers", () => {
             args: ["mcp-server-git"],
             env: { GIT_EDITOR: "true" },
           },
-          default_state: "off",
+          default_state: "searchable",
           tool_states: { git_status: "loaded" },
         },
         hash: null,
@@ -478,7 +480,7 @@ describe("LibraryPage, MCP servers", () => {
         name: "cockpit",
         server: {
           entry: { type: "http", url: "https://cockpit.example.com/mcp", headers: {}, oauth },
-          default_state: "off",
+          default_state: "searchable",
           tool_states: {},
         },
         hash: null,

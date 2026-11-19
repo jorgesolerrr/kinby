@@ -9,6 +9,7 @@ import sys
 import threading
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import TextIO
@@ -44,17 +45,25 @@ CONNECT_SECONDS = 60
 STDERR_TAIL = 2000
 
 
-async def connected_tools(
+@dataclass(frozen=True)
+class ConnectedServer:
+    """A server a turn connected to: its own description, when it gives one, and each of its
+    tools by the name the server gives it."""
+
+    description: str | None
+    tools: list[tuple[str, Tool]]
+
+
+async def connected_server(
     name: str,
     pick: LockedMcpServer,
     secrets: Mapping[str, str],
     source: Path,
     stack: AsyncExitStack,
-) -> list[tuple[str, Tool]]:
-    """Each tool of the server *pick* names, by the name the server gives it, its entry filled
-    from *secrets*, connected until *stack* closes, with the hub's access token when it asks for a
-    sign-in. A server that does not start or list its tools raises NotConnected, and one whose
-    sign-in the hub does not hold, SignInNeeded."""
+) -> ConnectedServer:
+    """The server *pick* names, its entry filled from *secrets*, connected until *stack* closes,
+    with the hub's access token when it asks for a sign-in. A server that does not start or list
+    its tools raises NotConnected, and one whose sign-in the hub does not hold, SignInNeeded."""
     auth = _HubToken(name, await _hub_token(name)) if pick.needs_sign_in else None
     try:
         client, listed = await _connect(pick.server.entry, secrets, auth, stack)
@@ -62,7 +71,10 @@ async def connected_tools(
         if auth is not None and auth.pending:
             raise SignInNeeded from None
         raise
-    return [(each.name, _adapted(name, pick, each, client, source)) for each in listed]
+    return ConnectedServer(
+        client.server_info.description if client.server_info is not None else None,
+        [(each.name, _adapted(name, pick, each, client, source)) for each in listed],
+    )
 
 
 class NotConnected(Exception):
@@ -221,6 +233,7 @@ def _adapted(
             args_schema=listed.input_schema,
             coroutine=partial(_call, client, listed.name),
         ),
+        output_schema=listed.output_schema,
     )
 
 

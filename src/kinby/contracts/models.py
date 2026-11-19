@@ -351,12 +351,20 @@ class MessageDelta(ContractModel):
     text: str
 
 
+class CallVia(StrEnum):
+    """What a tool call went through to reach its tool, when the model did not call the tool
+    itself (ADR 0129)."""
+
+    TOOL_SEARCH = "tool_search"
+
+
 class ToolCall(ContractModel):
     type: Literal[EventType.TOOL_CALL] = EventType.TOOL_CALL
     call_id: str
     name: str
     arguments: dict[str, JsonValue]
     write: bool | None = None
+    via: CallVia | None = None
 
 
 class ToolGated(ContractModel):
@@ -3514,8 +3522,9 @@ class McpServer(ContractModel):
     beside it."""
 
     entry: McpServerEntry
-    #: The state of each of the server's tools that has none of its own.
-    default_state: ToolState = ToolState.OFF
+    #: The state of each of the server's tools that has none of its own. A definition stored
+    #: before tool states holds an include list, which reads as off.
+    default_state: ToolState = ToolState.SEARCHABLE
     #: The tools with a state of their own, by the name the server gives them.
     tool_states: dict[str, ToolState] = Field(default_factory=dict)
 

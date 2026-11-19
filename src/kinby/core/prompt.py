@@ -9,6 +9,7 @@ from datetime import date
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from kinby.contracts import (
     FactoryRunOrigin,
@@ -25,6 +26,9 @@ from kinby.contracts import (
 from kinby.instance import Instance
 from kinby.instance.layout import MEMORY_DIR, PROFILE_NAME, SYSTEM_NAME
 from kinby.plugins.skills import Skill
+
+if TYPE_CHECKING:
+    from kinby.plugins.tool_search import SearchableGroup
 
 KINBY_PREAMBLE = "You are a personal AI teammate running on kinby."
 #: What a browser-on instance is told about signed-in sites (ADR 0113).
@@ -162,6 +166,23 @@ def assemble_system_prompt(
 
 def render_system_prompt(sections: Sequence[PromptSection]) -> SystemPrompt:
     return SystemPrompt("\n\n".join(section.text for section in sections))
+
+
+def with_searchable_groups(prompt: SystemPrompt, groups: Sequence[SearchableGroup]) -> str:
+    """*prompt*, followed by each tool group with searchable tools, when a turn has any. The
+    groups are known once the turn connects to its MCP servers, after the prompt is prepared."""
+    if not groups:
+        return prompt
+    listed = "\n".join(
+        f"- {group.name} ({len(group.tools)} tool{'s' if len(group.tools) > 1 else ''})"
+        + (f": {group.line}" if group.line else "")
+        for group in groups
+    )
+    return (
+        f"{prompt}\n\n# Searchable tools\n"
+        "These tool groups have tools you were not sent. Find one with search_tools, read it "
+        f"with describe_tool, and call it with call_tool.\n{listed}"
+    )
 
 
 def prompt_version(sections: Sequence[PromptSection]) -> PromptVersion:

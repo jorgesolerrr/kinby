@@ -122,6 +122,8 @@ class Tool:
     preview: Preview | None = field(default=None, repr=False)
     #: Run before the gate: a call it refuses returns its refusal and never asks.
     check: ArgumentCheck | None = field(default=None, repr=False)
+    #: The JSON schema of what the tool returns, when it declares one.
+    output_schema: Mapping[str, JsonValue] | None = field(default=None, repr=False, compare=False)
     context_parameter: str | None = field(default=None, repr=False)
 
     async def ainvoke(

@@ -278,7 +278,7 @@ def test_the_hub_converts_a_library_definition_in_the_old_shape(tmp_path, old, c
     assert kept.server == McpServer.model_validate(converted)
 
 
-def test_a_new_server_that_names_no_states_has_every_tool_off(tmp_path):
+def test_a_new_server_that_names_no_states_has_every_tool_searchable(tmp_path):
     hub = hub_at(tmp_path / "hub")
     command = {"name": "fetch", "server": {"entry": {"url": "https://mcp.example.com/"}}}
 
@@ -290,7 +290,7 @@ def test_a_new_server_that_names_no_states_has_every_tool_off(tmp_path):
 
     fetch = read(hub_client(hub), "fetch")
     assert isinstance(fetch, McpServerResult), fetch
-    assert (fetch.server.default_state, fetch.server.tool_states) == (ToolState.OFF, {})
+    assert (fetch.server.default_state, fetch.server.tool_states) == (ToolState.SEARCHABLE, {})
 
 
 def test_a_name_the_library_already_holds_is_refused_for_a_new_server(tmp_path):

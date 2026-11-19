@@ -35,7 +35,7 @@ export const EMPTY_DRAFT: McpServerDraft = {
   readArgs: [],
   env: "",
   readEnv: {},
-  defaultState: "off",
+  defaultState: "searchable",
   loaded: "",
   searchable: "",
   off: "",
@@ -43,7 +43,7 @@ export const EMPTY_DRAFT: McpServerDraft = {
 
 export function draftOf({
   entry,
-  default_state = "off",
+  default_state = "searchable",
   tool_states = {},
 }: McpServer): McpServerDraft {
   const named = (state: ToolState) =>

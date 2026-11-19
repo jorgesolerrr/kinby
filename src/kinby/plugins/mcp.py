@@ -20,6 +20,7 @@ from kinby.instance.skills_lock import read_lock
 from kinby.plugins.listed_tools import listed, mcp_tools_listed, record_mcp_tools
 
 if TYPE_CHECKING:
+    from kinby.plugins.tool_search import SearchableGroup
     from kinby.plugins.tools import Tool
 
 _FAILURES = TypeAdapter(dict[str, str])
@@ -28,10 +29,11 @@ _VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 @dataclass(frozen=True)
 class McpTools:
-    """The tools of a turn's MCP servers: those the model is sent, and the turn's search set."""
+    """The tools of a turn's MCP servers: those the model is sent, and the turn's search set by
+    server."""
 
     loaded: tuple[Tool, ...] = ()
-    searchable: tuple[Tool, ...] = ()
+    searchable: tuple[SearchableGroup, ...] = ()
 
 
 def mcp_tool_states(instance: Instance) -> dict[McpServerName, ToolStates]:
@@ -60,7 +62,8 @@ async def mcp_tools(
         yield McpTools()
         return
     # The MCP SDK loads only in an instance that picked a server.
-    from kinby.plugins.mcp_connection import NotConnected, SignInNeeded, connected_tools
+    from kinby.plugins.mcp_connection import NotConnected, SignInNeeded, connected_server
+    from kinby.plugins.tool_search import SearchableGroup
 
     secrets = {
         name: value
@@ -68,7 +71,8 @@ async def mcp_tools(
         if value is not None
     }
     source = (instance.path / SKILLS_LOCK_NAME).resolve()
-    tools: dict[ToolState, list[Tool]] = {state: [] for state in ToolState}
+    loaded: list[Tool] = []
+    searchable: list[SearchableGroup] = []
     before = mcp_tools_listed(state_dir)
     listed_tools = {name: before[name] for name in picks if name in before}
     failures: dict[str, str] = {}
@@ -87,7 +91,7 @@ async def mcp_tools(
                 continue
             states = started.get(name) or pick.states()
             try:
-                connected = await connected_tools(name, pick, secrets, source, stack)
+                server = await connected_server(name, pick, secrets, source, stack)
             except SignInNeeded:
                 failures[name] = f'MCP server "{name}" needs a sign-in, so the turn ran without it.'
                 continue
@@ -97,13 +101,18 @@ async def mcp_tools(
                     f"without them: {failed}"
                 )
                 continue
-            for tool, adapted in connected:
-                tools[states.of(tool)].append(adapted)
-            listed_tools[name] = tuple(listed(tool, adapted) for tool, adapted in connected)
+            loaded.extend(
+                adapted for tool, adapted in server.tools if states.of(tool) is ToolState.LOADED
+            )
+            if found := tuple(
+                adapted for tool, adapted in server.tools if states.of(tool) is ToolState.SEARCHABLE
+            ):
+                searchable.append(SearchableGroup(f"MCP server {name}", server.description, found))
+            listed_tools[name] = tuple(listed(tool, adapted) for tool, adapted in server.tools)
         _record_failures(state_dir, failures)
         record_mcp_tools(state_dir, listed_tools)
         try:
-            yield McpTools(tuple(tools[ToolState.LOADED]), tuple(tools[ToolState.SEARCHABLE]))
+            yield McpTools(tuple(loaded), tuple(searchable))
         except Exception as exc:
             # Closing the servers' clients with it would wrap it in their task group's exception.
             raised = exc
