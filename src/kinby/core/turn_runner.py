@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from functools import partial
+from pathlib import Path
 from typing import Annotated, Protocol, cast
 from uuid import UUID, uuid4, uuid5
 
@@ -88,7 +89,7 @@ from kinby.core.errors import (
     RoutineNotFound,
 )
 from kinby.core.events import EventLog
-from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, evaluate
+from kinby.core.gate import AUTHORED_RULE, INVALID_ARGUMENTS, URL_READS, GateDecision, evaluate
 from kinby.core.model_calls import completed_model_call
 from kinby.core.models import Tokenizer, init_model, is_anthropic_model
 from kinby.core.pricing import SHIPPED_WINDOWS, price_map
@@ -266,6 +267,62 @@ class ToolCallResolution:
     approval_id: UUID | None
     #: What the tool's check found wrong with the arguments, which the model reads instead.
     refusal: str | None = None
+
+
+@dataclass(frozen=True)
+class GateAnswer:
+    """The gate's answer to one tool call, before any approval is raised for it."""
+
+    decision: GateDecision
+    #: What the tool's check found wrong with the arguments, which denies the call before the
+    #: gate could ask for it. The model reads it instead of a denial.
+    refusal: str | None = None
+
+
+@dataclass
+class _ToolStep:
+    """The tool calls of one model message: what the gate reads for them, and the routine grants
+    and read-only marks their approvals add."""
+
+    turn: PreparedTurnRequest
+    context: ModelContext
+    granted: list[str]
+    read_only: list[str]
+    seen_urls: frozenset[str]
+    saved_outputs: Path
+
+    def call(self, call_id: str, name: str, arguments: dict[str, JsonValue]) -> ToolCall:
+        """A call to the tool *name*, which writes when that tool does or when the turn has no
+        tool by that name."""
+        tool = self.context.tools.get(name)
+        return ToolCall(
+            call_id=call_id,
+            name=name,
+            arguments=arguments,
+            write=tool.write if tool is not None else True,
+        )
+
+    def gate(self, call: ToolCall) -> GateAnswer:
+        """The gate's answer to *call*, without raising an approval when it asks."""
+        tool = self.context.tools.get(call.name)
+        refusal = (
+            tool.check(call.arguments) if tool is not None and tool.check is not None else None
+        )
+        if refusal is not None:
+            return GateAnswer(GateDecision(GateAction.DENY, INVALID_ARGUMENTS), refusal)
+        return GateAnswer(
+            evaluate(
+                self.context.gate_policy,
+                self.context.permission_mode,
+                call,
+                tool,
+                self.context.tool_context.workspace,
+                granted=call.name in self.granted,
+                marked_read_only=call.name in self.read_only,
+                seen_urls=self.seen_urls,
+                saved_outputs=self.saved_outputs,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -1414,149 +1471,28 @@ class LangGraphRunner:
         response = state.messages[-1]
         if not isinstance(response, AIMessage):
             raise ModelNoResponse("The model returned an invalid tool call response.")
-        calls: list[ToolCallResolution] = []
-        granted = list(state.granted)
-        read_only = list(state.read_only)
-        seen_urls = _seen_urls(state.messages)
-        saved_outputs = turn_outputs(self._instance.manifest.state_dir, state.turn.turn_id)
+        step = _ToolStep(
+            turn=state.turn,
+            context=runtime.context,
+            granted=list(state.granted),
+            read_only=list(state.read_only),
+            seen_urls=_seen_urls(state.messages),
+            saved_outputs=turn_outputs(self._instance.manifest.state_dir, state.turn.turn_id),
+        )
         message_index = len(state.messages) - 1
+        calls: list[ToolCallResolution] = []
         for call_index, model_call in enumerate(response.tool_calls):
-            name = model_call["name"]
             call_id = model_call["id"] or str(
                 uuid5(state.turn.turn_id, f"{message_index}:{call_index}")
             )
-            arguments = _TOOL_ARGUMENTS.validate_python(model_call["args"])
-            selected = runtime.context.tools.get(name)
-            call = ToolCall(
-                call_id=call_id,
-                name=name,
-                arguments=arguments,
-                write=selected.write if selected is not None else True,
+            call = step.call(
+                call_id, model_call["name"], _TOOL_ARGUMENTS.validate_python(model_call["args"])
             )
-            await self._emit_tool_call_once(state.turn, call, runtime.context.emit)
-            gate_decision = evaluate(
-                runtime.context.gate_policy,
-                runtime.context.permission_mode,
-                call,
-                selected,
-                runtime.context.tool_context.workspace,
-                granted=name in granted,
-                marked_read_only=name in read_only,
-                seen_urls=seen_urls,
-                saved_outputs=saved_outputs,
-            )
-            approval_id = None
-            refusal = (
-                selected.check(arguments)
-                if selected is not None and selected.check is not None
-                else None
-            )
-            if refusal is not None:
-                gate = ToolGated(
-                    call_id=call.call_id,
-                    name=call.name,
-                    action=GateOutcome.DENY,
-                    rule=INVALID_ARGUMENTS,
-                    decided_by=GateDecider.POLICY,
-                )
-            elif (
-                selected is not None
-                and name == browser_takeover.name
-                and gate_decision.action is not GateAction.DENY
-                and isinstance(reason := arguments.get("reason"), str)
-            ):
-                # The takeover asks the user itself, so it stands in for an approval. It comes
-                # before any call of the message runs, and the turn waits as on an approval.
-                interrupt(
-                    TakeoverRequested(
-                        takeover_id=uuid5(state.turn.turn_id, f"takeover:{call_id}"),
-                        reason=reason,
-                    )
-                )
-                gate = ToolGated(
-                    call_id=call.call_id,
-                    name=call.name,
-                    action=GateOutcome.ALLOW,
-                    rule=gate_decision.rule,
-                    decided_by=(
-                        GateDecider.USER
-                        if gate_decision.action is GateAction.ASK
-                        else GateDecider.POLICY
-                    ),
-                )
-            elif gate_decision.action is GateAction.ASK:
-                # The node runs again on resume, so the id must come out the same both times.
-                approval_id = uuid5(state.turn.turn_id, f"approval:{call_id}")
-                preview = (
-                    selected.preview(arguments, runtime.context.tool_context.instance)
-                    if selected is not None and selected.preview is not None
-                    else None
-                )
-                answer: ApprovalAnswer = interrupt(
-                    ApprovalRequested(
-                        approval_id=approval_id,
-                        name=name,
-                        arguments=arguments,
-                        rule=gate_decision.rule,
-                        preview=preview,
-                    )
-                )
-                approved = answer.decision is not ApprovalDecision.DENY
-                if answer.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
-                    granted.append(name)
-                if answer.decision is ApprovalDecision.MARK_READ_ONLY:
-                    read_only.append(name)
-                gate = ToolGated(
-                    call_id=call.call_id,
-                    name=call.name,
-                    action=GateOutcome.ALLOW if approved else GateOutcome.DENY,
-                    rule=gate_decision.rule,
-                    decided_by=GateDecider.USER,
-                    reason=answer.reason,
-                )
-            else:
-                gate = ToolGated(
-                    call_id=call.call_id,
-                    name=call.name,
-                    action=_gate_outcome(gate_decision.action),
-                    rule=gate_decision.rule,
-                    decided_by=GateDecider.POLICY,
-                )
-            calls.append(ToolCallResolution(call, gate, approval_id, refusal))
-
+            calls.append(await self._decide(step, call))
+        # An approval runs the step again from its start, so no call runs before all are decided.
         messages: list[AnyMessage] = []
         for resolution in calls:
-            call = resolution.call
-            await runtime.context.emit(resolution.gate)
-            if resolution.gate.action is GateOutcome.DENY:
-                result = ToolResult(
-                    call_id=call.call_id,
-                    name=call.name,
-                    output=resolution.refusal or _denial(resolution.gate),
-                    error=True,
-                )
-                await runtime.context.emit(result)
-                messages.append(
-                    ToolMessage(
-                        content=result.output,
-                        name=result.name,
-                        tool_call_id=result.call_id,
-                        status="error",
-                    )
-                )
-                self._forget_tool_call(state.turn, call)
-                continue
-            result = cut_to_cap(
-                await self._run_tool(
-                    call.call_id,
-                    call.name,
-                    call.arguments,
-                    runtime,
-                    resolution.approval_id,
-                ),
-                saved_outputs,
-            )
-            await runtime.context.emit(result)
+            result = await self._make(step, resolution)
             messages.append(
                 ToolMessage(
                     content=result.output,
@@ -1565,17 +1501,110 @@ class LangGraphRunner:
                     status="error" if result.error else "success",
                 )
             )
-            self._forget_tool_call(state.turn, call)
         return ModelState(
             turn=state.turn,
             messages=messages,
             input_tokens=state.input_tokens,
             output_tokens=state.output_tokens,
-            granted=tuple(granted),
+            granted=tuple(step.granted),
             revision=state.revision,
-            read_only=tuple(read_only),
+            read_only=tuple(step.read_only),
             cut=state.cut,
         )
+
+    async def _decide(self, step: _ToolStep, call: ToolCall) -> ToolCallResolution:
+        """Decide a call the model made directly, raising the approval or the takeover the gate's
+        answer asks for. A resume runs this again, so its ids come out the same both times."""
+        await self._emit_tool_call_once(step.turn, call, step.context.emit)
+        tool = step.context.tools.get(call.name)
+        answer = step.gate(call)
+        decision = answer.decision
+        approval_id = None
+        if (
+            tool is not None
+            and call.name == browser_takeover.name
+            and decision.action is not GateAction.DENY
+            and isinstance(reason := call.arguments.get("reason"), str)
+        ):
+            # The takeover asks the user itself, so it stands in for an approval. It comes
+            # before any call of the message runs, and the turn waits as on an approval.
+            interrupt(
+                TakeoverRequested(
+                    takeover_id=uuid5(step.turn.turn_id, f"takeover:{call.call_id}"),
+                    reason=reason,
+                )
+            )
+            gate = ToolGated(
+                call_id=call.call_id,
+                name=call.name,
+                action=GateOutcome.ALLOW,
+                rule=decision.rule,
+                decided_by=(
+                    GateDecider.USER if decision.action is GateAction.ASK else GateDecider.POLICY
+                ),
+            )
+        elif decision.action is GateAction.ASK:
+            approval_id = uuid5(step.turn.turn_id, f"approval:{call.call_id}")
+            preview = (
+                tool.preview(call.arguments, step.context.tool_context.instance)
+                if tool is not None and tool.preview is not None
+                else None
+            )
+            approval: ApprovalAnswer = interrupt(
+                ApprovalRequested(
+                    approval_id=approval_id,
+                    name=call.name,
+                    arguments=call.arguments,
+                    rule=decision.rule,
+                    preview=preview,
+                )
+            )
+            if approval.decision is ApprovalDecision.ALLOW_IN_ROUTINE:
+                step.granted.append(call.name)
+            if approval.decision is ApprovalDecision.MARK_READ_ONLY:
+                step.read_only.append(call.name)
+            gate = ToolGated(
+                call_id=call.call_id,
+                name=call.name,
+                action=(
+                    GateOutcome.DENY
+                    if approval.decision is ApprovalDecision.DENY
+                    else GateOutcome.ALLOW
+                ),
+                rule=decision.rule,
+                decided_by=GateDecider.USER,
+                reason=approval.reason,
+            )
+        else:
+            gate = ToolGated(
+                call_id=call.call_id,
+                name=call.name,
+                action=_gate_outcome(decision.action),
+                rule=decision.rule,
+                decided_by=GateDecider.POLICY,
+            )
+        return ToolCallResolution(call, gate, approval_id, answer.refusal)
+
+    async def _make(self, step: _ToolStep, resolution: ToolCallResolution) -> ToolResult:
+        """Make a decided call as its tool: run it when allowed, cut its result to the cap, and
+        emit its gate decision and its result."""
+        call = resolution.call
+        await step.context.emit(resolution.gate)
+        if resolution.gate.action is GateOutcome.DENY:
+            result = ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                output=resolution.refusal or _denial(resolution.gate),
+                error=True,
+            )
+        else:
+            result = cut_to_cap(
+                await self._run_tool(call, step.context, resolution.approval_id),
+                step.saved_outputs,
+            )
+        await step.context.emit(result)
+        self._forget_tool_call(step.turn, call)
+        return result
 
     async def _emit_tool_call_once(
         self,
@@ -1605,38 +1634,33 @@ class LangGraphRunner:
         self._emitted_tool_calls.discard((turn.thread_id, turn.turn_id, call.call_id))
 
     async def _run_tool(
-        self,
-        call_id: str,
-        name: str,
-        arguments: dict[str, JsonValue],
-        runtime: Runtime[ModelContext],
-        approval_id: UUID | None,
+        self, call: ToolCall, context: ModelContext, approval_id: UUID | None
     ) -> ToolResult:
-        selected = runtime.context.tools.get(name)
+        selected = context.tools.get(call.name)
         if selected is None:
             return ToolResult(
-                call_id=call_id,
-                name=name,
-                output=f'Tool "{name}" is not available in this turn.',
+                call_id=call.call_id,
+                name=call.name,
+                output=f'Tool "{call.name}" is not available in this turn.',
                 error=True,
             )
         started_at = asyncio.get_running_loop().time()
         try:
             # A tool is user code. Turn its failures into model-visible tool errors.
             output = await selected.ainvoke(
-                arguments, replace(runtime.context.tool_context, approval_id=approval_id)
+                call.arguments, replace(context.tool_context, approval_id=approval_id)
             )
         except Exception as exc:
             return ToolResult(
-                call_id=call_id,
-                name=name,
+                call_id=call.call_id,
+                name=call.name,
                 output=exception_message(exc),
                 error=True,
                 duration_ms=_elapsed_ms(started_at),
             )
         return ToolResult(
-            call_id=call_id,
-            name=name,
+            call_id=call.call_id,
+            name=call.name,
             output=output,
             error=False,
             duration_ms=_elapsed_ms(started_at),
