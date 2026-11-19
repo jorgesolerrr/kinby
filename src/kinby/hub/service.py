@@ -1267,6 +1267,8 @@ class Hub:
                 result = await self.recreate(write, requester=home)
             case InstancePicksSetCommand():
                 result = await self.set_picks(write)
+            case InstanceToolStatesSetCommand():
+                result = await self.set_tool_states(write)
             case ImagePrepareCommand():
                 result = await self.prepare_image(write, requester=home)
             case LibrarySkillWriteCommand():

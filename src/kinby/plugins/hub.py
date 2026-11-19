@@ -41,6 +41,7 @@ from kinby.contracts import (
     InstanceRelayReadResult,
     InstanceStartCommand,
     InstanceStopCommand,
+    InstanceToolStatesSetCommand,
     LibraryGitAddCommand,
     LibraryMcpServerWriteCommand,
     LibrarySkillMoveCommand,
@@ -87,6 +88,7 @@ class HubWriteOperation(StrEnum):
     INSTANCE_CREATE = "instance_create"
     INSTANCE_LIFECYCLE = "instance_lifecycle"
     INSTANCE_PICKS_SET = "instance_picks_set"
+    INSTANCE_TOOL_STATES_SET = "instance_tool_states_set"
     INSTANCE_PROMPT_SET = "instance_prompt_set"
     INSTANCE_ROUTINE_WRITE = "instance_routine_write"
     INSTANCE_ROUTINE_SET_ENABLED = "instance_routine_set_enabled"
@@ -129,10 +131,11 @@ async def hub_write(operation: str, arguments: dict[str, JsonValue], context: To
     """Ask the hub for one write the user approves, and return the hub's answer as JSON.
 
     operation is one of instance_create, instance_lifecycle, instance_picks_set,
-    instance_prompt_set, instance_routine_write, instance_routine_set_enabled,
-    instance_routine_run, instance_routine_delete, instance_ask, image_prepare, library_skill_write,
-    library_git_add, library_move, library_mcp_server_write, factory_write, line_setup,
-    channel_mute and channel_unmute. `kinby hub help <operation>` prints its arguments.
+    instance_tool_states_set, instance_prompt_set, instance_routine_write,
+    instance_routine_set_enabled, instance_routine_run, instance_routine_delete, instance_ask,
+    image_prepare, library_skill_write, library_git_add, library_move, library_mcp_server_write,
+    factory_write, line_setup, channel_mute and channel_unmute. `kinby hub help <operation>`
+    prints its arguments.
     """
     write = home_write(operation, arguments)
     if context.approval_id is None:
@@ -195,6 +198,7 @@ type HomeWrite = (
     | InstanceStopCommand
     | InstanceRecreateCommand
     | InstancePicksSetCommand
+    | InstanceToolStatesSetCommand
     | RelayedWrite
     | InstanceAsk
     | ImagePrepareCommand
@@ -238,6 +242,7 @@ _HUB_RUN_WRITES: Mapping[str, type[ContractModel]] = {
     HubWriteOperation.INSTANCE_CREATE: InstanceCreateCommand,
     HubWriteOperation.INSTANCE_LIFECYCLE: _LifecycleCall,
     HubWriteOperation.INSTANCE_PICKS_SET: InstancePicksSetCommand,
+    HubWriteOperation.INSTANCE_TOOL_STATES_SET: InstanceToolStatesSetCommand,
     HubWriteOperation.INSTANCE_ASK: InstanceAsk,
     HubWriteOperation.IMAGE_PREPARE: ImagePrepareCommand,
     HubWriteOperation.LIBRARY_SKILL_WRITE: LibrarySkillWriteCommand,
@@ -305,6 +310,8 @@ def home_write(operation: str, arguments: Mapping[str, JsonValue]) -> HomeWrite:
                         return InstanceRecreateCommand(instance_id=call.instance_id)
             case HubWriteOperation.INSTANCE_PICKS_SET:
                 return InstancePicksSetCommand.model_validate(arguments)
+            case HubWriteOperation.INSTANCE_TOOL_STATES_SET:
+                return InstanceToolStatesSetCommand.model_validate(arguments)
             case HubWriteOperation.INSTANCE_ASK:
                 return InstanceAsk.model_validate(arguments)
             case HubWriteOperation.IMAGE_PREPARE:
