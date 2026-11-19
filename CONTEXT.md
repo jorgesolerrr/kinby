@@ -992,12 +992,12 @@ _Avoid_: automated PR, bot PR
 
 ### Stack
 
-A parent issue's ordered series of **agent PRs**, each based on the PR below it. A top-level issue forms a stack of one.
+An ordered series of **agent PRs**, each based on the PR of an issue that blocks its own, whatever the issues' parents. An agent PR based on the default branch starts one.
 _Avoid_: issue tree, branch chain
 
 ### Eligible issue
 
-An open issue marked `ready-for-agent` that has no **agent PR** and whose open blockers already have an agent PR in the same **stack**.
+An open issue marked `ready-for-agent` that has no **agent PR** and whose open blockers already have an agent PR, so it stacks on theirs. The scan logs each issue it skips for a blocker with no agent PR yet.
 
 The label counts only on the issue itself. A parent's `ready-for-agent` doesn't make its sub-issues eligible, so each sub-issue in a **stack** carries its own label, and its blockers decide the order.
 
