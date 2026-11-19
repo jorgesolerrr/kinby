@@ -18,6 +18,8 @@ from kinby.plugins.registry import ToolSnapshot
 from kinby.plugins.tools import Tool, tool
 
 CALL_TOOL = "call_tool"
+#: The names of tool search's own tools, which a turn with tool search holds no other tool by.
+TOOL_SEARCH_NAMES = frozenset({"search_tools", "describe_tool", CALL_TOOL})
 _WORD = re.compile(r"[a-z0-9]+")
 #: A character a Python name cannot hold: any but a letter, a digit or `_`, or a leading digit.
 _NOT_IN_A_NAME = re.compile(r"^\d|\W")

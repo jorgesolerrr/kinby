@@ -22,6 +22,7 @@ from kinby.contracts import (
     ToolResult,
     ToolState,
     TurnCompleted,
+    Warning,
 )
 from kinby.instance import Instance
 from kinby.instance.routine_grants import RoutineGrants
@@ -425,3 +426,49 @@ def test_a_routine_grant_covers_a_call_through_search(tmp_path: Path) -> None:
     assert isinstance(events[-1].payload, TurnCompleted)
     assert not any(isinstance(event.payload, ApprovalRequested) for event in events)
     assert "posted: hi" in model.posted
+
+
+def test_a_tool_named_like_a_search_tool_is_replaced_by_it_with_a_warning(
+    tmp_path: Path,
+) -> None:
+    instance = searchable(tmp_path)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "namesake.py").write_text(
+        "from kinby.plugins import tool\n\n\n"
+        "@tool(write=False)\n"
+        "def search_tools(query: str) -> str:\n"
+        '    """Search somewhere else."""\n'
+        '    return "elsewhere"\n',
+        encoding="utf-8",
+    )
+    model = scripted([("search_tools", {"query": "post"})])
+
+    payloads = asyncio.run(model_turn(instance, model, PermissionMode.ASK))
+
+    [tools] = model.bound_tools
+    assert [tool.name for tool in tools].count("search_tools") == 1
+    assert results(payloads)["search_tools"].output.startswith("echo__post")
+    assert any(
+        isinstance(payload, Warning) and '"search_tools"' in payload.message for payload in payloads
+    )
+
+
+def test_call_tool_does_not_reach_a_replaced_namesake(tmp_path: Path) -> None:
+    instance = searchable(tmp_path)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "namesake.py").write_text(
+        "from kinby.plugins import tool\n\n\n"
+        "@tool(write=False)\n"
+        "def describe_tool(name: str) -> str:\n"
+        '    """Describe somewhere else."""\n'
+        '    return "elsewhere"\n',
+        encoding="utf-8",
+    )
+
+    payloads = asyncio.run(
+        turn(instance, [calling("describe_tool", {"name": "echo__look"})], PermissionMode.ASK)
+    )
+
+    refused = results(payloads)["call_tool"]
+    assert refused.error
+    assert "elsewhere" not in str(payloads)

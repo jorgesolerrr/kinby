@@ -186,6 +186,7 @@ from kinby.plugins.routines import (
 from kinby.plugins.skills import Skill, load_skills, referenced_skills, skill_tool
 from kinby.plugins.tool_search import (
     CALL_TOOL,
+    TOOL_SEARCH_NAMES,
     SearchableGroup,
     called,
     tool_search,
@@ -851,13 +852,7 @@ class LangGraphRunner:
         )
         if isinstance(prepared, TurnOutcome):
             return prepared
-        search_set = prepared.tools.search_set
-        reachable = ToolSnapshot((*prepared.tools.loaded.tools, *search_set.tools))
-        tools = (
-            ToolSnapshot((*prepared.tools.loaded.tools, *tool_search(search_set, reachable)))
-            if search_set.tools
-            else prepared.tools.loaded
-        )
+        tools, reachable = await _with_tool_search(prepared.tools, emit)
         progress = prepared.progress
         budgets = progress.budgets
         window = {**SHIPPED_WINDOWS, **self._manifest().windows}.get(turn.model)
@@ -1791,6 +1786,27 @@ class LangGraphRunner:
             error=False,
             duration_ms=_elapsed_ms(started_at),
         )
+
+
+async def _with_tool_search(tools: _TurnTools, emit: Emit) -> tuple[ToolSnapshot, ToolSnapshot]:
+    """The tools the model is sent, and those a call through tool search reaches. A turn with a
+    searchable tool is sent tool search's own tools too, and any other tool by their names is
+    left out of both, with a warning."""
+    kept = tools.kept(lambda tool: tool.name not in TOOL_SEARCH_NAMES)
+    search_set = kept.search_set
+    if not search_set.tools:
+        return tools.loaded, ToolSnapshot((*tools.loaded.tools, *tools.search_set.tools))
+    reachable = ToolSnapshot((*kept.loaded.tools, *search_set.tools))
+    searching = tool_search(search_set, reachable)
+    for namesake in (*tools.loaded.tools, *tools.search_set.tools):
+        if namesake.name in TOOL_SEARCH_NAMES:
+            await emit(
+                Warning(
+                    sources=(str(namesake.source),),
+                    message=f'Tool "{namesake.name}" was replaced by tool search\'s own.',
+                )
+            )
+    return ToolSnapshot((*kept.loaded.tools, *searching)), reachable
 
 
 def _seen_urls(messages: Sequence[AnyMessage]) -> frozenset[str]:
