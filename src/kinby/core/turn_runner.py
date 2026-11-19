@@ -1728,7 +1728,7 @@ class LangGraphRunner:
             )
         else:
             broker = ToolBroker(
-                script_tools(step.context.reachable), partial(self._call_from_script, step)
+                script_tools(step.context.reachable), partial(self._call_from_script, step, call)
             )
             result = cut_to_cap(
                 await self._run_tool(
@@ -1747,17 +1747,19 @@ class LangGraphRunner:
         return result
 
     async def _call_from_script(
-        self, step: _ToolStep, tool: Tool, arguments: Mapping[str, JsonValue]
+        self, step: _ToolStep, script: ToolCall, tool: Tool, arguments: Mapping[str, JsonValue]
     ) -> str:
-        """Make a script's call to *tool* as a call the model made, but raise no approval: a call
-        the gate would ask about fails, for the model to make directly. The script gets the
-        tool's whole output, and the call's result event the output cut to the cap."""
+        """Make the call to *tool* that the script of the run_code call *script* makes, as a call
+        the model made, but raise no approval: a call the gate would ask about fails, for the
+        model to make directly. The script gets the tool's whole output, and the call's result
+        event the output cut to the cap."""
         call = ToolCall(
             call_id=str(uuid4()),
             name=tool.name,
             arguments=dict(arguments),
             write=tool.write,
             via=CallVia.SCRIPT,
+            script_call_id=script.call_id,
         )
         await step.context.emit(call)
         answer = step.gate(call)
@@ -1765,7 +1767,7 @@ class LangGraphRunner:
         gate = ToolGated(
             call_id=call.call_id,
             name=call.name,
-            action=_gate_outcome(action),
+            action=GateOutcome.ASK if action is GateAction.ASK else _gate_outcome(action),
             rule=answer.decision.rule,
             decided_by=GateDecider.POLICY,
         )

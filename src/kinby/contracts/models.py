@@ -205,6 +205,8 @@ class PermissionMode(StrEnum):
 class GateOutcome(StrEnum):
     ALLOW = "allow"
     DENY = "deny"
+    #: The gate would ask about a call from a script, which raises no approval, so it did not run.
+    ASK = "ask"
 
 
 class GateAction(StrEnum):
@@ -366,6 +368,8 @@ class ToolCall(ContractModel):
     arguments: dict[str, JsonValue]
     write: bool | None = None
     via: CallVia | None = None
+    #: The call id of the run_code call whose script made this call.
+    script_call_id: str | None = None
 
 
 class ToolGated(ContractModel):
@@ -2308,7 +2312,10 @@ class TurnMetrics(TokenTotals):
     compaction_input_tokens: int = 0
     compaction_output_tokens: int = 0
     cost: float | None = None
+    #: The calls the model made, by tool. A script's calls are counted apart.
     tool_calls: dict[str, int]
+    #: The calls the turn's scripts made, by tool.
+    script_tool_calls: dict[str, int] = Field(default_factory=dict)
     memory_calls: MemoryCallCounts
     memory_consulted: bool
     approvals_requested: int

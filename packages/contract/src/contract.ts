@@ -241,7 +241,7 @@ export type ErrorCode =
  * itself (ADR 0129).
  */
 export type CallVia = "tool_search" | "script";
-export type GateOutcome = "allow" | "deny";
+export type GateOutcome = "allow" | "deny" | "ask";
 export type GateDecider = "policy" | "user";
 export type ViewChange = "created" | "changed" | "deleted";
 
@@ -3148,6 +3148,9 @@ export interface TurnMetrics {
   recalled?: string[];
   recap_input_tokens: number;
   recap_output_tokens: number;
+  script_tool_calls?: {
+    [k: string]: number;
+  };
   started_at: string | null;
   thread_id: string;
   tool_calls: {
@@ -4116,6 +4119,7 @@ export interface ToolCall {
   };
   call_id: string;
   name: string;
+  script_call_id?: string | null;
   type: "tool.call";
   via?: CallVia | null;
   write?: boolean | null;
