@@ -56,7 +56,7 @@ interface Panel {
   instance: InstanceSummary
   /** Undefined until the hub answers. */
   status: InstanceStatusResult | undefined
-  /** Read the status again, after a change that may add a recreate reason. */
+  /** Read the status again, after a change that may add a recreate reason or change its setup. */
   statusChanged: () => void
   /** The instance's one update, lent by its header. */
   update: Update
@@ -109,12 +109,13 @@ const GROUPS: { label: string; sections: Section[] }[] = [
       {
         label: "Skills",
         hint: "library picks, instance, kinby, workspace",
-        render: ({ client, caller, clock, instance }) => (
+        render: ({ client, caller, clock, instance, statusChanged }) => (
           <SkillsSection
             client={client}
             caller={caller}
             clock={clock}
             instanceId={instance.instance_id}
+            onPicked={statusChanged}
           />
         ),
       },

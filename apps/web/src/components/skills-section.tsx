@@ -69,17 +69,20 @@ type Selection = { name: string; tier: SkillTier } | "new"
  * The skills the instance picked from the hub's library, to add or drop, then every skill in every
  * tier, each name's shadowed skills greyed under the one the model reads. Any skill opens
  * read-only; an instance skill opens to edit. `client` reaches the instance and `caller` the hub.
+ * `onPicked` hears each change the hub made to the picks.
  */
 export function SkillsSection({
   client,
   caller,
   clock,
   instanceId,
+  onPicked,
 }: {
   client: Caller
   caller: HubCaller
   clock: Clock
   instanceId: string
+  onPicked: () => void
 }) {
   const pacing = usePace(clock)
   const [listed, setListed] = useState<SkillListResult>()
@@ -164,6 +167,7 @@ export function SkillsSection({
           onPicked={(held) => {
             setPicked({ ...picked, held })
             void load(pacing)
+            onPicked()
           }}
           onLoad={() => void loadPicks(pacing)}
         />
