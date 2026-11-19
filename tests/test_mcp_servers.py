@@ -1,5 +1,5 @@
-"""MCP servers on an instance's turns: each picked server's included tools, named by server and
-gated as writes until the user trusts the server's read-only hints (ADR 0111)."""
+"""MCP servers on an instance's turns: each picked server's loaded tools, named by server and
+gated as writes until the user trusts the server's read-only hints (ADR 0111, ADR 0129)."""
 
 import asyncio
 import json
@@ -7,24 +7,34 @@ import os
 import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from kinby.contracts import (
     INSTANCE_LIST,
+    ApprovalDecision,
     ApprovalRequested,
+    ErrorCode,
+    Event,
     InstanceListCommand,
     InstanceListResult,
     InstanceNotice,
     McpServer,
     McpServerFailed,
+    Payload,
     PermissionMode,
+    SystemPrompt,
     ToolResult,
+    ToolState,
+    TurnCompleted,
+    TurnFailed,
 )
 from kinby.core.contract_server import CONTROL_TOKEN_VARIABLE
+from kinby.core.turn_runner import LangGraphRunner
+from kinby.core.turns import ApprovalAnswer, ParkedTurn, PreparedTurnRequest, TurnContext
 from kinby.hub import Hub
 from kinby.instance import Instance, Serve, inspect_instance
 from kinby.instance.skills_lock import LockedMcpServer, SkillsLock, write_lock
@@ -37,23 +47,27 @@ from tests.test_hub import FakeControl, hub_at, hub_client, started_instance
 from tests.test_hub_mcp_sign_ins import _Clock, _picked, _signed_in
 from tests.test_hub_routing import control_token
 from tests.test_hub_server import served, url
-from tests.test_instance_code import turn
-from tests.test_routines import instance_at
+from tests.test_instance_code import model_turn, scripted, turn
+from tests.test_routines import RoutineModel, fire, instance_at, routine_file
 
 SERVER = Path(__file__).with_name("mcp_echo_server.py")
 
 
 def echo(
-    *include: str,
+    *loaded: str,
     env: dict[str, str] | None = None,
     package: str = "echo-server",
     args: tuple[str, ...] = (),
     command: str = "uvx",
+    default_state: ToolState = ToolState.OFF,
 ) -> McpServer:
+    """The echo server's library entry, with the tools *loaded* and the others in
+    *default_state*."""
     return McpServer.model_validate(
         {
             "entry": {"command": command, "args": [package, *args], "env": env or {}},
-            "include": list(include),
+            "default_state": default_state,
+            "tool_states": dict.fromkeys(loaded, ToolState.LOADED),
         }
     )
 
@@ -131,7 +145,7 @@ def test_a_result_over_the_cap_is_cut_by_the_runner_not_the_server(tmp_path: Pat
     assert called.output.startswith("looked: " + "x" * (30_000 - len("looked: ")) + "\n")
 
 
-def test_a_tool_outside_the_include_filter_is_not_offered(tmp_path: Path) -> None:
+def test_an_off_tool_cannot_be_called(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     pick(instance, echo=echo("look"))
 
@@ -140,6 +154,136 @@ def test_a_tool_outside_the_include_filter_is_not_offered(tmp_path: Path) -> Non
     called = result(payloads)
     assert called.error
     assert called.output == 'Tool "echo__post" is not available in this turn.'
+
+
+def sent(instance: Instance) -> set[str]:
+    """The echo server's tools the model is sent on a turn of *instance*."""
+    model = scripted([])
+    asyncio.run(model_turn(instance, model, PermissionMode.ASK))
+    [tools] = model.bound_tools
+    return {tool.name for tool in tools if tool.name.startswith("echo__")}
+
+
+def test_a_loaded_tool_is_sent_to_the_model_and_a_searchable_or_off_one_is_not(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    library = echo("look", default_state=ToolState.SEARCHABLE).model_copy(
+        update={"tool_states": {"look": ToolState.LOADED, "post": ToolState.OFF}}
+    )
+    pick(instance, echo=library)
+
+    assert sent(instance) == {"echo__look"}
+
+
+def test_a_tool_the_server_adds_later_takes_its_groups_default(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    library = echo(default_state=ToolState.LOADED).model_copy(
+        update={"tool_states": {"look": ToolState.OFF}}
+    )
+    pick(instance, echo=library)
+
+    assert sent(instance) == {"echo__arguments", "echo__environment", "echo__headers", "echo__post"}
+
+
+def test_the_picks_states_beat_the_library_entrys(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    changed = LockedMcpServer(
+        server=echo("look", "post"),
+        default_state=ToolState.LOADED,
+        tool_states={"look": ToolState.OFF, "headers": ToolState.SEARCHABLE},
+    )
+    write_lock(instance.path, SkillsLock(mcp_servers={"echo": changed}))
+
+    assert sent(instance) == {"echo__arguments", "echo__environment", "echo__post"}
+
+
+def test_a_server_switched_off_offers_no_tool_even_one_with_its_own_state(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    switched_off = LockedMcpServer(
+        server=echo("look"), on=False, tool_states={"post": ToolState.LOADED}
+    )
+    write_lock(instance.path, SkillsLock(mcp_servers={"echo": switched_off}))
+
+    assert sent(instance) == set()
+
+
+def test_a_turn_resumed_from_an_approval_keeps_the_states_it_started_with(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo("look"))
+    runner = LangGraphRunner(
+        instance, model_factory=lambda _: scripted([("echo__look", {"text": "hi"})])
+    )
+    payloads: list[Payload] = []
+
+    async def scenario() -> None:
+        preparation = runner.prepare_for_turn()
+        request = PreparedTurnRequest(
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            message="Look.",
+            model=preparation.model,
+            permission_mode=PermissionMode.ASK,
+            system_prompt=SystemPrompt("System prompt"),
+        )
+
+        async def emit(payload: Payload) -> Event:
+            payloads.append(payload)
+            return Event(
+                sequence=len(payloads),
+                thread_id=request.thread_id,
+                turn_id=request.turn_id,
+                payload=payload,
+                timestamp=datetime.now(UTC),
+            )
+
+        context = TurnContext(preparation.budgets, emit)
+        assert isinstance(await runner.run(request, context), ParkedTurn)
+        pick(instance, echo=echo())
+        await runner.resume(request, ApprovalAnswer(ApprovalDecision.APPROVE), context)
+
+    asyncio.run(scenario())
+
+    called = result(payloads)
+    assert (called.error, called.output) == (False, "looked: hi")
+
+
+@pytest.mark.parametrize("state", [ToolState.LOADED, ToolState.SEARCHABLE])
+def test_a_routines_code_step_runs_a_loaded_or_searchable_tool(
+    tmp_path: Path, state: ToolState
+) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo(default_state=state))
+    routine_file(
+        instance, 'description: Look\nmode: full-access\nrun: echo__look\narguments: {"text": "hi"}'
+    )
+    model = RoutineModel()
+
+    events = asyncio.run(fire(instance, model, seconds=60))
+
+    assert isinstance(events[-1].payload, TurnCompleted)
+    assert "looked: hi" in str(model.messages[0][-1].content)
+
+
+def test_a_routines_code_step_naming_an_off_tool_fails_as_a_missing_tool(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo())
+    routine_file(
+        instance, 'description: Look\nmode: full-access\nrun: echo__look\narguments: {"text": "hi"}'
+    )
+
+    events = asyncio.run(fire(instance, RoutineModel(), seconds=60))
+
+    failed = events[-1].payload
+    assert isinstance(failed, TurnFailed)
+    assert failed.code is ErrorCode.NOT_FOUND
+    assert 'Code step tool "echo__look"' in failed.message
 
 
 @pytest.mark.parametrize("tool", ["echo__look", "echo__post"])
@@ -232,7 +376,7 @@ def test_a_remote_server_is_reached_at_its_filled_url_with_filled_and_fixed_head
                     "X-Cockpit-Agent": "kinby",
                 },
             },
-            "include": ["headers"],
+            "tool_states": {"headers": "loaded"},
         }
     )
     pick(instance, echo=remote)
@@ -384,7 +528,9 @@ def test_a_server_whose_sign_in_is_pending_is_left_out_with_a_notice_that_it_nee
     tmp_path: Path, oauth_server: OAuthMcpServer
 ) -> None:
     instance = instance_at(tmp_path)
-    remote = McpServer.model_validate({"entry": {"url": oauth_server.url}, "include": ["look"]})
+    remote = McpServer.model_validate(
+        {"entry": {"url": oauth_server.url}, "tool_states": {"look": "loaded"}}
+    )
     write_lock(
         instance.path,
         SkillsLock(

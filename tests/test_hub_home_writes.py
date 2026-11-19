@@ -716,7 +716,10 @@ def test_kinby_writes_a_skill_into_the_library_once_the_user_approves(tmp_path, 
 def test_kinby_adds_an_mcp_server_to_the_library_only_once_the_user_approves_in_full_access(
     tmp_path, monkeypatch
 ):
-    fetch = {"entry": {"command": "uvx", "args": ["mcp-server-fetch"]}, "include": ["fetch"]}
+    fetch = {
+        "entry": {"command": "uvx", "args": ["mcp-server-fetch"]},
+        "tool_states": {"fetch": "loaded"},
+    }
 
     def script(_: UUID) -> list[AIMessageChunk]:
         server = {"name": "fetch", "server": fetch, "hash": None}
@@ -751,7 +754,10 @@ def test_kinby_picks_an_mcp_server_for_another_instance_only_once_the_user_appro
     tmp_path, monkeypatch
 ):
     fetch = McpServer.model_validate(
-        {"entry": {"command": "uvx", "args": ["mcp-server-fetch"]}, "include": ["fetch"]}
+        {
+            "entry": {"command": "uvx", "args": ["mcp-server-fetch"]},
+            "tool_states": {"fetch": "loaded"},
+        }
     )
 
     def script(alice: UUID) -> list[AIMessageChunk]:

@@ -37,6 +37,7 @@ from kinby.contracts import (
     OperationState,
     PickState,
     SecretSetup,
+    ToolState,
 )
 from kinby.hub import Hub
 from kinby.instance import inspect_instance
@@ -141,7 +142,9 @@ def test_a_library_change_to_a_picked_server_reaches_the_instance_only_through_a
     directory = _started(hub)
     _library_server(hub, "fetch", FETCH)
     _pick_servers(hub, directory, McpServerChoice(name="fetch", trust_hints=True))
-    changed = FETCH.model_copy(update={"include": ["fetch", "fetch_html"]})
+    changed = FETCH.model_copy(
+        update={"tool_states": {"fetch": ToolState.LOADED, "fetch_html": ToolState.LOADED}}
+    )
     _library_server(hub, "fetch", changed)
 
     assert _servers(_picks(hub_client(hub), directory)) == [
@@ -185,7 +188,8 @@ def test_the_hub_converts_a_picks_locked_copy_in_the_old_shape(tmp_path):
                 "args": ["mcp-server-fetch", "--ignore-robots"],
                 "env": {"FETCH_USER_AGENT": "${FETCH_USER_AGENT}"},
             },
-            "include": ["fetch"],
+            "default_state": "off",
+            "tool_states": {"fetch": "loaded"},
         },
         "trustHints": True,
         "needsSignIn": False,
@@ -193,6 +197,56 @@ def test_the_hub_converts_a_picks_locked_copy_in_the_old_shape(tmp_path):
     assert _servers(_picks(hub_client(hub), directory)) == [
         McpServerPick(name="fetch", trust_hints=True, state=PickState.BEHIND)
     ]
+
+
+def test_an_include_list_migrates_to_its_tools_loaded_and_the_pick_stays_up_to_date(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    included = {"entry": FETCH.entry.model_dump(mode="json"), "include": ["fetch"]}
+    (hub.directory / "mcp-servers").mkdir()
+    (hub.directory / "mcp-servers" / "fetch.json").write_text(
+        json.dumps(included), encoding="utf-8"
+    )
+    _pick_servers(hub, directory, McpServerChoice(name="fetch"))
+    lock = json.loads((directory / "skills-lock.json").read_bytes())
+    lock["mcpServers"]["fetch"]["server"] = included
+    (directory / "skills-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
+    hub = reopened(hub)
+
+    migrated = {
+        "entry": FETCH.entry.model_dump(mode="json"),
+        "default_state": "off",
+        "tool_states": {"fetch": "loaded"},
+    }
+    assert _locked_servers(directory)["fetch"]["server"] == migrated
+    assert json.loads((hub.directory / "mcp-servers" / "fetch.json").read_bytes()) == migrated
+    assert _servers(_picks(hub_client(hub), directory)) == [FETCHED]
+
+
+def test_an_update_takes_the_librarys_new_definition_and_keeps_the_picks_states(tmp_path):
+    hub = _hub(tmp_path)
+    directory = _started(hub)
+    _library_server(hub, "fetch", FETCH)
+    _pick_servers(hub, directory, McpServerChoice(name="fetch"))
+    lock = json.loads((directory / "skills-lock.json").read_bytes())
+    changes = {"on": False, "defaultState": "searchable", "toolStates": {"fetch": "off"}}
+    lock["mcpServers"]["fetch"] |= changes
+    (directory / "skills-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    changed = FETCH.model_copy(
+        update={"tool_states": {"fetch": ToolState.LOADED, "fetch_html": ToolState.LOADED}}
+    )
+    _library_server(hub, "fetch", changed)
+
+    _update(hub, directory)
+
+    assert _locked_servers(directory)["fetch"] == {
+        "server": changed.model_dump(mode="json"),
+        "trustHints": False,
+        "needsSignIn": False,
+        **changes,
+    }
+    assert _servers(_picks(hub_client(hub), directory)) == [FETCHED]
 
 
 def test_a_variable_a_picked_server_needs_and_the_instance_lacks_is_pending_setup(tmp_path):
@@ -206,7 +260,7 @@ def test_a_variable_a_picked_server_needs_and_the_instance_lacks_is_pending_setu
                 "url": "https://mcp.example.com/${ROUTE:-mcp}",
                 "headers": {"Authorization": "Bearer ${FETCH_TOKEN}"},
             },
-            "include": ["fetch"],
+            "tool_states": {"fetch": "loaded"},
         }
     )
     _library_server(hub, "fetch", FETCH)
@@ -243,7 +297,7 @@ def test_a_variable_a_picked_server_needs_and_the_instance_lacks_is_pending_setu
 
 def _remote(url: str, headers: dict[str, str] | None = None) -> McpServer:
     return McpServer.model_validate(
-        {"entry": {"url": url, "headers": headers or {}}, "include": ["look"]}
+        {"entry": {"url": url, "headers": headers or {}}, "tool_states": {"look": "loaded"}}
     )
 
 
@@ -399,7 +453,9 @@ def test_a_pick_changed_while_an_update_asks_its_servers_is_kept(tmp_path):
     remote = _remote(f"http://127.0.0.1:{listening.getsockname()[1]}/mcp")
     _library_server(hub, "cockpit", remote)
     _pick_servers(hub, directory, McpServerChoice(name="cockpit"))
-    changed = remote.model_copy(update={"include": ["look", "post"]})
+    changed = remote.model_copy(
+        update={"tool_states": {"look": ToolState.LOADED, "post": ToolState.LOADED}}
+    )
     _library_server(hub, "cockpit", changed)
     asked, answer = threading.Event(), threading.Event()
 

@@ -1,4 +1,4 @@
-import type { McpOAuth, McpServer, McpServerEntry } from "@kinby/contract"
+import type { McpOAuth, McpServer, McpServerEntry, ToolState } from "@kinby/contract"
 
 /** An MCP server's definition as its form holds it, each list one item a line. */
 export interface McpServerDraft {
@@ -16,8 +16,15 @@ export interface McpServerDraft {
   readEnv: Record<string, string>
   /** A remote server's OAuth client, which the form does not show, kept as read or pasted. */
   oauth?: McpOAuth | null
-  include: string
+  defaultState: ToolState
+  /** The tools with a state of their own, one name a line. */
+  loaded: string
+  searchable: string
+  off: string
 }
+
+/** Each tool state, as the form names it. */
+export const TOOL_STATES: ToolState[] = ["loaded", "searchable", "off"]
 
 export const EMPTY_DRAFT: McpServerDraft = {
   type: "http",
@@ -28,22 +35,38 @@ export const EMPTY_DRAFT: McpServerDraft = {
   readArgs: [],
   env: "",
   readEnv: {},
-  include: "",
+  defaultState: "off",
+  loaded: "",
+  searchable: "",
+  off: "",
 }
 
-export function draftOf({ entry, include = [] }: McpServer): McpServerDraft {
-  const tools = include.join("\n")
+export function draftOf({
+  entry,
+  default_state = "off",
+  tool_states = {},
+}: McpServer): McpServerDraft {
+  const named = (state: ToolState) =>
+    Object.keys(tool_states)
+      .filter((tool) => tool_states[tool] === state)
+      .join("\n")
+  const tools = {
+    defaultState: default_state,
+    loaded: named("loaded"),
+    searchable: named("searchable"),
+    off: named("off"),
+  }
   return entry.type === "http"
     ? {
         ...EMPTY_DRAFT,
-        include: tools,
+        ...tools,
         url: entry.url,
         headers: textOf(entry.headers, ": "),
         oauth: entry.oauth,
       }
     : {
         ...EMPTY_DRAFT,
-        include: tools,
+        ...tools,
         type: "stdio",
         command: entry.command,
         args: (entry.args ?? []).join("\n"),
@@ -69,14 +92,17 @@ export function serverOf(draft: McpServerDraft): McpServer {
             args: draft.args === draft.readArgs.join("\n") ? draft.readArgs : lines(draft.args),
             env: draft.env === textOf(draft.readEnv, "=") ? draft.readEnv : pairsOf(draft.env, "="),
           },
-    include: lines(draft.include),
+    default_state: draft.defaultState,
+    tool_states: Object.fromEntries(
+      TOOL_STATES.flatMap((state) => lines(draft[state]).map((tool) => [tool, state])),
+    ),
   }
 }
 
 /** A field of the MCP server form: the server's name, or one of its draft's. */
 export type McpServerField =
   | "name"
-  | Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv" | "oauth">
+  | Exclude<keyof McpServerDraft, "type" | "readArgs" | "readEnv" | "oauth" | "defaultState">
 
 const DRAFT_FIELDS = new Set<string>(["url", "headers", "command", "args", "env"])
 
@@ -98,7 +124,6 @@ export function reasonsByField(
 function fieldOf(path: string): McpServerField | "other" {
   const [top, value, , field = ""] = path.split(".")
   if (top === "name") return "name"
-  if (top === "server" && value === "include") return "include"
   if (top === "server" && value === "entry" && DRAFT_FIELDS.has(field)) {
     return field as McpServerField
   }

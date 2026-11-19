@@ -50,11 +50,11 @@ async def connected_tools(
     secrets: Mapping[str, str],
     source: Path,
     stack: AsyncExitStack,
-) -> list[Tool]:
-    """The included tools of the server *pick* names, its entry filled from *secrets*, connected
-    until *stack* closes, with the hub's access token when it asks for a sign-in. A server that
-    does not start or list its tools raises NotConnected, and one whose sign-in the hub does not
-    hold, SignInNeeded."""
+) -> list[tuple[str, Tool]]:
+    """Each tool of the server *pick* names, by the name the server gives it, its entry filled
+    from *secrets*, connected until *stack* closes, with the hub's access token when it asks for a
+    sign-in. A server that does not start or list its tools raises NotConnected, and one whose
+    sign-in the hub does not hold, SignInNeeded."""
     auth = _HubToken(name, await _hub_token(name)) if pick.needs_sign_in else None
     try:
         client, listed = await _connect(pick.server.entry, secrets, auth, stack)
@@ -62,11 +62,7 @@ async def connected_tools(
         if auth is not None and auth.pending:
             raise SignInNeeded from None
         raise
-    return [
-        _adapted(name, pick, each, client, source)
-        for each in listed
-        if each.name in pick.server.include
-    ]
+    return [(each.name, _adapted(name, pick, each, client, source)) for each in listed]
 
 
 class NotConnected(Exception):

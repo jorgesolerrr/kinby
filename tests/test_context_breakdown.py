@@ -8,7 +8,7 @@ from uuid import UUID
 
 import pytest
 
-from kinby.contracts import ContextCategory, ThreadContextResult
+from kinby.contracts import ContextCategory, ThreadContextResult, ToolState
 from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.instance import Instance
 from kinby.instance.layout import MEMORY_DIR, PROFILE_NAME
@@ -100,6 +100,21 @@ def test_the_tool_list_has_a_row_each_for_core_authored_and_mcp_tools(tmp_path: 
 
     assert rows[ContextCategory.CORE_TOOLS] > rows[ContextCategory.AUTHORED_TOOLS] > 0
     assert rows[ContextCategory.MCP_TOOLS] > 0
+
+
+def test_the_tool_list_counts_no_searchable_mcp_tool(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    pick(instance, echo=echo(default_state=ToolState.SEARCHABLE))
+    dispatcher, _ = signal_runtime(instance, CompactingModel(Sized("Done.", 30_000)))
+
+    async def scenario() -> ThreadContextResult:
+        thread_id = await new_thread(dispatcher)
+        await turn(dispatcher, thread_id, "Go.")
+        return await breakdown(dispatcher, thread_id)
+
+    rows = tokens(asyncio.run(scenario()))
+
+    assert rows[ContextCategory.MCP_TOOLS] == 0
 
 
 def test_a_compacted_thread_counts_the_summary_and_not_the_messages_before_its_boundary(

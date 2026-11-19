@@ -3477,13 +3477,25 @@ type McpServerEntry = Annotated[
 ]
 
 
+class ToolState(StrEnum):
+    """How one tool reaches an instance's turns (ADR 0129)."""
+
+    #: The model is sent its definition on every call.
+    LOADED = "loaded"
+    #: The model finds it through tool search.
+    SEARCHABLE = "searchable"
+    OFF = "off"
+
+
 class McpServer(ContractModel):
     """An MCP server's definition, as the library keeps it: its entry, and kinby's own fields
     beside it."""
 
     entry: McpServerEntry
-    #: The server's tools a turn is offered, by name. The others are left out.
-    include: list[str] = Field(default_factory=list)
+    #: The state of each of the server's tools that has none of its own.
+    default_state: ToolState = ToolState.OFF
+    #: The tools with a state of their own, by the name the server gives them.
+    tool_states: dict[str, ToolState] = Field(default_factory=dict)
 
 
 class LibraryMcpServerReadCommand(ContractModel):

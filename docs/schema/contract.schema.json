@@ -5750,14 +5750,17 @@
       "additionalProperties": false,
       "description": "An MCP server's definition, as the library keeps it: its entry, and kinby's own fields\nbeside it.",
       "properties": {
+        "default_state": {
+          "$ref": "#/$defs/ToolState"
+        },
         "entry": {
           "$ref": "#/$defs/McpServerEntry"
         },
-        "include": {
-          "items": {
-            "type": "string"
+        "tool_states": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolState"
           },
-          "type": "array"
+          "type": "object"
         }
       },
       "required": [
@@ -11860,6 +11863,16 @@
         "mode"
       ],
       "title": "ToolRule",
+      "type": "string"
+    },
+    "ToolState": {
+      "description": "How one tool reaches an instance's turns (ADR 0129).",
+      "enum": [
+        "loaded",
+        "searchable",
+        "off"
+      ],
+      "title": "ToolState",
       "type": "string"
     },
     "ToolSummary": {

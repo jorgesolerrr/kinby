@@ -12,11 +12,11 @@ import {
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import type { McpServerDraft, McpServerField } from "@/lib/mcp-servers"
+import { type McpServerDraft, type McpServerField, TOOL_STATES } from "@/lib/mcp-servers"
 
 /**
- * The fields of an MCP server's definition: its entry, then the tools a turn is offered. Each
- * shows the hub's reason, in `refused`, for refusing its value.
+ * The fields of an MCP server's definition: its entry, then its tools' states. Each shows the
+ * hub's reason, in `refused`, for refusing its value.
  */
 export function McpServerFields({
   draft,
@@ -96,11 +96,32 @@ export function McpServerFields({
           )}
         </>
       )}
-      {field(
-        "include",
-        "Tools",
-        "The tools a turn is offered, one a line. The others are left out.",
-      )}
+      <FieldSet>
+        <FieldLegend variant="label">Default state</FieldLegend>
+        <ToggleGroup
+          variant="outline"
+          value={[draft.defaultState]}
+          disabled={disabled}
+          onValueChange={([state]) => {
+            const chosen = TOOL_STATES.find((each) => each === state)
+            if (chosen) onChange({ ...draft, defaultState: chosen })
+          }}
+        >
+          {TOOL_STATES.map((state) => (
+            <ToggleGroupItem key={state} value={state}>
+              {state}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <FieldDescription>
+          The state of each tool not named below, one the server adds later too. A loaded tool is
+          sent to the model on every call. A searchable tool reaches no turn until kinby has tool
+          search. An off tool is left out.
+        </FieldDescription>
+      </FieldSet>
+      {field("loaded", "Loaded tools", "One a line.")}
+      {field("searchable", "Searchable tools", "One a line.")}
+      {field("off", "Off tools", "One a line.")}
     </FieldGroup>
   )
 }
