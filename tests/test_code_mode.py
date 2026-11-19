@@ -24,6 +24,7 @@ from kinby.contracts import (
 )
 from kinby.instance import Instance
 from kinby.instance.routine_grants import RoutineGrants
+from tests.helpers import GRAPH_EVENT_TIMEOUT
 from tests.test_instance_code import model_turn, scripted, turn
 from tests.test_learning_review import failed_tool, work_turn
 from tests.test_mcp_servers import asked, echo, launchers, pick  # noqa: F401
@@ -361,3 +362,186 @@ def test_a_tool_the_turns_limits_remove_is_no_function_of_its_scripts(tmp_path: 
 
     assert isinstance(events[-1].payload, TurnCompleted)
     assert model.ran == "looked: hi, and no post"
+
+
+def tool_file(tmp_path: Path, name: str, source: str) -> None:
+    (tmp_path / "tools").mkdir(exist_ok=True)
+    (tmp_path / "tools" / f"{name}.py").write_text(
+        f"import asyncio\n\nfrom kinby.plugins import tool\n\n\n{source}", encoding="utf-8"
+    )
+
+
+def test_a_script_stops_after_its_running_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("kinby.plugins.code_mode.SCRIPT_SECONDS", 0.5)
+    instance = scripting(tmp_path)
+
+    payloads = asyncio.run(turn(instance, [script("while True:\n    pass")], PermissionMode.ASK))
+
+    result = ran_once(payloads)
+    assert result.error
+    assert "The script passed its limit of 0.5 seconds of running time." in result.output
+
+
+def test_time_a_script_waits_on_a_tool_is_not_its_running_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("kinby.plugins.code_mode.SCRIPT_SECONDS", 0.5)
+    instance = instance_with(tmp_path, browser=False)
+    tool_file(
+        tmp_path,
+        "nap",
+        "@tool(write=False)\n"
+        "async def nap() -> str:\n"
+        '    """Nap for a second."""\n'
+        "    await asyncio.sleep(1)\n"
+        '    return "rested"\n',
+    )
+
+    payloads = asyncio.run(turn(instance, [script("return await nap()")], PermissionMode.ASK))
+
+    assert ran_once(payloads).output == "rested"
+
+
+def test_a_script_stops_at_its_memory(tmp_path: Path) -> None:
+    instance = scripting(tmp_path)
+
+    payloads = asyncio.run(
+        turn(instance, [script("kept = 'a' * (300 * 1024 * 1024)")], PermissionMode.ASK)
+    )
+
+    result = ran_once(payloads)
+    assert result.error
+    assert "The script passed its limit of 256 MiB of memory." in result.output
+
+
+def test_a_script_stops_at_its_tool_calls(tmp_path: Path) -> None:
+    instance = instance_with(tmp_path, browser=False)
+    tool_file(
+        tmp_path,
+        "tick",
+        '@tool(write=False)\ndef tick() -> str:\n    """Tick."""\n    return "tick"\n',
+    )
+
+    payloads = asyncio.run(
+        turn(
+            instance,
+            [
+                script(
+                    "try:\n"
+                    "    for each in range(101):\n"
+                    "        await tick()\n"
+                    "except Exception:\n"
+                    "    return 'kept going'"
+                )
+            ],
+            PermissionMode.ASK,
+        )
+    )
+
+    result = ran_once(payloads)
+    assert result.error
+    assert "The script passed its limit of 100 tool calls." in result.output
+    ticks = [
+        payload
+        for payload in payloads
+        if isinstance(payload, ToolResult) and payload.name == "tick"
+    ]
+    assert len(ticks) == 100
+
+
+def test_a_syntax_error_comes_back_with_its_line(tmp_path: Path) -> None:
+    instance = scripting(tmp_path)
+
+    payloads = asyncio.run(turn(instance, [script("kept = 1\nkept = )")], PermissionMode.ASK))
+
+    result = ran_once(payloads)
+    assert result.error
+    assert "line 2" in result.output
+    assert "SyntaxError" in result.output
+
+
+def test_a_runtime_error_comes_back_with_its_line(tmp_path: Path) -> None:
+    instance = scripting(tmp_path)
+
+    payloads = asyncio.run(
+        turn(instance, [script("kept = 1\nreturn kept / 0")], PermissionMode.ASK)
+    )
+
+    result = ran_once(payloads)
+    assert result.error
+    assert "line 2" in result.output
+    assert "ZeroDivisionError: division by zero" in result.output
+
+
+def test_a_failed_scripts_result_names_the_tool_calls_that_finished(tmp_path: Path) -> None:
+    instance = scripting(tmp_path, trust_hints=True)
+
+    payloads = asyncio.run(
+        turn(
+            instance,
+            [
+                script(
+                    "await echo__look(text='one')\n"
+                    "try:\n"
+                    "    await echo__post(text='two')\n"
+                    "except Exception:\n"
+                    "    pass\n"
+                    "await echo__arguments()\n"
+                    "raise ValueError('stopped')"
+                )
+            ],
+            PermissionMode.ASK,
+        )
+    )
+
+    output = ran_once(payloads).output
+    assert "ValueError: stopped" in output
+    assert output.endswith("The tool calls that finished: echo__look, echo__arguments.")
+
+
+def test_a_script_that_fails_before_any_call_says_none_finished(tmp_path: Path) -> None:
+    instance = scripting(tmp_path)
+
+    payloads = asyncio.run(
+        turn(instance, [script("raise ValueError('stopped')")], PermissionMode.ASK)
+    )
+
+    assert ran_once(payloads).output.endswith("No tool call finished.")
+
+
+#: Set by the tool `wait` once a script calls it, and what became of each call.
+waiting = asyncio.Event()
+waits: list[str] = []
+
+
+def test_interrupting_the_turn_cancels_the_script_and_its_call_in_flight(tmp_path: Path) -> None:
+    instance = instance_with(tmp_path, browser=False)
+    tool_file(
+        tmp_path,
+        "wait",
+        "from tests import test_code_mode\n\n\n"
+        "@tool(write=False)\n"
+        "async def wait() -> str:\n"
+        '    """Wait for good."""\n'
+        "    test_code_mode.waiting.set()\n"
+        "    try:\n"
+        "        await asyncio.Event().wait()\n"
+        "    except asyncio.CancelledError:\n"
+        "        test_code_mode.waits.append('cancelled')\n"
+        "        raise\n"
+        "    return 'waited'\n",
+    )
+
+    async def interrupt() -> None:
+        running = asyncio.create_task(
+            turn(instance, [script("await wait()\nawait wait()")], PermissionMode.ASK)
+        )
+        await asyncio.wait_for(waiting.wait(), timeout=GRAPH_EVENT_TIMEOUT)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert waits == ["cancelled"]
+
+    asyncio.run(interrupt())
