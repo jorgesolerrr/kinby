@@ -12,6 +12,7 @@ from uuid import UUID
 
 from kinby.contracts import (
     ApprovalRequested,
+    CallVia,
     CompletionOutcome,
     DenyCounts,
     Event,
@@ -146,6 +147,7 @@ class _TurnEvents:
     profile_version: ProfileVersion | None
     origin: Origin
     tool_calls: Counter[str] = field(default_factory=Counter)
+    script_tool_calls: Counter[str] = field(default_factory=Counter)
     tool_writes: dict[str, bool | None] = field(default_factory=dict)
     denies: Counter[str] = field(default_factory=Counter)
     tool_duration: Counter[str] = field(default_factory=Counter)
@@ -290,7 +292,10 @@ def turn_metrics(
             continue
         if isinstance(payload, ToolCall):
             if turn is not None:
-                turn.tool_calls[payload.name] += 1
+                counted = (
+                    turn.tool_calls if payload.via is not CallVia.SCRIPT else turn.script_tool_calls
+                )
+                counted[payload.name] += 1
                 turn.tool_writes[payload.call_id] = payload.write
                 if kind := _MEMORY_CALL_KINDS.get(payload.name):
                     turn.memory_calls[kind] += 1
@@ -388,6 +393,7 @@ def turn_metrics(
                 recap_output_tokens=0,
                 cost=own_cost,
                 tool_calls=dict(turn.tool_calls) if turn else {},
+                script_tool_calls=dict(turn.script_tool_calls) if turn else {},
                 memory_calls=memory_calls,
                 memory_consulted=bool(memory_calls.search or memory_calls.open),
                 approvals_requested=turn.approvals_requested if turn else 0,

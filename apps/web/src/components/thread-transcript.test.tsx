@@ -162,6 +162,73 @@ describe("a thread's panel", () => {
     expect(screen.queryByText(/call_tool/)).toBeNull()
   })
 
+  it("shows a script with each call it made beneath it, and each call's gate decision", async () => {
+    const fromScript = (callId: string, name: string, text: string, write: boolean): Payload => ({
+      type: "tool.call",
+      call_id: callId,
+      name,
+      arguments: { text },
+      write,
+      via: "script",
+      script_call_id: "s",
+    })
+    const gated = (callId: string, name: string, action: "allow" | "deny" | "ask"): Payload => ({
+      type: "tool.gated",
+      call_id: callId,
+      name,
+      action,
+      decided_by: "policy",
+      rule: "mode.ask.write",
+    })
+    const result = (callId: string, name: string, output: string, error = false): Payload => ({
+      type: "tool.result",
+      call_id: callId,
+      name,
+      output,
+      error,
+    })
+    const code = "looked = await echo__look(text='hi')\nawait echo__post(text='hi')"
+    const events = thread(
+      ["turn-1", started("Look, then post")],
+      ["turn-1", { type: "tool.call", call_id: "s", name: "run_code", arguments: { code } }],
+      ["turn-1", gated("s", "run_code", "allow")],
+      ["turn-1", fromScript("s1", "echo__look", "hi", false)],
+      ["turn-1", gated("s1", "echo__look", "allow")],
+      ["turn-1", result("s1", "echo__look", "looked: hi")],
+      ["turn-1", fromScript("s2", "echo__post", "hi", true)],
+      ["turn-1", gated("s2", "echo__post", "ask")],
+      ["turn-1", result("s2", "echo__post", "Call it directly.", true)],
+      ["turn-1", fromScript("s3", "echo__post", "bye", true)],
+      ["turn-1", gated("s3", "echo__post", "deny")],
+      ["turn-1", result("s3", "echo__post", "Denied by policy.", true)],
+      ["turn-1", result("s", "run_code", "Script failed.", true)],
+      ["turn-1", { type: "turn.completed", input_tokens: 10, output_tokens: 5 }],
+    )
+    const { subscription } = openThread()
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    await userEvent.click(traceLine("Used run_code"))
+    expect(screen.queryByRole("button", { name: /^echo__look/ })).toBeNull()
+    await userEvent.click(traceLine("run_code"))
+    expect(
+      screen.getByText(/^looked = await echo__look\(text='hi'\)\s+await echo__post/),
+    ).toBeDefined()
+    for (const [line, decision] of [
+      ["echo__look hi", "done"],
+      ["echo__post hi", "needs your approval · not run"],
+      ["echo__post bye", "denied by policy"],
+    ]) {
+      expect(within(traceLine(line)).getByText(decision)).toBeDefined()
+    }
+    await userEvent.click(traceLine("echo__look hi"))
+    expect(screen.getByText("looked: hi")).toBeDefined()
+    expect(screen.getByText(/"text": "hi"/)).toBeDefined()
+  })
+
   describe("the line a turn opens with", () => {
     async function opened(origin: Extract<Payload, { type: "turn.started" }>["origin"]) {
       const events = thread([

@@ -77,6 +77,7 @@ function ToolCall({
   end: TurnEnd | undefined
 }) {
   const { icon: Icon, decision } = gateDecision(step, waiting, end)
+  const script = step.name === "run_code" ? step.arguments.code : undefined
   const status = waiting
     ? "pending"
     : isFailed(step)
@@ -101,8 +102,15 @@ function ToolCall({
       <TraceCollapsibleContent>
         <div className="flex flex-col gap-2 text-xs">
           <pre className="max-h-64 overflow-y-auto wrap-anywhere whitespace-pre-wrap">
-            {JSON.stringify(step.arguments, null, 2)}
+            {typeof script === "string" ? script : JSON.stringify(step.arguments, null, 2)}
           </pre>
+          {step.calls !== undefined && (
+            <Trace>
+              {step.calls.map((call) => (
+                <ToolCall key={call.callId} step={call} waiting={false} end={end} />
+              ))}
+            </Trace>
+          )}
           {step.result?.output ? (
             <pre className="max-h-64 overflow-y-auto wrap-anywhere whitespace-pre-wrap text-foreground">
               {step.result.output}
@@ -114,14 +122,17 @@ function ToolCall({
   )
 }
 
-/** A call the gate has not denied that has not returned. Once its turn ends, it never will. */
+/** A call the gate has not kept from running that has not returned. Once its turn ends, it never will. */
 function isRunning({ gate, result }: ToolStep): boolean {
-  return gate?.action !== "deny" && result === undefined
+  return (gate === undefined || gate.action === "allow") && result === undefined
 }
 
-/** A call that ran and returned an error. A denied call returns one too, without running. */
+/**
+ * A call that ran and returned an error. A denied call returns one too without running, as does a
+ * script's call the gate would ask about.
+ */
 function isFailed({ gate, result }: ToolStep): boolean {
-  return gate?.action !== "deny" && result?.error === true
+  return (gate === undefined || gate.action === "allow") && result?.error === true
 }
 
 /** What a run of calls did, in words: "Searched the web, opened 2 pages". */
@@ -189,6 +200,9 @@ function gateDecision(
       decision: `denied by ${gate.decidedBy === "policy" ? "policy" : "you"}`,
     }
   }
+  // A script cannot wait on an approval, so the call failed in it without running.
+  if (gate?.action === "ask")
+    return { icon: ShieldAlertIcon, decision: "needs your approval · not run" }
   if (gate === undefined && result === undefined) {
     if (end !== undefined) return { icon: BanIcon, decision: "not run" }
     return waiting

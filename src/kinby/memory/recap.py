@@ -456,7 +456,15 @@ def _delete_no_work_traces(graph: Path, reader: EventReader) -> None:
 
 
 def _path_taken(calls: list[ToolCall]) -> str:
-    steps = [f"{number}. {_summarize_call(call)}" for number, call in enumerate(calls, 1)]
+    """Each call the model made, numbered, with the calls its script made beneath it."""
+    steps = []
+    for number, call in enumerate((call for call in calls if call.script_call_id is None), 1):
+        steps.append(f"{number}. {_summarize_call(call)}")
+        steps.extend(
+            f"   - from the script: {_summarize_call(made)}"
+            for made in calls
+            if made.script_call_id == call.call_id
+        )
     return "## Path taken\n" + "\n".join(steps)
 
 
@@ -687,8 +695,9 @@ def _render_turn(events: list[Event], calls: list[ToolCall]) -> str:
             rendered_result = _truncate_result(result.output)
             if result.error:
                 rendered_result = f"Error: {rendered_result}"
+        made_by = " from a script" if call.script_call_id is not None else ""
         sections.append(
-            f"# Tool call {call.name}\n"
+            f"# Tool call {call.name}{made_by}\n"
             f"Arguments: {json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)}\n"
             f"Result: {rendered_result}"
         )

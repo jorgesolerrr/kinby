@@ -15,6 +15,7 @@ from pydantic import JsonValue, ValidationError
 
 from kinby.contracts import (
     AcceptedResult,
+    CallVia,
     CodingSessionId,
     CompletionOutcome,
     DelegatedRun,
@@ -1299,6 +1300,64 @@ def test_tool_call_summary_is_one_bounded_line(tmp_path: Path) -> None:
         assert path_line.startswith('1. write: {"content": "')
         assert path_line.endswith("...")
         assert len(path_line) == 163
+
+    asyncio.run(scenario())
+
+
+def test_the_path_taken_lists_a_scripts_calls_beneath_its_script(tmp_path: Path) -> None:
+    class ScriptRunner:
+        async def run(self, turn: PreparedTurnRequest, context: TurnContext) -> TurnOutcome:
+            code = "return await echo__look(text='hi')"
+            await context.emit(ToolCall(call_id="s", name="run_code", arguments={"code": code}))
+            await context.emit(
+                ToolCall(
+                    call_id="s-1",
+                    name="echo__look",
+                    arguments={"text": "hi"},
+                    via=CallVia.SCRIPT,
+                    script_call_id="s",
+                )
+            )
+            await context.emit(ToolCall(call_id="r", name="read", arguments={"path": "notes.md"}))
+            return TurnOutcome()
+
+        resume = does_not_park
+        restore = cannot_restore
+        routine_mode = no_routines
+
+    async def scenario() -> None:
+        state_dir = tmp_path / ".state"
+        event_log = EventLog(state_dir)
+        recap = _trace_only_writer(tmp_path, event_log, GraphStore(tmp_path))
+        dispatcher = build_dispatcher(
+            state_dir,
+            event_log=event_log,
+            turns=TurnConfig(
+                fixed_turn_preparation, fixed_permission_ceiling, ScriptRunner(), recap
+            ),
+        )
+        created = await dispatcher.dispatch("thread.create", {}, {Scope.THREAD_OPERATE})
+        assert isinstance(created, ThreadCreateResult)
+        await dispatcher.dispatch(
+            "thread.turn.start",
+            {"thread_id": created.id, "message": "Look"},
+            {Scope.THREAD_OPERATE},
+        )
+
+        closing_events = (await event_log.subscribe(created.id)).items
+        for _ in range(5):
+            await anext(closing_events)
+        await closing_events.aclose()
+        await asyncio.wait_for(recap.drain(), timeout=1)
+        [episode_path] = (tmp_path / "memory" / "graph").glob("*.md")
+        body = episode_path.read_text(encoding="utf-8").split("---\n")[-1]
+
+        assert body == (
+            "## Path taken\n"
+            '1. run_code: {"code": "return await echo__look(text=\'hi\')"}\n'
+            '   - from the script: echo__look: {"text": "hi"}\n'
+            '2. read: {"path": "notes.md"}\n'
+        )
 
     asyncio.run(scenario())
 

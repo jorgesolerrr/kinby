@@ -88,6 +88,8 @@ export interface ToolStep {
   gate?: { action: GateOutcome; decidedBy: GateDecider; rule: string; reason?: string | null }
   /** What the call returned: its output, whether it failed, and how long it ran when the result says. */
   result?: { output: string; error: boolean; durationMs?: number }
+  /** The calls a run_code call's script made, in order. */
+  calls?: ToolStep[]
 }
 
 /** A notification the turn raised on the instance's hub route. */
@@ -104,7 +106,7 @@ export interface NotificationStep {
    * The approval it asks the user to answer: the call it gates, and how it settled, by the gate's
    * decision on the call or by the turn ending first. Unsettled while the turn is parked on it.
    */
-  approval?: { callId: string; settled?: GateOutcome | "ended" }
+  approval?: { callId: string; settled?: ApprovalSettled }
 }
 
 /** A view the turn wrote. */
@@ -114,6 +116,9 @@ export interface ViewStep {
   title: string
   change: ViewChange
 }
+
+/** How an approval settled: by the gate's decision on its call, or by the turn ending first. */
+type ApprovalSettled = Exclude<GateOutcome, "ask"> | "ended"
 
 /** The thread compacted on its own while the turn ran. */
 interface CompactionStep {
@@ -185,19 +190,20 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
           }
         : { ...turn, steps: [...turn.steps, { kind: "text", text: payload.text }] }
     }
-    case "tool.call":
-      return {
-        ...turn,
-        steps: [
-          ...turn.steps,
-          {
-            kind: "tool",
-            callId: payload.call_id,
-            name: payload.name,
-            arguments: payload.arguments,
-          },
-        ],
+    case "tool.call": {
+      const call: ToolStep = {
+        kind: "tool",
+        callId: payload.call_id,
+        name: payload.name,
+        arguments: payload.arguments,
       }
+      return payload.script_call_id == null
+        ? { ...turn, steps: [...turn.steps, call] }
+        : updateTool(turn, payload.script_call_id, (script) => ({
+            ...script,
+            calls: [...(script.calls ?? []), call],
+          }))
+    }
     case "approval.requested": {
       // The request names no call, so it is the undecided call it repeats the name and arguments of.
       const asked = JSON.stringify(payload.arguments)
@@ -238,7 +244,10 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
           reason: payload.reason,
         },
       }))
-      return settleApprovals(gated, payload.action, payload.call_id)
+      // Only a script's call is gated as ask, and it raises no approval.
+      return payload.action === "ask"
+        ? gated
+        : settleApprovals(gated, payload.action, payload.call_id)
     }
     case "tool.result":
       return updateTool(turn, payload.call_id, (step) => ({
@@ -330,16 +339,21 @@ function openedSite({ steps }: TurnBlock): string | undefined {
   }
 }
 
+/** The turn with the call `callId` updated, whether the model or a script made it. */
 function updateTool(
   turn: TurnBlock,
   callId: string,
   update: (step: ToolStep) => ToolStep,
 ): TurnBlock {
+  const updated = (step: ToolStep): ToolStep =>
+    step.callId === callId
+      ? update(step)
+      : step.calls === undefined
+        ? step
+        : { ...step, calls: step.calls.map(updated) }
   return {
     ...turn,
-    steps: turn.steps.map((step) =>
-      step.kind === "tool" && step.callId === callId ? update(step) : step,
-    ),
+    steps: turn.steps.map((step) => (step.kind === "tool" ? updated(step) : step)),
   }
 }
 
@@ -357,11 +371,7 @@ function updateNotification(
 }
 
 /** The turn with each unsettled approval notification settled, or only the one on `callId`. */
-function settleApprovals(
-  turn: TurnBlock,
-  settled: GateOutcome | "ended",
-  callId?: string,
-): TurnBlock {
+function settleApprovals(turn: TurnBlock, settled: ApprovalSettled, callId?: string): TurnBlock {
   return {
     ...turn,
     steps: turn.steps.map((step) =>

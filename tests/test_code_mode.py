@@ -14,14 +14,17 @@ from pydantic import JsonValue
 
 from kinby.contracts import (
     CallVia,
+    GateOutcome,
     PermissionMode,
     RoutineGrant,
     RoutineName,
     ToolCall,
+    ToolGated,
     ToolResult,
     ToolState,
     TurnCompleted,
 )
+from kinby.core.turn_metrics import turn_metrics
 from kinby.instance import Instance
 from kinby.instance.routine_grants import RoutineGrants
 from tests.helpers import GRAPH_EVENT_TIMEOUT
@@ -61,6 +64,13 @@ def ran_once(payloads: Sequence[object]) -> ToolResult:
     return result
 
 
+def gated(payloads: Sequence[object], name: str) -> GateOutcome:
+    [gate] = [
+        payload for payload in payloads if isinstance(payload, ToolGated) and payload.name == name
+    ]
+    return gate.action
+
+
 def test_run_code_is_a_default_tool_an_instance_can_switch_off(tmp_path: Path) -> None:
     (tmp_path / "on").mkdir()
     (tmp_path / "off").mkdir()
@@ -94,7 +104,7 @@ def test_a_script_builds_one_value_from_two_tools_and_only_that_value_reaches_th
     assert not any("looked: hi" in message.text for message in model.sent[-1])
 
 
-def test_each_call_a_script_makes_is_marked_as_made_from_a_script(tmp_path: Path) -> None:
+def test_each_call_a_script_makes_is_marked_as_made_from_its_script(tmp_path: Path) -> None:
     instance = scripting(tmp_path, trust_hints=True)
 
     payloads = asyncio.run(
@@ -102,10 +112,22 @@ def test_each_call_a_script_makes_is_marked_as_made_from_a_script(tmp_path: Path
     )
 
     calls = [payload for payload in payloads if isinstance(payload, ToolCall)]
-    assert [(call.name, call.via) for call in calls] == [
-        ("run_code", None),
-        ("echo__look", CallVia.SCRIPT),
+    assert [(call.name, call.via, call.script_call_id) for call in calls] == [
+        ("run_code", None, None),
+        ("echo__look", CallVia.SCRIPT, "call-0"),
     ]
+
+
+def test_turn_metrics_count_a_scripts_calls_apart_from_direct_calls(tmp_path: Path) -> None:
+    instance = scripting(tmp_path, trust_hints=True)
+    routine_file(instance, "description: Look")
+    model = ScriptingModel("await echo__look(text='a')\nawait echo__look(text='b')")
+
+    events = asyncio.run(fire(instance, model, seconds=60))
+
+    [record] = turn_metrics(events).records
+    assert record.tool_calls == {"run_code": 1}
+    assert record.script_tool_calls == {"echo__look": 2}
 
 
 def test_a_function_returns_parsed_json_or_else_the_text(tmp_path: Path) -> None:
@@ -157,6 +179,7 @@ def test_a_call_the_gate_would_ask_about_raises_in_the_script_and_asks_nothing(
     assert "echo__post" in output
     assert "directly" in output
     assert "posted" not in output
+    assert gated(payloads, "echo__post") == GateOutcome.ASK
 
 
 def test_a_denied_call_raises_with_the_gates_reason(tmp_path: Path) -> None:
@@ -178,6 +201,7 @@ def test_a_denied_call_raises_with_the_gates_reason(tmp_path: Path) -> None:
     )
 
     assert 'Tool "echo__post" was denied by policy rule' in ran_once(payloads).output
+    assert gated(payloads, "echo__post") == GateOutcome.DENY
 
 
 def test_a_tool_error_raises_with_the_tools_message_and_the_script_can_catch_it(

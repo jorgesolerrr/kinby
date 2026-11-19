@@ -2990,7 +2990,8 @@
     "GateOutcome": {
       "enum": [
         "allow",
-        "deny"
+        "deny",
+        "ask"
       ],
       "title": "GateOutcome",
       "type": "string"
@@ -11850,6 +11851,17 @@
         "name": {
           "type": "string"
         },
+        "script_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "tool.call",
           "default": "tool.call",
@@ -12478,6 +12490,12 @@
         },
         "recap_output_tokens": {
           "type": "integer"
+        },
+        "script_tool_calls": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
         },
         "started_at": {
           "anyOf": [

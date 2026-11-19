@@ -535,7 +535,7 @@ The identifier for the policy condition that produced a **gate decision**, such 
 
 ### Gate decision
 
-The **gate**'s final verdict on one **tool** call, recorded as an event: allow or deny, the rule that decided it, and whether policy or the user decided. An **approval** the user refuses is a deny decided by the user.
+The **gate**'s final verdict on one **tool** call, recorded as an event: allow or deny, the rule that decided it, and whether policy or the user decided. An **approval** the user refuses is a deny decided by the user. A call from a script the gate would ask about is recorded as ask: in **code mode** no approval is raised, so the call did not run.
 
 ### Sandbox
 
