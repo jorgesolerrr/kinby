@@ -36,6 +36,10 @@ export type StepId = string;
 export type FactorySource = "hub" | "shipped";
 export type GitCommit = string;
 /**
+ * A step-sized change the owner of a line asks for from chat, each one of the step writes.
+ */
+export type FactoryChangeOperation = "step_save" | "step_add" | "step_off_set";
+/**
  * Where a factory run stands.
  */
 export type FactoryRunStatus = "running" | "queued" | "parked" | "needs-human" | "done" | "cancelled";
@@ -50,7 +54,7 @@ export type ViewId = string;
 /**
  * Where a factory version came from.
  */
-export type FactoryVersionSource = "web" | "by_hand" | "revert" | "shipped" | "shipped_update";
+export type FactoryVersionSource = "web" | "chat" | "by_hand" | "revert" | "shipped" | "shipped_update";
 export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -375,6 +379,18 @@ export interface Contract {
     "factory.list": {
       command: FactoryListCommand;
       result: FactoryListResult;
+    };
+    "factory.owned.change": {
+      command: FactoryChangeCommand;
+      result: FactoryResult;
+    };
+    "factory.owned.change.preview": {
+      command: FactoryChangePreviewCommand;
+      result: FactoryChangePreview;
+    };
+    "factory.owned.get": {
+      command: FactoryGetCommand;
+      result: FactoryResult;
     };
     "factory.remove": {
       command: FactoryRemoveCommand;
@@ -1505,6 +1521,31 @@ export interface FactorySummary {
   name: FactoryName;
   source: FactorySource;
   version: GitCommit | null;
+}
+/**
+ * Make a step-sized change to a factory a line of the instance is on, as a chat version,
+ * once the hub saw the user approve the change_factory call that asks for it.
+ */
+export interface FactoryChangeCommand {
+  approval_id: string;
+  arguments: {
+    [k: string]: JsonValue;
+  };
+  operation: FactoryChangeOperation;
+}
+/**
+ * Show a step-sized change to a factory a line of the instance is on, as its approval shows
+ * it, without making it.
+ */
+export interface FactoryChangePreviewCommand {
+  arguments: {
+    [k: string]: JsonValue;
+  };
+  operation: FactoryChangeOperation;
+}
+export interface FactoryChangePreview {
+  diff: string;
+  lines: string[];
 }
 /**
  * Delete one of the hub's own factories. The result lists the factories left.

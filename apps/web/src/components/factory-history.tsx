@@ -16,6 +16,7 @@ type Caller = Pick<Client, "call">
 
 const SOURCES: Record<FactoryVersionSource, string> = {
   web: "Saved from the web",
+  chat: "Changed from chat",
   by_hand: "Changed by hand",
   revert: "Reverted",
   shipped: "kinby's version",

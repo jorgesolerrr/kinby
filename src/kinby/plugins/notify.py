@@ -31,6 +31,8 @@ from kinby.plugins.tools import NotificationReporter, Tool, ToolContext, tool
 UNTITLED = "Untitled thread"
 #: How much of each argument's value an approval's notification shows.
 _ARGUMENT_LENGTH = 80
+#: Why a notification offers no approve for an approval with a preview, which no channel shows.
+APPROVE_IN_WEB = "Approve it in the web app, which shows what it changes."
 
 
 def raises_notifications() -> bool:
@@ -89,19 +91,22 @@ def approval_notification(
 ) -> NotificationRaised:
     """kinby's notification for an approval a turn parked on: the tool and its arguments on one
     line, each value cut short, and the options that answer it. Only a routine's turn offers to
-    allow the tool in the routine."""
+    allow the tool in the routine. An approval with a preview is only denied here, since the
+    notification cuts its arguments short and shows no preview."""
     arguments = ", ".join(
         f"{name}={_shown(value if isinstance(value, str) else json.dumps(value))}"
         for name, value in request.arguments.items()
     )
+    previewed = request.preview is not None
     return NotificationRaised(
         source=source,
         title="Approval waiting",
-        text=f"{request.name}: {arguments}",
+        text=f"{request.name}: {arguments}" + (f". {APPROVE_IN_WEB}" if previewed else ""),
         options=[
             option
             for option, decision in APPROVAL_OPTIONS.items()
-            if in_routine or decision is not ApprovalDecision.ALLOW_IN_ROUTINE
+            if decision is ApprovalDecision.DENY
+            or (not previewed and (in_routine or decision is not ApprovalDecision.ALLOW_IN_ROUTINE))
         ],
         approval=WaitingApproval(turn_id=turn_id, request=request),
     )

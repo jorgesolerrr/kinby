@@ -2307,6 +2307,83 @@
       "title": "Event",
       "type": "object"
     },
+    "FactoryChangeCommand": {
+      "additionalProperties": false,
+      "description": "Make a step-sized change to a factory a line of the instance is on, as a chat version,\nonce the hub saw the user approve the change_factory call that asks for it.",
+      "properties": {
+        "approval_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "operation": {
+          "$ref": "#/$defs/FactoryChangeOperation"
+        }
+      },
+      "required": [
+        "operation",
+        "arguments",
+        "approval_id"
+      ],
+      "title": "FactoryChangeCommand",
+      "type": "object"
+    },
+    "FactoryChangeOperation": {
+      "description": "A step-sized change the owner of a line asks for from chat, each one of the step writes.",
+      "enum": [
+        "step_save",
+        "step_add",
+        "step_off_set"
+      ],
+      "title": "FactoryChangeOperation",
+      "type": "string"
+    },
+    "FactoryChangePreview": {
+      "additionalProperties": false,
+      "properties": {
+        "diff": {
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "diff",
+        "lines"
+      ],
+      "title": "FactoryChangePreview",
+      "type": "object"
+    },
+    "FactoryChangePreviewCommand": {
+      "additionalProperties": false,
+      "description": "Show a step-sized change to a factory a line of the instance is on, as its approval shows\nit, without making it.",
+      "properties": {
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "operation": {
+          "$ref": "#/$defs/FactoryChangeOperation"
+        }
+      },
+      "required": [
+        "operation",
+        "arguments"
+      ],
+      "title": "FactoryChangePreviewCommand",
+      "type": "object"
+    },
     "FactoryCheckCommand": {
       "additionalProperties": false,
       "properties": {
@@ -3270,6 +3347,7 @@
       "description": "Where a factory version came from.",
       "enum": [
         "web",
+        "chat",
         "by_hand",
         "revert",
         "shipped",
@@ -15290,6 +15368,54 @@
           ],
           "type": "object"
         },
+        "factory.owned.change": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryChangeCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.owned.change.preview": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryChangePreviewCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryChangePreview"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.owned.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.remove": {
           "additionalProperties": false,
           "properties": {
@@ -18069,6 +18195,9 @@
         "factory.step.off.set",
         "factory.step.reset",
         "factory.step.delete",
+        "factory.owned.get",
+        "factory.owned.change.preview",
+        "factory.owned.change",
         "factory.run.list",
         "factory.run.get",
         "factory.run.transcript",

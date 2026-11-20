@@ -61,6 +61,9 @@ from kinby.contracts import (
     FACTORY_EDIT,
     FACTORY_GET,
     FACTORY_LIST,
+    FACTORY_OWNED_CHANGE,
+    FACTORY_OWNED_CHANGE_PREVIEW,
+    FACTORY_OWNED_GET,
     FACTORY_REMOVE,
     FACTORY_RESET,
     FACTORY_REVERT,
@@ -197,14 +200,23 @@ from kinby.contracts import (
     DeclaredSetup,
     DrainState,
     ErrorCode,
+    FactoryChangeCommand,
+    FactoryChangePreview,
+    FactoryChangePreviewCommand,
     FactoryEditCommand,
+    FactoryGetCommand,
     FactoryListResult,
     FactoryName,
     FactoryRemoveCommand,
+    FactoryResult,
     FactoryRun,
     FactoryRunStatus,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    FactoryStepAddCommand,
+    FactoryStepOffSetCommand,
+    FactoryStepSaveCommand,
+    FactoryVersionSource,
     HubRouteMissing,
     HubSecret,
     HubSecretDeleteCommand,
@@ -407,7 +419,7 @@ from kinby.factories.file import (
 from kinby.frontmatter import render_frontmatter_value
 from kinby.hub.access import HubAccess, new_control_token
 from kinby.hub.adoption import INSTANCE_MOUNT, blocker, preflight, previous_manager
-from kinby.hub.approvals import HomeApprovals
+from kinby.hub.approvals import RelayedApprovals
 from kinby.hub.browser import BrowserLimits, BrowserRuntime
 from kinby.hub.browser_profiles import BrowserProfiles
 from kinby.hub.channels import ChannelKind, Channels, installed_kinds
@@ -496,6 +508,7 @@ from kinby.plugins.hub import (
     requested_write,
 )
 from kinby.plugins.intake import run_line_intake
+from kinby.plugins.lines import change_factory, requested_change
 from kinby.plugins.mcp import failed_mcp_servers, needed_variables
 from kinby.plugins.routines import HmacSignalConfig, TokenSignalConfig
 from kinby.setup import (
@@ -954,7 +967,7 @@ class Hub:
             self.browser_profiles = BrowserProfiles(self.directory / "browser-profiles")
             self.vault = Vault(self.directory / "vault")
             self.mcp_sign_ins = McpSignIns(self.directory / "mcp-sign-ins", self.vault.key, clock)
-            self.approvals = HomeApprovals()
+            self._approvals: dict[UUID, RelayedApprovals] = {}
             self.channels = Channels(
                 self.registry,
                 self.secrets,
@@ -1200,6 +1213,13 @@ class Hub:
                 WORKBENCH_OWNED_COMMANDS_SET,
                 partial(self.set_owned_workbench_commands, instance_id),
             )
+            dispatcher.register(FACTORY_OWNED_GET, partial(self.owned_factory, instance_id))
+            dispatcher.register(
+                FACTORY_OWNED_CHANGE_PREVIEW, partial(self.preview_owned_change, instance_id)
+            )
+            dispatcher.register(
+                FACTORY_OWNED_CHANGE, partial(self.change_owned_factory, instance_id)
+            )
         if Scope.BROWSER_OPEN in scopes:
             browsers = self._browsers
             assert browsers is not None
@@ -1218,10 +1238,9 @@ class Hub:
             dispatcher.register(HUB_WRITE, partial(self.write_for_home, instance_id))
         return scopes, dispatcher
 
-    def home_approvals(self, instance_id: UUID) -> HomeApprovals | None:
-        """What the hub witnesses on the instance's relay: the home instance's approvals only."""
-        record = self.registry.instance(instance_id)
-        return self.approvals if record is not None and record.home else None
+    def relayed_approvals(self, instance_id: UUID) -> RelayedApprovals:
+        """What the hub witnesses on the instance's relay: its approvals and the user's answers."""
+        return self._approvals.setdefault(instance_id, RelayedApprovals())
 
     async def own_browser_profiles(
         self, instance_id: UUID, command: BrowserProfilesCommand
@@ -1271,10 +1290,11 @@ class Hub:
     async def write_for_home(self, home: UUID, command: HubWriteCommand) -> HubWriteResult:
         """Run a hub_write operation once, for the approval the hub saw the user give that call."""
         write = home_write(command.tool, command.arguments)
-        approved = self.approvals.approved(command.approval_id)
+        approvals = self.relayed_approvals(home)
+        approved = approvals.approved(command.approval_id)
         if approved.name != hub_write.name or requested_write(approved.arguments) != write:
             raise PermissionDenied(f'Approval "{command.approval_id}" is for another call.')
-        self.approvals.use(command.approval_id)
+        approvals.use(command.approval_id)
         match write:
             case InstanceCreateCommand():
                 result = await self.create(write, requester=home)
@@ -1319,7 +1339,7 @@ class Hub:
         """Refuse while a line runs the factory, and name the workbench of each."""
         async with self._factory_dependents:
             workbenches = [
-                self._workbench_name(line.workbench_id)
+                self._instance_name(line.workbench_id)
                 for line in self.registry.lines()
                 if line.factory == command.name
             ]
@@ -1362,12 +1382,12 @@ class Hub:
         """Answer the approval on the instance's socket, as the relay carries the user's answer.
         False when it no longer waits.
 
-        The hub sees a home instance's approval approved before the instance does, so the hub
-        write the resumed turn makes finds it (ADR 0096).
+        The hub sees the approval approved before the instance does, so the hub write the resumed
+        turn makes finds it (ADR 0096).
         """
         approval_id = waiting.request.approval_id
-        approvals = self.home_approvals(instance_id)
-        if approvals is not None and decision is ApprovalDecision.APPROVE:
+        approvals = self.relayed_approvals(instance_id)
+        if decision is ApprovalDecision.APPROVE:
             approvals.approve(waiting.turn_id, waiting.request)
         command = ThreadApprovalRespondCommand(
             thread_id=thread_id, approval_id=approval_id, decision=decision
@@ -1379,8 +1399,7 @@ class Hub:
         except InstanceRefused as exc:
             if exc.error.code not in _NOT_WAITING:
                 raise
-            if approvals is not None:
-                approvals.use(approval_id)
+            approvals.use(approval_id)
             return False
         return True
 
@@ -4056,7 +4075,7 @@ class Hub:
             self._refuse_running(line)
             moved = line.model_copy(update={"owner_id": owner.instance_id})
             source, target = GraphStore(old.path), GraphStore(owner.path)
-            memory = source.marked(self._workbench_name(line.workbench_id))
+            memory = source.marked(self._instance_name(line.workbench_id))
             async with AsyncExitStack() as undo:
                 undo.callback(target.restore, target.take(memory))
                 if line.intake is not None:
@@ -4116,7 +4135,7 @@ class Hub:
             lines=[
                 OwnedLine(
                     line=line,
-                    workbench=self._workbench_name(line.workbench_id),
+                    workbench=self._instance_name(line.workbench_id),
                     runs=self.registry.runs(line.factory, UNFINISHED, line_id=line.line_id),
                 )
                 for line in self.registry.lines()
@@ -4144,7 +4163,7 @@ class Hub:
             return await self._control.read_workspace(endpoint, method, command)
         except (ControlUnreachable, IncompatibleLifecycleEndpoint) as exc:
             raise WorkspaceReadFailed(
-                f'Workbench "{self._workbench_name(command.workbench_id)}" answered no read: {exc}'
+                f'Workbench "{self._instance_name(command.workbench_id)}" answered no read: {exc}'
             ) from exc
 
     async def set_owned_workbench_commands(
@@ -4153,6 +4172,55 @@ class Hub:
         """Set a list of repository commands of a workbench one of the instance's lines is on."""
         self._owns_a_line_on(instance_id, command.workbench_id)
         return await self.set_workbench_commands(command)
+
+    async def owned_factory(self, instance_id: UUID, command: FactoryGetCommand) -> FactoryResult:
+        """The factory a line the instance owns is on, as factory.get reads it."""
+        self._owns_a_line_of(instance_id, command.name)
+        return await self.factories.get(command)
+
+    async def preview_owned_change(
+        self, instance_id: UUID, command: FactoryChangePreviewCommand
+    ) -> FactoryChangePreview:
+        """What the change does to the factory a line the instance owns is on, and every line on
+        that factory, as the change's approval shows them."""
+        change = requested_change(command.model_dump(mode="json"))
+        self._owns_a_line_of(instance_id, change.name)
+        return FactoryChangePreview(
+            diff=await self.factories.preview(change),
+            lines=[
+                f"{self._instance_name(line.workbench_id)}, owned by "
+                f"{self._instance_name(line.owner_id)}"
+                for line in self.registry.lines()
+                if line.factory == change.name
+            ],
+        )
+
+    async def change_owned_factory(
+        self, instance_id: UUID, command: FactoryChangeCommand
+    ) -> FactoryResult:
+        """Make the change to the factory a line the instance owns is on, as a chat version, for
+        the approval the hub saw the user give that change_factory call (ADR 0096)."""
+        change = requested_change(command.model_dump(mode="json", exclude={"approval_id"}))
+        self._owns_a_line_of(instance_id, change.name)
+        approvals = self.relayed_approvals(instance_id)
+        approved = approvals.approved(command.approval_id)
+        if approved.name != change_factory.name or requested_change(approved.arguments) != change:
+            raise PermissionDenied(f'Approval "{command.approval_id}" is for another call.')
+        approvals.use(command.approval_id)
+        match change:
+            case FactoryStepSaveCommand():
+                return await self.factories.save_step(change, FactoryVersionSource.CHAT)
+            case FactoryStepAddCommand():
+                return await self.factories.add_step(change, FactoryVersionSource.CHAT)
+            case FactoryStepOffSetCommand():
+                return await self.factories.set_step_off(change, FactoryVersionSource.CHAT)
+
+    def _owns_a_line_of(self, instance_id: UUID, factory: FactoryName) -> None:
+        if not any(
+            (line.owner_id, line.factory) == (instance_id, factory)
+            for line in self.registry.lines()
+        ):
+            raise PermissionDenied(f'Factory "{factory}" has no line of this instance.')
 
     def _owns_a_line_on(self, instance_id: UUID, workbench_id: UUID) -> None:
         if not any(
@@ -4187,16 +4255,16 @@ class Hub:
         except (ControlUnreachable, IncompatibleLifecycleEndpoint) as exc:
             raise IntakeFailed(
                 f'The intake of line "{line.factory}" did not run on workbench '
-                f'"{self._workbench_name(line.workbench_id)}": {exc}'
+                f'"{self._instance_name(line.workbench_id)}": {exc}'
             ) from exc
         line = await self.get_line(LineGetCommand(line_id=line.line_id))
         return LineIntakeResult(
             runs=[await self.runs.hand_in(line, work_item) for work_item in found.work_items]
         )
 
-    def _workbench_name(self, workbench_id: UUID) -> str:
-        record = self.registry.instance(workbench_id)
-        return str(workbench_id) if record is None else record.manifest_id
+    def _instance_name(self, instance_id: UUID) -> str:
+        record = self.registry.instance(instance_id)
+        return str(instance_id) if record is None else record.manifest_id
 
     async def endpoint(self, instance_id: UUID) -> InstanceEndpoint | InstanceUnreachable:
         """Answer where a public route may reach one instance, and with which control token."""

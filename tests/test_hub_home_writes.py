@@ -52,7 +52,7 @@ from kinby.core.events import EventLog
 from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn
 from kinby.hub import Hub
-from kinby.hub.approvals import HomeApprovals
+from kinby.hub.approvals import RelayedApprovals
 from kinby.hub.toolset import toolset_hash
 from kinby.instance import Serve, inspect_instance
 from kinby.instance.config_changes import ConfigChangeLog, file_hash
@@ -1230,7 +1230,7 @@ def test_only_an_instance_its_hub_grants_hub_home_has_hub_tools(monkeypatch, sco
 
 
 def test_a_replayed_request_keeps_the_approval_the_user_gave():
-    approvals = HomeApprovals()
+    approvals = RelayedApprovals()
     thread_id = uuid4()
     request = ApprovalRequested(
         approval_id=uuid4(),

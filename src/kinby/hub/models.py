@@ -23,7 +23,7 @@ from kinby.contracts import (
 
 if TYPE_CHECKING:
     from kinby.core.routing import Dispatcher
-    from kinby.hub.approvals import HomeApprovals
+    from kinby.hub.approvals import RelayedApprovals
     from kinby.plugins.routines import SignalConfig
 
 
@@ -138,8 +138,8 @@ class InstanceRouting(Protocol):
         """The scopes the instance holds on its hub route, once its control token checks out,
         and what it may call there."""
 
-    def home_approvals(self, instance_id: UUID) -> HomeApprovals | None:
-        """What the hub witnesses on the instance's relay: the home instance's approvals only."""
+    def relayed_approvals(self, instance_id: UUID) -> RelayedApprovals:
+        """What the hub witnesses on the instance's relay: its approvals and the user's answers."""
 
 
 type RuntimeState = Literal["absent", "created", "starting", "running", "stopped", "failed"]

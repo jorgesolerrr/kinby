@@ -22,6 +22,7 @@ from kinby.contracts import (
     ErrorEnvelope,
     ErrorFrame,
     Event,
+    GateRule,
     NotificationAccepted,
     NotificationRaiseCommand,
     NotificationRaised,
@@ -39,6 +40,7 @@ from kinby.core.turn_runner import LangGraphRunner
 from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE
+from kinby.plugins.notify import approval_notification
 from tests.helpers import every_event, thread_events
 from tests.test_gate import ScriptedModel, _instance, _run_turn, _write_store_tool
 from tests.test_routine_grants import news_runtime
@@ -383,6 +385,24 @@ def test_a_turn_parked_on_an_approval_raises_one_notification_naming_the_call(
         assert isinstance(payloads[-1], NotificationAccepted)
 
     asyncio.run(scenario())
+
+
+def test_an_approval_with_a_preview_is_only_denied_from_a_notification_which_cannot_show_it():
+    request = ApprovalRequested(
+        approval_id=uuid4(),
+        name="change_factory",
+        arguments={"operation": "step_off_set"},
+        rule=GateRule("hub.write"),
+        preview="--- a/factory.yaml",
+    )
+
+    raised = approval_notification("Untitled thread", uuid4(), request, in_routine=True)
+
+    assert raised.options == ["Deny"]
+    assert raised.text == (
+        "change_factory: operation=step_off_set. "
+        "Approve it in the web app, which shows what it changes."
+    )
 
 
 def test_a_routine_turn_parked_on_an_approval_offers_to_allow_the_tool_in_the_routine(

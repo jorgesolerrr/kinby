@@ -390,7 +390,7 @@ def _with_exposed(project: str, names: list[str]) -> str:
     return tomlkit.dumps(document)
 
 
-def _expose_preview(arguments: Mapping[str, JsonValue], instance: Instance) -> str | None:
+async def _expose_preview(arguments: Mapping[str, JsonValue], instance: Instance) -> str | None:
     """The tool's declared write flag and its module, as an approval to expose it shows them."""
     name = arguments.get("name")
     if not isinstance(name, str) or not name.isidentifier():

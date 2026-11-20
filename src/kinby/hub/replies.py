@@ -29,6 +29,7 @@ from kinby.hub.channels import Channels, ReceivingKind, Reply
 from kinby.hub.outbox import GIVE_UP_AFTER, Sleep
 from kinby.hub.registry import ChannelRecord, HubRegistry, ReceivedReply, RunAskRef, RunStopRef
 from kinby.hub.runs import BACKOFF_CAP_SECONDS, BACKOFF_SECONDS
+from kinby.plugins.notify import APPROVE_IN_WEB
 
 _logger = logging.getLogger(__name__)
 _UNKNOWN = "Not known whether the instance got this answer. Answer again from the web app."
@@ -167,6 +168,14 @@ class Replies:
             if outcome is None:
                 return ReplyStatus.STALE, "The run already moved."
             return ReplyStatus.APPLIED, outcome
+        waiting = reply.ask.approval if reply.ask is not None else reply.approval
+        if (
+            waiting is not None
+            and waiting.request.preview is not None
+            and APPROVAL_OPTIONS.get(reply.option) is not ApprovalDecision.DENY
+        ):
+            # The instance raised the notification, so its options may offer more than kinby's.
+            return ReplyStatus.FAILED, APPROVE_IN_WEB
         if reply.ask is not None:
             decision = APPROVAL_OPTIONS[reply.option]
             if not await self._answer_ask(reply.ask, decision):

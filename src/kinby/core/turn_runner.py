@@ -1712,7 +1712,7 @@ class LangGraphRunner:
         elif decision.action is GateAction.ASK:
             approval_id = uuid5(step.turn.turn_id, f"approval:{call.call_id}")
             preview = (
-                tool.preview(call.arguments, step.context.tool_context.instance)
+                await tool.preview(call.arguments, step.context.tool_context.instance)
                 if tool is not None and tool.preview is not None
                 else None
             )

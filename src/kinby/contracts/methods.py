@@ -44,6 +44,9 @@ from kinby.contracts.models import (
     ContractModel,
     DeclaredSetup,
     Event,
+    FactoryChangeCommand,
+    FactoryChangePreview,
+    FactoryChangePreviewCommand,
     FactoryCheckCommand,
     FactoryCheckResult,
     FactoryEditCommand,
@@ -712,6 +715,16 @@ FACTORY_STEP_DELETE = Method(
 FACTORY_STEP_RESET = Method(
     "factory.step.reset", Scope.HUB_ADMIN, FactoryStepResetCommand, FactoryResult
 )
+FACTORY_OWNED_GET = Method("factory.owned.get", Scope.LINE_OWNER, FactoryGetCommand, FactoryResult)
+FACTORY_OWNED_CHANGE_PREVIEW = Method(
+    "factory.owned.change.preview",
+    Scope.LINE_OWNER,
+    FactoryChangePreviewCommand,
+    FactoryChangePreview,
+)
+FACTORY_OWNED_CHANGE = Method(
+    "factory.owned.change", Scope.LINE_OWNER, FactoryChangeCommand, FactoryResult
+)
 FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
 )
@@ -1018,6 +1031,9 @@ METHODS = (
     FACTORY_STEP_OFF_SET,
     FACTORY_STEP_RESET,
     FACTORY_STEP_DELETE,
+    FACTORY_OWNED_GET,
+    FACTORY_OWNED_CHANGE_PREVIEW,
+    FACTORY_OWNED_CHANGE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
     FACTORY_RUN_TRANSCRIPT,

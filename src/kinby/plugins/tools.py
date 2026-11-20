@@ -33,7 +33,7 @@ NotificationReporter = Callable[
 ]
 ViewReporter = Callable[[ViewChanged], Awaitable[object]]
 #: What an approval of a call shows beside its arguments, from the call's arguments.
-Preview = Callable[[Mapping[str, JsonValue], Instance], str | None]
+Preview = Callable[[Mapping[str, JsonValue], Instance], Awaitable[str | None]]
 #: What is wrong with a call's arguments, or None when the tool takes them.
 ArgumentCheck = Callable[[Mapping[str, JsonValue]], str | None]
 #: Makes a script's call to a tool as the turn makes the model's, and returns the tool's output.
