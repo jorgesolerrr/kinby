@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import subprocess
 import tarfile
 from collections.abc import Mapping
@@ -113,12 +114,16 @@ class FactoryVersions:
         base = self._shipped_base(name)
         if base is None:
             return current
+        # Commits, since an older git merges no bare trees.
+        sides = [
+            self._git("commit-tree", tree, "-m", f"{name}: a side of kinby's update")
+            for tree in (base, current, self._tree(shipped))
+        ]
         try:
-            merged = self._git(
-                "merge-tree", "--write-tree", f"--merge-base={base}", current, self._tree(shipped)
-            )
+            merged = self._git("merge-tree", "--write-tree", f"--merge-base={sides[0]}", *sides[1:])
         except subprocess.CalledProcessError as exc:
-            if exc.returncode == 1:
+            # A conflict exits 1 after the tree it wrote, but git exits 1 on some misuse too.
+            if exc.returncode == 1 and re.match(rb"[0-9a-f]{40}\n", exc.stdout):
                 return None
             raise
         return merged.splitlines()[0]

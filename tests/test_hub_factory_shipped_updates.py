@@ -133,3 +133,21 @@ def test_resetting_a_step_takes_kinbys_version_of_it_as_one_version(tmp_path):
         assert refused.code is ErrorCode.INVALID_ARGUMENT
 
     asyncio.run(scenario())
+
+
+def test_resetting_a_step_lines_kinbys_step_up_with_the_users_steps(tmp_path):
+    hub = factory_hub(tmp_path, shipped={"software": SOFTWARE})
+    head, steps = SOFTWARE["factory.yaml"].split("steps:\n")
+    indentless = f"{head}steps:\n{steps.replace('\n  ', '\n')[2:]}"
+    update = SOFTWARE | {"factory.yaml": SOFTWARE["factory.yaml"].replace("max: 3 }", "max: 2 }")}
+
+    async def scenario() -> None:
+        await edit(hub_client(hub), {"factory.yaml": indentless}, "software")
+        client = hub_client(upgraded(hub, update))
+        reviewed = await reset_step(client, "review")
+
+        assert isinstance(reviewed, FactoryResult), reviewed
+        assert reviewed.files["factory.yaml"] == indentless.replace("max: 3 }", "max: 2 }")
+        assert reviewed.differing_steps == []
+
+    asyncio.run(scenario())
