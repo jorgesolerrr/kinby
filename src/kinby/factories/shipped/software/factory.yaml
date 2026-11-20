@@ -60,27 +60,31 @@ work_item: { issue: int }
 # base, named again.
 worktree: { call: agent_branch }
 steps:
-  # Passes the ticket on only once a trusted author wrote all its text (ADR 0073). Records the
-  # commit the run worktree was cut from, so the run's own commits are those past it, even after
-  # a blocker's branch under it was rewritten.
   - id: ticket
     kind: code
+    description: >-
+      Passes the ticket on only once a trusted author wrote all its text (ADR 0073). Records the
+      commit the run worktree was cut from, so the run's own commits are those past it, even after
+      a blocker's branch under it was rewritten.
     call: vet_ticket
     results: { base_commit: str }
-  # Runs the workbench's setup list of repository commands in the run worktree, which has
-  # installs of its own.
   - id: setup
     kind: command
+    description: >-
+      Runs the workbench's setup list of repository commands in the run worktree, which has
+      installs of its own.
     run:
       - { commands: setup }
-  # Every agent step continues implement's session, so one coding session per issue writes the
-  # change, answers its reviews and repairs its checks. It writes the pull request's title, body
-  # and replies. Each step's check records them as the run's values, and publish applies them
-  # (ADRs 0081 and 0083). Every agent step runs in the run's own run worktree, so the session
-  # resumes from the directory it started in, and no other run's steps touch it. A ticket with
-  # nothing to do ends the run cancelled with no commit, once the session wrote why as no_change.
   - id: implement
     kind: agent
+    description: >-
+      Every agent step continues implement's session, so one coding session per issue writes the
+      change, answers its reviews and repairs its checks. It writes the pull request's title, body
+      and replies. Each step's check records them as the run's values, and publish applies them
+      (ADRs 0081 and 0083). Every agent step runs in the run's own run worktree, so the session
+      resumes from the directory it started in, and no other run's steps touch it. A ticket with
+      nothing to do ends the run cancelled with no commit, once the session wrote why as
+      no_change.
     engine: claude
     model: claude-opus-5-5
     effort: high
@@ -90,12 +94,13 @@ steps:
     results: { title: str, body: str, no_change: str }
     outcomes: { no-change: stop }
     timeout: 60m
-  # A fix round: the coding client answers the review threads trusted authors left on the pull
-  # request, commits its fixes, and rewrites the title and body where the round changed them.
-  # Work is only ever sent back, so it comes before the pull request opens, and finds no threads
-  # to answer the first time or in a check repair.
   - id: answer
     kind: agent
+    description: >-
+      A fix round: the coding client answers the review threads trusted authors left on the pull
+      request, commits its fixes, and rewrites the title and body where the round changed them.
+      Work is only ever sent back, so it comes before the pull request opens, and finds no threads
+      to answer the first time or in a check repair.
     engine: claude
     model: claude-opus-5-5
     effort: high
@@ -105,11 +110,12 @@ steps:
     requires: [branch, base]
     results: { replies: str, title: str, body: str }
     timeout: 60m
-  # A check repair (ADR 0080): the coding client fixes what the failed checks sent back as
-  # results.failure, and changes nothing when nothing failed. It comes after answer, so a repair
-  # during babysitting keeps the round's replies, its feedback and the pull request.
   - id: fix
     kind: agent
+    description: >-
+      A check repair (ADR 0080): the coding client fixes what the failed checks sent back as
+      results.failure, and changes nothing when nothing failed. It comes after answer, so a repair
+      during babysitting keeps the round's replies, its feedback and the pull request.
     engine: claude
     model: claude-opus-5-5
     effort: high
@@ -120,10 +126,12 @@ steps:
     results: { title: str, body: str }
     timeout: 30m
   # Adversarial review before the pull request opens is off by default (ADR 0044): reviewers
-  # on the pull request take its place. To turn it on, uncomment review. It sends changes back
-  # to fix, which then reads its .scratch/review.md.
+  # on the pull request take its place. To turn it on, uncomment review.
   # - id: review
   #   kind: agent
+  #   description: >-
+  #     Adversarial review before the pull request opens. It sends changes back to fix, which
+  #     then reads its .scratch/review.md.
   #   engine: claude
   #   model: claude-opus-5-5
   #   effort: high
@@ -133,30 +141,33 @@ steps:
   #   results: { reviewed: bool }
   #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
   #   timeout: 15m
-  # Runs the workbench's setup list again in the run worktree, so a change to the dependencies is
-  # checked against fresh installs, then its checks list. A failure goes back to fix with the
-  # failing command and the tail of its output, at most twice.
   - id: checks
     kind: command
+    description: >-
+      Runs the workbench's setup list again in the run worktree, so a change to the dependencies
+      is checked against fresh installs, then its checks list. A failure goes back to fix with the
+      failing command and the tail of its output, at most twice.
     run:
       - { commands: setup }
       - { commands: checks }
     failed: { back: fix, max: 2 }
-  # Pushes the branch. The first time, it opens the pull request; after a fix round, it applies
-  # the title and body the session rewrote, and replies on each thread the round answered. Never
-  # retried, so a pull request is never opened twice.
   - id: publish
     kind: code
+    description: >-
+      Pushes the branch. The first time, it opens the pull request; after a fix round, it applies
+      the title and body the session rewrote, and replies on each thread the round answered.
+      Never retried, so a pull request is never opened twice.
     call: publish_pull_request
     requires: [branch, base]
     results: { pr: int }
     retry: 0
-  # Babysitting. The run holds nothing while it waits for a review of its pull request, a reply
-  # on one of its review threads, a check suite that finished on its branch, or the pull request
-  # closing. The repository's webhook must send all four events. After 20 quiet minutes with none
-  # of them, the wait moves on by itself and assess stops waiting for a reviewer.
   - id: babysit
     kind: wait
+    description: >-
+      Babysitting. The run holds nothing while it waits for a review of its pull request, a reply
+      on one of its review threads, a check suite that finished on its branch, or the pull request
+      closing. The repository's webhook must send all four events. After 20 quiet minutes with
+      none of them, the wait moves on by itself and assess stops waiting for a reviewer.
     signal:
       - headers.X-GitHub-Event: pull_request_review
         body.pull_request.number: "{{pr}}"
@@ -170,15 +181,16 @@ steps:
         body.pull_request.number: "{{pr}}"
     quiet: 20m
     results: { quiet: bool }
-  # Reads the pull request. Merge-ready, it labels it merge-ready and asks the maintainer for a
-  # review, and the run is done; it never merges. Merged by someone, the run is done too; closed
-  # without a merge, it stops. Threads to answer start a fix round, at most 3 before the run
-  # needs a human. With none, checks that failed on the head start a check repair, at most
-  # twice. It goes back to answer, which finds no threads, so a repair whose own checks fail
-  # keeps the failed checks and the pull request (ADR 0086). Fix rounds and check repairs share
-  # one count. Anything else waits for the next wake.
   - id: assess
     kind: code
+    description: >-
+      Reads the pull request. Merge-ready, it labels it merge-ready and asks the maintainer for a
+      review, and the run is done; it never merges. Merged by someone, the run is done too; closed
+      without a merge, it stops. Threads to answer start a fix round, at most 3 before the run
+      needs a human. With none, checks that failed on the head start a check repair, at most
+      twice. It goes back to answer, which finds no threads, so a repair whose own checks fail
+      keeps the failed checks and the pull request (ADR 0086). Fix rounds and check repairs share
+      one count. Anything else waits for the next wake.
     call: assess_pull_request
     requires: [pr]
     results: { feedback: str, failure: str, pr: int, merge_ready: bool }

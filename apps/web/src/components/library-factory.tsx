@@ -1,10 +1,10 @@
 import type { Client, Clock } from "@kinby/contract"
-import { ArrowRightIcon } from "lucide-react"
 import { useCallback, useId } from "react"
 import { parse } from "yaml"
 
 import { Failure } from "@/components/config-alerts"
 import { FactoryHistory } from "@/components/factory-history"
+import { FactorySteps, type FactoryStep } from "@/components/factory-steps"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
@@ -12,7 +12,7 @@ import { useRead } from "@/hooks/use-read"
 
 /** The parts of a `factory.yaml` the summary shows. The hub checked the rest. */
 interface FactoryFile {
-  steps: { id: string }[]
+  steps: FactoryStep[]
 }
 
 /**
@@ -50,22 +50,7 @@ export function FactoryEntry({
           )
         ) : (
           <>
-            <dl className="flex gap-2 text-sm">
-              <dt className="w-32 shrink-0 text-muted-foreground">Steps</dt>
-              <dd>
-                <ol
-                  aria-label="Steps"
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono"
-                >
-                  {opened.factory.steps.map((step, index) => (
-                    <li key={step.id} className="flex items-center gap-2">
-                      {index > 0 && <ArrowRightIcon className="size-3.5 text-muted-foreground" />}
-                      {step.id}
-                    </li>
-                  ))}
-                </ol>
-              </dd>
-            </dl>
+            <FactorySteps steps={opened.factory.steps} />
             <Field>
               <FieldLabel htmlFor={id}>factory.yaml</FieldLabel>
               <Textarea id={id} className="min-h-72" value={opened.content} readOnly />
