@@ -1,5 +1,5 @@
-import type { FactoryVersion } from "@kinby/contract"
-import { stubCaller } from "@kinby/contract/testing"
+import { CallError, type FactoryVersion } from "@kinby/contract"
+import { type Answers, stubCaller } from "@kinby/contract/testing"
 import { screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
@@ -28,15 +28,22 @@ const versions: FactoryVersion[] = [
   },
 ]
 
-function openPage(file = factoryFile, history = versions) {
+const hookFile = "@hook\ndef check_implementation(end):\n    return None\n"
+
+function openPage(file = factoryFile, history = versions, more: Answers = {}) {
   const caller = stubCaller({
     "library.list": () => listed,
     "factory.get": ({ name }) => ({
       name,
       source: "shipped",
-      files: { "factory.yaml": file, "prompts/implement.md": "Implement it.\n" },
+      files: {
+        "factory.yaml": file,
+        "prompts/implement.md": "Implement it.\n",
+        "hooks/implementation.py": hookFile,
+      },
       hash: "h-2",
       version: history[0]?.version ?? null,
+      declared_in: { check_implementation: "hooks/implementation.py" },
     }),
     "factory.version.list": () => ({ versions: history }),
     "factory.version.diff": ({ version }) => ({ diff: `diff of ${version}\n` }),
@@ -46,7 +53,9 @@ function openPage(file = factoryFile, history = versions) {
       files: { "factory.yaml": file },
       hash: "h-3",
       version: shippedVersion,
+      declared_in: {},
     }),
+    ...more,
   })
   return { caller, user: openLibrary(caller, "/library/factories") }
 }
@@ -65,7 +74,9 @@ describe("LibraryPage, a factory", () => {
     const file = await screen.findByRole("textbox", { name: "factory.yaml" })
     expect((file as HTMLTextAreaElement).value).toBe(factoryFile)
     expect(file.hasAttribute("readonly")).toBe(true)
-    expect(screen.getByText("Other files: prompts/implement.md")).toBeTruthy()
+    expect(
+      screen.getByText("Other files: prompts/implement.md, hooks/implementation.py"),
+    ).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
   })
 
@@ -185,10 +196,10 @@ steps:
 /** The shipped software factory's file with its review step uncommented, as its own tests do. */
 const withReview = software.replace(/^ {2}# (?=- | {2})/gm, "  ")
 
-async function openMap(file = software) {
-  const { user } = openPage(file)
+async function openMap(file = software, more: Answers = {}) {
+  const { caller, user } = openPage(file, versions, more)
   await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
-  return { user, map: await screen.findByRole("figure", { name: "Map" }) }
+  return { caller, user, map: await screen.findByRole("figure", { name: "Map" }) }
 }
 
 const height = (map: HTMLElement, label: string) =>
@@ -285,5 +296,150 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
 
     const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[7]
     expect(scrolled.mock.contexts).toEqual([babysit])
+  })
+})
+
+const card = (id: string) =>
+  within(screen.getByRole("list", { name: "Steps" }))
+    .getAllByRole("listitem")
+    .find((step) => within(step).getByRole("heading").textContent === id) as HTMLElement
+
+async function openStep(id: string, more: Answers = {}) {
+  const opened = await openMap(software, more)
+  await opened.user.click(within(card(id)).getByRole("button", { name: id }))
+  const form = await within(card(id)).findByRole("form", { name: id })
+  return { ...opened, form, editor: within(form) }
+}
+
+const labels = (form: HTMLElement) =>
+  Array.from(form.querySelectorAll("label"), (label) => label.textContent)
+
+describe("LibraryPage, a step's editor", () => {
+  it("opens an agent step's card with its run fields, its prompt and its check", async () => {
+    const { form, editor } = await openStep("implement")
+
+    expect(labels(form)).toEqual([
+      "Description",
+      "Engine",
+      "Model",
+      "Effort",
+      "Timeout",
+      "Resume",
+      "Retry",
+      "When it fails",
+      "Outcome no-change",
+      "Prompt · prompts/implement.md",
+      "Check · hooks/implementation.py",
+    ])
+    expect((editor.getByRole("textbox", { name: "Model" }) as HTMLInputElement).value).toBe(
+      "claude-opus-5-5",
+    )
+    expect(
+      (editor.getByRole("textbox", { name: "Prompt · prompts/implement.md" }) as HTMLInputElement)
+        .value,
+    ).toBe("Implement it.\n")
+    expect(
+      (editor.getByRole("textbox", { name: "Check · hooks/implementation.py" }) as HTMLInputElement)
+        .value,
+    ).toBe(hookFile)
+    expect(editor.getByText("branch, base")).toBeTruthy()
+    expect(editor.getByText("title: str, body: str, no_change: str")).toBeTruthy()
+  })
+
+  it("opens a wait step's card with its quiet time and its signal patterns", async () => {
+    const { form, editor } = await openStep("babysit")
+
+    expect(labels(form)).toEqual(["Description", "Quiet", "Retry", "When it fails", "Signal"])
+    expect((editor.getByRole("textbox", { name: "Signal" }) as HTMLInputElement).value).toContain(
+      "- headers.X-GitHub-Event: pull_request_review\n  body.pull_request.number:",
+    )
+  })
+
+  it("opens a step's card from its node on the map", async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const { user, map } = await openMap()
+
+    await user.click(within(map).getByRole("link", { name: "assess" }))
+
+    expect(await within(card("assess")).findByRole("form", { name: "assess" })).toBeTruthy()
+  })
+
+  it("spells out where each outcome sends the run", async () => {
+    const { editor } = await openStep("assess")
+
+    expect(editor.getByText(/^Now:/).textContent).toBe(
+      "Now: merge-ready → done; merged → done; closed → stop; " +
+        "feedback → back to answer, up to 3 times; " +
+        "checks-failed → back to answer, up to 2 times; " +
+        "waiting → back to babysit, up to 30 times",
+    )
+  })
+
+  it("offers a failure route only to earlier steps", async () => {
+    const { user, editor } = await openStep("checks")
+
+    await user.click(editor.getByRole("combobox", { name: "When it fails" }))
+
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent)
+    expect(options).toEqual([
+      "Retry, then needs a human",
+      "Try this step again",
+      "Back to ticket",
+      "Back to setup",
+      "Back to implement",
+      "Back to answer",
+      "Back to fix",
+    ])
+  })
+
+  it("saves the step, its prompt and its check against the hash it read", async () => {
+    const { caller, user, editor } = await openStep("implement", {
+      "factory.step.save": ({ name }) => ({
+        name,
+        source: "hub",
+        files: { "factory.yaml": software },
+        hash: "h-3",
+        version: commit,
+        declared_in: {},
+      }),
+    })
+    const timeout = editor.getByRole("textbox", { name: "Timeout" })
+    await user.clear(timeout)
+    await user.type(timeout, "90m")
+    await user.type(editor.getByRole("textbox", { name: "Prompt · prompts/implement.md" }), "Now.")
+
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    const saved = caller.calls.find((call) => call.method === "factory.step.save")
+    expect(saved?.params).toEqual({
+      name: "software",
+      hash: "h-2",
+      step: expect.objectContaining({ id: "implement", timeout: "90m", model: "claude-opus-5-5" }),
+      prompt: "Implement it.\nNow.",
+      hook: null,
+    })
+  })
+
+  it("shows the check's problems when the hub refuses a save, and keeps the edit", async () => {
+    const { user, editor } = await openStep("checks", {
+      "factory.step.save": () => {
+        throw new CallError({
+          code: "INVALID_ARGUMENT",
+          message:
+            "The factory check failed, so nothing changed:\n" +
+            '- Step "checks" sends its failures back to "publish", which is not an earlier step.',
+          retryable: false,
+        })
+      },
+    })
+    const retry = editor.getByRole("spinbutton", { name: "Retry" })
+    await user.type(retry, "3")
+
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    expect(
+      await editor.findByText(/Step "checks" sends its failures back to "publish"/),
+    ).toBeTruthy()
+    expect((retry as HTMLInputElement).value).toBe("3")
   })
 })

@@ -1,22 +1,8 @@
-import { useId } from "react"
+import { useId, useState } from "react"
 
+import { StepEditor, type StepSaving } from "@/components/step-editor"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-
-type SendBack = { back: string; max: number }
-type Retry = { retry: number }
-
-/** The parts of a step of a `factory.yaml` the map and the cards show. The hub checked the rest.
- * A part the file declares as null is absent. */
-export interface FactoryStep {
-  id: string
-  kind: string
-  description?: string | null
-  engine?: string
-  model?: string | null
-  resume?: string | null
-  outcomes?: Record<string, string | SendBack>
-  failed?: SendBack | Retry | null
-}
+import { type FactoryStep, routeText } from "@/lib/factory-steps"
 
 /** A route between two steps, by their places in the factory, `to` the earlier one. */
 interface Arc {
@@ -34,25 +20,50 @@ const LANE = 20
 const RESUME_LANE = 8
 
 /** The factory's steps as a map, its routes back as arcs over the line and its resumed sessions
- * as dotted arcs under it, above a card for each step. */
-export function FactorySteps({ steps }: { steps: FactoryStep[] }) {
+ * as dotted arcs under it, above a card for each step, which opens in place as its step editor.
+ * `onSaved` runs once a save made a new version. */
+export function FactorySteps({
+  steps,
+  saving,
+  onSaved,
+}: {
+  steps: FactoryStep[]
+  saving: StepSaving
+  onSaved: () => void
+}) {
   const prefix = useId()
   const cardId = (id: string) => `${prefix}${id}`
+  const [open, setOpen] = useState<string>()
   return (
     <div className="flex flex-col gap-4">
       <FactoryMap
         steps={steps}
         cardId={cardId}
-        onPick={(id) =>
+        onPick={(id) => {
+          setOpen(id)
           document
             .getElementById(cardId(id))
             ?.scrollIntoView({ behavior: "smooth", block: "start" })
-        }
+        }}
       />
       <ol aria-label="Steps" className="flex flex-col gap-3">
-        {steps.map((step) => (
+        {steps.map((step, place) => (
           <li key={step.id} id={cardId(step.id)} className="scroll-mt-24">
-            <StepCard step={step} />
+            <StepCard
+              step={step}
+              open={open === step.id}
+              onToggle={() => setOpen(open === step.id ? undefined : step.id)}
+            >
+              <StepEditor
+                step={step}
+                earlier={steps.slice(0, place)}
+                saving={saving}
+                onSaved={() => {
+                  setOpen(undefined)
+                  onSaved()
+                }}
+              />
+            </StepCard>
           </li>
         ))}
       </ol>
@@ -181,25 +192,26 @@ function FactoryMap({
 
 /** The step's outcomes and failure that send the run back, each an arc labelled with its max. */
 function routesBack(step: FactoryStep, from: number, at: (id: string) => number): Arc[] {
-  const routes: { outcome: string; target: string | SendBack | Retry; failed: boolean }[] =
-    Object.entries(step.outcomes ?? {}).map(([outcome, target]) => ({
-      outcome,
-      target,
-      failed: false,
-    }))
-  if (step.failed != null) routes.push({ outcome: "failed", target: step.failed, failed: true })
+  const routes = Object.entries(step.outcomes ?? {}).map(([outcome, target]) => ({
+    outcome,
+    target: typeof target === "object" && "back" in target ? target : undefined,
+    failed: false,
+  }))
+  if (step.failed != null && "back" in step.failed) {
+    routes.push({ outcome: "failed", target: step.failed, failed: true })
+  }
   return routes.flatMap(({ outcome, target, failed }) =>
-    typeof target === "object" && "back" in target
-      ? [
+    target === undefined
+      ? []
+      : [
           {
             from,
             to: at(target.back),
             failed,
             label: `${outcome} ×${target.max}`,
-            title: `${step.id}: ${outcome} → back to ${target.back}, up to ${target.max} ${target.max === 1 ? "time" : "times"}`,
+            title: `${step.id}: ${outcome} → ${routeText(target)}`,
           },
-        ]
-      : [],
+        ],
   )
 }
 
@@ -223,21 +235,39 @@ function curve(x1: number, x2: number, y: number, reach: number): string {
   return `M${x1},${y} C${x1},${control} ${x2},${control} ${x2},${y}`
 }
 
-function StepCard({ step }: { step: FactoryStep }) {
+function StepCard({
+  step,
+  open,
+  onToggle,
+  children,
+}: {
+  step: FactoryStep
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
   return (
     <Card size="sm">
       <CardHeader>
         <CardTitle>
-          <h3 className="font-mono">{step.id}</h3>
+          <h3 className="font-mono">
+            <button type="button" aria-expanded={open} onClick={onToggle}>
+              {step.id}
+            </button>
+          </h3>
         </CardTitle>
         <CardDescription>
           {[step.kind, step.engine, step.model].filter(Boolean).join(" · ")}
         </CardDescription>
       </CardHeader>
-      {step.description != null && (
-        <CardContent>
-          <p>{step.description}</p>
-        </CardContent>
+      {open ? (
+        <CardContent>{children}</CardContent>
+      ) : (
+        step.description != null && (
+          <CardContent>
+            <p>{step.description}</p>
+          </CardContent>
+        )
       )}
     </Card>
   )

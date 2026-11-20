@@ -424,6 +424,10 @@ export interface Contract {
       command: FactoryRunTranscriptCommand;
       result: FactoryRunTranscript;
     };
+    "factory.step.save": {
+      command: FactoryStepSaveCommand;
+      result: FactoryResult;
+    };
     "factory.version.diff": {
       command: FactoryVersionDiffCommand;
       result: FactoryVersionDiff;
@@ -1460,6 +1464,9 @@ export interface FactoryEditCommand {
   name: FactoryName;
 }
 export interface FactoryResult {
+  declared_in: {
+    [k: string]: string;
+  };
   files: {
     [k: string]: string;
   };
@@ -1700,6 +1707,19 @@ export interface FactoryRunTranscript {
   events: {
     [k: string]: JsonValue;
   }[];
+}
+/**
+ * Save one step of a factory, its prompt and its hook, as one version. The hub keeps the rest
+ * of the factory file as it was, comments included, and keeps the save only if the check passes.
+ */
+export interface FactoryStepSaveCommand {
+  hash: string;
+  hook?: string | null;
+  name: FactoryName;
+  prompt?: string | null;
+  step: {
+    [k: string]: JsonValue;
+  };
 }
 export interface FactoryVersionDiffCommand {
   name: FactoryName;

@@ -3203,6 +3203,8 @@ class FactoryResult(ContractModel):
     hash: FileHash
     #: The factory's current version. None for a shipped factory the hub never copied in.
     version: GitCommit | None
+    #: The file of the folder that declares each of its checks and tools, by name.
+    declared_in: dict[str, str]
 
 
 class FactoryCheckCommand(ContractModel):
@@ -3225,6 +3227,23 @@ class FactoryEditCommand(ContractModel):
     files: dict[str, str]
     #: The hash the client read, or null to create a factory no source has yet.
     hash: FileHash | None
+
+
+class FactoryStepSaveCommand(ContractModel):
+    """Save one step of a factory, its prompt and its hook, as one version. The hub keeps the rest
+    of the factory file as it was, comments included, and keeps the save only if the check passes.
+    """
+
+    name: FactoryName
+    #: The step's entry in the factory file. Its id names the step it replaces.
+    step: dict[str, JsonValue]
+    #: The text of the step's prompt file. None leaves the file as it is.
+    prompt: str | None = None
+    #: The text of the file that declares the step's check, or a code step's tool. None leaves the
+    #: file as it is.
+    hook: str | None = None
+    #: The hash the client read.
+    hash: FileHash
 
 
 class FactoryRemoveCommand(ContractModel):

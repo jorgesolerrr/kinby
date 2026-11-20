@@ -33,7 +33,7 @@ export function Refusal({ reason }: { reason: string }) {
     <Alert variant="destructive">
       <CircleXIcon />
       <AlertTitle>The hub refused it</AlertTitle>
-      <AlertDescription>{reason}</AlertDescription>
+      <AlertDescription className="whitespace-pre-line">{reason}</AlertDescription>
     </Alert>
   )
 }

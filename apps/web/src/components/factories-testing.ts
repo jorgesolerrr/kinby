@@ -262,6 +262,7 @@ export const answers: Answers = {
     hash: "h",
     files: { "factory.yaml": FILES[name] ?? "" },
     version: null,
+    declared_in: {},
   }),
   "line.list": () => ({ lines }),
   "line.get": ({ line_id }) => {
