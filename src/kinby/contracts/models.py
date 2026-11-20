@@ -3274,6 +3274,10 @@ class FactoryStepOffSetCommand(ContractModel):
     hash: FileHash
 
 
+#: A step write the owner of a line on the factory can ask for from chat.
+type FactoryStepChange = FactoryStepSaveCommand | FactoryStepAddCommand | FactoryStepOffSetCommand
+
+
 class FactoryStepDeleteCommand(ContractModel):
     """Delete one off step of a factory, as one version, with its prompt file unless another step
     uses it."""
@@ -3282,6 +3286,42 @@ class FactoryStepDeleteCommand(ContractModel):
     step: StepId
     #: The hash the client read.
     hash: FileHash
+
+
+class FactoryChangeOperation(StrEnum):
+    """A step-sized change the owner of a line asks for from chat, each one of the step writes."""
+
+    #: factory.step.save's.
+    STEP_SAVE = "step_save"
+    #: factory.step.add's.
+    STEP_ADD = "step_add"
+    #: factory.step.off.set's.
+    STEP_OFF_SET = "step_off_set"
+
+
+class FactoryChangePreviewCommand(ContractModel):
+    """Show a step-sized change to a factory a line of the instance is on, as its approval shows
+    it, without making it."""
+
+    operation: FactoryChangeOperation
+    #: The command of the operation's step write, such as ``{"name": "tickets", "step": "review",
+    #: "off": true, "hash": "..."}`` for step_off_set.
+    arguments: dict[str, JsonValue]
+
+
+class FactoryChangePreview(ContractModel):
+    #: What the change does to the factory's files, as a unified diff.
+    diff: str
+    #: Each line on the factory, whose runs the change reaches, by its workbench and its owner,
+    #: such as "cec-backend, owned by alice".
+    lines: list[str]
+
+
+class FactoryChangeCommand(FactoryChangePreviewCommand):
+    """Make a step-sized change to a factory a line of the instance is on, as a chat version,
+    once the hub saw the user approve the change_factory call that asks for it."""
+
+    approval_id: UUID
 
 
 class FactoryRemoveCommand(ContractModel):
@@ -3295,6 +3335,8 @@ class FactoryVersionSource(StrEnum):
 
     #: A save from the web app, or a ``factory.edit``.
     WEB = "web"
+    #: A change the owner of a line on the factory asked for from chat, and the user approved.
+    CHAT = "chat"
     #: A change made by hand in the factory's folder, which the hub took in when it next read it.
     BY_HAND = "by_hand"
     #: A revert to an earlier version.

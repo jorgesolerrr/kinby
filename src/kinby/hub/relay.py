@@ -1,5 +1,5 @@
 """Carry traffic to one instance's private routes: a client's socket and a webhook travel unread,
-but for the approvals on the home instance's socket."""
+but for the approvals on an instance's socket."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from kinby.contracts import (
 )
 from kinby.core.contract_server import HEARTBEAT_SECONDS
 from kinby.core.errors import InstanceAnswerLost, InstanceRefused, InstanceUnavailable
-from kinby.hub.approvals import HomeApprovals
+from kinby.hub.approvals import RelayedApprovals
 from kinby.hub.models import InstanceEndpoint, InstanceUnreachable
 
 #: Headers that describe the connection ending at the hub, plus the ones the next hop rewrites.
@@ -59,10 +59,10 @@ def unreachable(reason: InstanceUnreachable) -> web.HTTPException:
 
 
 async def relay_socket(
-    request: web.Request, endpoint: InstanceEndpoint, approvals: HomeApprovals | None = None
+    request: web.Request, endpoint: InstanceEndpoint, approvals: RelayedApprovals | None = None
 ) -> web.WebSocketResponse:
-    """Carry frames both ways unparsed, so the hub knows no instance method. On the home
-    instance's socket, *approvals* sees each frame first."""
+    """Carry frames both ways unparsed, so the hub knows no instance method, but *approvals*
+    sees each frame first."""
     session = aiohttp.ClientSession()
     try:
         async with asyncio.timeout(SOCKET_CONNECT_SECONDS):
@@ -168,7 +168,7 @@ def forwarded_headers(headers: Mapping[str, str]) -> CIMultiDict[str]:
 async def _carry(
     downstream: web.WebSocketResponse,
     upstream: aiohttp.ClientWebSocketResponse,
-    approvals: HomeApprovals | None,
+    approvals: RelayedApprovals | None,
 ) -> None:
     both = (
         asyncio.create_task(

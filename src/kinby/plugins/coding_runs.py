@@ -108,7 +108,7 @@ def _ending(ran: CodingRun) -> DelegatedRunOutcome:
     return reported.outcome
 
 
-def _preview(arguments: Mapping[str, JsonValue], instance: Instance) -> str:
+async def _preview(arguments: Mapping[str, JsonValue], instance: Instance) -> str:
     """The approval names the client the task goes to."""
     named = arguments.get("client")
     client = (

@@ -152,7 +152,7 @@ class HubContractServer:
             raise web.HTTPUnauthorized(reason=_UNAUTHORIZED)
         endpoint = await self._reach(request)
         return await relay_socket(
-            request, endpoint, self._routing.home_approvals(endpoint.instance_id)
+            request, endpoint, self._routing.relayed_approvals(endpoint.instance_id)
         )
 
     async def _instance_signal(self, request: web.Request) -> web.Response:

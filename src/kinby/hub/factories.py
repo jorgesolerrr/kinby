@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import difflib
 import logging
 import shutil
 from collections.abc import Iterable, Iterator, Mapping
@@ -27,6 +28,7 @@ from kinby.contracts import (
     FactoryRevertCommand,
     FactorySource,
     FactoryStepAddCommand,
+    FactoryStepChange,
     FactoryStepDeleteCommand,
     FactoryStepOffSetCommand,
     FactoryStepSaveCommand,
@@ -163,15 +165,23 @@ class FactoryStore:
     def _edit(self, command: FactoryEditCommand) -> None:
         self._write(command.name, self._read_as(command.name, command.hash), command.files)
 
-    async def save_step(self, command: FactoryStepSaveCommand) -> FactoryResult:
+    async def save_step(
+        self,
+        command: FactoryStepSaveCommand,
+        source: FactoryVersionSource = FactoryVersionSource.WEB,
+    ) -> FactoryResult:
         """Declare one step of the factory the client read as the command says, with its prompt
-        and its hook, and keep them if the check passes."""
+        and its hook, and keep them as a version from *source* if the check passes."""
         _prompt_in_folder(command.step, command.prompt)
         async with self._edit_lock:
-            await asyncio.to_thread(self._save_step, command)
+            await asyncio.to_thread(self._save_step, command, source)
         return await self.get(FactoryGetCommand(name=command.name))
 
-    def _save_step(self, command: FactoryStepSaveCommand) -> None:
+    def _save_step(self, command: FactoryStepSaveCommand, source: FactoryVersionSource) -> None:
+        self._write(command.name, *self._step_saved(command), source=source)
+
+    def _step_saved(self, command: FactoryStepSaveCommand) -> tuple[Path, dict[str, str]]:
+        """The factory's folder, and the files the save writes over it."""
         folder, _ = self._folder(command.name)
         self._read_as(command.name, command.hash)
         try:
@@ -190,17 +200,25 @@ class FactoryStore:
             if declared is None:
                 raise InvalidConfig({"hook": "No file of the factory declares the step's hook."})
             files[declared] = command.hook
-        self._write(command.name, folder, files)
+        return folder, files
 
-    async def add_step(self, command: FactoryStepAddCommand) -> FactoryResult:
+    async def add_step(
+        self,
+        command: FactoryStepAddCommand,
+        source: FactoryVersionSource = FactoryVersionSource.WEB,
+    ) -> FactoryResult:
         """Add one step right after another of the factory the client read, with its new prompt,
-        and keep them if the check passes."""
+        and keep them as a version from *source* if the check passes."""
         _prompt_in_folder(command.step, command.prompt)
         async with self._edit_lock:
-            await asyncio.to_thread(self._add_step, command)
+            await asyncio.to_thread(self._add_step, command, source)
         return await self.get(FactoryGetCommand(name=command.name))
 
-    def _add_step(self, command: FactoryStepAddCommand) -> None:
+    def _add_step(self, command: FactoryStepAddCommand, source: FactoryVersionSource) -> None:
+        self._write(command.name, *self._step_added(command), source=source)
+
+    def _step_added(self, command: FactoryStepAddCommand) -> tuple[Path, dict[str, str]]:
+        """The factory's folder, and the files the add writes over it."""
         folder, _ = self._folder(command.name)
         self._read_as(command.name, command.hash)
         text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
@@ -213,26 +231,55 @@ class FactoryStore:
             if (folder / prompt).exists():
                 raise InvalidConfig({"step.prompt": f'"{prompt}" is already a file.'})
             files[prompt] = command.prompt
-        self._write(command.name, folder, files)
+        return folder, files
 
-    async def set_step_off(self, command: FactoryStepOffSetCommand) -> FactoryResult:
-        """Turn one step of the factory the client read off or on, if the check passes."""
+    async def set_step_off(
+        self,
+        command: FactoryStepOffSetCommand,
+        source: FactoryVersionSource = FactoryVersionSource.WEB,
+    ) -> FactoryResult:
+        """Turn one step of the factory the client read off or on, as a version from *source*,
+        if the check passes."""
         async with self._edit_lock:
-            await asyncio.to_thread(self._set_step_off, command)
+            await asyncio.to_thread(self._set_step_off, command, source)
         return await self.get(FactoryGetCommand(name=command.name))
 
-    def _set_step_off(self, command: FactoryStepOffSetCommand) -> None:
+    def _set_step_off(
+        self, command: FactoryStepOffSetCommand, source: FactoryVersionSource
+    ) -> None:
+        folder, files = self._step_turned(command)
+        try:
+            self._write(command.name, folder, files, source=source)
+        except FactoryCheckFailed as exc:
+            raise FactoryCheckFailed(exc.problems, _needing_off(files[FACTORY_FILE])) from None
+
+    def _step_turned(self, command: FactoryStepOffSetCommand) -> tuple[Path, dict[str, str]]:
+        """The factory's folder, and the factory file with the step turned off or on."""
         folder, _ = self._folder(command.name)
         self._read_as(command.name, command.hash)
         text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
         try:
-            turned = with_step_off(text, command.step, off=command.off)
+            return folder, {FACTORY_FILE: with_step_off(text, command.step, off=command.off)}
         except StepNotDeclared as exc:
             raise InvalidConfig({"step": str(exc)}) from None
-        try:
-            self._write(command.name, folder, {FACTORY_FILE: turned})
-        except FactoryCheckFailed as exc:
-            raise FactoryCheckFailed(exc.problems, _needing_off(turned)) from None
+
+    async def preview(self, change: FactoryStepChange) -> str:
+        """What *change* would do to the factory the client read, as a unified diff, without
+        making it."""
+        async with self._edit_lock:
+            return await asyncio.to_thread(self._preview, change)
+
+    def _preview(self, change: FactoryStepChange) -> str:
+        match change:
+            case FactoryStepSaveCommand():
+                _prompt_in_folder(change.step, change.prompt)
+                folder, files = self._step_saved(change)
+            case FactoryStepAddCommand():
+                _prompt_in_folder(change.step, change.prompt)
+                folder, files = self._step_added(change)
+            case FactoryStepOffSetCommand():
+                folder, files = self._step_turned(change)
+        return _diff(folder, files)
 
     async def delete_step(self, command: FactoryStepDeleteCommand) -> FactoryResult:
         """Delete one off step of the factory the client read, with its prompt file unless another
@@ -275,9 +322,10 @@ class FactoryStore:
         folder: Path | None,
         files: Mapping[str, str],
         removed: Iterable[str] = (),
+        source: FactoryVersionSource = FactoryVersionSource.WEB,
     ) -> None:
         """Write *files* over the factory in *folder*, or a new one, without the files *removed*,
-        and keep them as a web version if the check passes."""
+        and keep them as a version from *source* if the check passes."""
         with self._staging(name) as staged:
             if folder is None:
                 staged.mkdir()
@@ -289,7 +337,7 @@ class FactoryStore:
                 target.write_text(content, encoding="utf-8")
             for path in removed:
                 (staged / path).unlink(missing_ok=True)
-            self._save(staged, FactoryVersionSource.WEB)
+            self._save(staged, source)
 
     async def revert(self, command: FactoryRevertCommand) -> FactoryResult:
         """Make the factory's files those of one of its versions, as a new version."""
@@ -404,6 +452,23 @@ def _factory_files(folder: Path) -> dict[str, Path]:
         for path in sorted(folder.rglob("*"))
         if path.is_file() and "__pycache__" not in path.relative_to(folder).parts
     }
+
+
+def _diff(folder: Path, files: Mapping[str, str]) -> str:
+    """What writing *files* over the factory in *folder* changes, as a unified diff."""
+    shown: list[str] = []
+    for path, text in sorted(files.items()):
+        current = folder / path
+        before = current.read_text(encoding="utf-8") if current.exists() else ""
+        shown.extend(
+            difflib.unified_diff(
+                before.splitlines(keepends=True),
+                text.splitlines(keepends=True),
+                f"a/{path}" if current.exists() else "/dev/null",
+                f"b/{path}",
+            )
+        )
+    return "".join(shown)
 
 
 def _needing_off(text: str) -> dict[str, str]:

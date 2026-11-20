@@ -1,4 +1,4 @@
-"""The approvals the hub relays between the user and the home instance (ADR 0096)."""
+"""The approvals the hub relays between the user and an instance (ADR 0096)."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ class _Witnessed:
     approved: bool = False
 
 
-class HomeApprovals:
-    """What the hub saw on the home instance's relay: each approval it raised, and whether the
-    user approved it. One lasts until it is used or its turn ends."""
+class RelayedApprovals:
+    """What the hub saw on one instance's relay: each approval it raised, and whether the user
+    approved it. One lasts until it is used or its turn ends."""
 
     def __init__(self) -> None:
         self._witnessed: dict[UUID, _Witnessed] = {}

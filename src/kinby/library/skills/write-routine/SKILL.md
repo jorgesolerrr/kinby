@@ -32,7 +32,7 @@ A routine's prompt runs with its instance's own tools: the routine tools, the
 `memory_*` and `view_*` tools, `notify`, and the instance's plugins. It never
 holds a hub tool, even in the home instance, because hub tools exist only on
 turns the user starts. A run that calls one fails with the tool not available.
-The hub tools are `hub_write` and `hand_to_line`.
+The hub tools are `hub_write`, `hand_to_line` and `change_factory`.
 
 Never write a step that calls one into a routine's prompt. A routine in the home
 instance reads the hub with `kinby hub read` in bash, as any turn there can, so
