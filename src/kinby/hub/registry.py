@@ -28,6 +28,7 @@ from kinby.contracts import (
     FactoryRun,
     FactoryRunStatus,
     FileHash,
+    GitCommit,
     GitSource,
     HubSecretName,
     IntendedState,
@@ -468,6 +469,9 @@ class HubRegistry:
                     # What the user wrote when they last sent the run back. Null when they wrote
                     # nothing.
                     "notes": "TEXT",
+                    # The factory version the run started on. Null for a run started before
+                    # runs kept one, which reads the latest.
+                    "version": "TEXT",
                 },
             )
             # A run that stopped before stops were recorded gets its latest stop as told, so its
@@ -511,6 +515,8 @@ class HubRegistry:
             self._add_columns(connection, "step_attempts", {"ask": "TEXT", "answer": "TEXT"})
             # The ids of the views an attempt wrote to its run's instance, as JSON.
             self._add_columns(connection, "step_attempts", {"views": "TEXT NOT NULL DEFAULT '[]'"})
+            # The factory version the attempt ran, its run's. Null when the run kept none.
+            self._add_columns(connection, "step_attempts", {"version": "TEXT"})
             # The factory role each instance picked, from before factories ran on workbenches.
             connection.execute("DROP TABLE IF EXISTS factory_members")
             # Null for a git skill added before the hub recorded the hash it landed with.
@@ -2005,9 +2011,10 @@ class HubRegistry:
         work_item: Mapping[ValueName, StepValue],
         step: StepId,
         line_id: UUID | None = None,
+        version: GitCommit | None = None,
     ) -> tuple[FactoryRun, bool]:
-        """Queue a new run at its first step, or find the unfinished run of the same work item
-        that the instance handed in, or that runs on line *line_id*.
+        """Queue a new run on the factory's *version* at its first step, or find the unfinished
+        run of the same work item that the instance handed in, or that runs on line *line_id*.
 
         A line's run that still owes the factory's ended call counts as unfinished: its folder
         goes only after that call, and a new run of the work item would work in the same one.
@@ -2035,9 +2042,9 @@ class HubRegistry:
             connection.execute(
                 """
                 INSERT INTO factory_runs (
-                    id, factory, instance_id, line_id, work_item, status, step, created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, factory, instance_id, line_id, work_item, status, step, version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(run_id),
@@ -2047,6 +2054,7 @@ class HubRegistry:
                     key,
                     FactoryRunStatus.QUEUED.value,
                     step,
+                    version,
                     now,
                     now,
                 ),
@@ -2307,7 +2315,8 @@ class HubRegistry:
         status: FactoryRunStatus = FactoryRunStatus.RUNNING,
         summary: str = "",
     ) -> FactoryRun:
-        """Open the next attempt at *step* with *summary*, and put the run in *status* at it.
+        """Open the next attempt at *step* with *summary*, on the run's factory version, and put
+        the run in *status* at it.
 
         A run parked at a wait or an approval keeps its attempt open until it moves on.
         """
@@ -2316,12 +2325,14 @@ class HubRegistry:
             connection.execute(
                 """
                 INSERT INTO step_attempts (
-                    run_id, step, attempt, result_values, summary, started_at
+                    run_id, step, attempt, result_values, summary, version, started_at
                 )
-                SELECT ?, ?, COUNT(*) + 1, '{}', ?, ? FROM step_attempts
+                SELECT ?, ?, COUNT(*) + 1, '{}', ?, (
+                    SELECT version FROM factory_runs WHERE id = ?
+                ), ? FROM step_attempts
                 WHERE run_id = ? AND step = ?
                 """,
-                (str(run_id), step, summary, now, str(run_id), step),
+                (str(run_id), step, summary, str(run_id), now, str(run_id), step),
             )
             connection.execute(
                 "UPDATE factory_runs SET status = ?, step = ?, updated_at = ? WHERE id = ?",
@@ -2403,7 +2414,7 @@ class HubRegistry:
                 """
                 SELECT
                     step, attempt, ending, outcome, result_values, summary, session, usage,
-                    ask, answer, views, started_at, ended_at
+                    ask, answer, views, version, started_at, ended_at
                 FROM step_attempts
                 WHERE run_id = ? AND rowid > ? AND (? IS NULL OR rowid <= ?)
                 ORDER BY rowid
@@ -2423,6 +2434,7 @@ class HubRegistry:
                 ask=_ASK.validate_json(ask) if ask is not None else None,
                 answer=StepAnswer.model_validate_json(answer) if answer is not None else None,
                 views=json.loads(views),
+                version=version,
                 started_at=datetime.fromisoformat(started_at),
                 ended_at=datetime.fromisoformat(ended_at) if ended_at is not None else None,
             )
@@ -2438,6 +2450,7 @@ class HubRegistry:
                 ask,
                 answer,
                 views,
+                version,
                 started_at,
                 ended_at,
             ) in rows
@@ -2919,7 +2932,8 @@ class HubRegistry:
 
 
 _RUN_COLUMNS = (
-    "id, factory, instance_id, line_id, work_item, status, step, wakes_at, created_at, updated_at"
+    "id, factory, instance_id, line_id, work_item, status, step, wakes_at, version, created_at, "
+    "updated_at"
 )
 _CHANNEL_COLUMNS = (
     "id, name, kind, settings, enabled, paired_user, pairing_code, pairing_expires_at, "
@@ -3043,6 +3057,7 @@ def _factory_run(row: tuple[str, ...]) -> FactoryRun:
         status,
         step,
         wakes_at,
+        version,
         created_at,
         updated_at,
     ) = row
@@ -3055,6 +3070,7 @@ def _factory_run(row: tuple[str, ...]) -> FactoryRun:
         status=FactoryRunStatus(status),
         step=step,
         wakes_at=datetime.fromisoformat(wakes_at) if wakes_at is not None else None,
+        version=version,
         created_at=datetime.fromisoformat(created_at),
         updated_at=datetime.fromisoformat(updated_at),
     )

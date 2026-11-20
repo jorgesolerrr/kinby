@@ -528,6 +528,20 @@ def test_a_code_step_runs_the_factorys_tool_as_its_folder_holds_it_at_each_step(
     assert edited == StepResult(ending=StepEnding.CLEAN, values={"label": "ready 12"})
 
 
+def test_a_code_step_runs_the_tool_of_the_factory_version_its_run_keeps(tmp_path):
+    workbench = _workbench(tmp_path, None)
+    version = "a" * 40
+    factories = tmp_path / "factories"
+    write_factory(factories / "tickets", {"tools/label.py": LABEL.format(label="latest")})
+    kept = factories / ".versions" / "tickets" / version
+    write_factory(kept, {"tools/label.py": LABEL.format(label="kept")})
+    command = _command(uuid4(), CodeStepRun(call="label_issue"), PLAIN)
+
+    result = asyncio.run(workbench.run(command.model_copy(update={"version": version})))
+
+    assert result.values == {"label": "kept 12"}
+
+
 def test_a_code_step_runs_a_tool_of_the_factory_kinby_ships_when_the_hub_holds_none(tmp_path):
     workbench = _workbench(tmp_path, None)
     write_factory(tmp_path / "shipped" / "tickets", {"tools/label.py": LABEL.format(label="new")})

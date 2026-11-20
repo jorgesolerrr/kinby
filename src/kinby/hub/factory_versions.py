@@ -89,6 +89,11 @@ class FactoryVersions:
         shown = self._run("show", "--format=", f"--relative={name}/", version, "--", f"{name}/")
         return shown.stdout.decode()
 
+    def show(self, name: FactoryName, version: GitCommit, path: str) -> str:
+        """The text of the file at *path* in the factory's folder, as it is in *version*."""
+        self._known(name, version)
+        return self._run("show", f"{version}:{name}/{path}").stdout.decode()
+
     def extract(self, name: FactoryName, version: GitCommit, into: Path) -> None:
         """Write the factory's folder as it is in *version* to the folder *into*."""
         self._known(name, version)
