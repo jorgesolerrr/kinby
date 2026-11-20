@@ -486,6 +486,17 @@ describe("LibraryPage, an off step", () => {
     )
   })
 
+  it("keeps the switch off until unsaved edits are saved or discarded", async () => {
+    const { user, editor } = await openStep("checks")
+    const on = editor.getByRole("switch", { name: "On" })
+
+    await user.type(editor.getByRole("spinbutton", { name: "Retry" }), "3")
+
+    expect(on.getAttribute("data-disabled")).not.toBeNull()
+    await user.click(editor.getByRole("button", { name: "Discard" }))
+    expect(on.getAttribute("data-disabled")).toBeNull()
+  })
+
   it("turns an off step back on", async () => {
     const { caller, user, editor } = await openStep("review", {
       "factory.step.off.set": ({ name }) => changed(name),

@@ -155,7 +155,8 @@ export function StepEditor({
           aria-label="On"
           className="mt-8"
           checked={step.off !== true}
-          disabled={turning.busy}
+          // A toggle reads the factory again, which would drop unsaved edits.
+          disabled={dirty || turning.busy}
           onCheckedChange={turn}
         />
       </div>
