@@ -18,7 +18,6 @@ from kinby.contracts import (
     FactoryListResult,
     FactoryResult,
     FactorySource,
-    FactorySummary,
 )
 from kinby.hub import Hub
 from tests.test_hub import FakeImages, FakeRuntime, hub_client
@@ -145,9 +144,9 @@ def test_list_and_get_serve_the_hubs_factories_and_the_shipped_ones(tmp_path):
         missing = await client.call(FACTORY_GET, FactoryGetCommand(name="absent"))
 
         assert isinstance(listed, FactoryListResult)
-        assert listed.factories == [
-            FactorySummary(name="software", source=FactorySource.SHIPPED),
-            FactorySummary(name="tickets", source=FactorySource.HUB),
+        assert [(factory.name, factory.source) for factory in listed.factories] == [
+            ("software", FactorySource.SHIPPED),
+            ("tickets", FactorySource.HUB),
         ]
         assert isinstance(got, FactoryResult)
         assert got.source is FactorySource.HUB
@@ -547,7 +546,9 @@ def test_editing_a_shipped_factory_copies_it_into_the_hubs_factories(tmp_path):
         assert edited.files == shipped | {"prompts/review.md": "Review it.\n"}
         assert await read(client, "software") == edited
         assert isinstance(listed, FactoryListResult)
-        assert listed.factories == [FactorySummary(name="software", source=FactorySource.HUB)]
+        assert [(factory.name, factory.source) for factory in listed.factories] == [
+            ("software", FactorySource.HUB)
+        ]
         assert (tmp_path / "shipped" / "software" / "prompts" / "review.md").read_text(
             encoding="utf-8"
         ) == FILES["prompts/review.md"]

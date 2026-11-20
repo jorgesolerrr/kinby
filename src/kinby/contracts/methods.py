@@ -51,7 +51,9 @@ from kinby.contracts.models import (
     FactoryListCommand,
     FactoryListResult,
     FactoryRemoveCommand,
+    FactoryResetCommand,
     FactoryResult,
+    FactoryRevertCommand,
     FactoryRun,
     FactoryRunAnswerCommand,
     FactoryRunApproveCommand,
@@ -66,6 +68,10 @@ from kinby.contracts.models import (
     FactoryRunTakeoverFinishCommand,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    FactoryVersionDiff,
+    FactoryVersionDiffCommand,
+    FactoryVersionListCommand,
+    FactoryVersionListResult,
     HubSecretDeleteCommand,
     HubSecretDeleteResult,
     HubSecretListCommand,
@@ -680,6 +686,14 @@ FACTORY_GET = Method("factory.get", Scope.HUB_READ, FactoryGetCommand, FactoryRe
 FACTORY_EDIT = Method("factory.edit", Scope.HUB_ADMIN, FactoryEditCommand, FactoryResult)
 FACTORY_REMOVE = Method("factory.remove", Scope.HUB_ADMIN, FactoryRemoveCommand, FactoryListResult)
 FACTORY_CHECK = Method("factory.check", Scope.HUB_READ, FactoryCheckCommand, FactoryCheckResult)
+FACTORY_VERSION_LIST = Method(
+    "factory.version.list", Scope.HUB_READ, FactoryVersionListCommand, FactoryVersionListResult
+)
+FACTORY_VERSION_DIFF = Method(
+    "factory.version.diff", Scope.HUB_READ, FactoryVersionDiffCommand, FactoryVersionDiff
+)
+FACTORY_REVERT = Method("factory.revert", Scope.HUB_ADMIN, FactoryRevertCommand, FactoryResult)
+FACTORY_RESET = Method("factory.reset", Scope.HUB_ADMIN, FactoryResetCommand, FactoryResult)
 FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
 )
@@ -977,6 +991,10 @@ METHODS = (
     FACTORY_CHECK,
     FACTORY_EDIT,
     FACTORY_REMOVE,
+    FACTORY_VERSION_LIST,
+    FACTORY_VERSION_DIFF,
+    FACTORY_REVERT,
+    FACTORY_RESET,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
     FACTORY_RUN_TRANSCRIPT,

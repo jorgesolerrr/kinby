@@ -2421,6 +2421,20 @@
       "title": "FactoryRemoveCommand",
       "type": "object"
     },
+    "FactoryResetCommand": {
+      "additionalProperties": false,
+      "description": "Make a shipped factory's files the ones kinby ships, as a new version.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryResetCommand",
+      "type": "object"
+    },
     "FactoryResult": {
       "additionalProperties": false,
       "properties": {
@@ -2438,15 +2452,44 @@
         },
         "source": {
           "$ref": "#/$defs/FactorySource"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "name",
         "source",
         "files",
-        "hash"
+        "hash",
+        "version"
       ],
       "title": "FactoryResult",
+      "type": "object"
+    },
+    "FactoryRevertCommand": {
+      "additionalProperties": false,
+      "description": "Make the factory's files those of an earlier version, as a new version.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "version": {
+          "$ref": "#/$defs/GitCommit"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "FactoryRevertCommand",
       "type": "object"
     },
     "FactoryRun": {
@@ -2924,14 +2967,125 @@
         },
         "source": {
           "$ref": "#/$defs/FactorySource"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "name",
-        "source"
+        "source",
+        "version"
       ],
       "title": "FactorySummary",
       "type": "object"
+    },
+    "FactoryVersion": {
+      "additionalProperties": false,
+      "description": "One saved state of a factory: a commit in the hub's factories repository.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/FactoryVersionSource"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/StepId"
+          },
+          "type": "array"
+        },
+        "time": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "version": {
+          "$ref": "#/$defs/GitCommit"
+        }
+      },
+      "required": [
+        "version",
+        "time",
+        "source",
+        "steps"
+      ],
+      "title": "FactoryVersion",
+      "type": "object"
+    },
+    "FactoryVersionDiff": {
+      "additionalProperties": false,
+      "properties": {
+        "diff": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "diff"
+      ],
+      "title": "FactoryVersionDiff",
+      "type": "object"
+    },
+    "FactoryVersionDiffCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "version": {
+          "$ref": "#/$defs/GitCommit"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "FactoryVersionDiffCommand",
+      "type": "object"
+    },
+    "FactoryVersionListCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FactoryVersionListCommand",
+      "type": "object"
+    },
+    "FactoryVersionListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "versions": {
+          "items": {
+            "$ref": "#/$defs/FactoryVersion"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "versions"
+      ],
+      "title": "FactoryVersionListResult",
+      "type": "object"
+    },
+    "FactoryVersionSource": {
+      "description": "Where a factory version came from.",
+      "enum": [
+        "web",
+        "by_hand",
+        "revert",
+        "shipped"
+      ],
+      "title": "FactoryVersionSource",
+      "type": "string"
     },
     "FeedbackPolicy": {
       "description": "When kinby asks the user to rate a completed turn.",
@@ -14939,6 +15093,38 @@
           ],
           "type": "object"
         },
+        "factory.reset": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryResetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.revert": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryRevertCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.run.answer": {
           "additionalProperties": false,
           "properties": {
@@ -15075,6 +15261,38 @@
             },
             "result": {
               "$ref": "#/$defs/FactoryRunTranscript"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.version.diff": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryVersionDiffCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryVersionDiff"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.version.list": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryVersionListCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryVersionListResult"
             }
           },
           "required": [
@@ -17549,6 +17767,10 @@
         "factory.check",
         "factory.edit",
         "factory.remove",
+        "factory.version.list",
+        "factory.version.diff",
+        "factory.revert",
+        "factory.reset",
         "factory.run.list",
         "factory.run.get",
         "factory.run.transcript",

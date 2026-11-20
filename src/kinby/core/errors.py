@@ -68,6 +68,10 @@ class FactoryNotFound(CoreError):
     code = ErrorCode.NOT_FOUND
 
 
+class FactoryVersionNotFound(CoreError):
+    code = ErrorCode.NOT_FOUND
+
+
 class FactoryInUse(CoreError):
     """Lines or instances depend on the factory, so it stays."""
 

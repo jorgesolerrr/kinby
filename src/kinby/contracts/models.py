@@ -3181,6 +3181,8 @@ class FactoryListCommand(ContractModel):
 class FactorySummary(ContractModel):
     name: FactoryName
     source: FactorySource
+    #: The factory's current version. None for a shipped factory the hub never copied in.
+    version: GitCommit | None
 
 
 class FactoryListResult(ContractModel):
@@ -3199,6 +3201,8 @@ class FactoryResult(ContractModel):
     files: dict[str, str]
     #: The hash of the factory's folder: every file's path and bytes.
     hash: FileHash
+    #: The factory's current version. None for a shipped factory the hub never copied in.
+    version: GitCommit | None
 
 
 class FactoryCheckCommand(ContractModel):
@@ -3225,6 +3229,63 @@ class FactoryEditCommand(ContractModel):
 
 class FactoryRemoveCommand(ContractModel):
     """Delete one of the hub's own factories. The result lists the factories left."""
+
+    name: FactoryName
+
+
+class FactoryVersionSource(StrEnum):
+    """Where a factory version came from."""
+
+    #: A save from the web app, or a ``factory.edit``.
+    WEB = "web"
+    #: A change made by hand in the factory's folder, which the hub took in when it next read it.
+    BY_HAND = "by_hand"
+    #: A revert to an earlier version.
+    REVERT = "revert"
+    #: The version kinby ships: copied in before the first edit of a shipped factory, or a reset
+    #: to it.
+    SHIPPED = "shipped"
+
+
+class FactoryVersion(ContractModel):
+    """One saved state of a factory: a commit in the hub's factories repository."""
+
+    version: GitCommit
+    time: AwareDatetime
+    source: FactoryVersionSource
+    #: The steps whose entry in ``factory.yaml`` or whose prompt it changed, in the factory's
+    #: order, then the ones it removed.
+    steps: list[StepId]
+
+
+class FactoryVersionListCommand(ContractModel):
+    name: FactoryName
+
+
+class FactoryVersionListResult(ContractModel):
+    #: Newest first. Empty for a shipped factory the hub never copied in.
+    versions: list[FactoryVersion]
+
+
+class FactoryVersionDiffCommand(ContractModel):
+    name: FactoryName
+    version: GitCommit
+
+
+class FactoryVersionDiff(ContractModel):
+    #: What the version changed, as a unified diff of paths in the factory's folder.
+    diff: str
+
+
+class FactoryRevertCommand(ContractModel):
+    """Make the factory's files those of an earlier version, as a new version."""
+
+    name: FactoryName
+    version: GitCommit
+
+
+class FactoryResetCommand(ContractModel):
+    """Make a shipped factory's files the ones kinby ships, as a new version."""
 
     name: FactoryName
 
