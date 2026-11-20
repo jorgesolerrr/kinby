@@ -83,8 +83,8 @@ export function FactorySteps({
                 <KeptAlert step={step} needs={kept.needs} cardId={cardId} onPick={pick} />
               )}
               <StepEditor
-                // A toggle leaves the card open, on the factory as it reads now.
-                key={saving.factory.hash}
+                // A toggle leaves the card open, on the factory as it reads since.
+                key={String(step.off === true)}
                 step={step}
                 earlier={steps.slice(0, place).filter((each) => !each.off)}
                 saving={saving}
@@ -99,7 +99,6 @@ export function FactorySteps({
             {adding === step.id ? (
               <div className="pt-3">
                 <NewStep
-                  key={saving.factory.hash}
                   after={step.id}
                   steps={steps}
                   commands={commands}

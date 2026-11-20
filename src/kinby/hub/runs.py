@@ -1439,8 +1439,8 @@ def _unmet(
     A command step also requires each value its commands name, and a wait each named value of
     the workbench its filters name, since a filter naming a value the run never holds would park
     it for good. The lack is charged to the step that should have produced the value: the last
-    earlier step that declares it in its results. A false work item value or a named value of the
-    workbench has no such step, so the requiring step itself fails.
+    earlier step that's on and declares it in its results. A false work item value or a named
+    value of the workbench has no such step, so the requiring step itself fails.
     """
     declared = {value.name for value in factory.requires.values}
     filtered = (
@@ -1459,7 +1459,10 @@ def _unmet(
             f'Step "{step.id}" requires named value "{lacking}", which its workbench {holds}.',
         )
     earlier = factory.steps[: factory.steps.index(step)]
-    producer = next((before for before in reversed(earlier) if lacking in before.results), None)
+    producer = next(
+        (before for before in reversed(earlier) if not before.off and lacking in before.results),
+        None,
+    )
     if producer is None:
         return _Refused(
             step.id, f'Step "{step.id}" requires "{lacking}", which the work item carries as false.'

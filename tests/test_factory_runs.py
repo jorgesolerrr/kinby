@@ -1213,6 +1213,39 @@ def test_a_failing_requires_check_fails_the_step_that_should_have_produced_the_v
     asyncio.run(scenario())
 
 
+def test_a_failing_requires_check_never_fails_an_off_step_that_declares_the_value(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"branch": "agent/7", "committed": False}),
+        StepResult(ending=StepEnding.CLEAN, values=BRANCH),
+        StepResult(ending=StepEnding.CLEAN, values={"pr": 42}),
+    ]
+    runtime = FakeRuntime()
+    off = (
+        "  - { id: commit, kind: command, run: [make commit], results: { committed: bool }, "
+        "retry: 1, off: true }\n"
+    )
+    files = HANDOFF_FILES | {
+        "factory.yaml": HANDOFF.replace("  - id: open-pr\n", off + "  - id: open-pr\n")
+    }
+    hub = factory_hub(tmp_path / "hub", control, runtime, files)
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        finished = await settled(hub, run.run_id)
+
+        assert finished.run.status is FactoryRunStatus.DONE
+        assert [(a.step, a.attempt, a.ending) for a in finished.attempts] == [
+            ("implement", 1, StepEnding.CLEAN),
+            ("implement", 2, StepEnding.FAILED),
+            ("implement", 3, StepEnding.CLEAN),
+            ("open-pr", 1, StepEnding.CLEAN),
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_a_requires_check_that_fails_past_the_producing_steps_retry_needs_a_human(tmp_path):
     control = FakeControl()
     control.step_results = [StepResult(ending=StepEnding.CLEAN)] * 2

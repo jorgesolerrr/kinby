@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from pydantic import JsonValue
 
 from kinby.contracts import (
@@ -10,6 +11,8 @@ from kinby.contracts import (
     FactoryStepAddCommand,
     FactoryVersionSource,
 )
+from tests.test_hub import hub_client
+from tests.test_hub_factories import FACTORY, FILES, factory_hub, write_factory
 from tests.test_hub_factory_step_save import COMMENTED, commented_hub
 from tests.test_hub_factory_versions import read, sources, versions
 
@@ -149,5 +152,39 @@ def test_an_add_from_a_stale_read_is_refused(tmp_path):
 
         assert isinstance(stale, ErrorEnvelope)
         assert stale.code is ErrorCode.STALE
+
+    asyncio.run(scenario())
+
+
+def shifted(factory: str, by: int) -> str:
+    """The factory file with its steps' lines indented *by* more columns, or fewer."""
+    head, rest = factory.split("steps:\n")
+    steps, tail = rest.split("done_requires:")
+    lines = steps.splitlines(keepends=True)
+    moved = [" " * by + line if by > 0 else line[-by:] for line in lines]
+    return head + "steps:\n" + "".join(moved) + "done_requires:" + tail
+
+
+@pytest.mark.parametrize(
+    ("by", "entry"),
+    [
+        (-2, "- id: tidy\n  kind: command\n  run:\n  - make tidy\n"),
+        (2, "    - id: tidy\n      kind: command\n      run:\n          - make tidy\n"),
+    ],
+)
+def test_an_added_step_takes_the_indentation_of_the_steps_around_it(tmp_path, by, entry):
+    hub = factory_hub(tmp_path)
+    write_factory(
+        tmp_path / "hub" / "factories" / "tickets", FILES | {"factory.yaml": shifted(FACTORY, by)}
+    )
+    client = hub_client(hub)
+    tidy: dict[str, JsonValue] = {"id": "tidy", "kind": "command", "run": ["make tidy"]}
+
+    async def scenario() -> None:
+        added = await add(client, "implement", tidy)
+
+        assert isinstance(added, FactoryResult), added
+        review = " " * (2 + by) + "- id: review\n"
+        assert added.files["factory.yaml"] == shifted(FACTORY, by).replace(review, entry + review)
 
     asyncio.run(scenario())
