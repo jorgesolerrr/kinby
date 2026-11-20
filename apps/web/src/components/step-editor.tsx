@@ -35,7 +35,7 @@ const DEFAULT = "default"
 /** A step's card opened as its step editor: what it does, how it runs, where its failures and
  * outcomes send the run, its prompt and its hook. */
 export function StepEditor({
-  step,
+  step: shown,
   earlier,
   saving,
   onSaved,
@@ -54,7 +54,9 @@ export function StepEditor({
    * it is needs of it, by the step's id. */
   onKept: (needs: Record<string, string>) => void
 }) {
-  const { files, declared_in: declaredIn } = saving.factory
+  // As the card opened, so a save from this draft is refused once the factory changed since.
+  const [{ step, factory }] = useState({ step: shown, factory: saving.factory })
+  const { files, declared_in: declaredIn } = factory
   const hook = step.check ?? step.call
   const hookPath = hook == null ? undefined : declaredIn[hook]
   const promptText = step.prompt === undefined ? undefined : (files[step.prompt] ?? "")
@@ -101,8 +103,8 @@ export function StepEditor({
     setNotYaml(undefined)
     void ask(async () => {
       await saving.client.call("factory.step.save", {
-        name: saving.factory.name,
-        hash: saving.factory.hash,
+        name: factory.name,
+        hash: factory.hash,
         step: saved,
         prompt: prompt === promptText ? null : prompt,
         hook: hookDraft === hookText ? null : hookDraft,
