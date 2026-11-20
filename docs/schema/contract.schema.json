@@ -2438,6 +2438,12 @@
     "FactoryResult": {
       "additionalProperties": false,
       "properties": {
+        "declared_in": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "files": {
           "additionalProperties": {
             "type": "string"
@@ -2469,7 +2475,8 @@
         "source",
         "files",
         "hash",
-        "version"
+        "version",
+        "declared_in"
       ],
       "title": "FactoryResult",
       "type": "object"
@@ -2969,6 +2976,53 @@
       ],
       "title": "FactorySource",
       "type": "string"
+    },
+    "FactoryStepSaveCommand": {
+      "additionalProperties": false,
+      "description": "Save one step of a factory, its prompt and its hook, as one version. The hub keeps the rest\nof the factory file as it was, comments included, and keeps the save only if the check passes.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "hook": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "step": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "step",
+        "hash"
+      ],
+      "title": "FactoryStepSaveCommand",
+      "type": "object"
     },
     "FactorySummary": {
       "additionalProperties": false,
@@ -15302,6 +15356,22 @@
           ],
           "type": "object"
         },
+        "factory.step.save": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryStepSaveCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.version.diff": {
           "additionalProperties": false,
           "properties": {
@@ -17804,6 +17874,7 @@
         "factory.version.diff",
         "factory.revert",
         "factory.reset",
+        "factory.step.save",
         "factory.run.list",
         "factory.run.get",
         "factory.run.transcript",

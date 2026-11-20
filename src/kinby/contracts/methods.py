@@ -68,6 +68,7 @@ from kinby.contracts.models import (
     FactoryRunTakeoverFinishCommand,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    FactoryStepSaveCommand,
     FactoryVersionDiff,
     FactoryVersionDiffCommand,
     FactoryVersionListCommand,
@@ -694,6 +695,9 @@ FACTORY_VERSION_DIFF = Method(
 )
 FACTORY_REVERT = Method("factory.revert", Scope.HUB_ADMIN, FactoryRevertCommand, FactoryResult)
 FACTORY_RESET = Method("factory.reset", Scope.HUB_ADMIN, FactoryResetCommand, FactoryResult)
+FACTORY_STEP_SAVE = Method(
+    "factory.step.save", Scope.HUB_ADMIN, FactoryStepSaveCommand, FactoryResult
+)
 FACTORY_RUN_LIST = Method(
     "factory.run.list", Scope.HUB_READ, FactoryRunListCommand, FactoryRunListResult
 )
@@ -995,6 +999,7 @@ METHODS = (
     FACTORY_VERSION_DIFF,
     FACTORY_REVERT,
     FACTORY_RESET,
+    FACTORY_STEP_SAVE,
     FACTORY_RUN_LIST,
     FACTORY_RUN_GET,
     FACTORY_RUN_TRANSCRIPT,

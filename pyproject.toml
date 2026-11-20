@@ -20,6 +20,7 @@ dependencies = [
     "pydantic-monty>=1.6.0",
     "python-dotenv>=1.0",
     "pyyaml>=6",
+    "ruamel-yaml>=0.19.1",
     "tomlkit>=0.13",
     "trafilatura>=2.0",
 ]

@@ -4,7 +4,8 @@ import { parse } from "yaml"
 
 import { Failure } from "@/components/config-alerts"
 import { FactoryHistory } from "@/components/factory-history"
-import { FactorySteps, type FactoryStep } from "@/components/factory-steps"
+import { FactorySteps } from "@/components/factory-steps"
+import type { FactoryStep } from "@/lib/factory-steps"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
@@ -30,11 +31,11 @@ export function FactoryEntry({
 }) {
   const id = useId()
   const read = useCallback(async () => {
-    const { "factory.yaml": content = "", ...others } = (await client.call("factory.get", { name }))
-      .files
+    const result = await client.call("factory.get", { name })
+    const { "factory.yaml": content = "", ...others } = result.files
     // The hub reads it with PyYAML, which resolves `<<` merge keys.
     const factory = parse(content, { merge: true }) as FactoryFile
-    return { content, factory, files: Object.keys(others) }
+    return { result, content, factory, files: Object.keys(others) }
   }, [client, name])
   const { value: opened, failure, readAgain } = useRead(read, clock)
 
@@ -50,7 +51,11 @@ export function FactoryEntry({
           )
         ) : (
           <>
-            <FactorySteps steps={opened.factory.steps} />
+            <FactorySteps
+              steps={opened.factory.steps}
+              saving={{ client, factory: opened.result }}
+              onSaved={readAgain}
+            />
             <Field>
               <FieldLabel htmlFor={id}>factory.yaml</FieldLabel>
               <Textarea id={id} className="min-h-72" value={opened.content} readOnly />
@@ -61,7 +66,13 @@ export function FactoryEntry({
           </>
         )}
       </section>
-      <FactoryHistory client={client} clock={clock} name={name} onReverted={readAgain} />
+      <FactoryHistory
+        client={client}
+        clock={clock}
+        name={name}
+        current={opened?.result.version}
+        onReverted={readAgain}
+      />
     </div>
   )
 }
