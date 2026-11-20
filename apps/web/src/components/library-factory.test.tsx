@@ -93,6 +93,31 @@ steps:
     expect(steps()).toEqual(["check", "recheck"])
   })
 
+  it("reads what a step declares as null as absent", async () => {
+    const { user } = openPage(`name: software
+requires: {}
+work_item: { issue: int }
+steps:
+  - { id: implement, kind: agent, engine: claude, prompt: prompts/implement.md }
+  - id: fix
+    kind: agent
+    engine: claude
+    prompt: prompts/fix.md
+    description: null
+    resume: null
+    failed:
+`)
+
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+
+    const map = await screen.findByRole("figure", { name: "Map" })
+    expect(within(map).getByLabelText("Routes back").querySelector("path")).toBeNull()
+    expect(within(map).getByLabelText("Resumed sessions").querySelector("path")).toBeNull()
+    expect(steps()).toEqual(["implement", "fix"])
+    const [, fix] = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")
+    expect(fix.querySelector("p")).toBeNull()
+  })
+
   it("lists the factory's versions newest first, with each one's source and steps", async () => {
     const { user } = openPage()
 

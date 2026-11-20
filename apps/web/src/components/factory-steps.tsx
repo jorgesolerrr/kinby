@@ -5,16 +5,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 type SendBack = { back: string; max: number }
 type Retry = { retry: number }
 
-/** The parts of a step of a `factory.yaml` the map and the cards show. The hub checked the rest. */
+/** The parts of a step of a `factory.yaml` the map and the cards show. The hub checked the rest.
+ * A part the file declares as null is absent. */
 export interface FactoryStep {
   id: string
   kind: string
-  description?: string
+  description?: string | null
   engine?: string
-  model?: string
-  resume?: string
+  model?: string | null
+  resume?: string | null
   outcomes?: Record<string, string | SendBack>
-  failed?: SendBack | Retry
+  failed?: SendBack | Retry | null
 }
 
 /** A route between two steps, by their places in the factory, `to` the earlier one. */
@@ -72,7 +73,7 @@ function FactoryMap({
   const back = laned(steps.flatMap((step, from) => routesBack(step, from, at)))
   const resumed = laned(
     steps.flatMap((step, from) =>
-      step.resume === undefined
+      step.resume == null
         ? []
         : [{ from, to: at(step.resume), title: `${step.id} resumes ${step.resume}'s session` }],
     ),
@@ -186,8 +187,7 @@ function routesBack(step: FactoryStep, from: number, at: (id: string) => number)
       target,
       failed: false,
     }))
-  if (step.failed !== undefined)
-    routes.push({ outcome: "failed", target: step.failed, failed: true })
+  if (step.failed != null) routes.push({ outcome: "failed", target: step.failed, failed: true })
   return routes.flatMap(({ outcome, target, failed }) =>
     typeof target === "object" && "back" in target
       ? [
@@ -234,7 +234,7 @@ function StepCard({ step }: { step: FactoryStep }) {
           {[step.kind, step.engine, step.model].filter(Boolean).join(" · ")}
         </CardDescription>
       </CardHeader>
-      {step.description !== undefined && (
+      {step.description != null && (
         <CardContent>
           <p>{step.description}</p>
         </CardContent>
