@@ -38,6 +38,28 @@ def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
     return "".join(old[: before.start] + new[after.start : after.stop] + old[before.stop :])
 
 
+def with_step_from(text: str, other: str, step_id: str) -> str:
+    """The factory file *text* with the step *step_id* declared in the lines the factory file
+    *other* declares it in, moved to the column *text* writes its steps at. Each line outside that
+    step stays as it was."""
+    document, source = _yaml().load(text), _yaml().load(other)
+    old, new = text.splitlines(keepends=True), other.splitlines(keepends=True)
+    here = _lines(document, _place(document, step_id), len(old))
+    there = _lines(source, _place(source, step_id), len(new))
+    shift = old[here.start].index("-") - new[there.start].index("-")
+    moved = [_shifted(line, shift) for line in new[there.start : there.stop]]
+    return "".join(old[: here.start] + moved + old[here.stop :])
+
+
+def _shifted(line: str, columns: int) -> str:
+    """*line* moved *columns* to the right, or left when negative. A blank line stays blank."""
+    if not line.strip():
+        return line
+    if columns >= 0:
+        return " " * columns + line
+    return line[min(-columns, len(line) - len(line.lstrip(" "))) :]
+
+
 def with_step_off(text: str, step_id: str, *, off: bool) -> str:
     """The factory file *text* with the step *step_id* off, or on, which a step is unless it says
     otherwise. Each line outside that step stays as it was."""

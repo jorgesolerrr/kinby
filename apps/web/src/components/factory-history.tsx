@@ -19,6 +19,7 @@ const SOURCES: Record<FactoryVersionSource, string> = {
   by_hand: "Changed by hand",
   revert: "Reverted",
   shipped: "kinby's version",
+  shipped_update: "kinby's update, merged",
 }
 
 /**

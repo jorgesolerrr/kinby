@@ -2444,6 +2444,15 @@
           },
           "type": "object"
         },
+        "differing_steps": {
+          "items": {
+            "$ref": "#/$defs/StepId"
+          },
+          "type": "array"
+        },
+        "differs_from_shipped": {
+          "type": "boolean"
+        },
         "files": {
           "additionalProperties": {
             "type": "string"
@@ -2455,6 +2464,9 @@
         },
         "name": {
           "$ref": "#/$defs/FactoryName"
+        },
+        "shipped_update_waiting": {
+          "type": "boolean"
         },
         "source": {
           "$ref": "#/$defs/FactorySource"
@@ -2476,7 +2488,10 @@
         "files",
         "hash",
         "version",
-        "declared_in"
+        "declared_in",
+        "differs_from_shipped",
+        "shipped_update_waiting",
+        "differing_steps"
       ],
       "title": "FactoryResult",
       "type": "object"
@@ -3065,6 +3080,28 @@
       "title": "FactoryStepOffSetCommand",
       "type": "object"
     },
+    "FactoryStepResetCommand": {
+      "additionalProperties": false,
+      "description": "Make one step of the hub's copy of a shipped factory kinby's version of it, its entry and its\nprompt, as one version, if the check passes.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "name",
+        "step",
+        "hash"
+      ],
+      "title": "FactoryStepResetCommand",
+      "type": "object"
+    },
     "FactoryStepSaveCommand": {
       "additionalProperties": false,
       "description": "Save one step of a factory, its prompt and its hook, as one version. The hub keeps the rest\nof the factory file as it was, comments included, and keeps the save only if the check passes.",
@@ -3235,7 +3272,8 @@
         "web",
         "by_hand",
         "revert",
-        "shipped"
+        "shipped",
+        "shipped_update"
       ],
       "title": "FactoryVersionSource",
       "type": "string"
@@ -15492,6 +15530,22 @@
           ],
           "type": "object"
         },
+        "factory.step.reset": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryStepResetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.step.save": {
           "additionalProperties": false,
           "properties": {
@@ -18013,6 +18067,7 @@
         "factory.step.save",
         "factory.step.add",
         "factory.step.off.set",
+        "factory.step.reset",
         "factory.step.delete",
         "factory.run.list",
         "factory.run.get",

@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import subprocess
 import tarfile
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import yaml
+from pydantic import JsonValue
 
 from kinby.contracts import (
     FactoryName,
@@ -23,6 +27,7 @@ from kinby.factories.file import FACTORY_FILE, FactoryLoader
 
 _SOURCE = "Source:"
 _STEPS = "Steps:"
+_SHIPPED = "refs/shipped/"
 
 
 class FactoryVersions:
@@ -30,7 +35,8 @@ class FactoryVersions:
 
     Every commit touches one factory's folder, and records where it came from and the steps it
     changed in its message. A removed factory's history ends at the commit that removed it, so a
-    factory made again under its name starts its own.
+    factory made again under its name starts its own. Apart from its commits, a shipped factory
+    the user changed keeps the version kinby shipped that the user's changes are made over.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -91,10 +97,67 @@ class FactoryVersions:
     def extract(self, name: FactoryName, version: GitCommit, into: Path) -> None:
         """Write the factory's folder as it is in *version* to the folder *into*."""
         self._known(name, version)
-        archive = self._run("archive", "--format=tar", f"{version}:{name}").stdout
+        self.unpack(f"{version}:{name}", into)
+
+    def unpack(self, tree: str, into: Path) -> None:
+        """Write the folder *tree* names to the folder *into*."""
+        archive = self._run("archive", "--format=tar", tree).stdout
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-            # The hub wrote every version, links to its other folders included.
+            # The hub wrote every tree, links to its other folders included.
             tar.extractall(into, filter="tar")
+
+    def took_shipped(self, name: FactoryName, shipped: Path) -> None:
+        """Keep the factory as kinby ships it in the folder *shipped* as the version the user's
+        changes are made over."""
+        self._git("update-ref", f"{_SHIPPED}{name}", self._tree(shipped))
+
+    def shipped_update(self, name: FactoryName, shipped: Path) -> str | None:
+        """The factory's current version with what kinby changed since the version the user's
+        changes are made over merged in, as a tree, or None when the two conflict. *shipped* is
+        the folder of kinby's version now."""
+        current = self._git("rev-parse", f"HEAD:{name}")
+        base = self._shipped_base(name)
+        if base is None:
+            return current
+        # Commits, since an older git merges no bare trees.
+        sides = [
+            self._git("commit-tree", tree, "-m", f"{name}: a side of kinby's update")
+            for tree in (base, current, self._tree(shipped))
+        ]
+        try:
+            merged = self._git("merge-tree", "--write-tree", f"--merge-base={sides[0]}", *sides[1:])
+        except subprocess.CalledProcessError as exc:
+            # A conflict exits 1 after the tree it wrote, but git exits 1 on some misuse too.
+            if exc.returncode == 1 and re.match(rb"[0-9a-f]{40}\n", exc.stdout):
+                return None
+            raise
+        return merged.splitlines()[0]
+
+    def shipped_update_waiting(self, name: FactoryName, shipped: Path) -> bool:
+        """Whether kinby changed the factory in a way its current version lacks."""
+        return self.shipped_update(name, shipped) != self._git("rev-parse", f"HEAD:{name}")
+
+    def _shipped_base(self, name: FactoryName) -> str | None:
+        try:
+            return self._git("rev-parse", "--verify", "--quiet", f"{_SHIPPED}{name}")
+        except subprocess.CalledProcessError:
+            # A copy made before the hub kept kinby's version apart: the last one it copied in.
+            copied = next(
+                (
+                    version.version
+                    for version in self.listed(name)
+                    if version.source is FactoryVersionSource.SHIPPED
+                ),
+                None,
+            )
+            return None if copied is None else self._git("rev-parse", f"{copied}:{name}")
+
+    def _tree(self, folder: Path) -> str:
+        """The tree git would commit for the files of *folder*, a folder outside the repository."""
+        with TemporaryDirectory() as temporary:
+            index = {"GIT_INDEX_FILE": str(Path(temporary) / "index")}
+            self._run(f"--work-tree={folder}", "add", "--all", "--", ":/", environment=index)
+            return self._git("write-tree", environment=index)
 
     def _known(self, name: FactoryName, version: GitCommit) -> None:
         if version not in self._log(name, "--format=%H").split():
@@ -113,13 +176,15 @@ class FactoryVersions:
         except subprocess.CalledProcessError:
             return None
 
-    def _git(self, *arguments: str) -> str:
-        return self._run(*arguments).stdout.decode().strip()
+    def _git(self, *arguments: str, environment: Mapping[str, str] | None = None) -> str:
+        return self._run(*arguments, environment=environment).stdout.decode().strip()
 
-    def _run(self, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+    def _run(
+        self, *arguments: str, environment: Mapping[str, str] | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
         if not (self._directory / ".git").exists():
             self._initialize()
-        return _git(self._directory, *arguments)
+        return _git(self._directory, *arguments, environment=environment)
 
     def _initialize(self) -> None:
         """Make the folder a repository, whose first commit is empty so HEAD always names one."""
@@ -130,7 +195,9 @@ class FactoryVersions:
         _git(self._directory, "commit", "--quiet", "--allow-empty", "-m", "The hub's factories")
 
 
-def _git(directory: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+def _git(
+    directory: Path, *arguments: str, environment: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         (
             "git",
@@ -150,7 +217,8 @@ def _git(directory: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]
             "GIT_AUTHOR_EMAIL": "hub@kinby",
             "GIT_COMMITTER_NAME": "kinby",
             "GIT_COMMITTER_EMAIL": "hub@kinby",
-        },
+        }
+        | dict(environment or {}),
     )
 
 
@@ -170,7 +238,7 @@ def _version(entry: str) -> FactoryVersion:
 def _changed_steps(before: str | None, after: str, paths: set[str]) -> list[StepId]:
     """The steps whose entry differs between the two factory files, or whose prompt is among
     *paths*: the factory's steps in order, then those it no longer has."""
-    old, new = _steps(before), _steps(after)
+    old, new = step_entries(before), step_entries(after)
     return [
         step_id
         for step_id in new | old
@@ -179,6 +247,7 @@ def _changed_steps(before: str | None, after: str, paths: set[str]) -> list[Step
     ]
 
 
-def _steps(text: str | None) -> dict[StepId, dict[str, object]]:
+def step_entries(text: str | None) -> dict[StepId, dict[str, JsonValue]]:
+    """Each step's entry in the factory file *text*, by its id."""
     declared = {} if text is None else yaml.load(text, Loader=FactoryLoader)
     return {step["id"]: step for step in declared.get("steps", [])}

@@ -3207,6 +3207,15 @@ class FactoryResult(ContractModel):
     version: GitCommit | None
     #: The file of the folder that declares each of its checks and tools, by name.
     declared_in: dict[str, str]
+    #: Whether the factory is the hub's copy of a shipped factory, with files that differ from
+    #: kinby's.
+    differs_from_shipped: bool
+    #: Whether kinby ships changes the hub's copy lacks, which conflicted with the user's or failed
+    #: the factory check.
+    shipped_update_waiting: bool
+    #: The steps of the hub's copy whose entry or prompt differs from kinby's version of the step,
+    #: in the factory's order. Each can be reset to kinby's.
+    differing_steps: list[StepId]
 
 
 class FactoryCheckCommand(ContractModel):
@@ -3284,6 +3293,16 @@ class FactoryStepDeleteCommand(ContractModel):
     hash: FileHash
 
 
+class FactoryStepResetCommand(ContractModel):
+    """Make one step of the hub's copy of a shipped factory kinby's version of it, its entry and its
+    prompt, as one version, if the check passes."""
+
+    name: FactoryName
+    step: StepId
+    #: The hash the client read.
+    hash: FileHash
+
+
 class FactoryRemoveCommand(ContractModel):
     """Delete one of the hub's own factories. The result lists the factories left."""
 
@@ -3302,6 +3321,8 @@ class FactoryVersionSource(StrEnum):
     #: The version kinby ships: copied in before the first edit of a shipped factory, or a reset
     #: to it.
     SHIPPED = "shipped"
+    #: kinby's later version of a shipped factory the user changed, merged into the user's.
+    SHIPPED_UPDATE = "shipped_update"
 
 
 class FactoryVersion(ContractModel):

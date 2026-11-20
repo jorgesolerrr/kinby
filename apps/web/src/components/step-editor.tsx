@@ -51,7 +51,7 @@ export function StepEditor({
   /** The steps that are on before this one. */
   earlier: FactoryStep[]
   saving: StepSaving
-  /** Runs once a save or a delete made a new version. */
+  /** Runs once a save, a delete or taking kinby's step made a new version. */
   onSaved: () => void
   /** Runs once turning the step off or on made a new version. */
   onTurned: () => void
@@ -131,6 +131,11 @@ export function StepEditor({
   const remove = () =>
     void ask(async () => {
       await saving.client.call("factory.step.delete", read)
+      onSaved()
+    })
+  const takeKinbys = () =>
+    void ask(async () => {
+      await saving.client.call("factory.step.reset", read)
       onSaved()
     })
   const routes = [
@@ -286,6 +291,11 @@ export function StepEditor({
             <Button type="button" variant="ghost" disabled={busy} onClick={remove}>
               <Trash2Icon data-icon="inline-start" />
               Delete
+            </Button>
+          )}
+          {factory.differing_steps.includes(step.id) && (
+            <Button type="button" variant="outline" disabled={busy} onClick={takeKinbys}>
+              Take kinby&apos;s
             </Button>
           )}
           <Button type="button" variant="ghost" disabled={!dirty || busy} onClick={discard}>

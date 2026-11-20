@@ -29,6 +29,7 @@ from kinby.contracts import (
     FactoryStepAddCommand,
     FactoryStepDeleteCommand,
     FactoryStepOffSetCommand,
+    FactoryStepResetCommand,
     FactoryStepSaveCommand,
     FactorySummary,
     FactoryVersionDiff,
@@ -38,6 +39,7 @@ from kinby.contracts import (
     FactoryVersionSource,
     FileHash,
     GitCommit,
+    StepId,
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory, off_dependents
@@ -54,10 +56,11 @@ from kinby.factories.file_writes import (
     StepNotDeclared,
     with_step,
     with_step_after,
+    with_step_from,
     with_step_off,
     without_step,
 )
-from kinby.hub.factory_versions import FactoryVersions
+from kinby.hub.factory_versions import FactoryVersions, step_entries
 from kinby.instance.config_changes import files_hash
 from kinby.instance.layout import HOOKS_DIR, TOOLS_DIR
 
@@ -70,8 +73,9 @@ class FactoryStore:
 
     Every save that passes the check is a version of the factory. A change made by hand in a hub
     folder becomes one the next time the hub reads the factory, or is set aside when it fails the
-    check, so the last good version stays in place. The hub keeps a tree of each version a run
-    keeps beside its folders, for the workbenches that mount them.
+    check, so the last good version stays in place. A hub folder of a shipped factory takes kinby's
+    later versions by a merge. The hub keeps a tree of each version a run keeps beside its folders,
+    for the workbenches that mount them.
     """
 
     def __init__(self, directory: Path, shipped: Path) -> None:
@@ -104,13 +108,20 @@ class FactoryStore:
         self._take_in(name)
         folder, source = self._folder(name)
         files = _factory_files(folder)
+        version = self._current(name, source)
+        shipped = self._shipped / name
+        copied = version is not None and self.ships(name)
         return FactoryResult(
             name=name,
             source=source,
             files={relative: _text(relative, path) for relative, path in files.items()},
             hash=files_hash(files),
-            version=self._current(name, source),
+            version=version,
             declared_in=_declared_in(folder),
+            differs_from_shipped=copied
+            and files_hash(files) != files_hash(_factory_files(shipped)),
+            shipped_update_waiting=copied and self._versions.shipped_update_waiting(name, shipped),
+            differing_steps=_differing_steps(folder, shipped) if copied else [],
         )
 
     async def versions(self, command: FactoryVersionListCommand) -> FactoryVersionListResult:
@@ -303,6 +314,30 @@ class FactoryStore:
         text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
         self._write(command.name, folder, {FACTORY_FILE: without_step(text, step.id)}, unused)
 
+    async def reset_step(self, command: FactoryStepResetCommand) -> FactoryResult:
+        """Make one step of the hub's copy of a shipped factory kinby's version of it, its entry
+        and its prompt, if the check passes."""
+        if not self.ships(command.name):
+            raise InvalidConfig({"name": f'kinby ships no factory "{command.name}".'})
+        async with self._edit_lock:
+            await asyncio.to_thread(self._reset_step, command)
+        return await self.get(FactoryGetCommand(name=command.name))
+
+    def _reset_step(self, command: FactoryStepResetCommand) -> None:
+        folder, _ = self._folder(command.name)
+        self._read_as(command.name, command.hash)
+        shipped = self._shipped / command.name
+        kinby = (shipped / FACTORY_FILE).read_text(encoding="utf-8")
+        text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
+        try:
+            files = {FACTORY_FILE: with_step_from(text, kinby, command.step)}
+        except StepNotDeclared as exc:
+            raise InvalidConfig({"step": str(exc)}) from None
+        prompt = step_entries(kinby)[command.step].get("prompt")
+        if isinstance(prompt, str) and (shipped / prompt).is_file():
+            files[prompt] = (shipped / prompt).read_text(encoding="utf-8")
+        self._write(command.name, folder, files)
+
     def _read_as(self, name: FactoryName, read: FileHash | None) -> Path | None:
         """The factory's folder, or None for a factory no source has, unless it changed since the
         client read it as *read*."""
@@ -361,6 +396,34 @@ class FactoryStore:
         with self._staging(name) as staged:
             shutil.copytree(self._shipped / name, staged, ignore=_BYTECODE)
             self._save(staged, FactoryVersionSource.SHIPPED)
+        self._versions.took_shipped(name, self._shipped / name)
+
+    def merge_shipped(self) -> None:
+        """Merge what kinby changed in each shipped factory the hub holds a copy of into the copy,
+        as a shipped update version. When the two conflict or the merge fails the check, the copy
+        stays as it is, with the shipped update waiting."""
+        for name in _named_folders(self._shipped, FactorySource.SHIPPED):
+            if not (self._directory / name).is_dir():
+                continue
+            self._take_in(name)
+            if self._versions.current(name) is None:
+                continue
+            merged = self._versions.shipped_update(name, self._shipped / name)
+            if merged is None:
+                _logger.warning("kinby's update of factory %s conflicts with the hub's copy.", name)
+                continue
+            with self._staging(name) as staged:
+                self._versions.unpack(merged, staged)
+                try:
+                    self._save(staged, FactoryVersionSource.SHIPPED_UPDATE)
+                except FactoryCheckFailed as exc:
+                    _logger.warning(
+                        "kinby's update of factory %s fails the check once merged: %s",
+                        name,
+                        " ".join(exc.problems),
+                    )
+                    continue
+            self._versions.took_shipped(name, self._shipped / name)
 
     @contextmanager
     def _staging(self, name: FactoryName) -> Iterator[Path]:
@@ -381,6 +444,7 @@ class FactoryStore:
         if not destination.exists() and self.ships(name):
             shutil.copytree(self._shipped / name, destination, ignore=_BYTECODE)
             self._versions.record(name, FactoryVersionSource.SHIPPED)
+            self._versions.took_shipped(name, self._shipped / name)
         replaced = staged.parent / "replaced"
         if destination.exists():
             destination.rename(replaced)
@@ -448,6 +512,30 @@ def _factory_files(folder: Path) -> dict[str, Path]:
         for path in sorted(folder.rglob("*"))
         if path.is_file() and "__pycache__" not in path.relative_to(folder).parts
     }
+
+
+def _differing_steps(folder: Path, shipped: Path) -> list[StepId]:
+    """The steps of the factory in *folder* that kinby's in *shipped* declares too, whose entry or
+    prompt differs from kinby's."""
+
+    def prompt(root: Path, entry: Mapping[str, JsonValue]) -> bytes | None:
+        path = entry.get("prompt")
+        return (
+            (root / path).read_bytes()
+            if isinstance(path, str) and (root / path).is_file()
+            else None
+        )
+
+    own, kinby = (
+        step_entries((root / FACTORY_FILE).read_text(encoding="utf-8"))
+        for root in (folder, shipped)
+    )
+    return [
+        step
+        for step, entry in own.items()
+        if step in kinby
+        and (entry != kinby[step] or prompt(folder, entry) != prompt(shipped, kinby[step]))
+    ]
 
 
 def _needing_off(text: str) -> dict[str, str]:
