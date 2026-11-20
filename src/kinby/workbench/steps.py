@@ -21,6 +21,7 @@ from kinby.contracts import (
     DelegatedRunOutcome,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    GitCommit,
     HookName,
     IntakeRunCommand,
     IntakeRunResult,
@@ -62,7 +63,7 @@ from kinby.core.run_worktrees import (
 from kinby.core.shell_reads import is_shell_read
 from kinby.core.steps import bounded, recorded, run_commands, run_tool, step_failed
 from kinby.factories import SHIPPED_FACTORIES
-from kinby.factories.file import BASE, BRANCH
+from kinby.factories.file import BASE, BRANCH, VERSIONS_DIR
 from kinby.instance.layout import SKILLS_DIR, STATE_DIR, TOOLS_DIR, VIEWS_DIR, WORKSPACE_DIR
 from kinby.plugins.defaults.files import workspace_path
 from kinby.plugins.defaults.shell import OUTPUT_CAP, run_capped
@@ -105,7 +106,9 @@ class WorkbenchSteps:
     """Run the hub's steps on the workbench in *directory*, with the tools of the hub's factory
     folders in *factories*, over the ones kinby ships in *shipped*.
 
-    Nothing copies a factory here, so a step runs its tool as the factory's folder holds it then.
+    Nothing copies a factory here. A step of a run that keeps a factory version runs the tools of
+    that version's tree, which the hub keeps among its factory folders. Any other runs its tool as
+    the factory's folder holds it then.
     An agent step on the kinby engine calls its model through *model_factory*, and opens pages
     on *browser*, the hub's, when the workbench has one.
     """
@@ -159,7 +162,7 @@ class WorkbenchSteps:
         list it returns is a work item it found, and None finds none."""
         factory = command.factory
         try:
-            tool = self._tool(factory, command.call)
+            tool = self._tool(factory, None, command.call)
         except Exception as exc:
             # Tool files are user code. Whatever goes wrong loading them fails the intake.
             raise IntakeFailed(
@@ -287,7 +290,7 @@ class WorkbenchSteps:
         workspace, or the failed result of a call that names none."""
         factory = command.origin.factory
         try:
-            tool = self._tool(factory, call)
+            tool = self._tool(factory, command.version, call)
         except Exception as exc:
             # Tool files are user code. Whatever goes wrong loading them fails the step.
             return step_failed(
@@ -330,7 +333,7 @@ class WorkbenchSteps:
                     answered,
                     command,
                     folder,
-                    await self._skills(command.origin.factory),
+                    await self._skills(command.origin.factory, command.version),
                     self._directory / STATE_DIR / _TURNS_DIR,
                     self._attempt_transcript(command),
                     self._model_factory or init_chat_model,
@@ -366,7 +369,7 @@ class WorkbenchSteps:
         the plan refused ends limited.
         """
         origin = command.origin
-        skills = await self._skills(origin.factory)
+        skills = await self._skills(origin.factory, command.version)
         transcript = self._attempt_transcript(command)
         ran = await run_coding_client(
             step.client,
@@ -400,10 +403,11 @@ class WorkbenchSteps:
             )
         return StepResult(ending=ran.ending, summary=ran.summary, session=ran.session, usage=usage)
 
-    async def _skills(self, factory: str) -> tuple[Skill, ...]:
+    async def _skills(self, factory: str, version: GitCommit | None) -> tuple[Skill, ...]:
         """The skills of the factory's folder, and the workbench's picks it does not hide."""
         skills, warnings = await asyncio.to_thread(
-            load_skill_roots, (self._factory(factory) / SKILLS_DIR, self._directory / SKILLS_DIR)
+            load_skill_roots,
+            (self._factory(factory, version) / SKILLS_DIR, self._directory / SKILLS_DIR),
         )
         for warning in warnings:
             _logger.warning("%s: %s", ", ".join(warning.sources), warning.message)
@@ -424,7 +428,7 @@ class WorkbenchSteps:
         places it names."""
         factory = command.origin.factory
         try:
-            tool = self._tool(factory, step.call)
+            tool = self._tool(factory, command.version, step.call)
         except Exception as exc:
             # Tool files are user code. Whatever goes wrong loading them fails the step.
             return step_failed(
@@ -455,7 +459,7 @@ class WorkbenchSteps:
         """The step's result with what its check, a hook of the factory's folder, records reading
         the run's folder. A check the folder does not hold fails a step that ended clean."""
         factory = command.origin.factory
-        own = self._factory(factory)
+        own = self._factory(factory, command.version)
         hooks, warnings = await asyncio.to_thread(load_hooks, own)
         found = next((hook for hook in hooks if hook.name == name), None)
         if found is None:
@@ -464,20 +468,23 @@ class WorkbenchSteps:
             return step_failed(reason, result)
         return await recorded(found, result, command, folder)
 
-    def _tool(self, factory: str, name: str) -> Tool | None:
+    def _tool(self, factory: str, version: GitCommit | None, name: str) -> Tool | None:
         """The factory's tool by *name*, read from its folder now."""
         return next(
             (
                 tool
-                for path in sorted((self._factory(factory) / TOOLS_DIR).glob("*.py"))
+                for path in sorted((self._factory(factory, version) / TOOLS_DIR).glob("*.py"))
                 for tool in load_tool_file(path)
                 if tool.name == name
             ),
             None,
         )
 
-    def _factory(self, name: str) -> Path:
-        """The factory's folder. The hub's hides the one kinby ships."""
+    def _factory(self, name: str, version: GitCommit | None) -> Path:
+        """The factory's folder as *version* holds it, or without one the latest: the hub's hides
+        the one kinby ships."""
+        if version is not None:
+            return self._factories / VERSIONS_DIR / name / version
         folder = self._factories / name
         return folder if folder.is_dir() else self._shipped / name
 

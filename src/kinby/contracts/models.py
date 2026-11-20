@@ -4617,6 +4617,9 @@ class StepRunCommand(ContractModel):
     #: The step's check, a hook of the factory's folder that records the step result once the
     #: step ends, however it ended.
     hook: HookName | None = None
+    #: The factory version whose tools and checks the step runs, which the hub keeps in the
+    #: workbench's factories mount. None runs the factory's latest.
+    version: GitCommit | None = None
     work_item: dict[ValueName, StepValue]
     #: Every value the run's earlier steps recorded, and the named values its factory requires
     #: that the workbench holds, by name.
@@ -4691,6 +4694,10 @@ class FactoryRun(ContractModel):
     step: StepId | None
     #: When a run parked until its plan window resets tries its step again. None for any other.
     wakes_at: AwareDatetime | None = None
+    #: The factory version the run started on, whose files its steps read. None for a run
+    #: started before runs kept one, or of a factory kinby ships that the hub holds no version
+    #: of, which reads the latest.
+    version: GitCommit | None = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 
@@ -4716,6 +4723,8 @@ class StepAttempt(ContractModel):
     answer: StepAnswer | None = None
     #: The views the attempt wrote among the views of the run's instance.
     views: list[ViewId] = Field(default_factory=list)
+    #: The factory version the attempt ran. None when its run kept none.
+    version: GitCommit | None = None
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
 
