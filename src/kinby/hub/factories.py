@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -33,7 +33,14 @@ from kinby.contracts import (
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
 from kinby.factories.check import check_factory
-from kinby.factories.file import FactoryPath, WorkbenchFactory, read_factory_file
+from kinby.factories.file import (
+    FACTORY_FILE,
+    VERSIONS_DIR,
+    FactoryPath,
+    WorkbenchFactory,
+    parse_factory_file,
+    read_factory_file,
+)
 from kinby.hub.factory_versions import FactoryVersions
 from kinby.instance.config_changes import files_hash
 
@@ -46,7 +53,8 @@ class FactoryStore:
 
     Every save that passes the check is a version of the factory. A change made by hand in a hub
     folder becomes one the next time the hub reads the factory, or is set aside when it fails the
-    check, so the last good version stays in place.
+    check, so the last good version stays in place. The hub keeps a tree of each version a run
+    keeps beside its folders, for the workbenches that mount them.
     """
 
     def __init__(self, directory: Path, shipped: Path) -> None:
@@ -54,6 +62,8 @@ class FactoryStore:
         self._shipped = shipped
         self._versions = FactoryVersions(directory)
         self._edit_lock = asyncio.Lock()
+        #: Each version's factory file, read once, since a version never changes.
+        self._version_files: dict[tuple[FactoryName, GitCommit], WorkbenchFactory] = {}
 
     async def list(self, command: FactoryListCommand) -> FactoryListResult:
         async with self._edit_lock:
@@ -105,15 +115,55 @@ class FactoryStore:
         folder, _ = self._folder(command.name)
         return FactoryCheckResult(problems=list(await asyncio.to_thread(check_factory, folder)))
 
-    def file(self, name: FactoryName) -> WorkbenchFactory:
-        """The factory's file as the hub keeps it: the last version that passed the check."""
-        folder, _ = self._folder(name)
-        return read_factory_file(folder)
+    async def version(self, name: FactoryName) -> GitCommit | None:
+        """The factory's latest version, with a change by hand in its folder taken in first. None
+        for a factory kinby ships that the hub holds no version of."""
+        async with self._edit_lock:
+            return await asyncio.to_thread(self._latest, name)
 
-    def prompt(self, name: FactoryName, path: FactoryPath) -> str:
-        """The text of a prompt file, from the last version of the factory that passed the check."""
-        folder, _ = self._folder(name)
+    def _latest(self, name: FactoryName) -> GitCommit | None:
+        self._take_in(name)
+        _, source = self._folder(name)
+        return self._current(name, source)
+
+    def file(self, name: FactoryName, version: GitCommit | None = None) -> WorkbenchFactory:
+        """The factory's file as *version* holds it, or without one as the hub keeps it: the last
+        version that passed the check."""
+        if version is None:
+            folder, _ = self._folder(name)
+            return read_factory_file(folder)
+        if (name, version) not in self._version_files:
+            text = self._versions.show(name, version, FACTORY_FILE)
+            self._version_files[name, version] = parse_factory_file(text)
+        return self._version_files[name, version]
+
+    def prompt(self, name: FactoryName, path: FactoryPath, version: GitCommit | None = None) -> str:
+        """The text of a prompt file as *version* holds it, read in the version's tree so a link
+        resolves as the check resolved it, or without one from the last version of the factory
+        that passed the check."""
+        folder = self.keep_tree(name, version) if version is not None else self._folder(name)[0]
         return (folder / path).read_text(encoding="utf-8")
+
+    def keep_tree(self, name: FactoryName, version: GitCommit) -> Path:
+        """The factory's folder as *version* holds it, kept without write permissions where a
+        workbench's factories mount finds it."""
+        tree = self._directory / VERSIONS_DIR / name / version
+        if tree.is_dir():
+            return tree
+        with self._staging(name) as staged:
+            self._versions.extract(name, version, staged)
+            for path in staged.rglob("*"):
+                if path.is_file() and not path.is_symlink():
+                    path.chmod(path.stat().st_mode & ~0o222)
+            tree.parent.mkdir(parents=True, exist_ok=True)
+            staged.rename(tree)
+        return tree
+
+    def drop_trees(self, kept: Collection[tuple[FactoryName, GitCommit]]) -> None:
+        """Remove each version's tree but those of the factories and versions in *kept*."""
+        for tree in (self._directory / VERSIONS_DIR).glob("*/*"):
+            if (tree.parent.name, tree.name) not in kept:
+                shutil.rmtree(tree)
 
     async def checked(self, name: FactoryName) -> WorkbenchFactory:
         """The factory's file, read in the same pass as the check passes it."""

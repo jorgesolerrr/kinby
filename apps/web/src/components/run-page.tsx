@@ -246,9 +246,9 @@ function endingOf(ending: StepEnding | null): (typeof ENDINGS)[StepEnding] {
 }
 
 /**
- * One attempt: its number, session, start, how long it took and what it spent, then its summary.
- * A command step's summary holds the exit and the tail of a failing command's output, and an agent
- * step's attempt shows its transcript.
+ * One attempt: its number, the factory version it ran, its session, start, how long it took and
+ * what it spent, then its summary. A command step's summary holds the exit and the tail of a
+ * failing command's output, and an agent step's attempt shows its transcript.
  */
 function Attempt({
   hub,
@@ -263,10 +263,11 @@ function Attempt({
   step: Step
   attempt: StepAttempt
 }) {
-  const { started_at, ended_at, session, summary, usage } = attempt
+  const { started_at, ended_at, session, summary, usage, version } = attempt
   const delegated = usage?.delegated_run
   const facts = [
     `Attempt ${attempt.attempt}`,
+    version != null && `version ${version.slice(0, 7)}`,
     session,
     when(started_at),
     ended_at !== null && duration(Date.parse(ended_at) - Date.parse(started_at)),

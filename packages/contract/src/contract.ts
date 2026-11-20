@@ -1528,6 +1528,7 @@ export interface FactoryRun {
   status: FactoryRunStatus;
   step: StepId | null;
   updated_at: string;
+  version?: GitCommit | null;
   wakes_at?: string | null;
   work_item: {
     [k: string]: StepValue;
@@ -1571,6 +1572,7 @@ export interface StepAttempt {
   values: {
     [k: string]: StepValue;
   };
+  version?: GitCommit | null;
   views?: ViewId[];
 }
 /**
@@ -3401,6 +3403,7 @@ export interface StepRunCommand {
     [k: string]: StepValue;
   };
   step: AgentStepRun | ClientStepRun | CommandStepRun | CodeStepRun;
+  version?: GitCommit | null;
   work_item: {
     [k: string]: StepValue;
   };
