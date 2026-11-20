@@ -60,6 +60,19 @@ describe("a run's page", () => {
     expect(screen.queryByRole("region", { name: "ticket" })).toBeNull()
   })
 
+  it("names the factory version each attempt ran", async () => {
+    const stopped = detail("r-stopped")
+    const version = "3f2a9c1e".padEnd(40, "0")
+    const attempts = stopped.attempts.map((ran) => ({ ...ran, version }))
+    openRun("r-stopped", { "factory.run.get": () => ({ ...stopped, attempts }) })
+
+    const implement = within(await screen.findByRole("region", { name: "implement" }))
+    const [first] = implement.getAllByRole("article")
+    expect(
+      within(first as HTMLElement).getByText(/^Attempt 1 · version 3f2a9c1 · claude-1 · /),
+    ).toBeDefined()
+  })
+
   it("shows a command step's exit and the tail of its failure", async () => {
     const user = userEvent.setup()
     openRun("r-stopped")

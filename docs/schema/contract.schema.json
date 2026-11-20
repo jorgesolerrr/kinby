@@ -2547,6 +2547,17 @@
           "format": "date-time",
           "type": "string"
         },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "wakes_at": {
           "anyOf": [
             {
@@ -10547,6 +10558,17 @@
           },
           "type": "object"
         },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "views": {
           "items": {
             "$ref": "#/$defs/ViewId"
@@ -10771,6 +10793,17 @@
               "$ref": "#/$defs/CodeStepRun"
             }
           ]
+        },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "work_item": {
           "additionalProperties": {

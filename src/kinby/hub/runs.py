@@ -54,6 +54,7 @@ from kinby.contracts import (
     FactoryRunStatus,
     FactoryRunSubscribeCommand,
     FactoryRunTakeoverFinishCommand,
+    GitCommit,
     Line,
     RunFolder,
     RunFolderRemoveCommand,
@@ -77,6 +78,7 @@ from kinby.core.errors import (
     BudgetExceeded,
     FactoryNotFound,
     FactoryRunNotFound,
+    FactoryVersionNotFound,
     InvalidWorkItem,
     NotAnEarlierStep,
     RunAwaitsNoAnswer,
@@ -270,10 +272,11 @@ class FactoryRuns:
     async def hand_in(self, line: Line, work_item: Mapping[ValueName, StepValue]) -> FactoryRun:
         """Start a run of the line's factory on its workbench, which the line's owner holds.
 
-        A work item that matches an unfinished run of the line returns that run, and retries
-        the step of one that needs a human.
+        A new run keeps the factory's latest version. A work item that matches an unfinished run
+        of the line returns that run, and retries the step of one that needs a human.
         """
-        factory = self._file(line.factory)
+        version = await self._factories.version(line.factory)
+        factory = self._file(line.factory, version)
         if factory is None:
             raise FactoryNotFound(f'There is no factory "{line.factory}".')
         errors = _work_item_errors(factory.work_item, work_item)
@@ -282,7 +285,7 @@ class FactoryRuns:
         first = _next_on(factory)
         assert first is not None, "The factory check refuses a factory whose every step is off."
         run, started = self._registry.open_run(
-            line.owner_id, line.factory, work_item, first.id, line.line_id
+            line.owner_id, line.factory, work_item, first.id, line.line_id, version
         )
         if started:
             self._publish(run)
@@ -312,7 +315,7 @@ class FactoryRuns:
         factory's file, no attempt reads as either.
         """
         attempts = self._registry.attempts(run.run_id)
-        factory = self._file(run.factory)
+        factory = self._file(run.factory, run.version)
         tally = (
             _tally(factory, attempts[:-1]) if factory is not None else _Tally(Counter(), Counter())
         )
@@ -328,7 +331,7 @@ class FactoryRuns:
         return FactoryRunDetail(
             run=run,
             attempts=self._registry.attempts(run.run_id),
-            earlier_steps=_earlier(self._file(run.factory), run.step),
+            earlier_steps=_earlier(self._file(run.factory, run.version), run.step),
         )
 
     async def retry(self, command: FactoryRunRetryCommand) -> FactoryRun:
@@ -343,7 +346,7 @@ class FactoryRuns:
         Its retries and send-backs count afresh.
         """
         run = self._existing(command.run_id)
-        factory = self._file(run.factory)
+        factory = self._file(run.factory, run.version)
         approving = _awaits_approval(factory, run)
         if not approving:
             _needing_human(run)
@@ -362,7 +365,7 @@ class FactoryRuns:
     async def approve(self, command: FactoryRunApproveCommand) -> FactoryRun:
         """Move a run that awaits the user's approval on, as its approve step's next outcome."""
         run = self._existing(command.run_id)
-        if not _awaits_approval(self._file(run.factory), run):
+        if not _awaits_approval(self._file(run.factory, run.version), run):
             raise RunAwaitsNoApproval(
                 f'Factory run "{run.run_id}" is {run.status.value}, so it awaits no approval.'
             )
@@ -421,15 +424,20 @@ class FactoryRuns:
         human ends once one of the factory's closing signals says its work finished elsewhere.
         """
         for line in self._registry.lines():
-            factory = self._file(line.factory)
-            if line.owner_id == instance_id and factory is not None:
-                runs = self._registry.runs(line.factory, UNFINISHED, line_id=line.line_id)
-                self._signalled(factory, runs, signal)
+            if line.owner_id != instance_id:
+                continue
+            runs = self._registry.runs(line.factory, UNFINISHED, line_id=line.line_id)
+            for version in dict.fromkeys(run.version for run in runs):
+                factory = self._file(line.factory, version)
+                if factory is not None:
+                    kept = [run for run in runs if run.version == version]
+                    self._signalled(factory, kept, signal)
 
     def _signalled(
         self, factory: WorkbenchFactory, unfinished: Sequence[FactoryRun], signal: Signal
     ) -> None:
-        """Move on, or end, each of the factory's *unfinished* runs the signal matches.
+        """Move on, or end, each of the *unfinished* runs the signal matches, all of them runs on
+        the factory version whose file is *factory*.
 
         *unfinished* is read before any parked run moves on, so the signal wakes each run at
         most once.
@@ -508,7 +516,8 @@ class FactoryRuns:
         run parked at a wait keeps its deadline, counted from when it parked, and one parked
         until its plan window resets still wakes at the reset. One parked on an ask waits for the
         answer. A needs_human report, an ended call or a run's stop queued but not delivered
-        before the hub stopped is queued again.
+        before the hub stopped is queued again. The tree of a factory version no run keeps any
+        more goes.
 
         The runs still unreported or uncalled and the stops still untold from before this pass
         are collected first, so a run that stops as it is queued below, which queues that fresh
@@ -522,7 +531,7 @@ class FactoryRuns:
         for run in self._registry.runs_in(FactoryRunStatus.QUEUED):
             self._enqueue(run)
         for run in self._registry.runs_in(FactoryRunStatus.PARKED):
-            factory = self._file(run.factory)
+            factory = self._file(run.factory, run.version)
             step = (
                 _step(factory, run.step) if factory is not None and run.step is not None else None
             )
@@ -531,17 +540,18 @@ class FactoryRuns:
             elif isinstance(step, WaitStep):
                 self._arm(run.run_id, step, self._registry.attempts(run.run_id)[-1].started_at)
         for run in pending:
-            factory = self._file(run.factory)
+            factory = self._file(run.factory, run.version)
             if factory is not None and factory.needs_human is not None:
                 attempts = self._registry.attempts(run.run_id)
                 summary = attempts[-1].summary if attempts else ""
                 self._report(factory, factory.needs_human, run, summary)
         for run in uncalled:
-            factory = self._file(run.factory)
+            factory = self._file(run.factory, run.version)
             if factory is not None and factory.ended is not None:
                 self._report(factory, factory.ended, run)
         for stop in untold:
             self._put_stop(_QueuedStop(stop))
+        self._drop_trees()
 
     def _parked_ask(self, run: FactoryRun) -> WaitingApproval | WaitingTakeover | None:
         """The ask the run's kinby turn is parked on, or None when it is parked on none."""
@@ -603,7 +613,7 @@ class FactoryRuns:
         A wait or approve step runs on no workbench: it is the step itself, which parks the run.
         An approve step comes with the run's values filled in its summary.
         """
-        factory = self._file(run.factory)
+        factory = self._file(run.factory, run.version)
         step = _step(factory, step_id) if factory is not None else None
         if factory is None or step is None:
             return _Refused(step_id, f'Factory "{run.factory}" has no step "{step_id}" any more.')
@@ -634,6 +644,8 @@ class FactoryRuns:
         factory's worktree call names the run worktree's branch and base again for that cut, and
         first for a run that holds none yet, and the folder is cut fresh from that base either
         way. An agent step fails once what the line's runs cost today reached its daily budget.
+        The tree of the run's factory version is kept for the workbench to find its tools and
+        checks in.
         """
         line, placed = self._line(run), self._workbench(run)
         if line is None or placed is None:
@@ -680,10 +692,13 @@ class FactoryRuns:
             # A branch the factory names may hold an abandoned run's commits, so naming cuts it
             # fresh from the base the factory names with it.
             folder, fresh = RunFolder(branch=None, named_by=naming.call), True
+        if run.version is not None:
+            self._factories.keep_tree(run.factory, run.version)
         command = StepRunCommand(
             step=asked,
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step.id),
             hook=step.check,
+            version=run.version,
             work_item=run.work_item,
             results=results,
             folder=folder,
@@ -714,7 +729,7 @@ class FactoryRuns:
             return None
         if workbench.workbench.workspace_source is None:
             return workbench, RunFolder(branch=None)
-        factory = self._file(run.factory)
+        factory = self._file(run.factory, run.version)
         if factory is not None and factory.worktree is not None:
             named = self._named(run.run_id, factory)
             if not named:
@@ -730,9 +745,15 @@ class FactoryRuns:
 
     def _prompt(self, run: FactoryRun, step: WorkbenchAgentStep) -> str | _Refused:
         try:
-            return self._factories.prompt(run.factory, step.prompt)
-        except (FactoryNotFound, OSError) as exc:
+            return self._factories.prompt(run.factory, step.prompt, run.version)
+        except (FactoryNotFound, FactoryVersionNotFound, OSError) as exc:
             return _Refused(step.id, f'Prompt "{step.prompt}" cannot be read: {exc}')
+
+    def _drop_trees(self) -> None:
+        """Remove the tree of each factory version no unfinished run keeps, nor a run that still
+        owes the factory's ended call."""
+        keeping = [*self._registry.runs(None, UNFINISHED), *self._registry.uncalled_ends()]
+        self._factories.drop_trees({(run.factory, run.version) for run in keeping if run.version})
 
     def _client_run(
         self,
@@ -1016,6 +1037,7 @@ class FactoryRuns:
             case StepResult(ending=StepEnding.CLEAN) if report.status in _ENDS:
                 self._registry.mark_ended_called(report.run_id)
                 self._drop_folder(self._existing(report.run_id))
+                self._drop_trees()
                 return
             case StepResult(ending=StepEnding.CLEAN):
                 self._registry.mark_reported(report.run_id, report.generation)
@@ -1143,7 +1165,7 @@ class FactoryRuns:
             parked = self._move(run_id, FactoryRunStatus.PARKED, run.step)
             self._notify_ask(parked, result.ask)
             return parked
-        factory = self._file(run.factory)
+        factory = self._file(run.factory, run.version)
         step = _step(factory, run.step) if factory is not None else None
         if step is not None and result.ending is StepEnding.CLEAN:
             result = _checked_types(step, result)
@@ -1167,13 +1189,16 @@ class FactoryRuns:
     def _move(self, run_id: UUID, status: FactoryRunStatus, step: StepId | None) -> FactoryRun:
         """Put the run in *status* at *step*, and tell the instance that handed it in when that
         stops it. A run that ends done or cancelled gets the factory's ended call, and a line's
-        run then loses its folder."""
-        factory = self._file(self._existing(run_id).factory)
+        run then loses its folder, and the tree of its factory version goes once no other run
+        keeps it."""
+        run = self._existing(run_id)
+        factory = self._file(run.factory, run.version)
         ended = factory.ended if factory is not None and status in _ENDS else None
         moved = self._registry.move_run(run_id, status, step, ended_call=ended is not None)
         self._publish(moved)
         if status in _ENDS and ended is None:
             self._drop_folder(moved)
+            self._drop_trees()
         if moved.status in STOPS:
             generation = self._registry.stop_generation(run_id)
             self._put_stop(_QueuedStop(self._registry.run_stop(run_id, generation)))
@@ -1297,9 +1322,12 @@ class FactoryRuns:
         """
         step = run.step if run.step is not None else self._registry.attempts(run.run_id)[-1].step
         placed = self._workbench(run)
+        if run.version is not None:
+            self._factories.keep_tree(run.factory, run.version)
         command = StepRunCommand(
             step=CodeStepRun(call=call.call, summary=summary),
             origin=FactoryRunOrigin(factory=run.factory, run_id=run.run_id, step=step),
+            version=run.version,
             work_item=run.work_item,
             results=self._results(run, factory),
             folder=placed[1] if placed is not None else None,
@@ -1320,11 +1348,12 @@ class FactoryRuns:
             return
         self._queue(placed[0].instance_id).put_nowait(report)
 
-    def _file(self, name: FactoryName) -> WorkbenchFactory | None:
-        """The factory's file as the hub keeps it, or None once the factory is gone."""
+    def _file(self, name: FactoryName, version: GitCommit | None) -> WorkbenchFactory | None:
+        """The factory's file as *version* holds it, or the latest as the hub keeps it without
+        one. None once the factory or the version is gone."""
         try:
-            return self._factories.file(name)
-        except FactoryNotFound, InvalidFactoryFile:
+            return self._factories.file(name, version)
+        except FactoryNotFound, FactoryVersionNotFound, InvalidFactoryFile:
             return None
 
     def _publish(self, run: FactoryRun) -> None:
