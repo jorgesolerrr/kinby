@@ -377,7 +377,7 @@ function TranscriptEntry({ entry }: { entry: Entry }) {
  */
 function Waiting({
   hub,
-  detail: { run, attempts, earlier_steps },
+  detail: { run, attempts, earlier_steps, latest_earlier_steps },
   wait,
   workbench,
   onActed,
@@ -408,7 +408,9 @@ function Waiting({
   }
   const sendBack = (
     <SendBack
-      earlier={earlier_steps}
+      // A step picked from one version's steps may not be a step of the other's.
+      key={String(latest)}
+      earlier={latest ? latest_earlier_steps : earlier_steps}
       busy={busy}
       onSend={(to, notes) =>
         act(() => hub.call("factory.run.send_back", { run_id, step: to, notes, latest }))

@@ -216,6 +216,28 @@ describe("a run's page", () => {
     )
   })
 
+  it("sends a run back to a step of the factory's latest version", async () => {
+    const user = userEvent.setup()
+    const { caller } = openRun("r-stopped", {
+      "factory.run.get": () => ({ ...detail("r-stopped"), latest_earlier_steps: ["setup"] }),
+      "factory.run.send_back": () => detail("r-stopped").run,
+    })
+
+    await screen.findByRole("region", { name: "Waiting on you" })
+    await user.click(waiting().getByRole("switch", { name: "On the factory's latest version" }))
+    await user.click(waiting().getByRole("button", { name: "Send back…" }))
+    const dialog = within(await screen.findByRole("dialog"))
+    expect(dialog.getByRole("combobox", { name: "Step" }).textContent).toContain("setup")
+    await user.click(dialog.getByRole("button", { name: "Send back" }))
+
+    await waitFor(() =>
+      expect(caller.calls).toContainEqual({
+        method: "factory.run.send_back",
+        params: { run_id: "r-stopped", step: "setup", notes: null, latest: true },
+      }),
+    )
+  })
+
   it("cancels a run that needs a human once the user confirms", async () => {
     const user = userEvent.setup()
     const { caller } = openRun("r-stopped", { "factory.run.cancel": () => detail("r-stopped").run })

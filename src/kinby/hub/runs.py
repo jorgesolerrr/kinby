@@ -83,6 +83,7 @@ from kinby.core.errors import (
     NotAnEarlierStep,
     RunAwaitsNoAnswer,
     RunAwaitsNoApproval,
+    RunCannotFinish,
     RunNeedsNoHuman,
     TakeoverNotFound,
 )
@@ -328,23 +329,37 @@ class FactoryRuns:
 
     async def get(self, command: FactoryRunGetCommand) -> FactoryRunDetail:
         run = self._existing(command.run_id)
+        latest = await self._factories.version(run.factory)
         return FactoryRunDetail(
             run=run,
             attempts=self._registry.attempts(run.run_id),
             earlier_steps=_earlier(self._file(run.factory, run.version), run.step),
+            latest_earlier_steps=_earlier(self._file(run.factory, latest), run.step),
         )
 
     async def retry(self, command: FactoryRunRetryCommand) -> FactoryRun:
         """Try the step the run stopped at again, with the step's retries reset, on the run's
         version or the factory's latest one.
 
-        A run moved onto a version where its step is off goes on to the next step that's on.
+        A run moved onto a version where its step is off goes on to the next step that's on, and
+        ends done when no step from its own on is on.
         """
         run = _needing_human(self._existing(command.run_id))
         if not command.latest:
             return self._restart(run, run.step, run.version)
         version = await self._factories.version(run.factory)
-        return self._restart(run, _on_from(self._file(run.factory, version), run.step), version)
+        factory = self._file(run.factory, version)
+        if factory is None or run.step is None:
+            return self._restart(run, run.step, version)
+        step = _on_from(factory, run.step)
+        if step is not None:
+            return self._restart(run, step, version)
+        held = run.work_item | self._results(run, factory)
+        unfinishable = _unfinishable(held, factory.done_requires)
+        if unfinishable is not None:
+            raise RunCannotFinish(f'No step from "{run.step}" on is on. {unfinishable}')
+        self._registry.restart_run(run.run_id, None, version)
+        return self._move(run.run_id, FactoryRunStatus.DONE, None)
 
     async def send_back(self, command: FactoryRunSendBackCommand) -> FactoryRun:
         """Send the run back to a step before the one it stopped or awaits approval at, with the
@@ -1382,13 +1397,13 @@ def _next_on(factory: WorkbenchFactory, after: WorkbenchStep | None = None) -> W
     return next((step for step in factory.steps[start:] if not step.off), None)
 
 
-def _on_from(factory: WorkbenchFactory | None, step_id: StepId | None) -> StepId | None:
-    """*step_id*, or the next step that's on past it when it's off in *factory*."""
-    if factory is None or step_id is None:
-        return step_id
+def _on_from(factory: WorkbenchFactory, step_id: StepId) -> StepId | None:
+    """*step_id* unless it's off in *factory*, then the next step that's on past it, if any."""
     step = _step(factory, step_id)
-    following = _next_on(factory, step) if step is not None and step.off else None
-    return step_id if following is None else following.id
+    if step is None or not step.off:
+        return step_id
+    following = _next_on(factory, step)
+    return None if following is None else following.id
 
 
 def _first_at_work(factory: WorkbenchFactory) -> WorkbenchStep | None:
@@ -1635,12 +1650,19 @@ def _checked_done(
 
     The values of that result count, so its check's values are in.
     """
-    values = {**held, **last.values}
-    lacking = _lacking(values, factory.done_requires)
+    unfinishable = _unfinishable({**held, **last.values}, factory.done_requires)
+    return last if unfinishable is None else _noted(last, unfinishable)
+
+
+def _unfinishable(
+    held: Mapping[ValueName, StepValue], done_requires: Iterable[ValueName]
+) -> str | None:
+    """Why a run holding *held* cannot end done: the first *done_requires* value it lacks."""
+    lacking = _lacking(held, done_requires)
     if lacking is None:
-        return last
-    recorded = "no step recorded" if lacking not in values else "a step recorded as false"
-    return _noted(last, f'The run\'s done_requires needs "{lacking}", which {recorded}.')
+        return None
+    recorded = "no step recorded" if lacking not in held else "a step recorded as false"
+    return f'The run\'s done_requires needs "{lacking}", which {recorded}.'
 
 
 def _noted(result: StepResult, reason: str, ending: StepEnding = StepEnding.FAILED) -> StepResult:

@@ -141,6 +141,12 @@ class NotAnEarlierStep(CoreError):
     code = ErrorCode.INVALID_ARGUMENT
 
 
+class RunCannotFinish(CoreError):
+    """A run with no step left to take ends done only once it holds each done_requires value."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class NotAnIntake(CoreError):
     """No line names this instance and routine as its intake, so no run started."""
 

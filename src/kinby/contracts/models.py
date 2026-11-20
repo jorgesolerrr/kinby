@@ -4934,6 +4934,9 @@ class FactoryRunDetail(ContractModel):
     attempts: list[StepAttempt]
     #: The steps before the run's step in its factory, which a send back can go to.
     earlier_steps: list[StepId]
+    #: The steps before the run's step in its factory's latest version, which a send back that
+    #: moves the run there can go to.
+    latest_earlier_steps: list[StepId]
 
 
 class FactoryRunTranscriptCommand(ContractModel):

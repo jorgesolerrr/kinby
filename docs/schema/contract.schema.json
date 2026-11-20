@@ -2754,6 +2754,12 @@
           },
           "type": "array"
         },
+        "latest_earlier_steps": {
+          "items": {
+            "$ref": "#/$defs/StepId"
+          },
+          "type": "array"
+        },
         "run": {
           "$ref": "#/$defs/FactoryRun"
         }
@@ -2761,7 +2767,8 @@
       "required": [
         "run",
         "attempts",
-        "earlier_steps"
+        "earlier_steps",
+        "latest_earlier_steps"
       ],
       "title": "FactoryRunDetail",
       "type": "object"
