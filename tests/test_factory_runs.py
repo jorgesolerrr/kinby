@@ -243,6 +243,7 @@ def test_a_work_item_handed_to_a_line_runs_a_one_step_factory_to_done(tmp_path):
             step=CommandStepRun(run=["uv run pytest", "uv run ruff check ."], timeout_seconds=600),
             origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="test"),
             attempt=1,
+            version=run.version,
             work_item={"issue": 7},
             folder=RunFolder(branch=f"checks/issue-7-{run.run_id.hex[:8]}"),
         )
@@ -712,6 +713,9 @@ def test_a_run_its_resume_cannot_queue_is_reported_and_told_once(tmp_path):
     run_id = asyncio.run(before_the_restart())
     hub.close()
     control.step_release.set()
+    # A run that kept no factory version reads the latest, which renamed its step.
+    with sqlite3.connect(directory / "registry.sqlite") as connection:
+        connection.execute("UPDATE factory_runs SET version = NULL")
     renamed = NEEDS_HUMAN_FILES["factory.yaml"].replace("  - id: test\n", "  - id: tests\n")
     write_factory(directory / "factories" / "checks", {"factory.yaml": renamed})
     restarted = restarted_hub(directory, control, runtime)
@@ -1149,6 +1153,7 @@ def test_the_hub_hands_each_step_its_check_and_the_values_earlier_steps_recorded
                 hook="read_branch",
                 origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="implement"),
                 attempt=1,
+                version=run.version,
                 work_item={"issue": 7},
                 folder=folder,
             ),
@@ -1156,6 +1161,7 @@ def test_the_hub_hands_each_step_its_check_and_the_values_earlier_steps_recorded
                 step=CodeStepRun(call="open_pull_request"),
                 origin=FactoryRunOrigin(factory="checks", run_id=run.run_id, step="open-pr"),
                 attempt=1,
+                version=run.version,
                 work_item={"issue": 7},
                 results=BRANCH,
                 folder=folder,

@@ -203,7 +203,7 @@ A workbench has no tool context, so a tool that takes a `ToolContext` parameter 
 - `tools/`: the tools.
 - `skills/`: skills of the factory itself, such as one that says how to implement a ticket, offered to its agent steps beside the workbench's picks.
 
-Nothing copies the folder into a workbench: each step reads it as it is then, so an edit reaches every line at its next step. The factory names no repository's commands or conventions, and its prompts name no skill a workbench picks. Each workbench holds those itself, in its lists of repository commands and its picks.
+Nothing copies the folder into a workbench. Each save of the factory is a factory version, and a run keeps the version it started on: an edit reaches the runs that start after it, never a run halfway through. The factory names no repository's commands or conventions, and its prompts name no skill a workbench picks. Each workbench holds those itself, in its lists of repository commands and its picks.
 
 ## The run folder
 

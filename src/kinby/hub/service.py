@@ -4343,7 +4343,8 @@ class Hub:
     ) -> tuple[StorageItem, ...]:
         """What a created instance owns: its directory on the Docker host, its workspace
         volume, and one volume per declared login. A workbench also mounts the hub's factory
-        folders read only, so each step runs its factory's tools as they are then.
+        folders read only, with the tree of each factory version a run keeps, so each step runs
+        the tools of its run's version.
 
         A login's volume is named after its id, so the factory's `codex` login keeps the name
         the hub gave the Codex volume before packages declared their logins.

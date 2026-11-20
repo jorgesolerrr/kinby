@@ -42,6 +42,9 @@ from kinby.contracts import (
 )
 
 FACTORY_FILE = "factory.yaml"
+#: Where the hub's factories folder keeps each factory version a run keeps, as
+#: ``<factory>/<version>``, for the workbenches that mount it.
+VERSIONS_DIR = ".versions"
 
 _DECLARATION = ConfigDict(extra="forbid", strict=True)
 #: A whole number of seconds, minutes, hours or days, such as ``60m`` or ``7d``.
@@ -365,11 +368,18 @@ def read_factory_file(folder: Path) -> WorkbenchFactory:
     is refused, each of its older keys with what replaced it."""
     path = folder / FACTORY_FILE
     try:
-        declared = yaml.safe_load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise InvalidFactoryFile((f"The factory has no {FACTORY_FILE}.",)) from exc
     except (OSError, UnicodeDecodeError) as exc:
         raise InvalidFactoryFile((f"{FACTORY_FILE} cannot be read as UTF-8 text: {exc}",)) from exc
+    return parse_factory_file(text)
+
+
+def parse_factory_file(text: str) -> WorkbenchFactory:
+    """The factory file *text*, validated as `read_factory_file` validates a factory's file."""
+    try:
+        declared = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise InvalidFactoryFile((f"{FACTORY_FILE} is not YAML: {exc}",)) from exc
     try:
