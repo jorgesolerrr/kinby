@@ -156,3 +156,35 @@ def test_a_versions_tree_stays_until_no_unfinished_run_keeps_it(tmp_path):
         assert not tree.exists()
 
     asyncio.run(scenario())
+
+
+def test_a_versions_tree_keeps_its_links_and_executable_files(tmp_path):
+    control = _control()
+    control.step_release.clear()
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+    folder = tmp_path / "hub" / "factories" / "tickets"
+    (folder / "prompts" / "shared.md").write_text("Fix what they shared.\n", encoding="utf-8")
+    (folder / "prompts" / "fix.md").unlink()
+    (folder / "prompts" / "fix.md").symlink_to("shared.md")
+    (folder / "tools" / "helper.sh").parent.mkdir()
+    (folder / "tools" / "helper.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (folder / "tools" / "helper.sh").chmod(0o755)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await _holding(control, 1)
+
+        assert run.version is not None
+        tree = tmp_path / "hub" / "factories" / ".versions" / "tickets" / run.version
+        assert (tree / "tools" / "helper.sh").stat().st_mode & 0o777 == 0o555
+
+        control.step_release.set()
+        await settled(hub, run.run_id)
+
+        assert _prompts(control) == ["Implement the issue.\n", "Fix what they shared.\n"]
+
+    asyncio.run(scenario())

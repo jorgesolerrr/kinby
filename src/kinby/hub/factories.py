@@ -138,26 +138,26 @@ class FactoryStore:
         return self._version_files[name, version]
 
     def prompt(self, name: FactoryName, path: FactoryPath, version: GitCommit | None = None) -> str:
-        """The text of a prompt file as *version* holds it, or without one from the last version
-        of the factory that passed the check."""
-        if version is not None:
-            return self._versions.show(name, version, path)
-        folder, _ = self._folder(name)
+        """The text of a prompt file as *version* holds it, read in the version's tree so a link
+        resolves as the check resolved it, or without one from the last version of the factory
+        that passed the check."""
+        folder = self.keep_tree(name, version) if version is not None else self._folder(name)[0]
         return (folder / path).read_text(encoding="utf-8")
 
-    def keep_tree(self, name: FactoryName, version: GitCommit) -> None:
-        """Keep the factory's folder as *version* holds it, read-only, where a workbench's
-        factories mount finds it."""
+    def keep_tree(self, name: FactoryName, version: GitCommit) -> Path:
+        """The factory's folder as *version* holds it, kept without write permissions where a
+        workbench's factories mount finds it."""
         tree = self._directory / VERSIONS_DIR / name / version
         if tree.is_dir():
-            return
+            return tree
         with self._staging(name) as staged:
             self._versions.extract(name, version, staged)
             for path in staged.rglob("*"):
                 if path.is_file() and not path.is_symlink():
-                    path.chmod(0o444)
+                    path.chmod(path.stat().st_mode & ~0o222)
             tree.parent.mkdir(parents=True, exist_ok=True)
             staged.rename(tree)
+        return tree
 
     def drop_trees(self, kept: Collection[tuple[FactoryName, GitCommit]]) -> None:
         """Remove each version's tree but those of the factories and versions in *kept*."""
