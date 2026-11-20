@@ -1,6 +1,7 @@
+import type { FactoryRunDetail } from "@kinby/contract"
 import { cn } from "cn"
 import { CircleXIcon, PlusIcon } from "lucide-react"
-import { useId, useState } from "react"
+import { useEffect, useId, useState } from "react"
 
 import { NewStep } from "@/components/new-step"
 import { StepEditor, type StepSaving } from "@/components/step-editor"
@@ -34,22 +35,30 @@ const RESUME_LANE = 8
 
 /** The factory's steps as a map, its routes back as arcs over the line and its resumed sessions
  * as dotted arcs under it, above a card for each step, which opens in place as its step editor.
- * A + after each card adds a step there. `onSaved` runs once a change made a new version. */
+ * A + after each card adds a step there. Opened from a run, it opens on the card of the run's
+ * step. `onSaved` runs once a change made a new version. */
 export function FactorySteps({
   steps,
   commands,
   saving,
+  from,
   onSaved,
 }: {
   steps: FactoryStep[]
   /** The names of the workbench's command lists the factory requires. */
   commands: string[]
   saving: StepSaving
+  /** The run the factory was opened from, and the step whose card it opens. */
+  from?: { step: string; run: FactoryRunDetail }
   onSaved: () => void
 }) {
   const prefix = useId()
   const cardId = (id: string) => `${prefix}${id}`
-  const [open, setOpen] = useState<string>()
+  const [open, setOpen] = useState(from?.step)
+  const opening = from?.step
+  useEffect(() => {
+    if (opening !== undefined) document.getElementById(`${prefix}${opening}`)?.scrollIntoView()
+  }, [prefix, opening])
   /** The step the user adds a new one after. */
   const [adding, setAdding] = useState<string>()
   /** The step the hub refused to turn off or on, and what each step that keeps it needs of it. */
@@ -88,6 +97,7 @@ export function FactorySteps({
                 step={step}
                 earlier={steps.slice(0, place).filter((each) => !each.off)}
                 saving={saving}
+                run={from?.step === step.id ? from.run : undefined}
                 onSaved={() => {
                   setOpen(undefined)
                   changed()

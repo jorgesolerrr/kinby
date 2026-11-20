@@ -3,11 +3,25 @@
 import asyncio
 import sqlite3
 
-from kinby.contracts import ClientStepRun, FactoryRunStatus, StepEnding, StepResult
-from tests.test_factory_runs import settled
+from kinby.contracts import (
+    FACTORY_RUN_RETRY,
+    FACTORY_RUN_SEND_BACK,
+    ClientStepRun,
+    ErrorCode,
+    ErrorEnvelope,
+    FactoryResult,
+    FactoryRun,
+    FactoryRunRetryCommand,
+    FactoryRunSendBackCommand,
+    FactoryRunStatus,
+    StepEnding,
+    StepResult,
+)
+from tests.test_factory_runs import detail, settled
 from tests.test_hub import FakeControl, FakeRuntime, hub_client
+from tests.test_hub_factory_step_off import set_off
 from tests.test_hub_factory_versions import edit
-from tests.test_hub_line_agents import _hub
+from tests.test_hub_line_agents import AGENTS, _hub
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
 
@@ -186,5 +200,234 @@ def test_a_versions_tree_keeps_its_links_and_executable_files(tmp_path):
         await settled(hub, run.run_id)
 
         assert _prompts(control) == ["Implement the issue.\n", "Fix what they shared.\n"]
+
+    asyncio.run(scenario())
+
+
+STUCK = StepResult(ending=StepEnding.NEEDS_HUMAN, summary="The tests will not pass.")
+TEST_FIRST = "Implement it test-first.\n"
+
+
+async def _retried(client, run: FactoryRun, latest: bool = False) -> None:
+    command = FactoryRunRetryCommand(run_id=run.run_id, latest=latest)
+    assert isinstance(await client.call(FACTORY_RUN_RETRY, command), FactoryRun)
+
+
+async def _sent_back(client, run: FactoryRun, step: str, latest: bool = False) -> None:
+    command = FactoryRunSendBackCommand(run_id=run.run_id, step=step, latest=latest)
+    assert isinstance(await client.call(FACTORY_RUN_SEND_BACK, command), FactoryRun)
+
+
+def test_a_retry_keeps_the_runs_version_and_one_that_moves_runs_the_latest(tmp_path):
+    control = FakeControl()
+    control.step_results = [STUCK, STUCK, StepResult(ending=StepEnding.CLEAN, session="claude-1")]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+        edited = await edit(client, {"prompts/implement.md": TEST_FIRST})
+
+        await _retried(client, run)
+        kept = await settled(hub, run.run_id)
+        await _retried(client, run, latest=True)
+        moved = await settled(hub, run.run_id)
+
+        assert kept.run.version == run.version
+        assert moved.run.status is FactoryRunStatus.DONE
+        assert moved.run.version == edited.version
+        assert _prompts(control) == [
+            "Implement the issue.\n",
+            "Implement the issue.\n",
+            TEST_FIRST,
+            "Fix what the review found.\n",
+        ]
+        assert [attempt.version for attempt in moved.attempts] == 2 * [run.version] + 2 * [
+            edited.version
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_send_back_keeps_the_runs_version_and_one_that_moves_runs_the_latest(tmp_path):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.CLEAN, session="claude-1"), STUCK]
+    control.step_results += [StepResult(ending=StepEnding.CLEAN, session="claude-2"), STUCK]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+        edited = await edit(client, {"prompts/implement.md": TEST_FIRST})
+
+        await _sent_back(client, run, "implement")
+        kept = await settled(hub, run.run_id)
+        await _sent_back(client, run, "implement", latest=True)
+        moved = await settled(hub, run.run_id)
+
+        assert kept.run.version == run.version
+        assert moved.run.version == edited.version
+        assert _prompts(control)[::2] == [
+            "Implement the issue.\n",
+            "Implement the issue.\n",
+            TEST_FIRST,
+        ]
+
+    asyncio.run(scenario())
+
+
+THREE = AGENTS | {
+    "factory.yaml": """\
+name: tickets
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: agent
+    engine: claude
+    prompt: prompts/implement.md
+  - id: review
+    kind: agent
+    engine: claude
+    prompt: prompts/review.md
+  - id: fix
+    kind: agent
+    engine: claude
+    prompt: prompts/fix.md
+""",
+    "prompts/review.md": "Review the change.\n",
+}
+
+
+def test_a_run_moved_onto_a_version_where_its_step_is_off_goes_on_to_the_next_step_on(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_results = [StepResult(ending=StepEnding.CLEAN), STUCK]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime, THREE)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+        turned = await set_off(client, "review")
+        assert isinstance(turned, FactoryResult)
+
+        await _retried(client, run, latest=True)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert [attempt.step for attempt in done.attempts] == ["implement", "review", "fix"]
+        assert done.attempts[-1].version == turned.version
+
+    asyncio.run(scenario())
+
+
+def test_a_run_moved_onto_a_version_where_no_step_from_its_own_is_on_ends_done(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN),
+    ]
+    control.step_results += [STUCK]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime, THREE)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+        turned = await set_off(client, "fix")
+        assert isinstance(turned, FactoryResult)
+
+        await _retried(client, run, latest=True)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert done.run.version == turned.version
+        assert [attempt.step for attempt in done.attempts] == ["implement", "review", "fix"]
+
+    asyncio.run(scenario())
+
+
+def test_a_run_with_no_step_on_from_its_own_is_kept_when_it_lacks_a_done_requires_value(
+    tmp_path,
+):
+    files = THREE | {
+        "factory.yaml": THREE["factory.yaml"]
+        .replace(
+            "work_item: { issue: int }",
+            "work_item: { issue: int }\ndone_requires: [reviewed]",
+        )
+        .replace(
+            "    prompt: prompts/review.md",
+            "    prompt: prompts/review.md\n    results: { reviewed: bool }",
+        )
+    }
+    control = FakeControl()
+    not_reviewed = StepResult(ending=StepEnding.CLEAN, values={"reviewed": False})
+    control.step_results = [StepResult(ending=StepEnding.CLEAN), not_reviewed, STUCK]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime, files)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        stopped = await settled(hub, run.run_id)
+        assert isinstance(await set_off(client, "fix"), FactoryResult)
+
+        command = FactoryRunRetryCommand(run_id=run.run_id, latest=True)
+        refused = await client.call(FACTORY_RUN_RETRY, command)
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert refused.message == (
+            'No step from "fix" on is on. The run\'s done_requires needs "reviewed", which a '
+            "step recorded as false."
+        )
+        assert (await detail(hub, run.run_id)) == stopped
+
+    asyncio.run(scenario())
+
+
+def test_a_run_offers_the_steps_it_can_be_sent_back_to_on_its_version_and_on_the_latest(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN),
+    ]
+    control.step_results += [STUCK]
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime, THREE)
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+        run = await _handed_in(client, line, 12)
+        await settled(hub, run.run_id)
+        assert isinstance(await set_off(client, "review"), FactoryResult)
+
+        stopped = await detail(hub, run.run_id)
+
+        assert stopped.earlier_steps == ["implement", "review"]
+        assert stopped.latest_earlier_steps == ["implement"]
 
     asyncio.run(scenario())

@@ -2285,16 +2285,22 @@ class HubRegistry:
             ).fetchall()
         return [self.run_stop(UUID(run_id), generation) for run_id, generation in rows]
 
-    def restart_run(self, run_id: UUID, step: StepId | None) -> FactoryRun:
-        """Queue the run at *step* for the user, its retries and send-backs counted afresh."""
+    def restart_run(
+        self, run_id: UUID, step: StepId | None, version: GitCommit | None
+    ) -> FactoryRun:
+        """Queue the run at *step* of factory *version* for the user, its retries and send-backs
+        counted afresh."""
         with self._transaction() as connection:
-            _restart(connection, run_id, step)
+            _restart(connection, run_id, step, version)
         return self._existing_run(run_id)
 
-    def send_back_run(self, run_id: UUID, step: StepId, notes: str | None) -> FactoryRun:
-        """Restart the run at *step*, with the *notes* the user sent it back with, or none."""
+    def send_back_run(
+        self, run_id: UUID, step: StepId, notes: str | None, version: GitCommit | None
+    ) -> FactoryRun:
+        """Restart the run at *step* of factory *version*, with the *notes* the user sent it back
+        with, or none."""
         with self._transaction() as connection:
-            _restart(connection, run_id, step)
+            _restart(connection, run_id, step, version)
             connection.execute(
                 "UPDATE factory_runs SET notes = ? WHERE id = ?", (notes, str(run_id))
             )
@@ -2953,16 +2959,20 @@ def _now() -> str:
     return _stored(datetime.now(UTC))
 
 
-def _restart(connection: sqlite3.Connection, run_id: UUID, step: StepId | None) -> None:
-    """Queue the run at *step*, its attempts so far counting toward no retry or send-back."""
+def _restart(
+    connection: sqlite3.Connection, run_id: UUID, step: StepId | None, version: GitCommit | None
+) -> None:
+    """Queue the run at *step* of factory *version*, its attempts so far counting toward no
+    retry or send-back."""
     connection.execute(
         """
-        UPDATE factory_runs SET status = ?, step = ?, updated_at = ?, restarted_after = (
-            SELECT COALESCE(MAX(rowid), 0) FROM step_attempts WHERE run_id = ?
-        )
+        UPDATE factory_runs SET status = ?, step = ?, version = ?, updated_at = ?,
+            restarted_after = (
+                SELECT COALESCE(MAX(rowid), 0) FROM step_attempts WHERE run_id = ?
+            )
         WHERE id = ?
         """,
-        (FactoryRunStatus.QUEUED.value, step, _now(), str(run_id), str(run_id)),
+        (FactoryRunStatus.QUEUED.value, step, version, _now(), str(run_id), str(run_id)),
     )
 
 

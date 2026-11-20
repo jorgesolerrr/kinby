@@ -322,7 +322,7 @@ export function detail(runId: string): FactoryRunDetail {
   if (run === undefined) throw new Error(`No run ${runId}`)
   const steps = FILES[run.factory]?.match(/id: \w+/g)?.map((id) => id.slice(4)) ?? []
   const earlier = run.step === null ? [] : steps.slice(0, steps.indexOf(run.step))
-  return { run, attempts: attempts(run), earlier_steps: earlier }
+  return { run, attempts: attempts(run), earlier_steps: earlier, latest_earlier_steps: earlier }
 }
 
 /** A hub that answers as `answers` says, and as `more` says over it. */

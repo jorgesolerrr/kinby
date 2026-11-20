@@ -11,6 +11,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { useRead } from "@/hooks/use-read"
+import type { StepLink } from "@/lib/selection"
 
 /** The parts of a `factory.yaml` the summary shows. The hub checked the rest. */
 interface FactoryFile {
@@ -21,25 +22,32 @@ interface FactoryFile {
 /**
  * A factory unfolded: its steps, its `factory.yaml` and its other files, read-only, and its
  * History, where it reverts to an earlier version. A shipped factory the user changed shows that
- * it differs from kinby's, and whether kinby's update waits for the user.
+ * it differs from kinby's, and whether kinby's update waits for the user. Opened `from` a run, it
+ * opens on the card of the run's step.
  */
 export function FactoryEntry({
   client,
   clock,
   name,
+  from,
 }: {
   client: Pick<Client, "call">
   clock: Clock
   name: string
+  from?: StepLink
 }) {
   const id = useId()
+  const runId = from?.runId
   const read = useCallback(async () => {
-    const result = await client.call("factory.get", { name })
+    const [result, run] = await Promise.all([
+      client.call("factory.get", { name }),
+      runId === undefined ? undefined : client.call("factory.run.get", { run_id: runId }),
+    ])
     const { "factory.yaml": content = "", ...others } = result.files
     // The hub reads it with PyYAML, which resolves `<<` merge keys.
     const factory = parse(content, { merge: true }) as FactoryFile
-    return { result, content, factory, files: Object.keys(others) }
-  }, [client, name])
+    return { result, run, content, factory, files: Object.keys(others) }
+  }, [client, name, runId])
   const { value: opened, failure, readAgain } = useRead(read, clock)
 
   return (
@@ -64,6 +72,7 @@ export function FactoryEntry({
               steps={opened.factory.steps}
               commands={opened.factory.requires?.commands ?? []}
               saving={{ client, factory: opened.result }}
+              from={from && opened.run && { step: from.step, run: opened.run }}
               onSaved={readAgain}
             />
             <Field>
