@@ -263,6 +263,9 @@ export const answers: Answers = {
     files: { "factory.yaml": FILES[name] ?? "" },
     version: null,
     declared_in: {},
+    differs_from_shipped: false,
+    shipped_update_waiting: false,
+    differing_steps: [],
   }),
   "line.list": () => ({ lines }),
   "line.get": ({ line_id }) => {

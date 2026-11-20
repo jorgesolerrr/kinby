@@ -1,4 +1,4 @@
-import { CallError, type FactoryVersion } from "@kinby/contract"
+import { CallError, type FactoryResult, type FactoryVersion } from "@kinby/contract"
 import { type Answers, stubCaller } from "@kinby/contract/testing"
 import { screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
@@ -44,6 +44,9 @@ function openPage(file = factoryFile, history = versions, more: Answers = {}) {
       hash: "h-2",
       version: history[0]?.version ?? null,
       declared_in: { check_implementation: "hooks/implementation.py" },
+      differs_from_shipped: false,
+      shipped_update_waiting: false,
+      differing_steps: [],
     }),
     "factory.version.list": () => ({ versions: history }),
     "factory.version.diff": ({ version }) => ({ diff: `diff of ${version}\n` }),
@@ -54,6 +57,9 @@ function openPage(file = factoryFile, history = versions, more: Answers = {}) {
       hash: "h-3",
       version: shippedVersion,
       declared_in: {},
+      differs_from_shipped: false,
+      shipped_update_waiting: false,
+      differing_steps: [],
     }),
     ...more,
   })
@@ -401,6 +407,9 @@ describe("LibraryPage, a step's editor", () => {
         hash: "h-3",
         version: commit,
         declared_in: {},
+        differs_from_shipped: false,
+        shipped_update_waiting: false,
+        differing_steps: [],
       }),
     })
     const timeout = editor.getByRole("textbox", { name: "Timeout" })
@@ -451,6 +460,9 @@ const changed = (name: string) => ({
   hash: "h-3",
   version: commit,
   declared_in: {},
+  differs_from_shipped: false,
+  shipped_update_waiting: false,
+  differing_steps: [],
 })
 
 describe("LibraryPage, an off step", () => {
@@ -681,5 +693,50 @@ describe("LibraryPage, adding a step", () => {
 
     expect(await form.findByText(/Step "docs" resumes "fix"/)).toBeTruthy()
     expect((id as HTMLInputElement).value).toBe("docs")
+  })
+})
+
+describe("LibraryPage, a shipped factory the user changed", () => {
+  const read = (marks: Partial<FactoryResult>) => ({
+    "factory.get": ({ name }: { name: string }) => ({ ...changed(name), ...marks }),
+  })
+
+  it("shows that it differs from shipped and that kinby's update waits", async () => {
+    await openMap(software, read({ differs_from_shipped: true, shipped_update_waiting: true }))
+
+    expect(screen.getByText("Differs from shipped")).toBeTruthy()
+    expect(screen.getByText("Update waiting")).toBeTruthy()
+  })
+
+  it("shows neither mark on kinby's version", async () => {
+    await openMap()
+
+    expect(screen.queryByText("Differs from shipped")).toBeNull()
+    expect(screen.queryByText("Update waiting")).toBeNull()
+  })
+
+  it("offers kinby's version on each step that differs, and takes it against the hash it read", async () => {
+    const { caller, user, editor } = await openStep("review", {
+      ...read({ differs_from_shipped: true, differing_steps: ["review"] }),
+      "factory.step.reset": ({ name }) => changed(name),
+    })
+
+    expect(within(card("review")).getByText("Differs from kinby's")).toBeTruthy()
+    expect(within(card("fix")).queryByText("Differs from kinby's")).toBeNull()
+    await user.click(editor.getByRole("button", { name: "Take kinby's" }))
+
+    await waitFor(() =>
+      expect(caller.calls.find((call) => call.method === "factory.step.reset")?.params).toEqual({
+        name: "software",
+        hash: "h-3",
+        step: "review",
+      }),
+    )
+  })
+
+  it("offers nothing to take on a step that is kinby's", async () => {
+    const { editor } = await openStep("fix", read({ differing_steps: ["review"] }))
+
+    expect(editor.queryByRole("button", { name: "Take kinby's" })).toBeNull()
   })
 })

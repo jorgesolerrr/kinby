@@ -77,6 +77,7 @@ from kinby.contracts import (
     FACTORY_STEP_ADD,
     FACTORY_STEP_DELETE,
     FACTORY_STEP_OFF_SET,
+    FACTORY_STEP_RESET,
     FACTORY_STEP_SAVE,
     FACTORY_VERSION_DIFF,
     FACTORY_VERSION_LIST,
@@ -939,6 +940,7 @@ class Hub:
             public_url = public_url.rstrip("/") if public_url is not None else None
             self._public_url = public_url
             self.factories = FactoryStore(self.directory / _FACTORIES_DIR, shipped_factories)
+            self.factories.merge_shipped()
             self.library = Library(
                 self.directory / "skills",
                 self.directory / "mcp-servers",
@@ -1072,6 +1074,7 @@ class Hub:
         dispatcher.register(FACTORY_STEP_ADD, self.factories.add_step)
         dispatcher.register(FACTORY_STEP_OFF_SET, self.factories.set_step_off)
         dispatcher.register(FACTORY_STEP_DELETE, self.factories.delete_step)
+        dispatcher.register(FACTORY_STEP_RESET, self.factories.reset_step)
         dispatcher.register(FACTORY_REMOVE, self.remove_factory)
         dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
         dispatcher.register(FACTORY_RUN_GET, self.runs.get)

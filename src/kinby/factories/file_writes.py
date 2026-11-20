@@ -34,6 +34,16 @@ def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
     return "".join(old[: before.start] + new[after.start : after.stop] + old[before.stop :])
 
 
+def with_step_from(text: str, other: str, step_id: str) -> str:
+    """The factory file *text* with the step *step_id* declared in the lines the factory file
+    *other* declares it in. Each line outside that step stays as it was."""
+    document, source = _yaml().load(text), _yaml().load(other)
+    old, new = text.splitlines(keepends=True), other.splitlines(keepends=True)
+    here = _lines(document, _place(document, step_id), len(old))
+    there = _lines(source, _place(source, step_id), len(new))
+    return "".join(old[: here.start] + new[there.start : there.stop] + old[here.stop :])
+
+
 def with_step_off(text: str, step_id: str, *, off: bool) -> str:
     """The factory file *text* with the step *step_id* off, or on, which a step is unless it says
     otherwise. Each line outside that step stays as it was."""
