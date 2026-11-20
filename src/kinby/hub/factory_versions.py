@@ -54,10 +54,12 @@ class FactoryVersions:
         )
 
     def removed(self, name: FactoryName) -> None:
-        """Commit the removal of the factory's folder, which ends its history."""
+        """Commit the removal of the factory's folder, which ends its history. A factory that never
+        had a version has no history to end."""
+        if not self._git("ls-files", "--", f"{name}/"):
+            return
         self._git("add", "--all", "--", f"{name}/")
-        if self._git("diff", "--cached", "--name-only", "--", f"{name}/"):
-            self._git("commit", "--quiet", "-m", f"{name}: removed")
+        self._git("commit", "--quiet", "-m", f"{name}: removed")
 
     def set_aside(self, name: FactoryName) -> None:
         """Move the change in the factory's folder into a stash, leaving its current version."""

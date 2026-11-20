@@ -272,3 +272,20 @@ def test_a_factory_made_again_under_a_removed_ones_name_starts_its_own_history(t
         assert sources(listed) == [(FactoryVersionSource.WEB, STEPS)]
 
     asyncio.run(scenario())
+
+
+def test_a_factory_that_never_had_a_version_is_removed(tmp_path):
+    hub = factory_hub(tmp_path)
+    write_factory(
+        tmp_path / "hub" / "factories" / "tickets", FILES | {"factory.yaml": "steps: [\n"}
+    )
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        assert (await read(client)).version is None
+        removed = await client.call(FACTORY_REMOVE, FactoryRemoveCommand(name="tickets"))
+
+        assert isinstance(removed, FactoryListResult)
+        assert removed.factories == []
+
+    asyncio.run(scenario())
