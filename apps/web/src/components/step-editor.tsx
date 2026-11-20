@@ -1,4 +1,5 @@
 import { CallError, type Client, type FactoryResult } from "@kinby/contract"
+import { Trash2Icon } from "lucide-react"
 import { useId, useState } from "react"
 import { parse, stringify } from "yaml"
 
@@ -13,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useHubCall } from "@/hooks/use-hub-call"
 import { type FactoryStep, type Retry, routeText, type SendBack } from "@/lib/factory-steps"
@@ -37,12 +39,20 @@ export function StepEditor({
   earlier,
   saving,
   onSaved,
+  onTurned,
+  onKept,
 }: {
   step: FactoryStep
+  /** The steps that are on before this one. */
   earlier: FactoryStep[]
   saving: StepSaving
-  /** Runs once a save made a new version. */
+  /** Runs once a save or a delete made a new version. */
   onSaved: () => void
+  /** Runs once turning the step off or on made a new version. */
+  onTurned: () => void
+  /** Runs when the hub refused to turn the step off or on, with what each step that keeps it as
+   * it is needs of it, by the step's id. */
+  onKept: (needs: Record<string, string>) => void
 }) {
   // As the card opened, so a save from this draft is refused once the factory changed since.
   const [{ step, factory }] = useState({ step: shown, factory: saving.factory })
@@ -57,7 +67,8 @@ export function StepEditor({
   const [hookDraft, setHookDraft] = useState(hookText)
   const [signal, setSignal] = useState(signalText)
   const [notYaml, setNotYaml] = useState<string>()
-  const { busy, failure, ask } = useHubCall()
+  const { busy, refusal, failure, ask } = useHubCall()
+  const turning = useHubCall()
   const id = useId()
   const dirty =
     JSON.stringify(draft) !== JSON.stringify(step) ||
@@ -101,6 +112,22 @@ export function StepEditor({
       onSaved()
     })
   }
+  const read = { name: factory.name, hash: factory.hash, step: step.id }
+  const turn = (on: boolean) =>
+    void turning.ask(async () => {
+      try {
+        await saving.client.call("factory.step.off.set", { ...read, off: !on })
+      } catch (error) {
+        if (error instanceof CallError) onKept(error.fields)
+        throw error
+      }
+      onTurned()
+    })
+  const remove = () =>
+    void ask(async () => {
+      await saving.client.call("factory.step.delete", read)
+      onSaved()
+    })
   const routes = [
     ...Object.entries(draft.outcomes ?? {}),
     ...(draft.failed == null ? [] : [["failed", draft.failed] as const]),
@@ -117,14 +144,25 @@ export function StepEditor({
         save()
       }}
     >
-      <Field>
-        <FieldLabel htmlFor={`${id}description`}>Description</FieldLabel>
-        <Textarea
-          id={`${id}description`}
-          value={draft.description ?? ""}
-          onChange={(event) => put("description", event.target.value)}
+      <div className="flex items-start gap-4">
+        <Field>
+          <FieldLabel htmlFor={`${id}description`}>Description</FieldLabel>
+          <Textarea
+            id={`${id}description`}
+            value={draft.description ?? ""}
+            onChange={(event) => put("description", event.target.value)}
+          />
+        </Field>
+        <Switch
+          aria-label="On"
+          className="mt-8"
+          checked={step.off !== true}
+          // A toggle reads the factory again, which would drop unsaved edits.
+          disabled={dirty || turning.busy}
+          onCheckedChange={turn}
         />
-      </Field>
+      </div>
+      {turning.failure !== undefined && <Unsaved error={turning.failure} />}
       <FieldGroup className="grid md:grid-cols-2">
         {draft.kind === "agent" && (
           <>
@@ -219,12 +257,8 @@ export function StepEditor({
         {signal !== undefined && <Code label="Signal" value={signal} onChange={setSignal} />}
       </div>
       {notYaml !== undefined && <Refusal reason={notYaml} />}
-      {failure !== undefined &&
-        (failure instanceof CallError ? (
-          <Refusal reason={failure.message} />
-        ) : (
-          <Failure error={failure} />
-        ))}
+      {refusal !== undefined && <Refusal reason={refusal} />}
+      {failure !== undefined && <Unsaved error={failure} />}
       <div className="flex flex-wrap items-end justify-between gap-4 border-t pt-3">
         <dl className="flex flex-col gap-1 text-sm">
           {[
@@ -243,6 +277,12 @@ export function StepEditor({
           ))}
         </dl>
         <div className="flex gap-2">
+          {step.off === true && (
+            <Button type="button" variant="ghost" disabled={busy} onClick={remove}>
+              <Trash2Icon data-icon="inline-start" />
+              Delete
+            </Button>
+          )}
           <Button type="button" variant="ghost" disabled={!dirty || busy} onClick={discard}>
             Discard
           </Button>
@@ -253,6 +293,11 @@ export function StepEditor({
       </div>
     </form>
   )
+}
+
+/** Why a change made no version: what the hub refused, or that it did not answer. */
+function Unsaved({ error }: { error: unknown }) {
+  return error instanceof CallError ? <Refusal reason={error.message} /> : <Failure error={error} />
 }
 
 function Text({

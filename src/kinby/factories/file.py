@@ -160,6 +160,8 @@ class _Step:
     id: StepId
     #: What the step does and why, as the user reads it on the factory's page.
     description: str | None = None
+    #: An off step stays in the factory, but its runs pass over it to the next step.
+    off: bool = False
     #: Values earlier steps or the work item must hold before this step starts.
     requires: tuple[ValueName, ...] = ()
     #: The values this step's result declares, by name.
@@ -363,6 +365,20 @@ class InvalidFactoryFile(ValueError):
         self.problems = problems
 
 
+class FactoryLoader(yaml.SafeLoader):
+    """Reads a factory file's booleans as YAML 1.2 does, only true and false, so a step's ``off``
+    is a key."""
+
+
+FactoryLoader.yaml_implicit_resolvers = {
+    first: [(tag, pattern) for tag, pattern in resolvers if tag != "tag:yaml.org,2002:bool"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+FactoryLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool", re.compile("^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
+)
+
+
 def read_factory_file(folder: Path) -> WorkbenchFactory:
     """The factory file in *folder*, validated against its schema. A file written the older way
     is refused, each of its older keys with what replaced it."""
@@ -379,7 +395,7 @@ def read_factory_file(folder: Path) -> WorkbenchFactory:
 def parse_factory_file(text: str) -> WorkbenchFactory:
     """The factory file *text*, validated as `read_factory_file` validates a factory's file."""
     try:
-        declared = yaml.safe_load(text)
+        declared = yaml.load(text, Loader=FactoryLoader)
     except yaml.YAMLError as exc:
         raise InvalidFactoryFile((f"{FACTORY_FILE} is not YAML: {exc}",)) from exc
     try:

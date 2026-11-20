@@ -424,6 +424,14 @@ export interface Contract {
       command: FactoryRunTranscriptCommand;
       result: FactoryRunTranscript;
     };
+    "factory.step.delete": {
+      command: FactoryStepDeleteCommand;
+      result: FactoryResult;
+    };
+    "factory.step.off.set": {
+      command: FactoryStepOffSetCommand;
+      result: FactoryResult;
+    };
     "factory.step.save": {
       command: FactoryStepSaveCommand;
       result: FactoryResult;
@@ -1709,6 +1717,25 @@ export interface FactoryRunTranscript {
   events: {
     [k: string]: JsonValue;
   }[];
+}
+/**
+ * Delete one off step of a factory, as one version, with its prompt file unless another step
+ * uses it.
+ */
+export interface FactoryStepDeleteCommand {
+  hash: string;
+  name: FactoryName;
+  step: StepId;
+}
+/**
+ * Turn one step of a factory off, so its runs pass over it, or back on, as one version. The
+ * check refuses turning off a step another step that's on needs.
+ */
+export interface FactoryStepOffSetCommand {
+  hash: string;
+  name: FactoryName;
+  off: boolean;
+  step: StepId;
 }
 /**
  * Save one step of a factory, its prompt and its hook, as one version. The hub keeps the rest

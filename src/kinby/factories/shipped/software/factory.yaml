@@ -125,22 +125,22 @@ steps:
     requires: [branch, base]
     results: { title: str, body: str }
     timeout: 30m
-  # Adversarial review before the pull request opens is off by default (ADR 0044): reviewers
-  # on the pull request take its place. To turn it on, uncomment review.
-  # - id: review
-  #   kind: agent
-  #   description: >-
-  #     Adversarial review before the pull request opens. It sends changes back to fix, which
-  #     then reads its .scratch/review.md.
-  #   engine: claude
-  #   model: claude-opus-5-5
-  #   effort: high
-  #   prompt: prompts/review.md
-  #   check: read_review_verdict
-  #   requires: [branch, base]
-  #   results: { reviewed: bool }
-  #   outcomes: { clean: next, changes: { back: fix, max: 2 } }
-  #   timeout: 15m
+  - id: review
+    kind: agent
+    description: >-
+      Adversarial review before the pull request opens. It sends changes back to fix, which
+      then reads its .scratch/review.md. Off by default (ADR 0044): reviewers on the pull request
+      take its place.
+    off: true
+    engine: claude
+    model: claude-opus-5-5
+    effort: high
+    prompt: prompts/review.md
+    check: read_review_verdict
+    requires: [branch, base]
+    results: { reviewed: bool }
+    outcomes: { clean: next, changes: { back: fix, max: 2 } }
+    timeout: 15m
   - id: checks
     kind: command
     description: >-

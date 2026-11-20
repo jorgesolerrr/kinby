@@ -28,7 +28,7 @@ The components in this folder are shadcn's `base-luma` source, installed with th
 - **avatar**: the `circle`, `squircle` and `square` shapes, and the colour variants blue, violet, green, amber, red and gray, drawn from the `--avatar-*` tokens. The group's `overlap` variant: `less` overlaps by `-space-x-1.5`, so a Library row's small avatars keep their letters readable.
 - **badge**: the `success` and `attention` variants. Attention fills with ember.
 - **button**: the `aria-disabled` state looks and acts like `disabled`, and the `nav` variant, start-aligned and quiet, filled while it is `aria-current="page"`, for the Settings section list.
-- **card**: the `attention` variant, ringed in ember, for a card that waits on the user.
+- **card**: the `attention` variant, ringed in ember, for a card that waits on the user. The `off` variant, a dashed border with no fill, ring or shadow, for a factory step that's off.
 - **chart**: the inline-style lint waiver on the series style, the legend swatch drawn from a CSS variable, and tooltip numbers formatted in the `en` locale.
 - **collapsible**: the content's `muted` variant, a panel under a top border on a muted tint with padding, for an unfolded row's detail in a bordered row group.
 - **command**: the row and its shortcut take the selected styles from `data-[selected=true]`, not from the bare `data-selected` variant. cmdk writes `data-selected="false"` on every row it hasn't selected, and the bare variant matches the attribute's presence, so every row looked selected. The root's `popup` variant, a popover's shadow and ring, for the composer's skill menu, which floats over the transcript.

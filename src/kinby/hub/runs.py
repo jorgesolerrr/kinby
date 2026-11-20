@@ -282,8 +282,10 @@ class FactoryRuns:
         errors = _work_item_errors(factory.work_item, work_item)
         if errors:
             raise InvalidWorkItem(errors)
+        first = _next_on(factory)
+        assert first is not None, "The factory check refuses a factory whose every step is off."
         run, started = self._registry.open_run(
-            line.owner_id, line.factory, work_item, factory.steps[0].id, line.line_id, version
+            line.owner_id, line.factory, work_item, first.id, line.line_id, version
         )
         if started:
             self._publish(run)
@@ -1363,10 +1365,22 @@ def _step(factory: WorkbenchFactory, step_id: StepId) -> WorkbenchStep | None:
     return next((step for step in factory.steps if step.id == step_id), None)
 
 
+def _next_on(factory: WorkbenchFactory, after: WorkbenchStep | None = None) -> WorkbenchStep | None:
+    """The first step that's on past *after*, or the factory's first one that's on."""
+    start = 0 if after is None else factory.steps.index(after) + 1
+    return next((step for step in factory.steps[start:] if not step.off), None)
+
+
 def _first_at_work(factory: WorkbenchFactory) -> WorkbenchStep | None:
-    """The factory's first step that works in the run's folder, past any wait or approval."""
+    """The factory's first step that's on and works in the run's folder, past any wait or
+    approval."""
     return next(
-        (step for step in factory.steps if not isinstance(step, WaitStep | ApproveStep)), None
+        (
+            step
+            for step in factory.steps
+            if not step.off and not isinstance(step, WaitStep | ApproveStep)
+        ),
+        None,
     )
 
 
@@ -1439,9 +1453,11 @@ def _signal_field(signal: Signal, body: JsonValue, field: str) -> JsonValue:
 
 
 def _earlier(factory: WorkbenchFactory | None, step_id: StepId | None) -> list[StepId]:
-    """The ids of the steps before *step_id* in *factory*."""
-    ids = [step.id for step in factory.steps] if factory is not None else []
-    return ids[: ids.index(step_id)] if step_id in ids else []
+    """The ids of the steps that are on before *step_id* in *factory*."""
+    steps = factory.steps if factory is not None else ()
+    ids = [step.id for step in steps]
+    earlier = steps[: ids.index(step_id)] if step_id in ids else ()
+    return [step.id for step in earlier if not step.off]
 
 
 def _unmet(
@@ -1452,8 +1468,8 @@ def _unmet(
     A command step also requires each value its commands name, and a wait each named value of
     the workbench its filters name, since a filter naming a value the run never holds would park
     it for good. The lack is charged to the step that should have produced the value: the last
-    earlier step that declares it in its results. A false work item value or a named value of the
-    workbench has no such step, so the requiring step itself fails.
+    earlier step that's on and declares it in its results. A false work item value or a named
+    value of the workbench has no such step, so the requiring step itself fails.
     """
     declared = {value.name for value in factory.requires.values}
     filtered = (
@@ -1472,7 +1488,10 @@ def _unmet(
             f'Step "{step.id}" requires named value "{lacking}", which its workbench {holds}.',
         )
     earlier = factory.steps[: factory.steps.index(step)]
-    producer = next((before for before in reversed(earlier) if lacking in before.results), None)
+    producer = next(
+        (before for before in reversed(earlier) if not before.off and lacking in before.results),
+        None,
+    )
     if producer is None:
         return _Refused(
             step.id, f'Step "{step.id}" requires "{lacking}", which the work item carries as false.'
@@ -1510,8 +1529,7 @@ def _settled(
                 return _noted(result, reason, result.ending), FactoryRunStatus.NEEDS_HUMAN, step.id
             case SendBack(back=back):
                 return result, FactoryRunStatus.QUEUED, back
-            case "next" if step is not factory.steps[-1]:
-                following = factory.steps[factory.steps.index(step) + 1]
+            case "next" if (following := _next_on(factory, step)) is not None:
                 return result, FactoryRunStatus.QUEUED, following.id
             case "done" | "next":
                 result = _checked_done(factory, held, result)

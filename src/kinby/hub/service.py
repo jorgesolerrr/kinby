@@ -74,6 +74,8 @@ from kinby.contracts import (
     FACTORY_RUN_SUBSCRIBE,
     FACTORY_RUN_TAKEOVER_FINISH,
     FACTORY_RUN_TRANSCRIPT,
+    FACTORY_STEP_DELETE,
+    FACTORY_STEP_OFF_SET,
     FACTORY_STEP_SAVE,
     FACTORY_VERSION_DIFF,
     FACTORY_VERSION_LIST,
@@ -1066,6 +1068,8 @@ class Hub:
         dispatcher.register(FACTORY_REVERT, self.factories.revert)
         dispatcher.register(FACTORY_RESET, self.factories.reset)
         dispatcher.register(FACTORY_STEP_SAVE, self.factories.save_step)
+        dispatcher.register(FACTORY_STEP_OFF_SET, self.factories.set_step_off)
+        dispatcher.register(FACTORY_STEP_DELETE, self.factories.delete_step)
         dispatcher.register(FACTORY_REMOVE, self.remove_factory)
         dispatcher.register(FACTORY_RUN_LIST, self.runs.list)
         dispatcher.register(FACTORY_RUN_GET, self.runs.get)

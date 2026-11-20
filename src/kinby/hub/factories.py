@@ -6,7 +6,7 @@ import ast
 import asyncio
 import logging
 import shutil
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -24,6 +24,8 @@ from kinby.contracts import (
     FactoryResult,
     FactoryRevertCommand,
     FactorySource,
+    FactoryStepDeleteCommand,
+    FactoryStepOffSetCommand,
     FactoryStepSaveCommand,
     FactorySummary,
     FactoryVersionDiff,
@@ -35,16 +37,22 @@ from kinby.contracts import (
     GitCommit,
 )
 from kinby.core.errors import FactoryCheckFailed, FactoryNotFound, InvalidConfig, StaleWrite
-from kinby.factories.check import check_factory
+from kinby.factories.check import check_factory, off_dependents
 from kinby.factories.file import (
     FACTORY_FILE,
     VERSIONS_DIR,
     FactoryPath,
+    WorkbenchAgentStep,
     WorkbenchFactory,
     parse_factory_file,
     read_factory_file,
 )
-from kinby.factories.file_writes import StepNotDeclared, with_step
+from kinby.factories.file_writes import (
+    StepNotDeclared,
+    with_step,
+    with_step_off,
+    without_step,
+)
 from kinby.hub.factory_versions import FactoryVersions
 from kinby.instance.config_changes import files_hash
 from kinby.instance.layout import HOOKS_DIR, TOOLS_DIR
@@ -228,6 +236,50 @@ class FactoryStore:
             files[declared] = command.hook
         self._write(command.name, folder, files)
 
+    async def set_step_off(self, command: FactoryStepOffSetCommand) -> FactoryResult:
+        """Turn one step of the factory the client read off or on, if the check passes."""
+        async with self._edit_lock:
+            await asyncio.to_thread(self._set_step_off, command)
+        return await self.get(FactoryGetCommand(name=command.name))
+
+    def _set_step_off(self, command: FactoryStepOffSetCommand) -> None:
+        folder, _ = self._folder(command.name)
+        self._read_as(command.name, command.hash)
+        text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
+        try:
+            turned = with_step_off(text, command.step, off=command.off)
+        except StepNotDeclared as exc:
+            raise InvalidConfig({"step": str(exc)}) from None
+        try:
+            self._write(command.name, folder, {FACTORY_FILE: turned})
+        except FactoryCheckFailed as exc:
+            raise FactoryCheckFailed(exc.problems, _needing_off(turned)) from None
+
+    async def delete_step(self, command: FactoryStepDeleteCommand) -> FactoryResult:
+        """Delete one off step of the factory the client read, with its prompt file unless another
+        step uses it, if the check passes."""
+        async with self._edit_lock:
+            await asyncio.to_thread(self._delete_step, command)
+        return await self.get(FactoryGetCommand(name=command.name))
+
+    def _delete_step(self, command: FactoryStepDeleteCommand) -> None:
+        folder, _ = self._folder(command.name)
+        self._read_as(command.name, command.hash)
+        steps = read_factory_file(folder).steps
+        step = next((step for step in steps if step.id == command.step), None)
+        if step is None:
+            raise InvalidConfig({"step": f'The factory declares no step "{command.step}".'})
+        if not step.off:
+            raise InvalidConfig({"step": f'Step "{step.id}" is on. Turn it off to delete it.'})
+        prompts = [other.prompt for other in steps if isinstance(other, WorkbenchAgentStep)]
+        unused = (
+            [step.prompt]
+            if isinstance(step, WorkbenchAgentStep) and prompts.count(step.prompt) == 1
+            else []
+        )
+        text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
+        self._write(command.name, folder, {FACTORY_FILE: without_step(text, step.id)}, unused)
+
     def _read_as(self, name: FactoryName, read: FileHash | None) -> Path | None:
         """The factory's folder, or None for a factory no source has, unless it changed since the
         client read it as *read*."""
@@ -238,9 +290,15 @@ class FactoryStore:
             raise StaleWrite(f'Factory "{name}" changed since it was read. Read it again.')
         return folder
 
-    def _write(self, name: FactoryName, folder: Path | None, files: Mapping[str, str]) -> None:
-        """Write *files* over the factory in *folder*, or a new one, and keep them as a web
-        version if the check passes."""
+    def _write(
+        self,
+        name: FactoryName,
+        folder: Path | None,
+        files: Mapping[str, str],
+        removed: Iterable[str] = (),
+    ) -> None:
+        """Write *files* over the factory in *folder*, or a new one, without the files *removed*,
+        and keep them as a web version if the check passes."""
         with self._staging(name) as staged:
             if folder is None:
                 staged.mkdir()
@@ -250,6 +308,8 @@ class FactoryStore:
                 target = staged / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding="utf-8")
+            for path in removed:
+                (staged / path).unlink(missing_ok=True)
             self._save(staged, FactoryVersionSource.WEB)
 
     async def revert(self, command: FactoryRevertCommand) -> FactoryResult:
@@ -365,6 +425,14 @@ def _factory_files(folder: Path) -> dict[str, Path]:
         for path in sorted(folder.rglob("*"))
         if path.is_file() and "__pycache__" not in path.relative_to(folder).parts
     }
+
+
+def _needing_off(text: str) -> dict[str, str]:
+    """What each step that's on in the factory file *text* needs of an off step, by its id."""
+    needing: dict[str, list[str]] = {}
+    for step, problem in off_dependents(parse_factory_file(text)):
+        needing.setdefault(step, []).append(problem)
+    return {step: " ".join(problems) for step, problems in needing.items()}
 
 
 def _in_folder(field: str, path: str) -> None:

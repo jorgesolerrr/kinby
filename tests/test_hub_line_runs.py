@@ -434,6 +434,35 @@ def test_handing_in_the_work_item_of_a_run_that_needs_a_human_retries_its_step(t
     asyncio.run(scenario())
 
 
+def test_a_run_passes_over_each_off_step_to_the_next_one_that_is_on(tmp_path):
+    control = FakeControl()
+    runtime = FakeRuntime()
+    hub = _hub(tmp_path, control, runtime)
+    off = '  - { id: %s, kind: command, run: ["make %s"], off: true }\n'
+    write_factory(
+        tmp_path / "hub" / "factories" / "tickets",
+        {
+            "factory.yaml": TICKETS["factory.yaml"]
+            .replace("  - id: test\n", off % ("draft", "draft") + "  - id: test\n")
+            .replace("  - id: label\n", off % ("docs", "docs") + "  - id: label\n")
+            + off % ("tidy", "tidy")
+        },
+    )
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        await _home(hub)
+        line = await _line(client, runtime)
+
+        run = await _handed_in(client, line, 12)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert [attempt.step for attempt in done.attempts] == ["test", "label"]
+
+    asyncio.run(scenario())
+
+
 def test_a_line_takes_only_the_work_item_its_factory_declares(tmp_path):
     control = FakeControl()
     runtime = FakeRuntime()

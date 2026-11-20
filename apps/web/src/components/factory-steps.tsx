@@ -1,7 +1,18 @@
+import { cn } from "cn"
+import { CircleXIcon } from "lucide-react"
 import { useId, useState } from "react"
 
 import { StepEditor, type StepSaving } from "@/components/step-editor"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { type FactoryStep, routeText } from "@/lib/factory-steps"
 
 /** A route between two steps, by their places in the factory, `to` the earlier one. */
@@ -21,7 +32,7 @@ const RESUME_LANE = 8
 
 /** The factory's steps as a map, its routes back as arcs over the line and its resumed sessions
  * as dotted arcs under it, above a card for each step, which opens in place as its step editor.
- * `onSaved` runs once a save made a new version. */
+ * `onSaved` runs once a change made a new version. */
 export function FactorySteps({
   steps,
   saving,
@@ -34,17 +45,23 @@ export function FactorySteps({
   const prefix = useId()
   const cardId = (id: string) => `${prefix}${id}`
   const [open, setOpen] = useState<string>()
+  /** The step the hub refused to turn off or on, and what each step that keeps it needs of it. */
+  const [kept, setKept] = useState<{ step: string; needs: Record<string, string> }>()
+  const pick = (id: string) => {
+    setOpen(id)
+    document.getElementById(cardId(id))?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+  const changed = () => {
+    setKept(undefined)
+    onSaved()
+  }
   return (
     <div className="flex flex-col gap-4">
       <FactoryMap
         steps={steps}
         cardId={cardId}
-        onPick={(id) => {
-          setOpen(id)
-          document
-            .getElementById(cardId(id))
-            ?.scrollIntoView({ behavior: "smooth", block: "start" })
-        }}
+        blocking={Object.keys(kept?.needs ?? {})}
+        onPick={pick}
       />
       <ol aria-label="Steps" className="flex flex-col gap-3">
         {steps.map((step, place) => (
@@ -54,14 +71,21 @@ export function FactorySteps({
               open={open === step.id}
               onToggle={() => setOpen(open === step.id ? undefined : step.id)}
             >
+              {kept?.step === step.id && Object.keys(kept.needs).length > 0 && (
+                <KeptAlert step={step} needs={kept.needs} cardId={cardId} onPick={pick} />
+              )}
               <StepEditor
+                // A toggle leaves the card open, on the factory as it reads since.
+                key={String(step.off === true)}
                 step={step}
-                earlier={steps.slice(0, place)}
+                earlier={steps.slice(0, place).filter((each) => !each.off)}
                 saving={saving}
                 onSaved={() => {
                   setOpen(undefined)
-                  onSaved()
+                  changed()
                 }}
+                onTurned={changed}
+                onKept={(needs) => setKept({ step: step.id, needs })}
               />
             </StepCard>
           </li>
@@ -71,13 +95,59 @@ export function FactorySteps({
   )
 }
 
+/** Why the hub keeps `step` off or on: each step that needs it as it is, as a link to its card. */
+function KeptAlert({
+  step,
+  needs,
+  cardId,
+  onPick,
+}: {
+  step: FactoryStep
+  needs: Record<string, string>
+  cardId: (id: string) => string
+  onPick: (id: string) => void
+}) {
+  const blocking = Object.entries(needs)
+  return (
+    <Alert variant="destructive" className="mb-4">
+      <CircleXIcon />
+      <AlertTitle>
+        The factory check keeps {step.id} {step.off ? "off" : "on"}
+      </AlertTitle>
+      <AlertDescription>
+        <ul className="list-disc pl-4">
+          {blocking.map(([id, why]) => (
+            <li key={id}>
+              <a
+                href={`#${cardId(id)}`}
+                className="font-mono font-medium"
+                onClick={(event) => {
+                  event.preventDefault()
+                  onPick(id)
+                }}
+              >
+                {id}
+              </a>{" "}
+              {why}
+            </li>
+          ))}
+        </ul>
+        Change {blocking.length === 1 ? "that step" : "those steps"} first.
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 function FactoryMap({
   steps,
   cardId,
+  blocking,
   onPick,
 }: {
   steps: FactoryStep[]
   cardId: (id: string) => string
+  /** The steps that keep a step the user turned off or on as it is, whose nodes pulse. */
+  blocking: string[]
   onPick: (id: string) => void
 }) {
   const at = (id: string) => steps.findIndex((step) => step.id === id)
@@ -163,14 +233,25 @@ function FactoryMap({
               cy={line}
               r={NODE - 2}
               strokeWidth={3}
-              className="fill-background stroke-foreground group-hover:stroke-primary"
+              strokeDasharray={step.off ? "3 3" : undefined}
+              className={cn(
+                "group-hover:stroke-primary",
+                blocking.includes(step.id)
+                  ? "animate-pulse fill-destructive stroke-destructive"
+                  : step.off
+                    ? "fill-background stroke-muted-foreground"
+                    : "fill-background stroke-foreground",
+              )}
             />
             <text
               x={x(place)}
               y={below + 16}
               textAnchor="middle"
               fontSize={11}
-              className="fill-foreground font-mono"
+              className={cn(
+                "font-mono",
+                step.off ? "fill-muted-foreground line-through" : "fill-foreground",
+              )}
             >
               {step.id}
             </text>
@@ -247,10 +328,10 @@ function StepCard({
   children: React.ReactNode
 }) {
   return (
-    <Card size="sm">
+    <Card size="sm" variant={step.off ? "off" : "default"}>
       <CardHeader>
         <CardTitle>
-          <h3 className="font-mono">
+          <h3 className={cn("font-mono", step.off && "text-muted-foreground line-through")}>
             <button type="button" aria-expanded={open} onClick={onToggle}>
               {step.id}
             </button>
@@ -259,6 +340,11 @@ function StepCard({
         <CardDescription>
           {[step.kind, step.engine, step.model].filter(Boolean).join(" · ")}
         </CardDescription>
+        {step.off && (
+          <CardAction>
+            <Badge variant="outline">Off</Badge>
+          </CardAction>
+        )}
       </CardHeader>
       {open ? (
         <CardContent>{children}</CardContent>

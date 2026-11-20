@@ -39,6 +39,11 @@
           "title": "Kind",
           "type": "string"
         },
+        "off": {
+          "default": false,
+          "title": "Off",
+          "type": "boolean"
+        },
         "outcomes": {
           "additionalProperties": {
             "$ref": "#/$defs/Outcome"
@@ -595,6 +600,11 @@
           "title": "Kind",
           "type": "string"
         },
+        "off": {
+          "default": false,
+          "title": "Off",
+          "type": "boolean"
+        },
         "outcomes": {
           "additionalProperties": {
             "$ref": "#/$defs/Outcome"
@@ -747,6 +757,11 @@
           ],
           "default": null
         },
+        "off": {
+          "default": false,
+          "title": "Off",
+          "type": "boolean"
+        },
         "outcomes": {
           "additionalProperties": {
             "$ref": "#/$defs/Outcome"
@@ -873,6 +888,11 @@
           "title": "Kind",
           "type": "string"
         },
+        "off": {
+          "default": false,
+          "title": "Off",
+          "type": "boolean"
+        },
         "outcomes": {
           "additionalProperties": {
             "$ref": "#/$defs/Outcome"
@@ -980,6 +1000,11 @@
           "const": "command",
           "title": "Kind",
           "type": "string"
+        },
+        "off": {
+          "default": false,
+          "title": "Off",
+          "type": "boolean"
         },
         "outcomes": {
           "additionalProperties": {
