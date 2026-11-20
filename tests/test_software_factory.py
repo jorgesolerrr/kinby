@@ -16,12 +16,11 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-import yaml
 
 from kinby.contracts import (
     FACTORY_CHECK,
-    FACTORY_EDIT,
     FACTORY_GET,
+    FACTORY_STEP_OFF_SET,
     LINE_HAND_IN,
     LINE_SETUP,
     LINE_SETUP_DESCRIBE,
@@ -32,13 +31,13 @@ from kinby.contracts import (
     CommandStepRun,
     FactoryCheckCommand,
     FactoryCheckResult,
-    FactoryEditCommand,
     FactoryGetCommand,
     FactoryResult,
     FactoryRun,
     FactoryRunDetail,
     FactoryRunOrigin,
     FactoryRunStatus,
+    FactoryStepOffSetCommand,
     IntakeRunCommand,
     Line,
     LineHandInCommand,
@@ -58,6 +57,7 @@ from kinby.contracts import (
 )
 from kinby.core.run_worktrees import cut_run_worktree
 from kinby.factories import SHIPPED_FACTORIES
+from kinby.factories.file import read_factory_file
 from kinby.hub import Hub
 from kinby.workbench import WorkbenchSteps
 from tests.test_contract_server import served as instance_served
@@ -827,16 +827,11 @@ def test_an_implement_with_no_change_ends_the_run_cancelled_and_makes_the_ended_
     asyncio.run(scenario())
 
 
-def with_review(factory: str) -> str:
-    """The software factory's file with its review step uncommented."""
-    return re.sub(r"(?m)^  # (?=- |  )", "  ", factory)
+def test_every_step_says_what_it_does_and_review_is_off():
+    steps = read_factory_file(FACTORY).steps
 
-
-def test_every_step_says_what_it_does_review_too():
-    declared = yaml.safe_load(with_review((FACTORY / "factory.yaml").read_text(encoding="utf-8")))
-
-    assert [step["id"] for step in declared["steps"] if not step.get("description")] == []
-    assert "review" in [step["id"] for step in declared["steps"]]
+    assert [step.id for step in steps if not step.description] == []
+    assert [step.id for step in steps if step.off] == ["review"]
 
 
 def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implementers_session(
@@ -867,12 +862,8 @@ def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implemen
         shipped = await client.call(FACTORY_GET, FactoryGetCommand(name="software"))
         assert isinstance(shipped, FactoryResult)
         edited = await client.call(
-            FACTORY_EDIT,
-            FactoryEditCommand(
-                name="software",
-                files={"factory.yaml": with_review(shipped.files["factory.yaml"])},
-                hash=shipped.hash,
-            ),
+            FACTORY_STEP_OFF_SET,
+            FactoryStepOffSetCommand(name="software", step="review", off=False, hash=shipped.hash),
         )
         assert isinstance(edited, FactoryResult), edited
         line = await software_line(hub, runtime)

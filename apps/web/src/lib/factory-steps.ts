@@ -7,6 +7,7 @@ export type FactoryStep = {
   id: string
   kind: string
   description?: string | null
+  off?: boolean
   engine?: string
   model?: string | null
   effort?: string | null

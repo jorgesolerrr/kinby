@@ -184,7 +184,9 @@ class ErrorEnvelope(ContractModel):
     retryable: bool
     #: What is wrong with each value the client sent, by field name. INVALID_SETUP fills it, and
     #: so does INVALID_ARGUMENT for a config write, and for a payload the contract refuses, by the
-    #: dotted path of the value, such as ``server.entry.stdio.command``.
+    #: dotted path of the value, such as ``server.entry.stdio.command``. A factory check that
+    #: refused turning a step off or on fills it with what each step that's on needs of an off
+    #: step, by the step's id.
     fields: dict[str, str] = Field(default_factory=dict)
 
     @property
@@ -3242,6 +3244,27 @@ class FactoryStepSaveCommand(ContractModel):
     #: The text of the file that declares the step's check, or a code step's tool. None leaves the
     #: file as it is.
     hook: str | None = None
+    #: The hash the client read.
+    hash: FileHash
+
+
+class FactoryStepOffSetCommand(ContractModel):
+    """Turn one step of a factory off, so its runs pass over it, or back on, as one version. The
+    check refuses turning off a step another step that's on needs."""
+
+    name: FactoryName
+    step: StepId
+    off: bool
+    #: The hash the client read.
+    hash: FileHash
+
+
+class FactoryStepDeleteCommand(ContractModel):
+    """Delete one off step of a factory, as one version, with its prompt file unless another step
+    uses it."""
+
+    name: FactoryName
+    step: StepId
     #: The hash the client read.
     hash: FileHash
 

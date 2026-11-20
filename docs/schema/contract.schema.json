@@ -2966,6 +2966,54 @@
       "title": "FactorySource",
       "type": "string"
     },
+    "FactoryStepDeleteCommand": {
+      "additionalProperties": false,
+      "description": "Delete one off step of a factory, as one version, with its prompt file unless another step\nuses it.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "name",
+        "step",
+        "hash"
+      ],
+      "title": "FactoryStepDeleteCommand",
+      "type": "object"
+    },
+    "FactoryStepOffSetCommand": {
+      "additionalProperties": false,
+      "description": "Turn one step of a factory off, so its runs pass over it, or back on, as one version. The\ncheck refuses turning off a step another step that's on needs.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "off": {
+          "type": "boolean"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "name",
+        "step",
+        "off",
+        "hash"
+      ],
+      "title": "FactoryStepOffSetCommand",
+      "type": "object"
+    },
     "FactoryStepSaveCommand": {
       "additionalProperties": false,
       "description": "Save one step of a factory, its prompt and its hook, as one version. The hub keeps the rest\nof the factory file as it was, comments included, and keeps the save only if the check passes.",
@@ -15323,6 +15371,38 @@
           ],
           "type": "object"
         },
+        "factory.step.delete": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryStepDeleteCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "factory.step.off.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryStepOffSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.step.save": {
           "additionalProperties": false,
           "properties": {
@@ -17842,6 +17922,8 @@
         "factory.revert",
         "factory.reset",
         "factory.step.save",
+        "factory.step.off.set",
+        "factory.step.delete",
         "factory.run.list",
         "factory.run.get",
         "factory.run.transcript",

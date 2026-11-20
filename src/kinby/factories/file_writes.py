@@ -34,6 +34,23 @@ def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
     return "".join(old[: before.start] + new[after.start : after.stop] + old[before.stop :])
 
 
+def with_step_off(text: str, step_id: str, *, off: bool) -> str:
+    """The factory file *text* with the step *step_id* off, or on, which a step is unless it says
+    otherwise. Each line outside that step stays as it was."""
+    document = _yaml().load(text)
+    entry = dict(document["steps"][_place(document, step_id)])
+    entry.pop("off", None)
+    return with_step(text, entry | {"off": True} if off else entry)
+
+
+def without_step(text: str, step_id: str) -> str:
+    """The factory file *text* without the step *step_id*, and the comments that follow it."""
+    document = _yaml().load(text)
+    old = text.splitlines(keepends=True)
+    gone = _lines(document, _place(document, step_id), len(old))
+    return "".join(old[: gone.start] + old[gone.stop :])
+
+
 def _yaml() -> YAML:
     yaml = YAML()
     yaml.indent(mapping=2, sequence=4, offset=2)

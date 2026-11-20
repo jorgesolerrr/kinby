@@ -19,7 +19,7 @@ from kinby.contracts import (
     StepId,
 )
 from kinby.core.errors import FactoryVersionNotFound
-from kinby.factories.file import FACTORY_FILE
+from kinby.factories.file import FACTORY_FILE, FactoryLoader
 
 _SOURCE = "Source:"
 _STEPS = "Steps:"
@@ -175,5 +175,5 @@ def _changed_steps(before: str | None, after: str, paths: set[str]) -> list[Step
 
 
 def _steps(text: str | None) -> dict[StepId, dict[str, object]]:
-    declared = {} if text is None else yaml.safe_load(text)
+    declared = {} if text is None else yaml.load(text, Loader=FactoryLoader)
     return {step["id"]: step for step in declared.get("steps", [])}

@@ -279,8 +279,10 @@ class FactoryRuns:
         errors = _work_item_errors(factory.work_item, work_item)
         if errors:
             raise InvalidWorkItem(errors)
+        first = _next_on(factory)
+        assert first is not None, "The factory check refuses a factory whose every step is off."
         run, started = self._registry.open_run(
-            line.owner_id, line.factory, work_item, factory.steps[0].id, line.line_id
+            line.owner_id, line.factory, work_item, first.id, line.line_id
         )
         if started:
             self._publish(run)
@@ -1334,10 +1336,22 @@ def _step(factory: WorkbenchFactory, step_id: StepId) -> WorkbenchStep | None:
     return next((step for step in factory.steps if step.id == step_id), None)
 
 
+def _next_on(factory: WorkbenchFactory, after: WorkbenchStep | None = None) -> WorkbenchStep | None:
+    """The first step that's on past *after*, or the factory's first one that's on."""
+    start = 0 if after is None else factory.steps.index(after) + 1
+    return next((step for step in factory.steps[start:] if not step.off), None)
+
+
 def _first_at_work(factory: WorkbenchFactory) -> WorkbenchStep | None:
-    """The factory's first step that works in the run's folder, past any wait or approval."""
+    """The factory's first step that's on and works in the run's folder, past any wait or
+    approval."""
     return next(
-        (step for step in factory.steps if not isinstance(step, WaitStep | ApproveStep)), None
+        (
+            step
+            for step in factory.steps
+            if not step.off and not isinstance(step, WaitStep | ApproveStep)
+        ),
+        None,
     )
 
 
@@ -1410,9 +1424,11 @@ def _signal_field(signal: Signal, body: JsonValue, field: str) -> JsonValue:
 
 
 def _earlier(factory: WorkbenchFactory | None, step_id: StepId | None) -> list[StepId]:
-    """The ids of the steps before *step_id* in *factory*."""
-    ids = [step.id for step in factory.steps] if factory is not None else []
-    return ids[: ids.index(step_id)] if step_id in ids else []
+    """The ids of the steps that are on before *step_id* in *factory*."""
+    steps = factory.steps if factory is not None else ()
+    ids = [step.id for step in steps]
+    earlier = steps[: ids.index(step_id)] if step_id in ids else ()
+    return [step.id for step in earlier if not step.off]
 
 
 def _unmet(
@@ -1481,8 +1497,7 @@ def _settled(
                 return _noted(result, reason, result.ending), FactoryRunStatus.NEEDS_HUMAN, step.id
             case SendBack(back=back):
                 return result, FactoryRunStatus.QUEUED, back
-            case "next" if step is not factory.steps[-1]:
-                following = factory.steps[factory.steps.index(step) + 1]
+            case "next" if (following := _next_on(factory, step)) is not None:
                 return result, FactoryRunStatus.QUEUED, following.id
             case "done" | "next":
                 result = _checked_done(factory, held, result)

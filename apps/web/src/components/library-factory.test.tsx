@@ -193,9 +193,6 @@ steps:
   })
 })
 
-/** The shipped software factory's file with its review step uncommented, as its own tests do. */
-const withReview = software.replace(/^ {2}# (?=- | {2})/gm, "  ")
-
 async function openMap(file = software, more: Answers = {}) {
   const { caller, user } = openPage(file, versions, more)
   await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
@@ -211,14 +208,16 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
 
     const arcs = within(map).getByLabelText("Routes back")
     expect(Array.from(arcs.querySelectorAll("text"), (label) => label.textContent)).toEqual([
-      "failed ×2",
+      "changes ×2",
       "waiting ×30",
+      "failed ×2",
       "feedback ×3",
       "checks-failed ×2",
     ])
     expect(Array.from(arcs.querySelectorAll("path"), (arc) => arc.textContent)).toEqual([
-      "checks: failed → back to fix, up to 2 times",
+      "review: changes → back to fix, up to 2 times",
       "assess: waiting → back to babysit, up to 30 times",
+      "checks: failed → back to fix, up to 2 times",
       "assess: feedback → back to answer, up to 3 times",
       "assess: checks-failed → back to answer, up to 2 times",
     ])
@@ -235,7 +234,7 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
   })
 
   it("keeps apart the labels of review's route and checks' failed route to fix", async () => {
-    const { map } = await openMap(withReview)
+    const { map } = await openMap()
 
     expect(Math.abs(height(map, "changes ×2") - height(map, "failed ×2"))).toBeGreaterThanOrEqual(
       16,
@@ -268,6 +267,7 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
       "implement",
       "answer",
       "fix",
+      "review",
       "checks",
       "publish",
       "babysit",
@@ -294,7 +294,7 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
 
     await user.click(within(map).getByRole("link", { name: "babysit" }))
 
-    const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[7]
+    const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[8]
     expect(scrolled.mock.contexts).toEqual([babysit])
   })
 })
@@ -441,5 +441,111 @@ describe("LibraryPage, a step's editor", () => {
       await editor.findByText(/Step "checks" sends its failures back to "publish"/),
     ).toBeTruthy()
     expect((retry as HTMLInputElement).value).toBe("3")
+  })
+})
+
+const changed = (name: string) => ({
+  name,
+  source: "hub" as const,
+  files: { "factory.yaml": software },
+  hash: "h-3",
+  version: commit,
+  declared_in: {},
+})
+
+describe("LibraryPage, an off step", () => {
+  it("is a dashed node and a dashed card, its name struck through, with an Off badge", async () => {
+    const { map } = await openMap()
+
+    const node = within(map).getByRole("link", { name: "review" }).querySelector("circle")
+    expect(node?.getAttribute("stroke-dasharray")).toBeTruthy()
+    const onNode = within(map).getByRole("link", { name: "fix" }).querySelector("circle")
+    expect(onNode?.getAttribute("stroke-dasharray")).toBeNull()
+    expect(card("review").querySelector("[data-slot=card]")?.getAttribute("data-variant")).toBe(
+      "off",
+    )
+    expect(within(card("review")).getByRole("heading").className).toContain("line-through")
+    expect(within(card("review")).getByText("Off")).toBeTruthy()
+    expect(within(card("fix")).queryByText("Off")).toBeNull()
+  })
+
+  it("turns a step off against the hash it read", async () => {
+    const { caller, user, editor } = await openStep("checks", {
+      "factory.step.off.set": ({ name }) => changed(name),
+    })
+
+    await user.click(editor.getByRole("switch", { name: "On" }))
+
+    await waitFor(() =>
+      expect(caller.calls.find((call) => call.method === "factory.step.off.set")?.params).toEqual({
+        name: "software",
+        hash: "h-2",
+        step: "checks",
+        off: true,
+      }),
+    )
+  })
+
+  it("turns an off step back on", async () => {
+    const { caller, user, editor } = await openStep("review", {
+      "factory.step.off.set": ({ name }) => changed(name),
+    })
+
+    await user.click(editor.getByRole("switch", { name: "On" }))
+
+    await waitFor(() =>
+      expect(
+        caller.calls.find((call) => call.method === "factory.step.off.set")?.params,
+      ).toMatchObject({ step: "review", off: false }),
+    )
+  })
+
+  it("offers Delete only on an off step", async () => {
+    const { caller, user, editor } = await openStep("review", {
+      "factory.step.delete": ({ name }) => changed(name),
+    })
+
+    await user.click(editor.getByRole("button", { name: "Delete" }))
+
+    await waitFor(() =>
+      expect(caller.calls.find((call) => call.method === "factory.step.delete")?.params).toEqual({
+        name: "software",
+        hash: "h-2",
+        step: "review",
+      }),
+    )
+    await user.click(within(card("fix")).getByRole("button", { name: "fix" }))
+    const fix = await within(card("fix")).findByRole("form", { name: "fix" })
+    expect(within(fix).queryByRole("button", { name: "Delete" })).toBeNull()
+  })
+
+  it("names each step that keeps a refused step on as a link, and pulses its node", async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const { user, map, editor } = await openStep("fix", {
+      "factory.step.off.set": () => {
+        throw new CallError({
+          code: "INVALID_ARGUMENT",
+          message: "The factory check failed, so nothing changed.",
+          retryable: false,
+          fields: {
+            review: 'sends work back to "fix", which is off.',
+            checks: 'sends work back to "fix", which is off.',
+          },
+        })
+      },
+    })
+
+    await user.click(editor.getByRole("switch", { name: "On" }))
+
+    const alert = await within(card("fix")).findByRole("alert")
+    expect(within(alert).getByText("The factory check keeps fix on")).toBeTruthy()
+    expect(alert.textContent).toContain('checks sends work back to "fix", which is off.')
+    const pulsing = (id: string) =>
+      within(map).getByRole("link", { name: id }).querySelector("circle")?.getAttribute("class")
+    expect(pulsing("checks")).toContain("animate-pulse")
+    expect(pulsing("review")).toContain("animate-pulse")
+    expect(pulsing("answer")).not.toContain("animate-pulse")
+    await user.click(within(alert).getByRole("link", { name: "checks" }))
+    expect(await within(card("checks")).findByRole("form", { name: "checks" })).toBeTruthy()
   })
 })

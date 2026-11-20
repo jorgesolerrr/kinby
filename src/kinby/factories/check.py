@@ -3,6 +3,7 @@
 It validates the factory file against its schema and what it requires of a workbench, resolves
 every image recipe, prompt, tool and check the file names, its run calls' among them, and checks
 that each step's inputs come from an earlier step, the work item or the workbench's named values.
+It treats an off step as missing for the steps that are on.
 It runs the folder's tool and hook files to learn their names, as a workbench does, and holds the
 steps to what the factory requires of the workbench.
 """
@@ -20,7 +21,9 @@ from kinby.contracts import (
     SetupFieldKind,
     SetupFieldType,
     SignalAuth,
+    StepId,
     SubscriptionLogin,
+    ValueName,
 )
 from kinby.factories import ships_recipe
 from kinby.factories.file import (
@@ -80,7 +83,46 @@ def check_factory(folder: Path) -> tuple[str, ...]:
         *_clashes(factory),
         *_order(factory),
         *_resumes(factory),
+        *(f'Step "{step}" {problem}' for step, problem in off_dependents(factory)),
+        *_all_off(factory),
     )
+
+
+def off_dependents(factory: WorkbenchFactory) -> Iterator[tuple[StepId, str]]:
+    """Each step that's on and needs a step that's off, with what it needs: a session it resumes,
+    a step it sends work back to, or a value only an off step records."""
+    off = {step.id for step in factory.steps if step.off}
+    held = set(factory.work_item) | {value.name for value in factory.requires.values}
+    if factory.worktree is not None:
+        held |= {BRANCH, BASE}
+    recorded_off: dict[ValueName, StepId] = {}
+    for step in factory.steps:
+        if step.off:
+            recorded_off |= dict.fromkeys(step.results, step.id)
+            continue
+        if isinstance(step, WorkbenchAgentStep) and step.resume in off:
+            yield step.id, f'resumes "{step.resume}", which is off.'
+        for outcome in (*step.outcomes.values(), step.failed):
+            if isinstance(outcome, SendBack) and outcome.back in off:
+                yield step.id, f'sends work back to "{outcome.back}", which is off.'
+        filters = step.signal if isinstance(step, WaitStep) else ()
+        taken = (
+            *step.requires,
+            *(run_value_name(expected) for fields in filters for expected in fields.values()),
+            *run_value_names(step),
+        )
+        for value in dict.fromkeys(taken):
+            if value is not None and value not in held and value in recorded_off:
+                yield (
+                    step.id,
+                    f'takes "{value}", which only off step "{recorded_off[value]}" records.',
+                )
+        held.update(step.results)
+
+
+def _all_off(factory: WorkbenchFactory) -> Iterator[str]:
+    if all(step.off for step in factory.steps):
+        yield "Every step is off, so a run has no step to take."
 
 
 def _folder(folder: Path) -> _Folder:

@@ -83,10 +83,21 @@ class FactoryCheckFailed(CoreError):
 
     code = ErrorCode.INVALID_ARGUMENT
 
-    def __init__(self, problems: tuple[str, ...]) -> None:
+    def __init__(
+        self, problems: tuple[str, ...], needing_off: dict[str, str] | None = None
+    ) -> None:
         super().__init__(
             "The factory check failed, so nothing changed:\n"
             + "\n".join(f"- {problem}" for problem in problems)
+        )
+        self.problems = problems
+        #: What each step that's on needs of an off step, by the step's id, for a step turned off
+        #: or on.
+        self.needing_off = needing_off or {}
+
+    def envelope(self) -> ErrorEnvelope:
+        return ErrorEnvelope(
+            code=self.code, message=str(self), retryable=self.retryable, fields=self.needing_off
         )
 
 
