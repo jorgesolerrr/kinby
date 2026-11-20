@@ -197,3 +197,64 @@ def test_a_factory_names_the_file_that_declares_each_check_and_tool(tmp_path):
         }
 
     asyncio.run(scenario())
+
+
+def test_a_step_save_fills_a_mapping_the_step_declares_empty(tmp_path):
+    hub = factory_hub(tmp_path)
+    declared = FACTORY.replace(
+        '    run: ["uv run pytest"]\n', '    run: ["uv run pytest"]\n    outcomes: {}\n'
+    )
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES | {"factory.yaml": declared})
+    client = hub_client(hub)
+    checks = {
+        "id": "checks",
+        "kind": "command",
+        "run": ["uv run pytest"],
+        "requires": ["branch"],
+        "outcomes": {"passed": "next"},
+        "description": "Runs the tests.",
+    }
+
+    async def scenario() -> None:
+        before = await read(client)
+        saved = await save(
+            client, FactoryStepSaveCommand(name="tickets", step=checks, hash=before.hash)
+        )
+
+        assert isinstance(saved, FactoryResult)
+        assert saved.files["factory.yaml"] == declared.replace(
+            "    outcomes: {}\n",
+            "    outcomes:\n      passed: next\n    description: Runs the tests.\n",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_step_save_keeps_steps_written_as_an_indentless_sequence(tmp_path):
+    hub = factory_hub(tmp_path)
+    head, steps = FACTORY.split("steps:\n")
+    body, tail = steps.split("done_requires:")
+    indentless = (
+        (head + "steps:\n" + "".join(line[2:] for line in body.splitlines(keepends=True)))
+        + "done_requires:"
+        + tail
+    )
+    write_factory(tmp_path / "hub" / "factories" / "tickets", FILES | {"factory.yaml": indentless})
+    client = hub_client(hub)
+
+    async def scenario() -> None:
+        before = await read(client)
+        saved = await save(
+            client,
+            FactoryStepSaveCommand(
+                name="tickets", step=REVIEW | {"timeout": "15m"}, hash=before.hash
+            ),
+        )
+
+        assert isinstance(saved, FactoryResult)
+        assert saved.files["factory.yaml"] == indentless.replace(
+            "  outcomes: { clean: next, changes: { back: implement, max: 3 } }\n",
+            "  timeout: 15m\n  outcomes: {clean: next, changes: {back: implement, max: 3}}\n",
+        )
+
+    asyncio.run(scenario())

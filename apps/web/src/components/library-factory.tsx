@@ -6,6 +6,7 @@ import { Failure } from "@/components/config-alerts"
 import { FactoryHistory } from "@/components/factory-history"
 import { FactorySteps } from "@/components/factory-steps"
 import type { FactoryStep } from "@/lib/factory-steps"
+import { Badge } from "@/components/ui/badge"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
@@ -19,7 +20,8 @@ interface FactoryFile {
 
 /**
  * A factory unfolded: its steps, its `factory.yaml` and its other files, read-only, and its
- * History, where it reverts to an earlier version.
+ * History, where it reverts to an earlier version. A shipped factory the user changed shows that
+ * it differs from kinby's, and whether kinby's update waits for the user.
  */
 export function FactoryEntry({
   client,
@@ -43,7 +45,13 @@ export function FactoryEntry({
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-4">
-        <h2 className="text-base font-semibold">What it&apos;s made of</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-base font-semibold">What it&apos;s made of</h2>
+          {opened?.result.differs_from_shipped && (
+            <Badge variant="secondary">Differs from shipped</Badge>
+          )}
+          {opened?.result.shipped_update_waiting && <Badge>Update waiting</Badge>}
+        </div>
         {opened === undefined ? (
           failure === undefined ? (
             <Skeleton className="h-72 w-full" />
@@ -68,7 +76,13 @@ export function FactoryEntry({
           </>
         )}
       </section>
-      <FactoryHistory client={client} clock={clock} name={name} onReverted={readAgain} />
+      <FactoryHistory
+        client={client}
+        clock={clock}
+        name={name}
+        current={opened?.result.version}
+        onReverted={readAgain}
+      />
     </div>
   )
 }

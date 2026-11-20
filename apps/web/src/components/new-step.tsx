@@ -40,6 +40,8 @@ export function NewStep({
   onAdded: (id: string) => void
   onCancel: () => void
 }) {
+  // As the card opened, so an add is refused once the factory changed since.
+  const [factory] = useState(saving.factory)
   const [kind, setKind] = useState("agent")
   const [id, setId] = useState("")
   const [description, setDescription] = useState("")
@@ -77,8 +79,8 @@ export function NewStep({
     setNotYaml(undefined)
     void ask(async () => {
       await saving.client.call("factory.step.add", {
-        name: saving.factory.name,
-        hash: saving.factory.hash,
+        name: factory.name,
+        hash: factory.hash,
         after,
         step,
         prompt: kind === "agent" ? prompt : null,

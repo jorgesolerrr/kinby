@@ -165,8 +165,14 @@ def shifted(factory: str, by: int) -> str:
     return head + "steps:\n" + "".join(moved) + "done_requires:" + tail
 
 
-@pytest.mark.parametrize("by", [-2, 2])
-def test_an_added_step_takes_the_indentation_of_the_steps_around_it(tmp_path, by):
+@pytest.mark.parametrize(
+    ("by", "entry"),
+    [
+        (-2, "- id: tidy\n  kind: command\n  run:\n  - make tidy\n"),
+        (2, "    - id: tidy\n      kind: command\n      run:\n          - make tidy\n"),
+    ],
+)
+def test_an_added_step_takes_the_indentation_of_the_steps_around_it(tmp_path, by, entry):
     hub = factory_hub(tmp_path)
     write_factory(
         tmp_path / "hub" / "factories" / "tickets", FILES | {"factory.yaml": shifted(FACTORY, by)}
@@ -178,12 +184,7 @@ def test_an_added_step_takes_the_indentation_of_the_steps_around_it(tmp_path, by
         added = await add(client, "implement", tidy)
 
         assert isinstance(added, FactoryResult), added
-        assert added.files["factory.yaml"] == shifted(
-            FACTORY.replace(
-                "  - id: review\n",
-                "  - id: tidy\n    kind: command\n    run:\n      - make tidy\n  - id: review\n",
-            ),
-            by,
-        )
+        review = " " * (2 + by) + "- id: review\n"
+        assert added.files["factory.yaml"] == shifted(FACTORY, by).replace(review, entry + review)
 
     asyncio.run(scenario())

@@ -29,6 +29,7 @@ export type TargetFile = "kinby.toml";
 export type SetupFieldType = "text" | "multiline" | "boolean" | "integer" | "choice" | "email" | "url";
 export type ConfigActor = "app" | "agent" | "failure_policy";
 export type FactoryName = string;
+export type StepId = string;
 /**
  * Where the factory the hub serves under a name comes from.
  */
@@ -42,7 +43,6 @@ export type FactoryChangeOperation = "step_save" | "step_add" | "step_off_set";
  * Where a factory run stands.
  */
 export type FactoryRunStatus = "running" | "queued" | "parked" | "needs-human" | "done" | "cancelled";
-export type StepId = string;
 export type StepValue = boolean | number | string;
 /**
  * How one attempt at a step ended.
@@ -54,7 +54,7 @@ export type ViewId = string;
 /**
  * Where a factory version came from.
  */
-export type FactoryVersionSource = "web" | "chat" | "by_hand" | "revert" | "shipped";
+export type FactoryVersionSource = "web" | "chat" | "by_hand" | "revert" | "shipped" | "shipped_update";
 export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -450,6 +450,10 @@ export interface Contract {
     };
     "factory.step.off.set": {
       command: FactoryStepOffSetCommand;
+      result: FactoryResult;
+    };
+    "factory.step.reset": {
+      command: FactoryStepResetCommand;
       result: FactoryResult;
     };
     "factory.step.save": {
@@ -1495,11 +1499,14 @@ export interface FactoryResult {
   declared_in: {
     [k: string]: string;
   };
+  differing_steps: StepId[];
+  differs_from_shipped: boolean;
   files: {
     [k: string]: string;
   };
   hash: string;
   name: FactoryName;
+  shipped_update_waiting: boolean;
   source: FactorySource;
   version: GitCommit | null;
 }
@@ -1588,6 +1595,7 @@ export interface FactoryRun {
   status: FactoryRunStatus;
   step: StepId | null;
   updated_at: string;
+  version?: GitCommit | null;
   wakes_at?: string | null;
   work_item: {
     [k: string]: StepValue;
@@ -1631,6 +1639,7 @@ export interface StepAttempt {
   values: {
     [k: string]: StepValue;
   };
+  version?: GitCommit | null;
   views?: ViewId[];
 }
 /**
@@ -1791,6 +1800,15 @@ export interface FactoryStepOffSetCommand {
   hash: string;
   name: FactoryName;
   off: boolean;
+  step: StepId;
+}
+/**
+ * Make one step of the hub's copy of a shipped factory kinby's version of it, its entry and its
+ * prompt, as one version, if the check passes.
+ */
+export interface FactoryStepResetCommand {
+  hash: string;
+  name: FactoryName;
   step: StepId;
 }
 /**
@@ -3506,6 +3524,7 @@ export interface StepRunCommand {
     [k: string]: StepValue;
   };
   step: AgentStepRun | ClientStepRun | CommandStepRun | CodeStepRun;
+  version?: GitCommit | null;
   work_item: {
     [k: string]: StepValue;
   };

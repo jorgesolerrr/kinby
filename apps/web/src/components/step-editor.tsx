@@ -40,7 +40,7 @@ const DEFAULT = "default"
 /** A step's card opened as its step editor: what it does, how it runs, where its failures and
  * outcomes send the run, its prompt and its hook. */
 export function StepEditor({
-  step,
+  step: shown,
   earlier,
   saving,
   onSaved,
@@ -51,7 +51,7 @@ export function StepEditor({
   /** The steps that are on before this one. */
   earlier: FactoryStep[]
   saving: StepSaving
-  /** Runs once a save or a delete made a new version. */
+  /** Runs once a save, a delete or taking kinby's step made a new version. */
   onSaved: () => void
   /** Runs once turning the step off or on made a new version. */
   onTurned: () => void
@@ -59,7 +59,9 @@ export function StepEditor({
    * it is needs of it, by the step's id. */
   onKept: (needs: Record<string, string>) => void
 }) {
-  const { files, declared_in: declaredIn } = saving.factory
+  // As the card opened, so a save from this draft is refused once the factory changed since.
+  const [{ step, factory }] = useState({ step: shown, factory: saving.factory })
+  const { files, declared_in: declaredIn } = factory
   const hook = step.check ?? step.call
   const hookPath = hook == null ? undefined : declaredIn[hook]
   const promptText = step.prompt === undefined ? undefined : (files[step.prompt] ?? "")
@@ -106,8 +108,8 @@ export function StepEditor({
     setNotYaml(undefined)
     void ask(async () => {
       await saving.client.call("factory.step.save", {
-        name: saving.factory.name,
-        hash: saving.factory.hash,
+        name: factory.name,
+        hash: factory.hash,
         step: saved,
         prompt: prompt === promptText ? null : prompt,
         hook: hookDraft === hookText ? null : hookDraft,
@@ -115,7 +117,7 @@ export function StepEditor({
       onSaved()
     })
   }
-  const read = { name: saving.factory.name, hash: saving.factory.hash, step: step.id }
+  const read = { name: factory.name, hash: factory.hash, step: step.id }
   const turn = (on: boolean) =>
     void turning.ask(async () => {
       try {
@@ -129,6 +131,11 @@ export function StepEditor({
   const remove = () =>
     void ask(async () => {
       await saving.client.call("factory.step.delete", read)
+      onSaved()
+    })
+  const takeKinbys = () =>
+    void ask(async () => {
+      await saving.client.call("factory.step.reset", read)
       onSaved()
     })
   const routes = [
@@ -160,7 +167,8 @@ export function StepEditor({
           aria-label="On"
           className="mt-8"
           checked={step.off !== true}
-          disabled={turning.busy}
+          // A toggle reads the factory again, which would drop unsaved edits.
+          disabled={dirty || turning.busy}
           onCheckedChange={turn}
         />
       </div>
@@ -283,6 +291,11 @@ export function StepEditor({
             <Button type="button" variant="ghost" disabled={busy} onClick={remove}>
               <Trash2Icon data-icon="inline-start" />
               Delete
+            </Button>
+          )}
+          {factory.differing_steps.includes(step.id) && (
+            <Button type="button" variant="outline" disabled={busy} onClick={takeKinbys}>
+              Take kinby&apos;s
             </Button>
           )}
           <Button type="button" variant="ghost" disabled={!dirty || busy} onClick={discard}>

@@ -22,16 +22,42 @@ class StepNotDeclared(LookupError):
 def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
     """The factory file *text* with the step of the entry's id declared as *entry*. Each line
     outside that step stays as it was."""
-    document = _yaml().load(text)
+    yaml = _yaml()
+    document = yaml.load(text)
     at = _place(document, entry.get("id"))
     old = text.splitlines(keepends=True)
     before = _lines(document, at, len(old))
+    line, column = document["steps"].lc.item(at)
+    # Written as the file writes its steps, so the spliced step lines up with the others.
+    yaml.indent(mapping=2, sequence=column, offset=old[line].index("-"))
     _merge(document["steps"][at], entry)
     dumped = io.StringIO()
-    _yaml().dump(document, dumped)
+    yaml.dump(document, dumped)
     new = dumped.getvalue().splitlines(keepends=True)
-    after = _lines(_yaml().load(dumped.getvalue()), at, len(new))
+    after = _lines(yaml.load(dumped.getvalue()), at, len(new))
     return "".join(old[: before.start] + new[after.start : after.stop] + old[before.stop :])
+
+
+def with_step_from(text: str, other: str, step_id: str) -> str:
+    """The factory file *text* with the step *step_id* declared in the lines the factory file
+    *other* declares it in, moved to the column *text* writes its steps at. Each line outside that
+    step stays as it was."""
+    document, source = _yaml().load(text), _yaml().load(other)
+    old, new = text.splitlines(keepends=True), other.splitlines(keepends=True)
+    here = _lines(document, _place(document, step_id), len(old))
+    there = _lines(source, _place(source, step_id), len(new))
+    shift = old[here.start].index("-") - new[there.start].index("-")
+    moved = [_shifted(line, shift) for line in new[there.start : there.stop]]
+    return "".join(old[: here.start] + moved + old[here.stop :])
+
+
+def _shifted(line: str, columns: int) -> str:
+    """*line* moved *columns* to the right, or left when negative. A blank line stays blank."""
+    if not line.strip():
+        return line
+    if columns >= 0:
+        return " " * columns + line
+    return line[min(-columns, len(line) - len(line.lstrip(" "))) :]
 
 
 def with_step_off(text: str, step_id: str, *, off: bool) -> str:
@@ -46,24 +72,21 @@ def with_step_off(text: str, step_id: str, *, off: bool) -> str:
 def with_step_after(text: str, after: str, entry: Mapping[str, JsonValue]) -> str:
     """The factory file *text* with *entry* declared right after the step *after*, before any
     comment that leads the next step. Each line of the file stays as it was."""
-    document = _yaml().load(text)
+    yaml = _yaml()
+    document = yaml.load(text)
     at = _place(document, after)
     old = text.splitlines(keepends=True)
     lines = _lines(document, at, len(old))
-    column = document["steps"][at].lc.col
+    line, column = document["steps"].lc.item(at)
     end = lines.stop
     while end > lines.start + 1 and _leads(old[end - 1], column):
         end -= 1
     old[end - 1] = old[end - 1].removesuffix("\n") + "\n"
+    # Written as the file writes its steps, so the new step lines up with the others.
+    yaml.indent(mapping=2, sequence=column, offset=old[line].index("-"))
     dumped = io.StringIO()
-    _yaml().dump({"steps": [dict(entry)]}, dumped)
-    # The dumper puts the dash at column 2. Move the entry to the column of the step it follows.
-    dash = old[lines.start]
-    shift = len(dash) - len(dash.lstrip()) - 2
-    new = [
-        " " * shift + line if shift >= 0 else line[-shift:]
-        for line in dumped.getvalue().splitlines(keepends=True)[1:]
-    ]
+    yaml.dump({"steps": [dict(entry)]}, dumped)
+    new = dumped.getvalue().splitlines(keepends=True)[1:]
     return "".join(old[:end] + new + old[end:])
 
 
@@ -84,7 +107,6 @@ def without_step(text: str, step_id: str) -> str:
 
 def _yaml() -> YAML:
     yaml = YAML()
-    yaml.indent(mapping=2, sequence=4, offset=2)
     # A narrower width folds again the descriptions the file already folds at 100 columns.
     yaml.width = 100
     yaml.preserve_quotes = True
@@ -112,7 +134,7 @@ def _lines(document: CommentedMap, at: int, count: int) -> range:
 
 def _merge(held: CommentedMap, entry: Mapping[str, JsonValue]) -> None:
     """Make *held* declare *entry*, leaving each value it already declares as it was written."""
-    last = list(held)[-1]
+    last = next(reversed(held), None)
     for key in [key for key in held if key not in entry]:
         del held[key]
     for key, value in entry.items():
@@ -121,9 +143,9 @@ def _merge(held: CommentedMap, entry: Mapping[str, JsonValue]) -> None:
             _merge(old, value)
         elif key not in held:
             # Before the last key, which carries the comments between this entry and the next.
-            held.insert(len(held) - 1, key, value)
+            held.insert(max(len(held) - 1, 0), key, value)
         elif old != value:
             styled = isinstance(old, ScalarString) and isinstance(value, str)
             held[key] = type(old)(value) if styled else value
-    if last not in held and last in held.ca.items:
+    if held and last not in held and last in held.ca.items:
         held.ca.items[list(held)[-1]] = held.ca.items.pop(last)

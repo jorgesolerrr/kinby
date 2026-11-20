@@ -75,6 +75,7 @@ export function FactorySteps({
           <li key={step.id} id={cardId(step.id)} className="scroll-mt-24">
             <StepCard
               step={step}
+              differs={saving.factory.differing_steps.includes(step.id)}
               open={open === step.id}
               onToggle={() => setOpen(open === step.id ? undefined : step.id)}
             >
@@ -82,8 +83,8 @@ export function FactorySteps({
                 <KeptAlert step={step} needs={kept.needs} cardId={cardId} onPick={pick} />
               )}
               <StepEditor
-                // A toggle leaves the card open, on the factory as it reads now.
-                key={saving.factory.hash}
+                // A toggle leaves the card open, on the factory as it reads since.
+                key={String(step.off === true)}
                 step={step}
                 earlier={steps.slice(0, place).filter((each) => !each.off)}
                 saving={saving}
@@ -98,7 +99,6 @@ export function FactorySteps({
             {adding === step.id ? (
               <div className="pt-3">
                 <NewStep
-                  key={saving.factory.hash}
                   after={step.id}
                   steps={steps}
                   commands={commands}
@@ -354,11 +354,14 @@ function curve(x1: number, x2: number, y: number, reach: number): string {
 
 function StepCard({
   step,
+  differs,
   open,
   onToggle,
   children,
 }: {
   step: FactoryStep
+  /** Whether kinby ships another version of the step. */
+  differs: boolean
   open: boolean
   onToggle: () => void
   children: React.ReactNode
@@ -376,9 +379,12 @@ function StepCard({
         <CardDescription>
           {[step.kind, step.engine, step.model].filter(Boolean).join(" · ")}
         </CardDescription>
-        {step.off && (
+        {(differs || step.off) && (
           <CardAction>
-            <Badge variant="outline">Off</Badge>
+            <div className="flex gap-2">
+              {differs && <Badge variant="secondary">Differs from kinby&apos;s</Badge>}
+              {step.off && <Badge variant="outline">Off</Badge>}
+            </div>
           </CardAction>
         )}
       </CardHeader>

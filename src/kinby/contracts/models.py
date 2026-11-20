@@ -3207,6 +3207,15 @@ class FactoryResult(ContractModel):
     version: GitCommit | None
     #: The file of the folder that declares each of its checks and tools, by name.
     declared_in: dict[str, str]
+    #: Whether the factory is the hub's copy of a shipped factory, with files that differ from
+    #: kinby's.
+    differs_from_shipped: bool
+    #: Whether kinby ships changes the hub's copy lacks, which conflicted with the user's or failed
+    #: the factory check.
+    shipped_update_waiting: bool
+    #: The steps of the hub's copy whose entry or prompt differs from kinby's version of the step,
+    #: in the factory's order. Each can be reset to kinby's.
+    differing_steps: list[StepId]
 
 
 class FactoryCheckCommand(ContractModel):
@@ -3288,6 +3297,16 @@ class FactoryStepDeleteCommand(ContractModel):
     hash: FileHash
 
 
+class FactoryStepResetCommand(ContractModel):
+    """Make one step of the hub's copy of a shipped factory kinby's version of it, its entry and its
+    prompt, as one version, if the check passes."""
+
+    name: FactoryName
+    step: StepId
+    #: The hash the client read.
+    hash: FileHash
+
+
 class FactoryChangeOperation(StrEnum):
     """A step-sized change the owner of a line asks for from chat, each one of the step writes."""
 
@@ -3344,6 +3363,8 @@ class FactoryVersionSource(StrEnum):
     #: The version kinby ships: copied in before the first edit of a shipped factory, or a reset
     #: to it.
     SHIPPED = "shipped"
+    #: kinby's later version of a shipped factory the user changed, merged into the user's.
+    SHIPPED_UPDATE = "shipped_update"
 
 
 class FactoryVersion(ContractModel):
@@ -4697,6 +4718,9 @@ class StepRunCommand(ContractModel):
     #: The step's check, a hook of the factory's folder that records the step result once the
     #: step ends, however it ended.
     hook: HookName | None = None
+    #: The factory version whose tools and checks the step runs, which the hub keeps in the
+    #: workbench's factories mount. None runs the factory's latest.
+    version: GitCommit | None = None
     work_item: dict[ValueName, StepValue]
     #: Every value the run's earlier steps recorded, and the named values its factory requires
     #: that the workbench holds, by name.
@@ -4771,6 +4795,10 @@ class FactoryRun(ContractModel):
     step: StepId | None
     #: When a run parked until its plan window resets tries its step again. None for any other.
     wakes_at: AwareDatetime | None = None
+    #: The factory version the run started on, whose files its steps read. None for a run
+    #: started before runs kept one, or of a factory kinby ships that the hub holds no version
+    #: of, which reads the latest.
+    version: GitCommit | None = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
 
@@ -4796,6 +4824,8 @@ class StepAttempt(ContractModel):
     answer: StepAnswer | None = None
     #: The views the attempt wrote among the views of the run's instance.
     views: list[ViewId] = Field(default_factory=list)
+    #: The factory version the attempt ran. None when its run kept none.
+    version: GitCommit | None = None
     started_at: AwareDatetime
     ended_at: AwareDatetime | None
 

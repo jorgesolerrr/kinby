@@ -1,5 +1,5 @@
 import type { Client, Clock, FactoryVersion, FactoryVersionSource } from "@kinby/contract"
-import { useCallback, useId, useState } from "react"
+import { useCallback, useEffect, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
@@ -20,21 +20,25 @@ const SOURCES: Record<FactoryVersionSource, string> = {
   by_hand: "Changed by hand",
   revert: "Reverted",
   shipped: "kinby's version",
+  shipped_update: "kinby's update, merged",
 }
 
 /**
  * A factory's versions, newest first: each one's time, source and the steps it changed, its diff,
- * and a revert to it. `onReverted` runs once a revert made a new version.
+ * and a revert to it. `onReverted` runs once a revert made a new version. `current` is the
+ * factory's version as last read, undefined until it is: History reads again when it lags it.
  */
 export function FactoryHistory({
   client,
   clock,
   name,
+  current,
   onReverted,
 }: {
   client: Caller
   clock: Clock
   name: string
+  current: string | null | undefined
   onReverted: () => void
 }) {
   const read = useCallback(
@@ -42,6 +46,11 @@ export function FactoryHistory({
     [client, name],
   )
   const { value: versions, failure, readAgain } = useRead(read, clock)
+  const behind =
+    versions !== undefined && current !== undefined && (versions[0]?.version ?? null) !== current
+  useEffect(() => {
+    if (behind) readAgain()
+  }, [behind, readAgain])
   const { busy, failure: revertFailure, ask } = useHubCall()
   const revert = (version: string) =>
     ask(async () => {

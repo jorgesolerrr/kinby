@@ -42,6 +42,9 @@ from kinby.contracts import (
 )
 
 FACTORY_FILE = "factory.yaml"
+#: Where the hub's factories folder keeps each factory version a run keeps, as
+#: ``<factory>/<version>``, for the workbenches that mount it.
+VERSIONS_DIR = ".versions"
 
 _DECLARATION = ConfigDict(extra="forbid", strict=True)
 #: A whole number of seconds, minutes, hours or days, such as ``60m`` or ``7d``.
@@ -390,7 +393,7 @@ def read_factory_file(folder: Path) -> WorkbenchFactory:
 
 
 def parse_factory_file(text: str) -> WorkbenchFactory:
-    """The factory file *text*, validated as read_factory_file validates it."""
+    """The factory file *text*, validated as `read_factory_file` validates a factory's file."""
     try:
         declared = yaml.load(text, Loader=FactoryLoader)
     except yaml.YAMLError as exc:
