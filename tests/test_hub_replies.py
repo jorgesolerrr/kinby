@@ -624,3 +624,34 @@ def test_an_answer_to_an_approval_no_longer_waiting_is_stale_and_changes_nothing
         assert (reply.option, reply.status) == ("Approve", ReplyStatus.STALE)
 
     asyncio.run(scenario())
+
+
+def test_an_approve_to_an_approval_with_a_preview_is_refused_since_no_channel_shows_it(tmp_path):
+    async def scenario() -> None:
+        runtime = FakeRuntime()
+        service = FakeService()
+        hub = channel_hub(tmp_path / "hub", service, FakeTime(), runtime)
+        client = hub_client(hub)
+        alice_id = (await started_instance(client, hub)).instance_id
+        approval_id = uuid4()
+        threads = FakeThreads(waiting={approval_id})
+        raised = approval_notification("approval", approval_id)
+        assert raised.approval is not None
+        previewed = raised.approval.model_copy(
+            update={"request": raised.approval.request.model_copy(update={"preview": "a diff"})}
+        )
+        async with served(hub) as address, running(runtime, hub, alice_id, threads):
+            channel = await paired_channel(client, address)
+            await raising(hub, alice_id).call(
+                NOTIFICATION_RAISE, raised.model_copy(update={"approval": previewed})
+            )
+            sent = await next_sent(service)
+            await replied(address, channel, sent.ref, 0)
+            edited = await next_edit(service)
+
+        assert edited == (sent.ref, "Approve it in the web app, which shows what it changes.")
+        assert threads.answered.empty()
+        [reply] = await replies(hub, alice_id)
+        assert (reply.option, reply.status) == ("Approve", ReplyStatus.FAILED)
+
+    asyncio.run(scenario())
