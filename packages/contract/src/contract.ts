@@ -424,6 +424,10 @@ export interface Contract {
       command: FactoryRunTranscriptCommand;
       result: FactoryRunTranscript;
     };
+    "factory.step.add": {
+      command: FactoryStepAddCommand;
+      result: FactoryResult;
+    };
     "factory.step.delete": {
       command: FactoryStepDeleteCommand;
       result: FactoryResult;
@@ -1717,6 +1721,19 @@ export interface FactoryRunTranscript {
   events: {
     [k: string]: JsonValue;
   }[];
+}
+/**
+ * Add one step to a factory right after another, with its new prompt, as one version. The
+ * steps already there keep their places, and the hub keeps the add only if the check passes.
+ */
+export interface FactoryStepAddCommand {
+  after: StepId;
+  hash: string;
+  name: FactoryName;
+  prompt?: string | null;
+  step: {
+    [k: string]: JsonValue;
+  };
 }
 /**
  * Delete one off step of a factory, as one version, with its prompt file unless another step

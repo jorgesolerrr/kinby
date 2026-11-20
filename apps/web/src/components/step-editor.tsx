@@ -17,7 +17,13 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useHubCall } from "@/hooks/use-hub-call"
-import { type FactoryStep, type Retry, routeText, type SendBack } from "@/lib/factory-steps"
+import {
+  ENGINES,
+  type FactoryStep,
+  type Retry,
+  routeText,
+  type SendBack,
+} from "@/lib/factory-steps"
 
 /** What the step editor saves through, and the factory as it was read. */
 export interface StepSaving {
@@ -28,7 +34,6 @@ export interface StepSaving {
 /** Where an outcome or a failure sends the run. Null leaves a failure to the step's retry. */
 type Route = string | SendBack | Retry | null
 
-const ENGINES = ["kinby", "claude", "codex"]
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 const DEFAULT = "default"
 
@@ -296,11 +301,11 @@ export function StepEditor({
 }
 
 /** Why a change made no version: what the hub refused, or that it did not answer. */
-function Unsaved({ error }: { error: unknown }) {
+export function Unsaved({ error }: { error: unknown }) {
   return error instanceof CallError ? <Refusal reason={error.message} /> : <Failure error={error} />
 }
 
-function Text({
+export function Text({
   label,
   value,
   onChange,
@@ -318,7 +323,7 @@ function Text({
   )
 }
 
-function Choice({
+export function Choice({
   label,
   value,
   choices,
@@ -408,7 +413,7 @@ function RouteField({
   )
 }
 
-function Code({
+export function Code({
   label,
   value,
   onChange,

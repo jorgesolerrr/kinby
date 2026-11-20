@@ -68,6 +68,7 @@ from kinby.contracts.models import (
     FactoryRunTakeoverFinishCommand,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    FactoryStepAddCommand,
     FactoryStepDeleteCommand,
     FactoryStepOffSetCommand,
     FactoryStepSaveCommand,
@@ -700,6 +701,7 @@ FACTORY_RESET = Method("factory.reset", Scope.HUB_ADMIN, FactoryResetCommand, Fa
 FACTORY_STEP_SAVE = Method(
     "factory.step.save", Scope.HUB_ADMIN, FactoryStepSaveCommand, FactoryResult
 )
+FACTORY_STEP_ADD = Method("factory.step.add", Scope.HUB_ADMIN, FactoryStepAddCommand, FactoryResult)
 FACTORY_STEP_OFF_SET = Method(
     "factory.step.off.set", Scope.HUB_ADMIN, FactoryStepOffSetCommand, FactoryResult
 )
@@ -1008,6 +1010,7 @@ METHODS = (
     FACTORY_REVERT,
     FACTORY_RESET,
     FACTORY_STEP_SAVE,
+    FACTORY_STEP_ADD,
     FACTORY_STEP_OFF_SET,
     FACTORY_STEP_DELETE,
     FACTORY_RUN_LIST,

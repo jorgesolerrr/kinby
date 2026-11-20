@@ -651,3 +651,157 @@ describe("LibraryPage, an off step", () => {
     expect(await within(card("checks")).findByRole("form", { name: "checks" })).toBeTruthy()
   })
 })
+
+async function openAdd(after: string, more: Answers = {}) {
+  const opened = await openMap(software, {
+    "factory.step.add": ({ name }) => changed(name),
+    ...more,
+  })
+  await opened.user.click(
+    within(card(after)).getByRole("button", { name: `Add a step after ${after}` }),
+  )
+  const form = await within(card(after)).findByRole("form", { name: `New step after ${after}` })
+  return { ...opened, form: within(form) }
+}
+
+const added = (caller: { calls: { method: string; params: unknown }[] }) =>
+  caller.calls.find((call) => call.method === "factory.step.add")?.params
+
+describe("LibraryPage, adding a step", () => {
+  it("offers an agent, a command or a wait after a step, and never code", async () => {
+    const { form } = await openAdd("implement")
+
+    const kinds = form.getByRole("group", { name: "Kind" })
+    expect(
+      within(kinds)
+        .getAllByRole("button")
+        .map((kind) => kind.textContent),
+    ).toEqual(["agent", "command", "wait"])
+    expect(within(kinds).getByRole("button", { name: "agent", pressed: true })).toBeTruthy()
+  })
+
+  it("adds an agent step with a new prompt and no check after its step", async () => {
+    const { caller, user, form } = await openAdd("implement")
+
+    await user.type(form.getByRole("textbox", { name: "Id" }), "docs")
+    await user.type(form.getByRole("textbox", { name: "Prompt · prompts/docs.md" }), "Update.")
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(added(caller)).toEqual({
+        name: "software",
+        hash: "h-2",
+        after: "implement",
+        step: { id: "docs", kind: "agent", engine: "claude", prompt: "prompts/docs.md" },
+        prompt: "Update.",
+      }),
+    )
+  })
+
+  it("gives an agent step with an existing check what that check takes and records", async () => {
+    const { caller, user, form } = await openAdd("fix")
+
+    await user.type(form.getByRole("textbox", { name: "Id" }), "docs")
+    await user.click(form.getByRole("combobox", { name: "Check" }))
+    const offered = await screen.findAllByRole("option")
+    expect(offered.map((option) => option.textContent)).toEqual([
+      "No check",
+      "check_implementation",
+      "check_answers",
+      "read_review_verdict",
+    ])
+    await user.click(screen.getByRole("option", { name: "check_implementation" }))
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(added(caller)).toMatchObject({
+        step: {
+          id: "docs",
+          check: "check_implementation",
+          requires: ["branch", "base"],
+          results: { title: "str", body: "str", no_change: "str" },
+          outcomes: { "no-change": "stop" },
+        },
+      }),
+    )
+  })
+
+  it("adds a command step that runs the workbench's command lists it picks", async () => {
+    const { caller, user, form } = await openAdd("checks")
+
+    await user.click(form.getByRole("button", { name: "command" }))
+    await user.type(form.getByRole("textbox", { name: "Id" }), "recheck")
+    expect(form.getByRole("checkbox", { name: "setup" })).toBeTruthy()
+    await user.click(form.getByRole("checkbox", { name: "checks" }))
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(added(caller)).toEqual({
+        name: "software",
+        hash: "h-2",
+        after: "checks",
+        step: { id: "recheck", kind: "command", run: [{ commands: "checks" }] },
+        prompt: null,
+      }),
+    )
+  })
+
+  it("adds a wait step with its signal and its quiet time", async () => {
+    const { caller, user, form } = await openAdd("publish")
+
+    await user.click(form.getByRole("button", { name: "wait" }))
+    await user.type(form.getByRole("textbox", { name: "Id" }), "settle")
+    await user.type(form.getByRole("textbox", { name: "Signal" }), "- routine: github")
+    await user.type(form.getByRole("textbox", { name: "Quiet" }), "5m")
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(added(caller)).toMatchObject({
+        after: "publish",
+        step: { id: "settle", kind: "wait", signal: [{ routine: "github" }], quiet: "5m" },
+        prompt: null,
+      }),
+    )
+  })
+
+  it("adds against the hash its card opened on, keeping what was typed across a re-read", async () => {
+    let reads = 0
+    const { caller, user, form } = await openAdd("implement", {
+      "factory.get": ({ name }) => {
+        reads += 1
+        return factoryRead(name, software, commit, `h-read-${reads}`)
+      },
+    })
+    const opened = reads
+    await user.type(form.getByRole("textbox", { name: "Id" }), "docs")
+
+    window.dispatchEvent(new Event("focus"))
+    await waitFor(() => expect(reads).toBeGreaterThan(opened))
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(added(caller)).toMatchObject({ hash: `h-read-${opened}`, step: { id: "docs" } }),
+    )
+  })
+
+  it("shows the check's problems when the hub refuses an add, and keeps the new step", async () => {
+    const { user, form } = await openAdd("implement", {
+      "factory.step.add": () => {
+        throw new CallError({
+          code: "INVALID_ARGUMENT",
+          message:
+            "The factory check failed, so nothing changed:\n" +
+            '- Step "docs" resumes "fix", which is not an earlier step.',
+          retryable: false,
+        })
+      },
+    })
+    const id = form.getByRole("textbox", { name: "Id" })
+    await user.type(id, "docs")
+
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    expect(await form.findByText(/Step "docs" resumes "fix"/)).toBeTruthy()
+    expect((id as HTMLInputElement).value).toBe("docs")
+  })
+})

@@ -8,7 +8,7 @@ function Card({
   ...props
 }: React.ComponentProps<"div"> & {
   size?: "default" | "sm"
-  variant?: "default" | "attention" | "off"
+  variant?: "default" | "attention" | "off" | "new"
 }) {
   return (
     <div
@@ -16,7 +16,7 @@ function Card({
       data-size={size}
       data-variant={variant}
       className={cn(
-        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground shadow-md ring-1 ring-foreground/5 [--card-spacing:--spacing(6)] has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(4)] data-[variant=attention]:ring-ember/60 data-[variant=off]:border data-[variant=off]:border-dashed data-[variant=off]:bg-transparent data-[variant=off]:shadow-none data-[variant=off]:ring-0 dark:ring-foreground/10 dark:data-[variant=attention]:ring-ember/60 dark:data-[variant=off]:ring-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground shadow-md ring-1 ring-foreground/5 [--card-spacing:--spacing(6)] has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(4)] data-[variant=attention]:ring-ember/60 data-[variant=new]:border-2 data-[variant=new]:border-dashed data-[variant=new]:border-primary/40 data-[variant=new]:shadow-none data-[variant=new]:ring-0 data-[variant=off]:border data-[variant=off]:border-dashed data-[variant=off]:bg-transparent data-[variant=off]:shadow-none data-[variant=off]:ring-0 dark:ring-foreground/10 dark:data-[variant=attention]:ring-ember/60 dark:data-[variant=new]:ring-0 dark:data-[variant=off]:ring-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         className,
       )}
       {...props}

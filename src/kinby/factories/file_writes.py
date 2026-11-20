@@ -47,6 +47,34 @@ def with_step_off(text: str, step_id: str, *, off: bool) -> str:
     return with_step(text, entry | {"off": True} if off else entry)
 
 
+def with_step_after(text: str, after: str, entry: Mapping[str, JsonValue]) -> str:
+    """The factory file *text* with *entry* declared right after the step *after*, before any
+    comment that leads the next step. Each line of the file stays as it was."""
+    yaml = _yaml()
+    document = yaml.load(text)
+    at = _place(document, after)
+    old = text.splitlines(keepends=True)
+    lines = _lines(document, at, len(old))
+    line, column = document["steps"].lc.item(at)
+    end = lines.stop
+    while end > lines.start + 1 and _leads(old[end - 1], column):
+        end -= 1
+    old[end - 1] = old[end - 1].removesuffix("\n") + "\n"
+    # Written as the file writes its steps, so the new step lines up with the others.
+    yaml.indent(mapping=2, sequence=column, offset=old[line].index("-"))
+    dumped = io.StringIO()
+    yaml.dump({"steps": [dict(entry)]}, dumped)
+    new = dumped.getvalue().splitlines(keepends=True)[1:]
+    return "".join(old[:end] + new + old[end:])
+
+
+def _leads(line: str, column: int) -> bool:
+    """Whether *line* is blank or a comment left of a step's keys, at *column*, so it leads what
+    follows."""
+    stripped = line.lstrip()
+    return not stripped.strip() or (stripped.startswith("#") and len(line) - len(stripped) < column)
+
+
 def without_step(text: str, step_id: str) -> str:
     """The factory file *text* without the step *step_id*, and the comments that follow it."""
     document = _yaml().load(text)
