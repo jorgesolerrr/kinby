@@ -1728,6 +1728,7 @@ export interface FactoryRunListResult {
  * Try the step of a run that needs a human again, with the step's retries reset.
  */
 export interface FactoryRunRetryCommand {
+  latest?: boolean;
   run_id: string;
 }
 /**
@@ -1736,6 +1737,7 @@ export interface FactoryRunRetryCommand {
  * Its retries and send-backs count afresh.
  */
 export interface FactoryRunSendBackCommand {
+  latest?: boolean;
   notes?: string | null;
   run_id: string;
   step: StepId;

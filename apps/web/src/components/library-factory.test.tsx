@@ -3,6 +3,7 @@ import { type Answers, stubCaller } from "@kinby/contract/testing"
 import { screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
+import { detail } from "@/components/factories-testing"
 import { commit, listed, openLibrary } from "@/components/library-testing"
 
 import software from "../../../../src/kinby/factories/shipped/software/factory.yaml?raw"
@@ -860,5 +861,55 @@ describe("LibraryPage, a shipped factory the user changed", () => {
     const { editor } = await openStep("fix", read({ differing_steps: ["review"] }))
 
     expect(editor.queryByRole("button", { name: "Take kinby's" })).toBeNull()
+  })
+})
+
+describe("LibraryPage, a step from its run", () => {
+  const fromRun = "/library/factories?factory=software&step=implement&run=r-stopped"
+
+  function openFromRun(more: Answers = {}) {
+    Element.prototype.scrollIntoView = vi.fn()
+    const caller = stubCaller({
+      "library.list": () => listed,
+      "factory.get": ({ name }) => factoryRead(name, software, commit),
+      "factory.version.list": () => ({ versions }),
+      "factory.run.get": () => detail("r-stopped"),
+      ...more,
+    })
+    return { caller, user: openLibrary(caller, fromRun) }
+  }
+
+  it("opens the step's card under a bar naming the run its attempt failed in", async () => {
+    openFromRun()
+
+    await screen.findByRole("list", { name: "Steps" })
+    const form = await within(card("implement")).findByRole("form", { name: "implement" })
+    const bar = await within(form).findByRole("alert")
+    expect(within(bar).getByText("From the run on issue 1305")).toBeTruthy()
+    expect(within(bar).getByText(/^Its implement attempt failed\./)).toBeTruthy()
+    expect(within(bar).getByRole("link", { name: "Back to the run" }).getAttribute("href")).toBe(
+      "/factories/runs/r-stopped",
+    )
+  })
+
+  it("saves the step and retries the run on the new version, then opens the run", async () => {
+    const { caller, user } = openFromRun({
+      "factory.step.save": ({ name }) => factoryRead(name, software, commit, "h-3"),
+      "factory.run.retry": () => detail("r-stopped").run,
+    })
+    await screen.findByRole("list", { name: "Steps" })
+    const form = await within(card("implement")).findByRole("form", { name: "implement" })
+    const editor = within(form)
+    await editor.findByRole("alert")
+    await user.type(editor.getByRole("textbox", { name: "Prompt · prompts/implement.md" }), "Now.")
+
+    await user.click(editor.getByRole("button", { name: "Save and retry" }))
+
+    await waitFor(() => expect(window.location.pathname).toBe("/factories/runs/r-stopped"))
+    expect(caller.calls.map(({ method }) => method)).toContain("factory.step.save")
+    expect(caller.calls.at(-1)).toEqual({
+      method: "factory.run.retry",
+      params: { run_id: "r-stopped", latest: true },
+    })
   })
 })

@@ -58,13 +58,14 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useRead } from "@/hooks/use-read"
 import { when } from "@/lib/config-changes"
 import { finished, STATUS_BADGES, standing, workItem } from "@/lib/factory-runs"
 import { type FactorySteps, lineName, readRun, stepKind, type Wait, waitingOn } from "@/lib/lines"
 import { type Entry, readTranscript } from "@/lib/run-transcript"
-import { FACTORIES_PATH, linePath } from "@/lib/selection"
+import { FACTORIES_PATH, linePath, stepPath } from "@/lib/selection"
 import { duration, money, shortTokens } from "@/lib/stats"
 import { mainArgument } from "@/lib/timeline"
 
@@ -229,7 +230,7 @@ function StepRow({
               key={attempt.attempt}
               hub={hub}
               clock={clock}
-              runId={run.run_id}
+              run={run}
               step={step}
               attempt={attempt}
             />
@@ -248,18 +249,19 @@ function endingOf(ending: StepEnding | null): (typeof ENDINGS)[StepEnding] {
 /**
  * One attempt: its number, the factory version it ran, its session, start, how long it took and
  * what it spent, then its summary. A command step's summary holds the exit and the tail of a
- * failing command's output, and an agent step's attempt shows its transcript.
+ * failing command's output, and an agent step's attempt shows its transcript. A failed attempt
+ * links to its step's editor.
  */
 function Attempt({
   hub,
   clock,
-  runId,
+  run,
   step,
   attempt,
 }: {
   hub: Hub
   clock: Clock
-  runId: string
+  run: FactoryRun
   step: Step
   attempt: StepAttempt
 }) {
@@ -286,8 +288,16 @@ function Attempt({
         ) : (
           <p className="text-sm font-medium whitespace-pre-wrap">{summary}</p>
         ))}
+      {(attempt.ending === "failed" || attempt.ending === "timed-out") && (
+        <PageLink
+          href={stepPath({ factory: run.factory, step: step.id, runId: run.run_id })}
+          className="self-start text-sm font-medium hover:underline"
+        >
+          Edit this step
+        </PageLink>
+      )}
       {step.kind === "agent" && (
-        <Transcript hub={hub} clock={clock} runId={runId} attempt={attempt} />
+        <Transcript hub={hub} clock={clock} runId={run.run_id} attempt={attempt} />
       )}
     </article>
   )
@@ -361,7 +371,8 @@ function TranscriptEntry({ entry }: { entry: Entry }) {
 /**
  * What the run waits on the user for, and the answers it takes. A run that needs a human retries,
  * goes back to an earlier step with notes, or is cancelled. One at an approve step is approved or
- * sent back. An agent step's ask is approved or denied, and its takeover opens the workbench's
+ * sent back. A retry or a send back keeps the run's factory version, or moves the run to the
+ * latest one. An agent step's ask is approved or denied, and its takeover opens the workbench's
  * browser here, where Finish resumes the turn.
  */
 function Waiting({
@@ -379,6 +390,8 @@ function Waiting({
 }) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<unknown>()
+  const [latest, setLatest] = useState(false)
+  const latestId = useId()
   const { run_id } = run
   const step = run.step ?? ""
   const act = async (work: () => Promise<unknown>) => {
@@ -398,7 +411,7 @@ function Waiting({
       earlier={earlier_steps}
       busy={busy}
       onSend={(to, notes) =>
-        act(() => hub.call("factory.run.send_back", { run_id, step: to, notes }))
+        act(() => hub.call("factory.run.send_back", { run_id, step: to, notes, latest }))
       }
     />
   )
@@ -414,7 +427,7 @@ function Waiting({
         <>
           <Button
             disabled={busy}
-            onClick={() => void act(() => hub.call("factory.run.retry", { run_id }))}
+            onClick={() => void act(() => hub.call("factory.run.retry", { run_id, latest }))}
           >
             Retry {step}
           </Button>
@@ -502,6 +515,12 @@ function Waiting({
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-3">
+            {(wait.kind === "needs-human" || wait.kind === "approval") && (
+              <Field orientation="horizontal">
+                <Switch id={latestId} checked={latest} onCheckedChange={setLatest} />
+                <FieldLabel htmlFor={latestId}>On the factory&apos;s latest version</FieldLabel>
+              </Field>
+            )}
             <div className="flex flex-wrap gap-2">{actions}</div>
             {failure !== undefined && <Failure error={failure} />}
           </div>

@@ -53,7 +53,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useRead } from "@/hooks/use-read"
 import { instanceName } from "@/lib/instances"
 import { type InstancePick, readPicks } from "@/lib/picks"
-import { homePath, navigate, openLibraryTab, useLibraryTab } from "@/lib/selection"
+import { homePath, navigate, openLibraryTab, useLibraryTab, useStepLink } from "@/lib/selection"
 
 type Caller = Pick<Client, "call">
 
@@ -137,8 +137,11 @@ export function LibraryPage({
     entry.kind === "factory" ? undefined : picked && (picked[entry.kind].get(entry.name) ?? [])
   const kind = useLibraryTab() ?? "skill"
   const [query, setQuery] = useState("")
+  const stepLink = useStepLink()
   // Kept with the tab it opened on, so Back to another tab opens nothing.
-  const [opened, setOpened] = useState<{ kind: LibraryKind; open: Open }>()
+  const [opened, setOpened] = useState<{ kind: LibraryKind; open: Open } | undefined>(
+    () => stepLink && { kind: "factory", open: { entry: stepLink.factory } },
+  )
   const open = opened?.kind === kind ? opened.open : undefined
   const show = (next?: Open) => setOpened(next && { kind, open: next })
   // A git skill's newer commit is known only from a check, which the list does not run.
@@ -213,7 +216,12 @@ export function LibraryPage({
               />
             </>
           ) : (
-            <FactoryEntry client={client} clock={clock} name={entry.name} />
+            <FactoryEntry
+              client={client}
+              clock={clock}
+              name={entry.name}
+              from={stepLink?.factory === entry.name ? stepLink : undefined}
+            />
           )}
         </EntryRow>
       ))}

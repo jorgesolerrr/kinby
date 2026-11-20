@@ -4878,6 +4878,9 @@ class FactoryRunRetryCommand(ContractModel):
     """Try the step of a run that needs a human again, with the step's retries reset."""
 
     run_id: UUID
+    #: Move the run to its factory's latest version first, which it keeps from then on. A step
+    #: that's off there passes to the next step that's on.
+    latest: bool = False
 
 
 class FactoryRunSendBackCommand(ContractModel):
@@ -4890,6 +4893,9 @@ class FactoryRunSendBackCommand(ContractModel):
     step: StepId
     #: What the user tells the steps from there on, which they read as the run value ``notes``.
     notes: Annotated[str, Field(min_length=1)] | None = None
+    #: Move the run to its factory's latest version first, which it keeps from then on. The step
+    #: must be on, and before the run's step, there.
+    latest: bool = False
 
 
 class FactoryRunApproveCommand(ContractModel):

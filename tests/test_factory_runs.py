@@ -748,7 +748,7 @@ def test_a_reports_delivery_only_marks_reported_its_own_stop(tmp_path):
     stale_generation = registry.stop_generation(run.run_id)
     assert registry.unreported_runs() == [registry.run(run.run_id)]
 
-    registry.restart_run(run.run_id, "test")
+    registry.restart_run(run.run_id, "test", None)
     registry.begin_attempt(run.run_id, "test")
     registry.end_attempt(run.run_id, StepResult(ending=StepEnding.FAILED, summary="second failure"))
     registry.move_run(run.run_id, FactoryRunStatus.NEEDS_HUMAN, "test")

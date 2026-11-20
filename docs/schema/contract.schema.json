@@ -2918,6 +2918,10 @@
       "additionalProperties": false,
       "description": "Try the step of a run that needs a human again, with the step's retries reset.",
       "properties": {
+        "latest": {
+          "default": false,
+          "type": "boolean"
+        },
         "run_id": {
           "format": "uuid",
           "type": "string"
@@ -2933,6 +2937,10 @@
       "additionalProperties": false,
       "description": "Send a run that needs a human or awaits approval back to an earlier step.\n\nIts retries and send-backs count afresh.",
       "properties": {
+        "latest": {
+          "default": false,
+          "type": "boolean"
+        },
         "notes": {
           "anyOf": [
             {

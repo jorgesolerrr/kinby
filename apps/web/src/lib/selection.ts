@@ -31,6 +31,17 @@ const LIBRARY_TABS: { kind: LibraryKind; segment?: string }[] = [
   { kind: "factory", segment: "factories" },
 ]
 
+// A run's failed step opens its factory in the Library on that step's card, from the run.
+const STEP_FACTORY = "factory"
+const STEP = "step"
+const FROM_RUN = "run"
+/** A factory's step whose card the Library opens, and the run whose attempt at it failed. */
+export interface StepLink {
+  factory: string
+  step: string
+  runId: string
+}
+
 // The Settings dialog opens over whatever path is open, so its section is a search parameter.
 const SETTINGS = "settings"
 const SETTINGS_SECTIONS = ["general", "usage", "secrets", "channels", "instances"] as const
@@ -129,6 +140,12 @@ export function linePath(lineId: string): string {
 /** One run's page in the Factories area. The hub's notifications about the run link to it. */
 export function runPath(runId: string): string {
   return `${FACTORIES_PATH}/${RUNS}/${encodeURIComponent(runId)}`
+}
+
+/** A factory in the Library, unfolded on one step's card, from the run whose attempt at it failed. */
+export function stepPath({ factory, step, runId }: StepLink): string {
+  const search = new URLSearchParams({ [STEP_FACTORY]: factory, [STEP]: step, [FROM_RUN]: runId })
+  return `${libraryPath("factory")}?${search}`
 }
 
 /** Select an instance without reloading the page, as a new entry in the browser's history. */
@@ -354,6 +371,16 @@ export function useOpenLine(): string | undefined {
 /** The run whose page the URL opens in the Factories area, if it names one. */
 export function useOpenRun(): string | undefined {
   return useSyncExternalStore(subscribe, openedRun)
+}
+
+/** The factory step the URL opens in the Library, from a run, if it names one. */
+export function useStepLink(): StepLink | undefined {
+  const search = useSyncExternalStore(subscribe, () => window.location.search)
+  return useMemo(() => {
+    const params = new URLSearchParams(search)
+    const [factory, step, runId] = [STEP_FACTORY, STEP, FROM_RUN].map((name) => params.get(name))
+    return factory && step && runId ? { factory, step, runId } : undefined
+  }, [search])
 }
 
 /** Whether the URL opens the Settings dialog, on a section or none. */

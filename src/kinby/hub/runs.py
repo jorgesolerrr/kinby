@@ -291,7 +291,7 @@ class FactoryRuns:
             self._publish(run)
             self._enqueue(run)
         elif run.status is FactoryRunStatus.NEEDS_HUMAN:
-            return self._restart(run, run.step)
+            return self._restart(run, run.step, run.version)
         return run
 
     async def list(self, command: FactoryRunListCommand) -> FactoryRunListResult:
@@ -335,13 +335,20 @@ class FactoryRuns:
         )
 
     async def retry(self, command: FactoryRunRetryCommand) -> FactoryRun:
-        """Try the step the run stopped at again, with the step's retries reset."""
+        """Try the step the run stopped at again, with the step's retries reset, on the run's
+        version or the factory's latest one.
+
+        A run moved onto a version where its step is off goes on to the next step that's on.
+        """
         run = _needing_human(self._existing(command.run_id))
-        return self._restart(run, run.step)
+        if not command.latest:
+            return self._restart(run, run.step, run.version)
+        version = await self._factories.version(run.factory)
+        return self._restart(run, _on_from(self._file(run.factory, version), run.step), version)
 
     async def send_back(self, command: FactoryRunSendBackCommand) -> FactoryRun:
         """Send the run back to a step before the one it stopped or awaits approval at, with the
-        user's notes or none.
+        user's notes or none, on the run's version or the factory's latest one.
 
         Its retries and send-backs count afresh.
         """
@@ -350,14 +357,15 @@ class FactoryRuns:
         approving = _awaits_approval(factory, run)
         if not approving:
             _needing_human(run)
-        if command.step not in _earlier(factory, run.step):
+        version = await self._factories.version(run.factory) if command.latest else run.version
+        if command.step not in _earlier(self._file(run.factory, version), run.step):
             raise NotAnEarlierStep(f'Step "{command.step}" is not a step before "{run.step}".')
         if approving:
             summary = f'The user sent the run back to "{command.step}".'
             self._registry.end_attempt(
                 run.run_id, StepResult(ending=StepEnding.CLEAN, summary=summary)
             )
-        moved = self._registry.send_back_run(run.run_id, command.step, command.notes)
+        moved = self._registry.send_back_run(run.run_id, command.step, command.notes, version)
         self._publish(moved)
         self._enqueue(moved)
         return moved
@@ -566,9 +574,12 @@ class FactoryRuns:
             raise FactoryRunNotFound(f'Factory run "{run_id}" was not found.')
         return run
 
-    def _restart(self, run: FactoryRun, step: StepId | None) -> FactoryRun:
-        """Queue the run at *step* for the user, counting its retries and send-backs afresh."""
-        moved = self._registry.restart_run(run.run_id, step)
+    def _restart(
+        self, run: FactoryRun, step: StepId | None, version: GitCommit | None
+    ) -> FactoryRun:
+        """Queue the run at *step* of *version* for the user, counting its retries and send-backs
+        afresh."""
+        moved = self._registry.restart_run(run.run_id, step, version)
         self._publish(moved)
         self._enqueue(moved)
         return moved
@@ -1369,6 +1380,15 @@ def _next_on(factory: WorkbenchFactory, after: WorkbenchStep | None = None) -> W
     """The first step that's on past *after*, or the factory's first one that's on."""
     start = 0 if after is None else factory.steps.index(after) + 1
     return next((step for step in factory.steps[start:] if not step.off), None)
+
+
+def _on_from(factory: WorkbenchFactory | None, step_id: StepId | None) -> StepId | None:
+    """*step_id*, or the next step that's on past it when it's off in *factory*."""
+    if factory is None or step_id is None:
+        return step_id
+    step = _step(factory, step_id)
+    following = _next_on(factory, step) if step is not None and step.off else None
+    return step_id if following is None else following.id
 
 
 def _first_at_work(factory: WorkbenchFactory) -> WorkbenchStep | None:

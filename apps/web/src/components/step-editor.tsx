@@ -1,10 +1,12 @@
-import { CallError, type Client, type FactoryResult } from "@kinby/contract"
-import { Trash2Icon } from "lucide-react"
+import { CallError, type Client, type FactoryResult, type FactoryRunDetail } from "@kinby/contract"
+import { RotateCcwIcon, Trash2Icon } from "lucide-react"
 import { useId, useState } from "react"
 import { parse, stringify } from "yaml"
 
 import { Failure, Refusal } from "@/components/config-alerts"
-import { Button } from "@/components/ui/button"
+import { PageLink } from "@/components/factories-page"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -24,6 +26,8 @@ import {
   routeText,
   type SendBack,
 } from "@/lib/factory-steps"
+import { workItem } from "@/lib/factory-runs"
+import { navigate, runPath } from "@/lib/selection"
 
 /** What the step editor saves through, and the factory as it was read. */
 export interface StepSaving {
@@ -38,11 +42,13 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 const DEFAULT = "default"
 
 /** A step's card opened as its step editor: what it does, how it runs, where its failures and
- * outcomes send the run, its prompt and its hook. */
+ * outcomes send the run, its prompt and its hook. Opened from a run whose attempt at the step
+ * failed, it also saves and retries that run on the new version. */
 export function StepEditor({
   step: shown,
   earlier,
   saving,
+  run,
   onSaved,
   onTurned,
   onKept,
@@ -51,6 +57,8 @@ export function StepEditor({
   /** The steps that are on before this one. */
   earlier: FactoryStep[]
   saving: StepSaving
+  /** The run the card was opened from. */
+  run?: FactoryRunDetail
   /** Runs once a save, a delete or taking kinby's step made a new version. */
   onSaved: () => void
   /** Runs once turning the step off or on made a new version. */
@@ -95,7 +103,8 @@ export function StepEditor({
     setSignal(signalText)
     setNotYaml(undefined)
   }
-  const save = () => {
+  /** Save the step, then retry the run `retrying` names, if any, on the new version. */
+  const save = (retrying?: string) => {
     let saved = draft
     if (signal !== undefined) {
       try {
@@ -114,7 +123,9 @@ export function StepEditor({
         prompt: prompt === promptText ? null : prompt,
         hook: hookDraft === hookText ? null : hookDraft,
       })
-      onSaved()
+      if (retrying === undefined) return onSaved()
+      await saving.client.call("factory.run.retry", { run_id: retrying, latest: true })
+      navigate(runPath(retrying))
     })
   }
   const read = { name: factory.name, hash: factory.hash, step: step.id }
@@ -173,6 +184,14 @@ export function StepEditor({
         />
       </div>
       {turning.failure !== undefined && <Unsaved error={turning.failure} />}
+      {run !== undefined && (
+        <FromRun
+          step={step.id}
+          run={run}
+          disabled={!dirty || busy}
+          onSaveAndRetry={() => save(run.run.run_id)}
+        />
+      )}
       <FieldGroup className="grid md:grid-cols-2">
         {draft.kind === "agent" && (
           <>
@@ -307,6 +326,45 @@ export function StepEditor({
         </div>
       </div>
     </form>
+  )
+}
+
+/** The run the card was opened from, and how its last attempt at the step ended: back to its
+ * page, or save the step and retry the run on the new version. */
+function FromRun({
+  step,
+  run: { run, attempts },
+  disabled,
+  onSaveAndRetry,
+}: {
+  step: string
+  run: FactoryRunDetail
+  disabled: boolean
+  onSaveAndRetry: () => void
+}) {
+  const ending = attempts.findLast((attempt) => attempt.step === step)?.ending
+  return (
+    <Alert layout="stack">
+      <RotateCcwIcon />
+      <AlertTitle>From the run on {workItem(run)}</AlertTitle>
+      <AlertDescription>
+        {ending != null && `Its ${step} attempt ${ending.replace("-", " ")}. `}
+        The change reaches every line on the factory, and the run takes it when it retries.
+      </AlertDescription>
+      <AlertAction>
+        <div className="flex gap-2">
+          <PageLink
+            href={runPath(run.run_id)}
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            Back to the run
+          </PageLink>
+          <Button type="button" size="sm" disabled={disabled} onClick={onSaveAndRetry}>
+            Save and retry
+          </Button>
+        </div>
+      </AlertAction>
+    </Alert>
   )
 }
 

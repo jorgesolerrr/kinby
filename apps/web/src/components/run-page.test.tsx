@@ -73,6 +73,19 @@ describe("a run's page", () => {
     ).toBeDefined()
   })
 
+  it("links a failed attempt to its step's editor, from the run", async () => {
+    openRun("r-stopped")
+
+    const implement = within(await screen.findByRole("region", { name: "implement" }))
+    const [clean, failed] = implement.getAllByRole("article")
+    expect(within(clean as HTMLElement).queryByRole("link", { name: "Edit this step" })).toBeNull()
+    expect(
+      within(failed as HTMLElement)
+        .getByRole("link", { name: "Edit this step" })
+        .getAttribute("href"),
+    ).toBe("/library/factories?factory=software&step=implement&run=r-stopped")
+  })
+
   it("shows a command step's exit and the tail of its failure", async () => {
     const user = userEvent.setup()
     openRun("r-stopped")
@@ -156,7 +169,23 @@ describe("a run's page", () => {
     await waitFor(() =>
       expect(caller.calls).toContainEqual({
         method: "factory.run.retry",
-        params: { run_id: "r-stopped" },
+        params: { run_id: "r-stopped", latest: false },
+      }),
+    )
+  })
+
+  it("retries a run that needs a human on the factory's latest version", async () => {
+    const user = userEvent.setup()
+    const { caller } = openRun("r-stopped", { "factory.run.retry": () => detail("r-stopped").run })
+
+    await screen.findByRole("region", { name: "Waiting on you" })
+    await user.click(waiting().getByRole("switch", { name: "On the factory's latest version" }))
+    await user.click(waiting().getByRole("button", { name: "Retry implement" }))
+
+    await waitFor(() =>
+      expect(caller.calls).toContainEqual({
+        method: "factory.run.retry",
+        params: { run_id: "r-stopped", latest: true },
       }),
     )
   })
@@ -177,7 +206,12 @@ describe("a run's page", () => {
     await waitFor(() =>
       expect(caller.calls).toContainEqual({
         method: "factory.run.send_back",
-        params: { run_id: "r-stopped", step: "ticket", notes: "Read the parent issue." },
+        params: {
+          run_id: "r-stopped",
+          step: "ticket",
+          notes: "Read the parent issue.",
+          latest: false,
+        },
       }),
     )
   })
