@@ -57,7 +57,13 @@ def with_step_after(text: str, after: str, entry: Mapping[str, JsonValue]) -> st
     old[end - 1] = old[end - 1].removesuffix("\n") + "\n"
     dumped = io.StringIO()
     _yaml().dump({"steps": [dict(entry)]}, dumped)
-    new = dumped.getvalue().splitlines(keepends=True)[1:]
+    # The dumper puts the dash at column 2. Move the entry to the column of the step it follows.
+    dash = old[lines.start]
+    shift = len(dash) - len(dash.lstrip()) - 2
+    new = [
+        " " * shift + line if shift >= 0 else line[-shift:]
+        for line in dumped.getvalue().splitlines(keepends=True)[1:]
+    ]
     return "".join(old[:end] + new + old[end:])
 
 
