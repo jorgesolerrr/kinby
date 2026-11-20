@@ -33,6 +33,7 @@ export type FactoryName = string;
  * Where the factory the hub serves under a name comes from.
  */
 export type FactorySource = "hub" | "shipped";
+export type GitCommit = string;
 /**
  * Where a factory run stands.
  */
@@ -46,6 +47,10 @@ export type StepEnding = "clean" | "failed" | "timed-out" | "interrupted" | "nee
 export type DelegatedRunOutcome = "completed" | "failed" | "limited";
 export type UsageSource = "api" | "claude-subscription" | "chatgpt-subscription";
 export type ViewId = string;
+/**
+ * Where a factory version came from.
+ */
+export type FactoryVersionSource = "web" | "by_hand" | "revert" | "shipped";
 export type HubSecretName = string;
 /**
  * What an instance's contract server can do. A hub reads it before acting on the instance.
@@ -117,7 +122,6 @@ export type ToolStateSource = "group" | "library" | "instance" | "unavailable";
  * The one service an instance sends its web searches to.
  */
 export type SearchBackend = "brave" | "tavily" | "exa" | "searxng";
-export type GitCommit = string;
 export type LibraryKind = "factory" | "mcp_server" | "skill";
 export type McpServerEntry = McpHttpEntry | McpStdioEntry;
 export type CommandListName = string;
@@ -376,6 +380,14 @@ export interface Contract {
       command: FactoryRemoveCommand;
       result: FactoryListResult;
     };
+    "factory.reset": {
+      command: FactoryResetCommand;
+      result: FactoryResult;
+    };
+    "factory.revert": {
+      command: FactoryRevertCommand;
+      result: FactoryResult;
+    };
     "factory.run.answer": {
       command: FactoryRunAnswerCommand;
       result: FactoryRun;
@@ -411,6 +423,14 @@ export interface Contract {
     "factory.run.transcript": {
       command: FactoryRunTranscriptCommand;
       result: FactoryRunTranscript;
+    };
+    "factory.version.diff": {
+      command: FactoryVersionDiffCommand;
+      result: FactoryVersionDiff;
+    };
+    "factory.version.list": {
+      command: FactoryVersionListCommand;
+      result: FactoryVersionListResult;
     };
     "hub.secret.delete": {
       command: HubSecretDeleteCommand;
@@ -1446,6 +1466,7 @@ export interface FactoryResult {
   hash: string;
   name: FactoryName;
   source: FactorySource;
+  version: GitCommit | null;
 }
 export interface FactoryGetCommand {
   name: FactoryName;
@@ -1457,12 +1478,26 @@ export interface FactoryListResult {
 export interface FactorySummary {
   name: FactoryName;
   source: FactorySource;
+  version: GitCommit | null;
 }
 /**
  * Delete one of the hub's own factories. The result lists the factories left.
  */
 export interface FactoryRemoveCommand {
   name: FactoryName;
+}
+/**
+ * Make a shipped factory's files the ones kinby ships, as a new version.
+ */
+export interface FactoryResetCommand {
+  name: FactoryName;
+}
+/**
+ * Make the factory's files those of an earlier version, as a new version.
+ */
+export interface FactoryRevertCommand {
+  name: FactoryName;
+  version: GitCommit;
 }
 /**
  * Answer the ask a run's kinby turn parked on, which resumes the turn as the step's next
@@ -1665,6 +1700,28 @@ export interface FactoryRunTranscript {
   events: {
     [k: string]: JsonValue;
   }[];
+}
+export interface FactoryVersionDiffCommand {
+  name: FactoryName;
+  version: GitCommit;
+}
+export interface FactoryVersionDiff {
+  diff: string;
+}
+export interface FactoryVersionListCommand {
+  name: FactoryName;
+}
+export interface FactoryVersionListResult {
+  versions: FactoryVersion[];
+}
+/**
+ * One saved state of a factory: a commit in the hub's factories repository.
+ */
+export interface FactoryVersion {
+  source: FactoryVersionSource;
+  steps: StepId[];
+  time: string;
+  version: GitCommit;
 }
 export interface HubSecretDeleteCommand {
   name: HubSecretName;

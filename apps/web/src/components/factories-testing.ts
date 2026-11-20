@@ -254,13 +254,14 @@ const login = (id: string, label: string) => ({
 /** How the hub answers with the fixture's factories, lines, workbenches and runs. */
 export const answers: Answers = {
   "factory.list": () => ({
-    factories: Object.keys(FILES).map((name) => ({ name, source: "hub" as const })),
+    factories: Object.keys(FILES).map((name) => ({ name, source: "hub" as const, version: null })),
   }),
   "factory.get": ({ name }) => ({
     name,
     source: "hub",
     hash: "h",
     files: { "factory.yaml": FILES[name] ?? "" },
+    version: null,
   }),
   "line.list": () => ({ lines }),
   "line.get": ({ line_id }) => {
