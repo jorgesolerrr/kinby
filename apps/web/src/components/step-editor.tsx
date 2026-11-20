@@ -293,7 +293,7 @@ export function StepEditor({
               Delete
             </Button>
           )}
-          {saving.factory.differing_steps.includes(step.id) && (
+          {factory.differing_steps.includes(step.id) && (
             <Button type="button" variant="outline" disabled={busy} onClick={takeKinbys}>
               Take kinby&apos;s
             </Button>
