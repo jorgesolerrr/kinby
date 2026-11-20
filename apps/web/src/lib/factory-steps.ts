@@ -1,6 +1,8 @@
 /** A send back to an earlier step, at most `max` times along this route. */
 export type SendBack = { back: string; max: number }
 export type Retry = { retry: number }
+/** What runs an agent step. */
+export const ENGINES = ["kinby", "claude", "codex"]
 /** A step of a `factory.yaml` as the file declares it. The hub checked it. A part the file
  * declares as null is absent. */
 export type FactoryStep = {

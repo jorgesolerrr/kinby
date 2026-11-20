@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
+from pydantic import JsonValue
+
 from kinby.contracts import (
     FactoryCheckCommand,
     FactoryCheckResult,
@@ -24,6 +26,7 @@ from kinby.contracts import (
     FactoryResult,
     FactoryRevertCommand,
     FactorySource,
+    FactoryStepAddCommand,
     FactoryStepDeleteCommand,
     FactoryStepOffSetCommand,
     FactoryStepSaveCommand,
@@ -49,6 +52,7 @@ from kinby.factories.file import (
 from kinby.factories.file_writes import (
     StepNotDeclared,
     with_step,
+    with_step_after,
     with_step_off,
     without_step,
 )
@@ -162,11 +166,7 @@ class FactoryStore:
     async def save_step(self, command: FactoryStepSaveCommand) -> FactoryResult:
         """Declare one step of the factory the client read as the command says, with its prompt
         and its hook, and keep them if the check passes."""
-        prompt = command.step.get("prompt")
-        if command.prompt is not None:
-            if not isinstance(prompt, str):
-                raise InvalidConfig({"prompt": "The step names no prompt to write."})
-            _in_folder("step.prompt", prompt)
+        _prompt_in_folder(command.step, command.prompt)
         async with self._edit_lock:
             await asyncio.to_thread(self._save_step, command)
         return await self.get(FactoryGetCommand(name=command.name))
@@ -190,6 +190,29 @@ class FactoryStore:
             if declared is None:
                 raise InvalidConfig({"hook": "No file of the factory declares the step's hook."})
             files[declared] = command.hook
+        self._write(command.name, folder, files)
+
+    async def add_step(self, command: FactoryStepAddCommand) -> FactoryResult:
+        """Add one step right after another of the factory the client read, with its new prompt,
+        and keep them if the check passes."""
+        _prompt_in_folder(command.step, command.prompt)
+        async with self._edit_lock:
+            await asyncio.to_thread(self._add_step, command)
+        return await self.get(FactoryGetCommand(name=command.name))
+
+    def _add_step(self, command: FactoryStepAddCommand) -> None:
+        folder, _ = self._folder(command.name)
+        self._read_as(command.name, command.hash)
+        text = (folder / FACTORY_FILE).read_text(encoding="utf-8")
+        try:
+            files = {FACTORY_FILE: with_step_after(text, command.after, command.step)}
+        except StepNotDeclared as exc:
+            raise InvalidConfig({"after": str(exc)}) from None
+        if command.prompt is not None:
+            prompt = str(command.step["prompt"])
+            if (folder / prompt).exists():
+                raise InvalidConfig({"step.prompt": f'"{prompt}" is already a file.'})
+            files[prompt] = command.prompt
         self._write(command.name, folder, files)
 
     async def set_step_off(self, command: FactoryStepOffSetCommand) -> FactoryResult:
@@ -389,6 +412,16 @@ def _needing_off(text: str) -> dict[str, str]:
     for step, problem in off_dependents(parse_factory_file(text)):
         needing.setdefault(step, []).append(problem)
     return {step: " ".join(problems) for step, problems in needing.items()}
+
+
+def _prompt_in_folder(step: Mapping[str, JsonValue], prompt: str | None) -> None:
+    """Refuse a *prompt* to write unless the *step* names a prompt file in the factory's folder."""
+    if prompt is None:
+        return
+    path = step.get("prompt")
+    if not isinstance(path, str):
+        raise InvalidConfig({"prompt": "The step names no prompt to write."})
+    _in_folder("step.prompt", path)
 
 
 def _in_folder(field: str, path: str) -> None:

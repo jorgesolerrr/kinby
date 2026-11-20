@@ -13,6 +13,7 @@ import { useRead } from "@/hooks/use-read"
 
 /** The parts of a `factory.yaml` the summary shows. The hub checked the rest. */
 interface FactoryFile {
+  requires?: { commands?: string[] }
   steps: FactoryStep[]
 }
 
@@ -53,6 +54,7 @@ export function FactoryEntry({
           <>
             <FactorySteps
               steps={opened.factory.steps}
+              commands={opened.factory.requires?.commands ?? []}
               saving={{ client, factory: opened.result }}
               onSaved={readAgain}
             />

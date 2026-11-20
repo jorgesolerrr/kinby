@@ -5,18 +5,23 @@ import asyncio
 from datetime import timedelta
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import JsonValue, SecretStr
 
 from kinby.contracts import (
+    FACTORY_GET,
     FACTORY_RUN_TRANSCRIPT,
+    FACTORY_STEP_ADD,
     AgentStepRun,
     ClientStepRun,
     CodingClient,
     ErrorCode,
     ErrorEnvelope,
+    FactoryGetCommand,
+    FactoryResult,
     FactoryRunStatus,
     FactoryRunTranscript,
     FactoryRunTranscriptCommand,
+    FactoryStepAddCommand,
     ReasoningEffort,
     RunFolder,
     StepEnding,
@@ -26,7 +31,7 @@ from kinby.hub import Hub
 from tests.test_factory_runs import settled
 from tests.test_factory_waits import limited
 from tests.test_hub import FakeControl, FakeRuntime, hub_at, hub_client
-from tests.test_hub_factories import write_factory
+from tests.test_hub_factories import HOOKS, write_factory
 from tests.test_hub_line_runs import _handed_in, _line
 from tests.test_hub_lines import _home
 from tests.test_hub_notices import PUBLIC_URL
@@ -102,6 +107,78 @@ def test_an_agent_step_runs_its_engine_on_the_workbench_and_a_later_one_resumes_
         assert [(attempt.step, attempt.session) for attempt in done.attempts] == [
             ("implement", "claude-1"),
             ("fix", None),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_run_takes_each_added_step_and_records_only_the_values_of_an_existing_check(
+    tmp_path,
+):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, session="claude-1", values={"branch": "agent/12"}),
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN, values={"branch": "agent/12-notes"}),
+    ]
+    runtime = FakeRuntime()
+    checked = AGENTS["factory.yaml"].replace(
+        "    timeout: 90m\n",
+        "    timeout: 90m\n    check: record_branch\n    results: { branch: str }\n",
+    )
+    hub = _hub(
+        tmp_path, control, runtime, AGENTS | {"factory.yaml": checked, "hooks/record.py": HOOKS}
+    )
+    client = hub_client(hub)
+
+    async def added(after: str, step: dict[str, JsonValue], prompt: str) -> None:
+        read = await client.call(FACTORY_GET, FactoryGetCommand(name="tickets"))
+        assert isinstance(read, FactoryResult)
+        command = FactoryStepAddCommand(
+            name="tickets", after=after, step=step, prompt=prompt, hash=read.hash
+        )
+        assert isinstance(await client.call(FACTORY_STEP_ADD, command), FactoryResult)
+
+    async def scenario() -> None:
+        await _home(hub)
+        await added(
+            "implement",
+            {"id": "docs", "kind": "agent", "engine": "claude", "prompt": "prompts/docs.md"},
+            "Update the docs.\n",
+        )
+        await added(
+            "docs",
+            {
+                "id": "notes",
+                "kind": "agent",
+                "engine": "claude",
+                "prompt": "prompts/notes.md",
+                "check": "record_branch",
+                "results": {"branch": "str"},
+            },
+            "Write the release notes.\n",
+        )
+        line = await _line(client, runtime)
+
+        run = await _handed_in(client, line, 12)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert [
+            (command.step.prompt, command.hook)
+            for _, command in control.steps
+            if isinstance(command.step, ClientStepRun)
+        ] == [
+            ("Implement the issue.\n", "record_branch"),
+            ("Update the docs.\n", None),
+            ("Write the release notes.\n", "record_branch"),
+            ("Fix what the review found.\n", None),
+        ]
+        assert [(attempt.step, attempt.values) for attempt in done.attempts] == [
+            ("implement", {"branch": "agent/12"}),
+            ("docs", {}),
+            ("notes", {"branch": "agent/12-notes"}),
+            ("fix", {}),
         ]
 
     asyncio.run(scenario())

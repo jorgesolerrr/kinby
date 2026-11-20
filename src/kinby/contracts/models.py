@@ -3248,6 +3248,21 @@ class FactoryStepSaveCommand(ContractModel):
     hash: FileHash
 
 
+class FactoryStepAddCommand(ContractModel):
+    """Add one step to a factory right after another, with its new prompt, as one version. The
+    steps already there keep their places, and the hub keeps the add only if the check passes."""
+
+    name: FactoryName
+    #: The step the new one follows.
+    after: StepId
+    #: The new step's entry in the factory file.
+    step: dict[str, JsonValue]
+    #: The text of the new step's prompt file, which must not exist yet. None writes no prompt.
+    prompt: str | None = None
+    #: The hash the client read.
+    hash: FileHash
+
+
 class FactoryStepOffSetCommand(ContractModel):
     """Turn one step of a factory off, so its runs pass over it, or back on, as one version. The
     check refuses turning off a step another step that's on needs."""

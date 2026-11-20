@@ -2966,6 +2966,46 @@
       "title": "FactorySource",
       "type": "string"
     },
+    "FactoryStepAddCommand": {
+      "additionalProperties": false,
+      "description": "Add one step to a factory right after another, with its new prompt, as one version. The\nsteps already there keep their places, and the hub keeps the add only if the check passes.",
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/StepId"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/FactoryName"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "step": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "after",
+        "step",
+        "hash"
+      ],
+      "title": "FactoryStepAddCommand",
+      "type": "object"
+    },
     "FactoryStepDeleteCommand": {
       "additionalProperties": false,
       "description": "Delete one off step of a factory, as one version, with its prompt file unless another step\nuses it.",
@@ -15371,6 +15411,22 @@
           ],
           "type": "object"
         },
+        "factory.step.add": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/FactoryStepAddCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/FactoryResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "factory.step.delete": {
           "additionalProperties": false,
           "properties": {
@@ -17922,6 +17978,7 @@
         "factory.revert",
         "factory.reset",
         "factory.step.save",
+        "factory.step.add",
         "factory.step.off.set",
         "factory.step.delete",
         "factory.run.list",

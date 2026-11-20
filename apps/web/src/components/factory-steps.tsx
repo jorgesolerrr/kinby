@@ -1,10 +1,12 @@
 import { cn } from "cn"
-import { CircleXIcon } from "lucide-react"
+import { CircleXIcon, PlusIcon } from "lucide-react"
 import { useId, useState } from "react"
 
+import { NewStep } from "@/components/new-step"
 import { StepEditor, type StepSaving } from "@/components/step-editor"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardAction,
@@ -32,19 +34,24 @@ const RESUME_LANE = 8
 
 /** The factory's steps as a map, its routes back as arcs over the line and its resumed sessions
  * as dotted arcs under it, above a card for each step, which opens in place as its step editor.
- * `onSaved` runs once a change made a new version. */
+ * A + after each card adds a step there. `onSaved` runs once a change made a new version. */
 export function FactorySteps({
   steps,
+  commands,
   saving,
   onSaved,
 }: {
   steps: FactoryStep[]
+  /** The names of the workbench's command lists the factory requires. */
+  commands: string[]
   saving: StepSaving
   onSaved: () => void
 }) {
   const prefix = useId()
   const cardId = (id: string) => `${prefix}${id}`
   const [open, setOpen] = useState<string>()
+  /** The step the user adds a new one after. */
+  const [adding, setAdding] = useState<string>()
   /** The step the hub refused to turn off or on, and what each step that keeps it needs of it. */
   const [kept, setKept] = useState<{ step: string; needs: Record<string, string> }>()
   const pick = (id: string) => {
@@ -63,7 +70,7 @@ export function FactorySteps({
         blocking={Object.keys(kept?.needs ?? {})}
         onPick={pick}
       />
-      <ol aria-label="Steps" className="flex flex-col gap-3">
+      <ol aria-label="Steps" className="flex flex-col">
         {steps.map((step, place) => (
           <li key={step.id} id={cardId(step.id)} className="scroll-mt-24">
             <StepCard
@@ -88,6 +95,35 @@ export function FactorySteps({
                 onKept={(needs) => setKept({ step: step.id, needs })}
               />
             </StepCard>
+            {adding === step.id ? (
+              <div className="pt-3">
+                <NewStep
+                  key={saving.factory.hash}
+                  after={step.id}
+                  steps={steps}
+                  commands={commands}
+                  saving={saving}
+                  onAdded={(id) => {
+                    setAdding(undefined)
+                    setOpen(id)
+                    changed()
+                  }}
+                  onCancel={() => setAdding(undefined)}
+                />
+              </div>
+            ) : (
+              <div className="flex justify-center pt-3">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={`Add a step after ${step.id}`}
+                  onClick={() => setAdding(step.id)}
+                >
+                  <PlusIcon />
+                </Button>
+              </div>
+            )}
           </li>
         ))}
       </ol>
