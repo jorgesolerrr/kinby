@@ -4,6 +4,18 @@
       "additionalProperties": false,
       "description": "Park the run until the user approves it or sends it back.",
       "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
         "failed": {
           "anyOf": [
             {
@@ -548,6 +560,18 @@
           ],
           "default": null
         },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
         "failed": {
           "anyOf": [
             {
@@ -662,6 +686,18 @@
             }
           ],
           "default": null
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
         },
         "effort": {
           "anyOf": [
@@ -802,6 +838,18 @@
           ],
           "default": null
         },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
         "failed": {
           "anyOf": [
             {
@@ -897,6 +945,18 @@
             }
           ],
           "default": null
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
         },
         "failed": {
           "anyOf": [

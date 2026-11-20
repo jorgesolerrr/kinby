@@ -155,6 +155,8 @@ BASE: ValueName = "base"
 @dataclass(frozen=True, kw_only=True, config=_DECLARATION)
 class _Step:
     id: StepId
+    #: What the step does and why, as the user reads it on the factory's page.
+    description: str | None = None
     #: Values earlier steps or the work item must hold before this step starts.
     requires: tuple[ValueName, ...] = ()
     #: The values this step's result declares, by name.

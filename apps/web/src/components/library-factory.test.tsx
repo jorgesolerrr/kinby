@@ -1,9 +1,11 @@
 import type { FactoryVersion } from "@kinby/contract"
 import { stubCaller } from "@kinby/contract/testing"
 import { screen, waitFor, within } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { commit, listed, openLibrary } from "@/components/library-testing"
+
+import software from "../../../../src/kinby/factories/shipped/software/factory.yaml?raw"
 
 const factoryFile = `name: software
 requires: { image: coder }
@@ -52,7 +54,7 @@ function openPage(file = factoryFile, history = versions) {
 const steps = () =>
   within(screen.getByRole("list", { name: "Steps" }))
     .getAllByRole("listitem")
-    .map((step) => step.textContent)
+    .map((step) => within(step).getByRole("heading").textContent)
 
 describe("LibraryPage, a factory", () => {
   it("unfolds a factory to read its factory file", async () => {
@@ -89,6 +91,31 @@ steps:
 
     await screen.findByRole("list", { name: "Steps" })
     expect(steps()).toEqual(["check", "recheck"])
+  })
+
+  it("reads what a step declares as null as absent", async () => {
+    const { user } = openPage(`name: software
+requires: {}
+work_item: { issue: int }
+steps:
+  - { id: implement, kind: agent, engine: claude, prompt: prompts/implement.md }
+  - id: fix
+    kind: agent
+    engine: claude
+    prompt: prompts/fix.md
+    description: null
+    resume: null
+    failed:
+`)
+
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+
+    const map = await screen.findByRole("figure", { name: "Map" })
+    expect(within(map).getByLabelText("Routes back").querySelector("path")).toBeNull()
+    expect(within(map).getByLabelText("Resumed sessions").querySelector("path")).toBeNull()
+    expect(steps()).toEqual(["implement", "fix"])
+    const [, fix] = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")
+    expect(fix.querySelector("p")).toBeNull()
   })
 
   it("lists the factory's versions newest first, with each one's source and steps", async () => {
@@ -152,5 +179,111 @@ steps:
       name: "software",
       version: shippedVersion,
     })
+  })
+})
+
+/** The shipped software factory's file with its review step uncommented, as its own tests do. */
+const withReview = software.replace(/^ {2}# (?=- | {2})/gm, "  ")
+
+async function openMap(file = software) {
+  const { user } = openPage(file)
+  await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+  return { user, map: await screen.findByRole("figure", { name: "Map" }) }
+}
+
+const height = (map: HTMLElement, label: string) =>
+  Number(within(map).getByText(label).getAttribute("y"))
+
+describe("LibraryPage, the shipped software factory's map and cards", () => {
+  it("draws each route back as an arc above the line, labelled with its outcome and max", async () => {
+    const { map } = await openMap()
+
+    const arcs = within(map).getByLabelText("Routes back")
+    expect(Array.from(arcs.querySelectorAll("text"), (label) => label.textContent)).toEqual([
+      "failed ×2",
+      "waiting ×30",
+      "feedback ×3",
+      "checks-failed ×2",
+    ])
+    expect(Array.from(arcs.querySelectorAll("path"), (arc) => arc.textContent)).toEqual([
+      "checks: failed → back to fix, up to 2 times",
+      "assess: waiting → back to babysit, up to 30 times",
+      "assess: feedback → back to answer, up to 3 times",
+      "assess: checks-failed → back to answer, up to 2 times",
+    ])
+    const line = Number(map.querySelector("line")?.getAttribute("y1"))
+    for (const label of arcs.querySelectorAll("text")) {
+      expect(Number(label.getAttribute("y"))).toBeLessThan(line)
+    }
+  })
+
+  it("stacks two routes between the same steps as separate arcs", async () => {
+    const { map } = await openMap()
+
+    expect(height(map, "feedback ×3")).not.toBe(height(map, "checks-failed ×2"))
+  })
+
+  it("keeps apart the labels of review's route and checks' failed route to fix", async () => {
+    const { map } = await openMap(withReview)
+
+    expect(Math.abs(height(map, "changes ×2") - height(map, "failed ×2"))).toBeGreaterThanOrEqual(
+      16,
+    )
+  })
+
+  it("draws each resumed session as a dotted arc below the line", async () => {
+    const { map } = await openMap()
+
+    const arcs = within(map).getByLabelText("Resumed sessions")
+    const resumes = arcs.querySelectorAll("path")
+    expect(Array.from(resumes, (arc) => arc.textContent)).toEqual([
+      "answer resumes implement's session",
+      "fix resumes implement's session",
+    ])
+    const line = Number(map.querySelector("line")?.getAttribute("y1"))
+    for (const arc of resumes) {
+      expect(arc.getAttribute("stroke-dasharray")).toBeTruthy()
+      const [, start] = /^M[\d.]+,([\d.]+)/.exec(arc.getAttribute("d") ?? "") ?? []
+      expect(Number(start)).toBeGreaterThan(line)
+    }
+  })
+
+  it("shows a card per step with its description, kind, engine and model", async () => {
+    await openMap()
+
+    expect(steps()).toEqual([
+      "ticket",
+      "setup",
+      "implement",
+      "answer",
+      "fix",
+      "checks",
+      "publish",
+      "babysit",
+      "assess",
+    ])
+    const [ticket, , implement] = within(screen.getByRole("list", { name: "Steps" })).getAllByRole(
+      "listitem",
+    )
+    expect(within(implement).getByText("agent · claude · claude-opus-5-5")).toBeTruthy()
+    expect(
+      within(implement).getByText(/^Every agent step continues implement's session/),
+    ).toBeTruthy()
+    expect(within(ticket).getByText("code")).toBeTruthy()
+    expect(
+      within(ticket).getByText(/^Passes the ticket on only once a trusted author wrote/),
+    ).toBeTruthy()
+    expect(within(ticket).queryByText(/claude/)).toBeNull()
+  })
+
+  it("scrolls to a step's card when its node on the map is clicked", async () => {
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
+    const { user, map } = await openMap()
+
+    await user.click(within(map).getByRole("link", { name: "babysit" }))
+
+    const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[7]
+    expect(scrolled.mock.contexts).toEqual([babysit])
   })
 })

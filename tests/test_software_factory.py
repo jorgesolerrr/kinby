@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+import yaml
 
 from kinby.contracts import (
     FACTORY_CHECK,
@@ -829,6 +830,13 @@ def test_an_implement_with_no_change_ends_the_run_cancelled_and_makes_the_ended_
 def with_review(factory: str) -> str:
     """The software factory's file with its review step uncommented."""
     return re.sub(r"(?m)^  # (?=- |  )", "  ", factory)
+
+
+def test_every_step_says_what_it_does_review_too():
+    declared = yaml.safe_load(with_review((FACTORY / "factory.yaml").read_text(encoding="utf-8")))
+
+    assert [step["id"] for step in declared["steps"] if not step.get("description")] == []
+    assert "review" in [step["id"] for step in declared["steps"]]
 
 
 def test_turning_review_on_sends_changes_back_to_a_fix_that_resumes_the_implementers_session(

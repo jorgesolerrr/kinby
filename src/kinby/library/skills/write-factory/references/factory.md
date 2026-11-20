@@ -68,6 +68,7 @@ Every step runs on the workbench, in the run folder. Every step has these fields
 
 - `id`: unique in the factory. Lowercase letters, digits, `_` and `-`.
 - `kind`: `agent`, `command`, `code`, `wait` or `approve`.
+- `description`: what the step does and why, as the user reads it on the factory's page. Optional.
 - `requires`: values the step needs, from the work item, `requires.values` or an earlier step's `results`. The check refuses a value none of them holds. A value false counts as missing. A named value the workbench lacks fails this step, which says so, since no earlier step produces it.
 - `results`: the values the step hands on, by name and type, as in `work_item`.
 - `outcomes`: what each outcome a check or code step names does next. See What happens next.

@@ -161,6 +161,14 @@ def test_the_check_passes_a_factory_whose_names_all_resolve(tmp_path):
     assert problems(tmp_path, FILES) == []
 
 
+def test_the_check_passes_a_step_that_describes_itself(tmp_path):
+    described = FACTORY.replace(
+        "  - id: checks\n", "  - id: checks\n    description: Runs the tests.\n"
+    )
+
+    assert problems(tmp_path, FILES | {"factory.yaml": described}) == []
+
+
 def test_the_check_reports_a_tool_or_hook_file_that_does_not_load(tmp_path):
     broken = {
         "tools/github.py": "raise RuntimeError('no token')\n",
