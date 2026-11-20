@@ -98,7 +98,6 @@ export function FactorySteps({
             {adding === step.id ? (
               <div className="pt-3">
                 <NewStep
-                  key={saving.factory.hash}
                   after={step.id}
                   steps={steps}
                   commands={commands}

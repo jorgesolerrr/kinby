@@ -50,24 +50,21 @@ def with_step_off(text: str, step_id: str, *, off: bool) -> str:
 def with_step_after(text: str, after: str, entry: Mapping[str, JsonValue]) -> str:
     """The factory file *text* with *entry* declared right after the step *after*, before any
     comment that leads the next step. Each line of the file stays as it was."""
-    document = _yaml().load(text)
+    yaml = _yaml()
+    document = yaml.load(text)
     at = _place(document, after)
     old = text.splitlines(keepends=True)
     lines = _lines(document, at, len(old))
-    column = document["steps"][at].lc.col
+    line, column = document["steps"].lc.item(at)
     end = lines.stop
     while end > lines.start + 1 and _leads(old[end - 1], column):
         end -= 1
     old[end - 1] = old[end - 1].removesuffix("\n") + "\n"
+    # Written as the file writes its steps, so the new step lines up with the others.
+    yaml.indent(mapping=2, sequence=column, offset=old[line].index("-"))
     dumped = io.StringIO()
-    _yaml().dump({"steps": [dict(entry)]}, dumped)
-    # The dumper puts the dash at column 2. Move the entry to the column of the step it follows.
-    dash = old[lines.start]
-    shift = len(dash) - len(dash.lstrip()) - 2
-    new = [
-        " " * shift + line if shift >= 0 else line[-shift:]
-        for line in dumped.getvalue().splitlines(keepends=True)[1:]
-    ]
+    yaml.dump({"steps": [dict(entry)]}, dumped)
+    new = dumped.getvalue().splitlines(keepends=True)[1:]
     return "".join(old[:end] + new + old[end:])
 
 

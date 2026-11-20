@@ -764,6 +764,26 @@ describe("LibraryPage, adding a step", () => {
     )
   })
 
+  it("adds against the hash its card opened on, keeping what was typed across a re-read", async () => {
+    let reads = 0
+    const { caller, user, form } = await openAdd("implement", {
+      "factory.get": ({ name }) => {
+        reads += 1
+        return factoryRead(name, software, commit, `h-read-${reads}`)
+      },
+    })
+    const opened = reads
+    await user.type(form.getByRole("textbox", { name: "Id" }), "docs")
+
+    window.dispatchEvent(new Event("focus"))
+    await waitFor(() => expect(reads).toBeGreaterThan(opened))
+    await user.click(form.getByRole("button", { name: "Add" }))
+
+    await waitFor(() =>
+      expect(added(caller)).toMatchObject({ hash: `h-read-${opened}`, step: { id: "docs" } }),
+    )
+  })
+
   it("shows the check's problems when the hub refuses an add, and keeps the new step", async () => {
     const { user, form } = await openAdd("implement", {
       "factory.step.add": () => {
