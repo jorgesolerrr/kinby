@@ -569,6 +569,39 @@ describe("LibraryPage, an off step", () => {
     )
   })
 
+  it("sends the next toggle against the factory as the last toggle left it", async () => {
+    let toggled = false
+    const read = (name: string) => ({
+      ...changed(name),
+      files: { "factory.yaml": toggled ? software.replace("    off: true\n", "") : software },
+      hash: toggled ? "h-3" : "h-2",
+    })
+    const { caller, user } = await openStep("review", {
+      "factory.get": ({ name }) => read(name),
+      "factory.step.off.set": ({ name }) => {
+        toggled = true
+        return read(name)
+      },
+    })
+
+    await user.click(within(card("review")).getByRole("switch", { name: "On" }))
+    await waitFor(() =>
+      expect(within(card("review")).queryByRole("button", { name: "Delete" })).toBeNull(),
+    )
+    await user.click(within(card("review")).getByRole("switch", { name: "On" }))
+
+    await waitFor(() =>
+      expect(
+        caller.calls
+          .filter((call) => call.method === "factory.step.off.set")
+          .map((call) => call.params),
+      ).toEqual([
+        { name: "software", hash: "h-2", step: "review", off: false },
+        { name: "software", hash: "h-3", step: "review", off: true },
+      ]),
+    )
+  })
+
   it("offers Delete only on an off step", async () => {
     const { caller, user, editor } = await openStep("review", {
       "factory.step.delete": ({ name }) => changed(name),

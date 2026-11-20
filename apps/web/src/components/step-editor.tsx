@@ -112,7 +112,7 @@ export function StepEditor({
       onSaved()
     })
   }
-  const read = { name: saving.factory.name, hash: saving.factory.hash, step: step.id }
+  const read = { name: factory.name, hash: factory.hash, step: step.id }
   const turn = (on: boolean) =>
     void turning.ask(async () => {
       try {
