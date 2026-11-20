@@ -22,15 +22,19 @@ class StepNotDeclared(LookupError):
 def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
     """The factory file *text* with the step of the entry's id declared as *entry*. Each line
     outside that step stays as it was."""
-    document = _yaml().load(text)
+    yaml = _yaml()
+    document = yaml.load(text)
     at = _place(document, entry.get("id"))
     old = text.splitlines(keepends=True)
     before = _lines(document, at, len(old))
+    line, column = document["steps"].lc.item(at)
+    # Written as the file writes its steps, so the spliced step lines up with the others.
+    yaml.indent(mapping=2, sequence=column, offset=old[line].index("-"))
     _merge(document["steps"][at], entry)
     dumped = io.StringIO()
-    _yaml().dump(document, dumped)
+    yaml.dump(document, dumped)
     new = dumped.getvalue().splitlines(keepends=True)
-    after = _lines(_yaml().load(dumped.getvalue()), at, len(new))
+    after = _lines(yaml.load(dumped.getvalue()), at, len(new))
     return "".join(old[: before.start] + new[after.start : after.stop] + old[before.stop :])
 
 
@@ -84,7 +88,6 @@ def without_step(text: str, step_id: str) -> str:
 
 def _yaml() -> YAML:
     yaml = YAML()
-    yaml.indent(mapping=2, sequence=4, offset=2)
     # A narrower width folds again the descriptions the file already folds at 100 columns.
     yaml.width = 100
     yaml.preserve_quotes = True
@@ -112,7 +115,7 @@ def _lines(document: CommentedMap, at: int, count: int) -> range:
 
 def _merge(held: CommentedMap, entry: Mapping[str, JsonValue]) -> None:
     """Make *held* declare *entry*, leaving each value it already declares as it was written."""
-    last = list(held)[-1]
+    last = next(reversed(held), None)
     for key in [key for key in held if key not in entry]:
         del held[key]
     for key, value in entry.items():
@@ -121,9 +124,9 @@ def _merge(held: CommentedMap, entry: Mapping[str, JsonValue]) -> None:
             _merge(old, value)
         elif key not in held:
             # Before the last key, which carries the comments between this entry and the next.
-            held.insert(len(held) - 1, key, value)
+            held.insert(max(len(held) - 1, 0), key, value)
         elif old != value:
             styled = isinstance(old, ScalarString) and isinstance(value, str)
             held[key] = type(old)(value) if styled else value
-    if last not in held and last in held.ca.items:
+    if held and last not in held and last in held.ca.items:
         held.ca.items[list(held)[-1]] = held.ca.items.pop(last)

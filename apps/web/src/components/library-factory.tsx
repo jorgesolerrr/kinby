@@ -68,7 +68,13 @@ export function FactoryEntry({
           </>
         )}
       </section>
-      <FactoryHistory client={client} clock={clock} name={name} onReverted={readAgain} />
+      <FactoryHistory
+        client={client}
+        clock={clock}
+        name={name}
+        current={opened?.result.version}
+        onReverted={readAgain}
+      />
     </div>
   )
 }

@@ -30,21 +30,26 @@ const versions: FactoryVersion[] = [
 
 const hookFile = "@hook\ndef check_implementation(end):\n    return None\n"
 
+/** The factory as the hub reads it, made of `file` and at `version`. */
+function factoryRead(name: string, file: string, version: string | null, hash = "h-2") {
+  return {
+    name,
+    source: "shipped" as const,
+    files: {
+      "factory.yaml": file,
+      "prompts/implement.md": "Implement it.\n",
+      "hooks/implementation.py": hookFile,
+    },
+    hash,
+    version,
+    declared_in: { check_implementation: "hooks/implementation.py" },
+  }
+}
+
 function openPage(file = factoryFile, history = versions, more: Answers = {}) {
   const caller = stubCaller({
     "library.list": () => listed,
-    "factory.get": ({ name }) => ({
-      name,
-      source: "shipped",
-      files: {
-        "factory.yaml": file,
-        "prompts/implement.md": "Implement it.\n",
-        "hooks/implementation.py": hookFile,
-      },
-      hash: "h-2",
-      version: history[0]?.version ?? null,
-      declared_in: { check_implementation: "hooks/implementation.py" },
-    }),
+    "factory.get": ({ name }) => factoryRead(name, file, history[0]?.version ?? null),
     "factory.version.list": () => ({ versions: history }),
     "factory.version.diff": ({ version }) => ({ diff: `diff of ${version}\n` }),
     "factory.revert": ({ name }) => ({
@@ -442,6 +447,59 @@ describe("LibraryPage, a step's editor", () => {
     ).toBeTruthy()
     expect((retry as HTMLInputElement).value).toBe("3")
   })
+
+  it("saves against the hash its card opened on, though the factory was read again since", async () => {
+    let reads = 0
+    const { caller, user, editor } = await openStep("implement", {
+      "factory.get": ({ name }) => {
+        reads += 1
+        return factoryRead(name, software, commit, `h-read-${reads}`)
+      },
+      "factory.step.save": ({ name }) => factoryRead(name, software, commit, "h-saved"),
+    })
+    const opened = reads
+
+    window.dispatchEvent(new Event("focus"))
+    await waitFor(() => expect(reads).toBeGreaterThan(opened))
+    await user.type(editor.getByRole("textbox", { name: "Timeout" }), "0")
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    await waitFor(() =>
+      expect(caller.calls.find((call) => call.method === "factory.step.save")?.params).toEqual(
+        expect.objectContaining({
+          hash: `h-read-${opened}`,
+          step: expect.objectContaining({ timeout: "60m0" }),
+        }),
+      ),
+    )
+  })
+
+  it("lists the version a save made in History", async () => {
+    const saved: FactoryVersion = {
+      version: "2".repeat(40),
+      time: "2026-11-20T10:00:00Z",
+      source: "web",
+      steps: ["fix"],
+    }
+    let history = versions
+    const { user, editor } = await openStep("implement", {
+      "factory.get": ({ name }) => factoryRead(name, software, history[0].version),
+      "factory.version.list": () => ({ versions: history }),
+      "factory.step.save": ({ name }) => {
+        history = [saved, ...versions]
+        return factoryRead(name, software, saved.version, "h-3")
+      },
+    })
+    const rows = () =>
+      within(screen.getByRole("list", { name: "History" })).getAllByRole("listitem")
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    await user.type(editor.getByRole("textbox", { name: "Timeout" }), "0")
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    expect(within(rows()[0]).getByText("fix")).toBeTruthy()
+  })
 })
 
 const changed = (name: string) => ({
@@ -486,6 +544,17 @@ describe("LibraryPage, an off step", () => {
     )
   })
 
+  it("keeps the switch off until unsaved edits are saved or discarded", async () => {
+    const { user, editor } = await openStep("checks")
+    const on = editor.getByRole("switch", { name: "On" })
+
+    await user.type(editor.getByRole("spinbutton", { name: "Retry" }), "3")
+
+    expect(on.getAttribute("data-disabled")).not.toBeNull()
+    await user.click(editor.getByRole("button", { name: "Discard" }))
+    expect(on.getAttribute("data-disabled")).toBeNull()
+  })
+
   it("turns an off step back on", async () => {
     const { caller, user, editor } = await openStep("review", {
       "factory.step.off.set": ({ name }) => changed(name),
@@ -497,6 +566,39 @@ describe("LibraryPage, an off step", () => {
       expect(
         caller.calls.find((call) => call.method === "factory.step.off.set")?.params,
       ).toMatchObject({ step: "review", off: false }),
+    )
+  })
+
+  it("sends the next toggle against the factory as the last toggle left it", async () => {
+    let toggled = false
+    const read = (name: string) => ({
+      ...changed(name),
+      files: { "factory.yaml": toggled ? software.replace("    off: true\n", "") : software },
+      hash: toggled ? "h-3" : "h-2",
+    })
+    const { caller, user } = await openStep("review", {
+      "factory.get": ({ name }) => read(name),
+      "factory.step.off.set": ({ name }) => {
+        toggled = true
+        return read(name)
+      },
+    })
+
+    await user.click(within(card("review")).getByRole("switch", { name: "On" }))
+    await waitFor(() =>
+      expect(within(card("review")).queryByRole("button", { name: "Delete" })).toBeNull(),
+    )
+    await user.click(within(card("review")).getByRole("switch", { name: "On" }))
+
+    await waitFor(() =>
+      expect(
+        caller.calls
+          .filter((call) => call.method === "factory.step.off.set")
+          .map((call) => call.params),
+      ).toEqual([
+        { name: "software", hash: "h-2", step: "review", off: false },
+        { name: "software", hash: "h-3", step: "review", off: true },
+      ]),
     )
   })
 
