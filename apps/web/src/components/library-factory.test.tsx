@@ -4,7 +4,7 @@ import { screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import { detail } from "@/components/factories-testing"
-import { commit, listed, openLibrary } from "@/components/library-testing"
+import { commit, headerHeight, listed, openLibrary } from "@/components/library-testing"
 
 import software from "../../../../src/kinby/factories/shipped/software/factory.yaml?raw"
 
@@ -384,6 +384,17 @@ steps:
 
     const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[8]
     expect(scrolled.mock.contexts).toEqual([babysit])
+  })
+
+  it("scrolls a step's card to below the Library's header, by the header's height", async () => {
+    await openMap()
+
+    const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[8]
+    const page = babysit.closest<HTMLElement>('[style*="--library-scroll-margin"]')
+    expect(page?.style.getPropertyValue("--library-scroll-margin")).toBe(
+      `calc(${headerHeight}px + var(--spacing) * 4)`,
+    )
+    expect(babysit.className).toContain("scroll-mt-(--library-scroll-margin)")
   })
 })
 

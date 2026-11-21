@@ -91,7 +91,7 @@ export function FactorySteps({
       />
       <ol aria-label="Steps" className="flex flex-col">
         {steps.map((step, place) => (
-          <li key={step.id} id={cardId(step.id)} className="scroll-mt-24">
+          <li key={step.id} id={cardId(step.id)} className="scroll-mt-(--library-scroll-margin)">
             <StepCard
               step={step}
               differs={saving.factory.differing_steps.includes(step.id)}
