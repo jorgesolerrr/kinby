@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import { InstanceScreen } from "@/components/instance-screen"
+import { drawnPage } from "@/components/view-testing"
 
 const BOARD = { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" }
 const READING = { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" }
@@ -16,7 +17,7 @@ function snapshot({ id, title, updated_at }: ViewSummary): View {
     id,
     title,
     updated_at,
-    spec: { components: [{ id: "root", component: "Text", text: { path: "/note" } }] },
+    page: "<p id=note></p><script>note.textContent = kinby.data.note</script>",
     data: { note: `The ${title} itself.` },
   }
 }
@@ -83,7 +84,8 @@ describe("an instance's screen", () => {
 
     expect(openTab()).toBe("Reading list")
     expect(following.params).toEqual({ id: "reading" })
-    expect(await screen.findByText("The Reading list itself.")).toBeDefined()
+    const frame = await screen.findByTitle("Reading list")
+    expect(drawnPage(frame).documentElement.innerHTML).toContain("The Reading list itself.")
   })
 
   it("opens a tab picked at its address, as a new history entry", async () => {

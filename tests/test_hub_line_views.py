@@ -16,19 +16,18 @@ from kinby.contracts import (
     StepResult,
     View,
     ViewListResult,
-    ViewSpec,
 )
 from tests.test_factory_runs import settled
 from tests.test_hub_factories import write_factory
 from tests.test_hub_line_intake import Owned, _started_workbench, owned
 from tests.test_hub_line_runs import TASKS
 from tests.test_scheduler import call
-from tests.test_views import BOARD, DATA
+from tests.test_views import DATA, PAGE
 
 BOARD_VIEW = View(
     id="board",
     title="Applications",
-    spec=ViewSpec.model_validate(BOARD),
+    page=PAGE,
     data=DATA,
     updated_at=datetime(2026, 11, 14, tzinfo=UTC),
 )
@@ -71,7 +70,7 @@ def test_a_view_a_step_writes_appears_among_its_owners_views_and_its_run_names_i
             assert [(view.id, view.title) for view in listed.views] == [("board", "Applications")]
             held = await call(hub.dispatcher, "view.get", id="board")
             assert isinstance(held, View), held
-            assert (held.spec, held.data) == (BOARD_VIEW.spec, DATA)
+            assert (held.page, held.data) == (PAGE, DATA)
             [(workbench, _)] = hub.control.steps
             assert [(endpoint, read.id) for endpoint, read in hub.control.views_read] == [
                 (workbench, "board")

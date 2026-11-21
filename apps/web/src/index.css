@@ -5,6 +5,7 @@
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/gabarito";
 @import "@fontsource-variable/source-serif-4";
+@import "./tokens.css";
 
 /* Streamdown styles replies with Tailwind classes that live in its bundle. */
 @source "../node_modules/streamdown/dist/*.js";
@@ -65,76 +66,6 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-/* The kinby design system's tokens: kin is the brand green, ember the companion's marigold. */
-:root {
-  --kin: oklch(0.45 0.09 162);
-  --ember: oklch(0.8 0.15 75);
-  --on-ember: oklch(0.25 0.04 60);
-  --background: oklch(0.982 0.005 85);
-  --foreground: oklch(0.21 0.006 85);
-  --card: oklch(0.995 0.003 85);
-  --card-foreground: var(--foreground);
-  --popover: var(--card);
-  --popover-foreground: var(--foreground);
-  --primary: var(--kin);
-  --primary-foreground: oklch(0.985 0.005 85);
-  --secondary: oklch(0.945 0.008 85);
-  --secondary-foreground: var(--foreground);
-  --muted: var(--secondary);
-  --muted-foreground: oklch(0.5 0.012 85);
-  --accent: oklch(0.94 0.03 162);
-  --accent-foreground: oklch(0.36 0.07 162);
-  --destructive: oklch(0.52 0.19 32);
-  --success: oklch(0.48 0.13 150);
-  --border: oklch(0.895 0.01 85);
-  --input: oklch(0.9 0.01 85);
-  --ring: var(--kin);
-  --chart-1: var(--kin);
-  --chart-2: var(--ember);
-  --chart-3: oklch(0.55 0.08 240);
-  --chart-4: oklch(0.62 0.06 150);
-  --chart-5: oklch(0.5 0.09 320);
-  --radius: 0.625rem;
-  --avatar-foreground: oklch(0.985 0 0);
-  --avatar-blue: oklch(0.546 0.215 262.9);
-  --avatar-violet: oklch(0.541 0.247 293);
-  --avatar-green: oklch(0.527 0.137 150.1);
-  --avatar-amber: oklch(0.555 0.146 49);
-  --avatar-red: oklch(0.577 0.215 27.3);
-  --avatar-gray: oklch(0.446 0 0);
-  --sidebar: oklch(0.958 0.008 85);
-  --sidebar-foreground: var(--foreground);
-  --sidebar-primary: var(--kin);
-  --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: var(--accent);
-  --sidebar-accent-foreground: var(--accent-foreground);
-  --sidebar-border: var(--border);
-  --sidebar-ring: var(--ring);
-}
-
-/* In dark, kin turns pale, so text on primary turns dark. The surfaces are warm near-blacks, so kin and ember carry the color. */
-.dark {
-  --kin: oklch(0.78 0.11 160);
-  --ember: oklch(0.82 0.14 78);
-  --on-ember: oklch(0.25 0.04 60);
-  --background: oklch(0.235 0.004 85);
-  --foreground: oklch(0.955 0.006 85);
-  --card: oklch(0.265 0.004 85);
-  --primary-foreground: oklch(0.2 0.03 165);
-  --secondary: oklch(0.29 0.005 85);
-  --muted-foreground: oklch(0.72 0.01 85);
-  --accent: oklch(0.31 0.04 162);
-  --accent-foreground: oklch(0.88 0.07 162);
-  --destructive: oklch(0.7 0.17 30);
-  --success: oklch(0.78 0.15 150);
-  --border: oklch(0.335 0.005 85);
-  --input: oklch(0.42 0.006 85);
-  --chart-3: oklch(0.72 0.09 240);
-  --chart-4: oklch(0.6 0.06 150);
-  --chart-5: oklch(0.7 0.1 320);
-  --sidebar: oklch(0.2 0.004 85);
 }
 
 @layer base {

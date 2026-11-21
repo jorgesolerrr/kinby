@@ -467,18 +467,8 @@ def test_the_schema_declares_the_skill_and_tool_calls() -> None:
     assert _object(definitions["ToolRule"])["enum"] == ["allow", "ask", "deny", "mode"]
 
 
-def test_the_schema_exports_the_view_catalogue() -> None:
+def test_the_schema_exports_a_view_as_a_page_and_its_data() -> None:
     definitions = _object(contract_schema()["$defs"])
 
-    assert _object(definitions["ViewComponent"])["oneOf"] == [
-        {"$ref": "#/$defs/ViewCard"},
-        {"$ref": "#/$defs/ViewRow"},
-        {"$ref": "#/$defs/ViewText"},
-        {"$ref": "#/$defs/ViewLink"},
-        {"$ref": "#/$defs/ViewTable"},
-        {"$ref": "#/$defs/ViewBadge"},
-        {"$ref": "#/$defs/ViewKanban"},
-        {"$ref": "#/$defs/ViewStat"},
-        {"$ref": "#/$defs/ViewChart"},
-        {"$ref": "#/$defs/ViewChecklist"},
-    ]
+    assert {"page", "data"} <= _object(_object(definitions["View"])["properties"]).keys()
+    assert "ViewComponent" not in definitions

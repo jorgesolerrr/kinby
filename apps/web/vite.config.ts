@@ -18,6 +18,8 @@ export default defineConfig({
       "/ws": { target: hub, ws: true },
       "^/instances/[^/]+/ws$": { target: hub, ws: true },
       "/auth": hub,
+      // What a view's page may load.
+      "/sandbox": hub,
       // An MCP server's page sends the browser back to the hub here.
       "/mcp-sign-ins": hub,
     },
@@ -25,6 +27,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // A view's frame inlines the theme's tokens, which vitest otherwise reads as empty.
+    css: { include: [/tokens\.css/] },
     // The jsdom tests are CPU-bound, and the suite is no faster past four workers. Vitest's
     // default of one per core less one oversubscribes a laptop's cores: the first test of a
     // heavy file then outruns the 5 s timeout. Below four cores, vitest's default stands.

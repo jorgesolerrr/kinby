@@ -1,4 +1,4 @@
-"""The view tools: a turn keeps the instance's views (ADR 0108)."""
+"""The view tools: a turn keeps the instance's views (ADR 0108, ADR 0131)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 
 from pydantic import JsonValue, TypeAdapter
 
-from kinby.contracts import ViewChange, ViewChanged, ViewId, ViewSpec
+from kinby.contracts import ViewChange, ViewChanged, ViewId
 from kinby.instance.views import (
     ViewPatchOperation,
     delete_view,
@@ -36,33 +36,32 @@ def view_list(context: ToolContext) -> str:
 
 @tool(write=False)
 def view_read(id: ViewId, context: ToolContext) -> str:
-    """Read one view whole: its title, spec and data."""
+    """Read one view whole: its title, page and data."""
     return read_view(context.instance, id).model_dump_json()
 
 
-@tool(write=True, view=True)
+@tool(write=True, page=True)
 async def view_write(
     id: ViewId,
     title: str,
-    spec: dict[str, JsonValue],
+    page: str,
     data: dict[str, JsonValue],
     context: ToolContext,
 ) -> str:
-    """Create or replace a view: a page of UI the user opens in the web app, which you keep
-    current. Write one on your own when it shows something more precisely than a message, such
-    as a board a routine updates every morning. Read the write-view skill before composing a
-    spec. id is a short slug, and a view is capped at 1 MB.
+    """Create or replace a view: a page of HTML the user opens in the web app, and the data it
+    shows, which you keep current. Write one on your own when it shows something more precisely
+    than a message, such as a board a routine updates every morning. Read the write-view skill
+    before writing a page. id is a short slug, and a view is capped at 1 MB.
     """
-    change = await asyncio.to_thread(
-        write_view, context.instance, id, title, ViewSpec.model_validate(spec), data
-    )
+    change = await asyncio.to_thread(write_view, context.instance, id, title, page, data)
     await context.report_view_changed(ViewChanged(view=id, title=title, change=change))
     return f"{change.value.capitalize()} view {id}."
 
 
 @tool(write=True, view=True)
 async def view_patch(id: ViewId, ops: list[dict[str, JsonValue]], context: ToolContext) -> str:
-    """Change part of a view with RFC 6902 JSON Patch operations, as the write-view skill shows."""
+    """Change a view's title or data with RFC 6902 JSON Patch operations, as the write-view skill
+    shows. The page is changed only with view_write."""
     operations = _OPERATIONS.validate_python(ops)
     patched = await asyncio.to_thread(patch_view, context.instance, id, operations)
     await context.report_view_changed(

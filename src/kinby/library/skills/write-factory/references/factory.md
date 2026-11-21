@@ -89,7 +89,7 @@ Each kind adds its own:
   - `resume`: an earlier `agent` step on the same coding client, whose session this one continues, so one session can write a change, answer its reviews and repair its checks. The `kinby` engine keeps no session, and the check refuses `resume` on it.
   - Both engines are offered the skills of the factory's folder, as `skills/<name>/SKILL.md`, and the workbench's picks. Each attempt's transcript is kept on the workbench, and the run shows it.
   - A coding client runs without kinby's gate: Claude Code edits and runs commands unasked, Codex runs without approvals or sandbox. Without `timeout` an attempt stops after 60 minutes.
-  - A kinby turn has bash and the file tools, in the run folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. On a workbench with a browser it has the browser tools too. It goes through kinby's default gate policy: when the gate asks about a call, the run parks and the user gets a notification that names it, and their answer resumes the turn. `browser_takeover` parks the run the same way until the user finishes the takeover. The `kinby` engine ignores `timeout`: the line's budget bounds the turn.
+  - A kinby turn has bash and the file tools, in the run folder only, and `view_write`, whose view the hub writes among the views of the line's owner and names in the run's attempt. A view's page is code, so the gate asks about every `view_write`. On a workbench with a browser it has the browser tools too. It goes through kinby's default gate policy: when the gate asks about a call, the run parks and the user gets a notification that names it, and their answer resumes the turn. `browser_takeover` parks the run the same way until the user finishes the takeover. The `kinby` engine ignores `timeout`: the line's budget bounds the turn.
 - `command`: commands in the run folder, each without a shell.
   - `run`: the commands, in order. A `{{name}}` in a command stands for that run value, as one argument. An entry `{ commands: <name> }` runs the workbench's list of repository commands of that name, which `requires.commands` must declare. Exit code zero passes. The first that fails fails the step, with the command and the last 2,000 characters of its output as the attempt's summary.
   - No gate. Without `timeout` the commands run as long as they take.
@@ -192,7 +192,7 @@ The decorator's arguments, all by keyword:
 
 - `write`: required. True for a tool that changes anything.
 - `paths`: the names of the parameters that hold a path, which a `code` step resolves against the run folder before the call.
-- `hub`, `notify` and `view`: these mark kinby's own hub, notify and view tools. A factory's tool leaves them out.
+- `hub`, `notify`, `view` and `page`: these mark kinby's own hub, notify and view tools. A factory's tool leaves them out.
 
 A workbench has no tool context, so a tool that takes a `ToolContext` parameter fails.
 

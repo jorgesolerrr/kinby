@@ -1,10 +1,10 @@
-import type { InstanceClient } from "@kinby/contract"
-import { Trash2Icon } from "lucide-react"
+import type { InstanceClient, View } from "@kinby/contract"
+import { HistoryIcon, Trash2Icon } from "lucide-react"
 
 import { Failure } from "@/components/config-alerts"
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ViewRenderer } from "@/components/view-renderer"
+import { ViewFrame } from "@/components/view-frame"
 import { type FollowedView, useView } from "@/hooks/use-view"
 import { when } from "@/lib/config-changes"
 
@@ -30,7 +30,7 @@ export function ViewPage({
       ) : (
         <>
           <p className="text-sm text-muted-foreground">Changed {when(view.updated_at)}</p>
-          <ViewRenderer view={view} />
+          <Drawn view={view} />
         </>
       )}
     </div>
@@ -46,10 +46,30 @@ export function ViewPane({ followed: { view, failure, deleted } }: { followed: F
       {view === undefined ? (
         failure === undefined && <Skeleton className="h-72 w-full" />
       ) : (
-        <ViewRenderer view={view} />
+        <Drawn view={view} />
       )}
     </div>
   )
+}
+
+/** The view's page, or for a view written for the view catalogue, how to get one. */
+function Drawn({ view }: { view: View }) {
+  if (view.page === null) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <HistoryIcon />
+          </EmptyMedia>
+          <EmptyTitle>Written for an older kinby</EmptyTitle>
+          <EmptyDescription>
+            This kinby draws views another way. Ask the instance to write it again.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+  return <ViewFrame title={view.title} page={view.page} data={view.data} />
 }
 
 function Deleted() {

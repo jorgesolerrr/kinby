@@ -56,6 +56,7 @@ def evaluate(
     *,
     granted: bool = False,
     marked_read_only: bool = False,
+    user_started: bool = False,
     seen_urls: Collection[str] = (),
     saved_outputs: Path | None = None,
 ) -> GateDecision:
@@ -63,10 +64,12 @@ def evaluate(
 
     A hub tool's write asks in every mode but read-only, ahead of any rule (ADR 0096).
     Consolidation's own write runs unasked in every mode but read-only, where it is denied,
-    also ahead of any rule (ADR 0100). So do notify and a view write, unless a rule names the
-    tool (ADR 0103, ADR 0108). A routine grant, when *granted*, allows the call ahead of the mode
-    in every mode but read-only, so the ceiling still bounds it (ADR 0112). An authored tool is a
-    write whatever it declares, unless the user *marked_read_only* it (ADR 0109). A tool that
+    also ahead of any rule (ADR 0100). So do notify and a write of a view's data, unless a rule
+    names the tool (ADR 0103, ADR 0108), and a write of a view's page on a turn the user
+    *user_started*, which on any other turn falls to the rules below as any write does
+    (ADR 0131). A routine grant, when *granted*, allows the call ahead of the mode in every mode
+    but read-only, so the ceiling still bounds it (ADR 0112). An authored tool is a write
+    whatever it declares, unless the user *marked_read_only* it (ADR 0109). A tool that
     opens a URL is allowed for one of the thread's *seen_urls*, and a write for any other
     (ADR 0110). A shell read runs unasked in ask and auto, once the bash patterns and a rule
     naming bash had their say (ADR 0119), and so does a read of the turn's *saved_outputs*
@@ -84,6 +87,9 @@ def evaluate(
     if tool is not None and tool.view and call.name not in policy.tools:
         action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ALLOW
         return GateDecision(action, GateRule("view"))
+    if tool is not None and tool.page and user_started and call.name not in policy.tools:
+        action = GateAction.DENY if mode is PermissionMode.READ_ONLY else GateAction.ALLOW
+        return GateDecision(action, GateRule("view.page"))
     if (
         mode is not PermissionMode.READ_ONLY
         and call.name == "bash"
@@ -137,6 +143,7 @@ def asks_every_call(
     *,
     granted: bool = False,
     marked_read_only: bool = False,
+    user_started: bool = False,
 ) -> bool:
     """Whether the gate asks about every call to *tool* it does not deny, whatever the call's
     arguments: it asks about a call without any, and no other arguments could have it allow the
@@ -150,6 +157,7 @@ def asks_every_call(
         workspace,
         granted=granted,
         marked_read_only=marked_read_only,
+        user_started=user_started,
     )
     allowed_by_arguments = (
         decision.rule == "web.unseen_url"
