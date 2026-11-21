@@ -66,6 +66,7 @@ class CoreSkillModel:
             "skill_delete",
             "skill_write",
             "view_delete",
+            "view_edit",
             "view_list",
             "view_patch",
             "view_read",

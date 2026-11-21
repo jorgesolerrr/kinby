@@ -11,6 +11,7 @@ from kinby.contracts import ViewChange, ViewChanged, ViewId
 from kinby.instance.views import (
     ViewPatchOperation,
     delete_view,
+    edit_view,
     list_views,
     patch_view,
     read_view,
@@ -22,7 +23,7 @@ _OPERATIONS = TypeAdapter(list[ViewPatchOperation])
 
 
 def view_tools() -> tuple[Tool, ...]:
-    return (view_list, view_read, view_write, view_patch, view_delete)
+    return (view_list, view_read, view_write, view_patch, view_edit, view_delete)
 
 
 @tool(write=False)
@@ -61,13 +62,23 @@ async def view_write(
 @tool(write=True, view=True)
 async def view_patch(id: ViewId, ops: list[dict[str, JsonValue]], context: ToolContext) -> str:
     """Change a view's title or data with RFC 6902 JSON Patch operations, as the write-view skill
-    shows. The page is changed only with view_write."""
+    shows. Change the page with view_edit."""
     operations = _OPERATIONS.validate_python(ops)
     patched = await asyncio.to_thread(patch_view, context.instance, id, operations)
     await context.report_view_changed(
         ViewChanged(view=id, title=patched.title, change=ViewChange.CHANGED)
     )
     return f"Changed view {id}."
+
+
+@tool(write=True, page=True)
+async def view_edit(id: ViewId, old: str, new: str, context: ToolContext) -> str:
+    """Change a view's page: replace old, an exact string that appears once in it, with new."""
+    edited = await asyncio.to_thread(edit_view, context.instance, id, old, new)
+    await context.report_view_changed(
+        ViewChanged(view=id, title=edited.title, change=ViewChange.CHANGED)
+    )
+    return f"Changed the page of view {id}."
 
 
 @tool(write=True)
