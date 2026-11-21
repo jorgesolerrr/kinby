@@ -7,8 +7,8 @@ A view is a page the user opens in the web app. Its `page` is HTML you write, an
 JSON object the page shows. Call `view_write` with the view's `id`, `title`, `page` and `data` to
 create or replace one. The whole view is capped at 1 MB.
 
-On a turn the user starts, `view_write` runs without asking. On any other turn, such as a
-routine's, it asks the user first when it creates a view or changes a page, because a page is
+On a turn the user starts, `view_write` and `view_edit` run without asking. On any other turn,
+such as a routine's, creating a view or changing its page asks the user first, because a page is
 code. Writing a view whole with the page it already has changes only the data, and never asks.
 
 ## The page and its data
@@ -71,10 +71,16 @@ tables. Style the rest with a `<style>` element or `style` attributes.
 
 ## Changing a view
 
-To change the title or the data, call `view_read`, then `view_patch` with JSON Patch operations
-instead of writing the view again. Paths address the view as `view_read` returns it:
-`/data/postings/-` appends a posting, and `/title` renames it. A patch can't touch the page: write
-the view again with `view_write` to change it.
+Call `view_read` first, then change only what needs changing instead of writing the view again.
+
+To change the title or the data, call `view_patch` with JSON Patch operations. Paths address the
+view as `view_read` returns it: `/data/postings/-` appends a posting, and `/title` renames it. A
+patch can't touch the page.
+
+To change the page, call `view_edit` with `old`, an exact string from the page, and `new`, the
+string to put in its place. It refuses when `old` is not in the page or appears more than once, so
+quote enough of the page around the change that it appears once. Write the page whole with
+`view_write` only to redesign it.
 
 A view written for an older kinby has no page. Read its data with `view_read` and write it again
 with a page.
