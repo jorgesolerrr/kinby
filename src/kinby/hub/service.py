@@ -159,6 +159,7 @@ from kinby.contracts import (
     THREAD_TAKEOVER_RESUME,
     THREAD_TAKEOVER_START,
     THREAD_TURN_START,
+    VIEW_GET,
     VIEW_WRITE,
     WORKBENCH_COMMANDS_SET,
     WORKBENCH_CREATE,
@@ -351,6 +352,7 @@ from kinby.contracts import (
     VaultEntryEditCommand,
     VaultEntryListCommand,
     VaultEntryListResult,
+    View,
     ViewGetCommand,
     ViewId,
     ViewWriteCommand,
@@ -984,6 +986,7 @@ class Hub:
                 self.outbox,
                 self._remove_run_folder,
                 self._hand_view,
+                self._owner_page,
             )
             self.replies = Replies(
                 self.registry,
@@ -1462,6 +1465,10 @@ class Hub:
         view = await self._control.read_view(endpoint, ViewGetCommand(id=view_id))
         command = ViewWriteCommand.model_validate(view.model_dump(exclude={"updated_at"}))
         await self._relayed(instance_id, VIEW_WRITE.name, command.model_dump(mode="json"))
+
+    async def _owner_page(self, instance_id: UUID, view_id: ViewId) -> str | None:
+        params = ViewGetCommand(id=view_id).model_dump(mode="json")
+        return View.model_validate(await self._relayed(instance_id, VIEW_GET.name, params)).page
 
     async def run_transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:
         """Read one page of the attempt's transcript from the workbench of the run's line."""

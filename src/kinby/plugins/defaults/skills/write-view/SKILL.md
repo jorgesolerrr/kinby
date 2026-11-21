@@ -8,7 +8,8 @@ JSON object the page shows. Call `view_write` with the view's `id`, `title`, `pa
 create or replace one. The whole view is capped at 1 MB.
 
 On a turn the user starts, `view_write` runs without asking. On any other turn, such as a
-routine's, it asks the user first, because a page is code.
+routine's, it asks the user first when it creates a view or changes a page, because a page is
+code. Writing a view whole with the page it already has changes only the data, and never asks.
 
 ## The page and its data
 
