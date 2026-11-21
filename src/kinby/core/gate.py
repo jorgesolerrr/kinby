@@ -23,6 +23,8 @@ class GateDecision:
 AUTHORED_RULE = GateRule("authored.write")
 #: The rule of a call its tool's check refused before the gate could ask for it.
 INVALID_ARGUMENTS = GateRule("arguments.invalid")
+#: The rule of a call its tool's preview refused before the gate could ask for it.
+PREVIEW_REFUSED = GateRule("preview.refused")
 #: The tools that open a URL. Each runs unasked for a URL already seen in the thread, and as a
 #: write for any other (ADR 0110).
 URL_READS = frozenset({"web_fetch", "browser_open"})

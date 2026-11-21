@@ -33,10 +33,13 @@ from kinby.contracts import (
     FactoryStepOffSetCommand,
     FactoryVersionSource,
     FrameType,
+    GateDecider,
+    GateOutcome,
     LineSetupCommand,
     LineSetupResult,
     OperationState,
     Payload,
+    ToolGated,
     ToolResult,
     WorkbenchStartCommand,
     is_turn_closing,
@@ -139,8 +142,18 @@ async def _nothing() -> None:
 async def relayed_turn(
     owner: Owner, decision: str, before_answer: Callable[[], Awaitable[None]] = _nothing
 ) -> tuple[ApprovalRequested, list[Payload]]:
-    """Start a turn in alice through the relay, as the user does, and answer its approval with
-    *decision* once *before_answer* ran. Return the approval and what the turn emitted."""
+    """Start a turn in alice through the relay, as the user does, and answer its one approval
+    with *decision* once *before_answer* ran. Return the approval and what the turn emitted."""
+    payloads = await _relayed(owner, decision, before_answer)
+    [approval] = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+    return approval, payloads
+
+
+async def _relayed(
+    owner: Owner, decision: str, before_answer: Callable[[], Awaitable[None]] = _nothing
+) -> list[Payload]:
+    """What a turn started in alice through the relay emitted, each approval answered with
+    *decision* once *before_answer* ran."""
     headers = {"Authorization": f"Bearer {owner.access_token}"}
     async with (
         aiohttp.ClientSession(headers=headers) as session,
@@ -180,8 +193,7 @@ async def relayed_turn(
                 payload = Event.model_validate(received["item"]).payload
                 payloads.append(payload)
                 if is_turn_closing(payload):
-                    assert approval is not None, payloads
-                    return approval, payloads
+                    return payloads
                 if not isinstance(payload, ApprovalRequested):
                     continue
                 approval = payload
@@ -369,6 +381,108 @@ def test_a_change_made_from_a_stale_read_reaches_the_owner_as_the_tools_result(
             assert result.error
             assert "changed since it was read" in result.output
             assert sources((await versions(client))[:1]) == [(FactoryVersionSource.WEB, ["review"])]
+
+    asyncio.run(scenario())
+
+
+def _refused(payloads: list[Payload]) -> ToolResult:
+    """The result of the turn's one call, which the gate denied on its refused preview."""
+    assert not [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+    [gated] = [payload for payload in payloads if isinstance(payload, ToolGated)]
+    assert (gated.action, gated.rule, gated.decided_by) == (
+        GateOutcome.DENY,
+        "preview.refused",
+        GateDecider.POLICY,
+    )
+    result = _result(payloads)
+    assert result.error
+    return result
+
+
+def test_a_change_to_a_factory_with_no_line_of_the_instance_is_refused_without_asking(
+    tmp_path, monkeypatch
+):
+    replies: list[AIMessageChunk] = []
+
+    async def scenario() -> None:
+        async with owner_hub(tmp_path, monkeypatch, replies) as owner:
+            client = hub_client(owner.hub)
+            before = await read(client, "other")
+            before_versions = await versions(client, "other")
+            replies.extend(
+                [
+                    _change(
+                        "step_off_set",
+                        {"name": "other", "hash": before.hash, "step": "land", "off": True},
+                    ),
+                    DONE,
+                ]
+            )
+
+            payloads = await _relayed(owner, "approve")
+
+            assert 'Factory "other" has no line of this instance' in _refused(payloads).output
+            assert await read(client, "other") == before
+            assert await versions(client, "other") == before_versions
+
+    asyncio.run(scenario())
+
+
+def test_a_change_from_a_stale_read_is_refused_without_asking(tmp_path, monkeypatch):
+    replies: list[AIMessageChunk] = []
+
+    async def scenario() -> None:
+        async with owner_hub(tmp_path, monkeypatch, replies) as owner:
+            client = hub_client(owner.hub)
+            before = await read(client)
+            turned = FactoryStepOffSetCommand(
+                name="tickets", step="review", off=True, hash=before.hash
+            )
+            assert isinstance(await client.call(FACTORY_STEP_OFF_SET, turned), FactoryResult)
+            replies.extend(
+                [
+                    _change(
+                        "step_off_set",
+                        {"name": "tickets", "hash": before.hash, "step": "land", "off": True},
+                    ),
+                    DONE,
+                ]
+            )
+
+            payloads = await _relayed(owner, "approve")
+
+            assert "changed since it was read" in _refused(payloads).output
+            assert sources((await versions(client))[:1]) == [(FactoryVersionSource.WEB, ["review"])]
+
+    asyncio.run(scenario())
+
+
+def test_a_change_whose_preview_the_hub_does_not_answer_is_refused_without_asking(
+    tmp_path, monkeypatch
+):
+    replies: list[AIMessageChunk] = []
+
+    async def scenario() -> None:
+        async with owner_hub(tmp_path, monkeypatch, replies) as owner:
+            client = hub_client(owner.hub)
+            before = await read(client)
+            before_versions = await versions(client)
+            replies.extend(
+                [
+                    _change(
+                        "step_off_set",
+                        {"name": "tickets", "hash": before.hash, "step": "land", "off": True},
+                    ),
+                    DONE,
+                ]
+            )
+            monkeypatch.setenv("KINBY_HUB_URL", url(owner.address, "/nowhere"))
+
+            payloads = await _relayed(owner, "approve")
+
+            assert "could not answer the preview" in _refused(payloads).output
+            assert await read(client) == before
+            assert await versions(client) == before_versions
 
     asyncio.run(scenario())
 
