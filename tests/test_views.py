@@ -19,6 +19,7 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Event,
+    PageWrite,
     RoutineGrant,
     RoutineName,
     Scope,
@@ -43,7 +44,7 @@ from kinby.plugins.defaults.files import read
 from tests.helpers import thread_events
 from tests.test_delegated_runs import call, fire_routine, runtime
 from tests.test_gate import ScriptedModel, _instance, _run_turn
-from tests.test_routine_grants import next_stop
+from tests.test_routine_grants import answer, next_stop, turn_events
 from tests.test_routines import instance_at, routine_file
 
 PAGE = """<h1>Applications</h1>
@@ -384,6 +385,9 @@ def test_a_routine_turn_asks_before_it_writes_a_page(tmp_path: Path, mode: str) 
 
         assert isinstance(stop.payload, ApprovalRequested)
         assert (stop.payload.name, stop.payload.rule) == ("view_write", f"mode.{mode}.write")
+        assert stop.payload.page_write == PageWrite(
+            title="Applications", page="<h1>Sign in</h1>", data=DATA, stored_page=PAGE
+        )
         assert isinstance(view, View)
         assert view.page == PAGE
 
@@ -400,6 +404,9 @@ def test_a_routine_turn_asks_before_it_creates_a_view(tmp_path: Path) -> None:
 
         assert isinstance(stop.payload, ApprovalRequested)
         assert (stop.payload.name, stop.payload.rule) == ("view_write", "mode.ask.write")
+        assert stop.payload.page_write == PageWrite(
+            title="Applications", page=PAGE, data=DATA, stored_page=None
+        )
         assert await listed(dispatcher) == []
 
     asyncio.run(scenario())
@@ -738,8 +745,52 @@ def test_a_routine_turn_asks_before_it_edits_a_page(
 
         assert isinstance(stop.payload, ApprovalRequested)
         assert (stop.payload.name, stop.payload.rule) == ("view_edit", f"mode.{mode}.write")
+        assert stop.payload.page_write == PageWrite(
+            title="Applications",
+            page=PAGE.replace("<h1>Applications</h1>", "<h1>Job board</h1>"),
+            data=DATA,
+            stored_page=PAGE,
+        )
         assert isinstance(view, View)
         assert view.page == PAGE
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("decision", "heading"), [("approve", "<h1>Job board</h1>"), ("deny", "<h1>Applications</h1>")]
+)
+def test_approving_a_routines_page_write_writes_the_view_and_denying_leaves_it(
+    tmp_path: Path, decision: str, heading: str
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        routine_file(instance, "description: News\nmode: ask")
+        dispatcher = runtime(instance, calling(RENAME_HEADING))
+
+        stop = await routine_stop(dispatcher)
+        await answer(dispatcher, stop, decision)
+        await turn_events(dispatcher, stop.thread_id)
+        view = await call(dispatcher, "view.get", id="applications")
+
+        assert isinstance(view, View)
+        assert view.page == PAGE.replace("<h1>Applications</h1>", heading)
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_that_would_be_refused_asks_with_no_page_to_draw(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        routine_file(instance, "description: News\nmode: ask")
+        dispatcher = runtime(instance, calling(edit("<h2>Missing</h2>", "<h2>Found</h2>")))
+
+        stop = await routine_stop(dispatcher)
+
+        assert isinstance(stop.payload, ApprovalRequested)
+        assert stop.payload.page_write is None
 
     asyncio.run(scenario())
 

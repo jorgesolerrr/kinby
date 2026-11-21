@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { instanceClient, openThread, started, thread, traceLine } from "@/components/thread-testing"
+import { drawnPage } from "@/components/view-testing"
 import { threadList } from "@/lib/thread-list"
 
 describe("a thread's panel", () => {
@@ -473,6 +474,104 @@ describe("a thread's panel", () => {
       await act(async () => subscription().deliver(denied("")))
 
       expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Thread title" }))
+    })
+  })
+
+  describe("an approval for a page write", () => {
+    const stored = `<h1>Applications</h1>
+<ul id="postings"></ul>
+<script>
+  for (const posting of kinby.data.postings) document.getElementById("postings").append(posting.company)
+</script>`
+    const edited = stored.replace("<h1>Applications</h1>", "<h1>Job board</h1>")
+    const edit = { id: "applications", old: "<h1>Applications</h1>", new: "<h1>Job board</h1>" }
+
+    /** Open the thread parked on a routine's view_edit, whose approval draws `edited`. */
+    async function parkedOnEdit(storedPage: string | null = stored) {
+      const parked = thread(
+        ["turn-1", started("Refresh the board")],
+        ["turn-1", { type: "tool.call", call_id: "c1", name: "view_edit", arguments: edit }],
+        [
+          "turn-1",
+          {
+            type: "approval.requested",
+            approval_id: "a1",
+            name: "view_edit",
+            arguments: edit,
+            rule: "mode.ask.write",
+            page_write: {
+              title: "Job board",
+              page: edited,
+              data: { postings: [{ company: "Acme" }] },
+              stored_page: storedPage,
+            },
+          },
+        ],
+      )
+      const opened = openThread()
+      await act(async () => {
+        opened.subscription().subscribed(parked.length)
+        for (const event of parked) opened.subscription().deliver(event)
+      })
+      return screen.getByRole("region", { name: /^Approve view_edit/ })
+    }
+
+    it("draws the page with its data in the document a view's frame uses", async () => {
+      const approval = await parkedOnEdit()
+
+      const drawn = drawnPage(within(approval).getByTitle("Job board"))
+      const policy = drawn.head.firstElementChild
+      const nonce = policy?.getAttribute("content")?.match(/'nonce-([^']+)'/)?.[1]
+      expect(policy?.getAttribute("http-equiv")).toBe("Content-Security-Policy")
+      expect(drawn.querySelector("h1")?.textContent).toBe("Job board")
+      expect([...drawn.querySelectorAll("script")].map((script) => script.nonce)).toEqual([
+        nonce,
+        nonce,
+      ])
+      expect(drawn.head.textContent).toContain('"company":"Acme"')
+      expect(approval.textContent).not.toContain('"old":')
+    })
+
+    it("runs none of the page's scripts before the user answers, so it cannot navigate away with its data", async () => {
+      const approval = await parkedOnEdit()
+
+      expect(within(approval).getByTitle("Job board").getAttribute("sandbox")).toBe("")
+    })
+
+    it("shows the page's data a click away", async () => {
+      const approval = await parkedOnEdit()
+
+      await userEvent.setup().click(within(approval).getByRole("tab", { name: "Data" }))
+
+      expect(JSON.parse(within(approval).getByRole("tabpanel").textContent ?? "")).toEqual({
+        postings: [{ company: "Acme" }],
+      })
+    })
+
+    it("shows the page's source a click away", async () => {
+      const approval = await parkedOnEdit()
+
+      await userEvent.setup().click(within(approval).getByRole("tab", { name: "Source" }))
+
+      expect(within(approval).getByRole("tabpanel").textContent).toBe(edited)
+    })
+
+    it("shows what the write changes in the stored page as a diff", async () => {
+      const approval = await parkedOnEdit()
+
+      await userEvent.setup().click(within(approval).getByRole("tab", { name: "Changes" }))
+
+      const lines = within(approval).getByRole("tabpanel").textContent?.split("\n")
+      expect(lines).toContain("-<h1>Applications</h1>")
+      expect(lines).toContain("+<h1>Job board</h1>")
+      expect(lines).toContain(' <ul id="postings"></ul>')
+    })
+
+    it("offers no diff for a view that holds no page yet", async () => {
+      const approval = await parkedOnEdit(null)
+
+      expect(within(approval).queryByRole("tab", { name: "Changes" })).toBeNull()
+      expect(within(approval).getByRole("tab", { name: "Source" })).toBeDefined()
     })
   })
 })

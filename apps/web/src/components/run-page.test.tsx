@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import { attempt, detail, hub } from "@/components/factories-testing"
 import { RunPage } from "@/components/run-page"
+import { drawnPage } from "@/components/view-testing"
 
 function openRun(runId: string, more: Answers = {}, clock = fakeClock()) {
   const caller = hub(more)
@@ -311,6 +312,41 @@ describe("a run's page", () => {
         method: "factory.run.answer",
         params: { run_id: "r-asking", approval_id: "ap-1", answer: { decision } },
       }),
+    )
+  })
+
+  it("draws the page an agent step asks to write, with its changes to the owner's page", async () => {
+    const user = userEvent.setup()
+    const board = { id: "board", title: "Applications", page: "<h1>Board</h1>", data: {} }
+    const asking: FactoryRunDetail = {
+      ...detail("r-asking"),
+      attempts: [
+        attempt({
+          ending: "asked",
+          ask: {
+            turn_id: "turn-2",
+            request: {
+              type: "approval.requested",
+              approval_id: "ap-1",
+              name: "view_write",
+              arguments: board,
+              rule: "mode.ask.write",
+              page_write: { ...board, stored_page: "<h1>Applications</h1>" },
+            },
+          },
+        }),
+      ],
+    }
+    openRun("r-asking", { "factory.run.get": () => asking })
+
+    await screen.findByRole("region", { name: "Waiting on you" })
+    expect(drawnPage(waiting().getByTitle("Applications")).querySelector("h1")?.textContent).toBe(
+      "Board",
+    )
+    await user.click(waiting().getByRole("tab", { name: "Changes" }))
+
+    expect(waiting().getByRole("tabpanel").textContent?.split("\n")).toEqual(
+      expect.arrayContaining(["-<h1>Applications</h1>", "+<h1>Board</h1>"]),
     )
   })
 
