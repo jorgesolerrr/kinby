@@ -29,7 +29,7 @@ from kinby.contracts import (
 from kinby.workbench import WorkbenchSteps, prepare_workspace
 from tests.test_browser_tools import FakeBrowser
 from tests.test_hub_factories import write_factory
-from tests.test_views import BOARD, DATA
+from tests.test_views import DATA, PAGE
 from tests.test_workbench_steps import CHECK, CLAUDE_STREAM, streaming, stub_client
 from tests.test_workbench_workspace import _seed
 
@@ -230,31 +230,56 @@ def test_a_failed_kinby_turns_attempt_spends_what_its_model_calls_cost(tmp_path)
     assert result.usage.api.cost == 0.006
 
 
+def test_a_kinby_turns_view_write_ends_its_attempt_asked(tmp_path):
+    model = TurnModel(
+        _calling("view_write", id="board", title="Applications", page=PAGE, data=DATA)
+    )
+
+    result = _run(tmp_path, model)
+
+    assert result.ending is StepEnding.ASKED
+    assert isinstance(result.ask, WaitingApproval) and result.ask.request.name == "view_write"
+    assert result.views == []
+
+
+def _approved(tmp_path: Path, model: TurnModel, *, writes: int) -> StepResult:
+    """The step's result once each of its turn's *writes* asked about is approved."""
+    run_id = uuid4()
+    result = _run(tmp_path, model, run_id=run_id)
+    for attempt in range(2, writes + 2):
+        assert result.ask is not None, result
+        answer = AnsweredAsk(ask=result.ask, answer=StepAnswer(decision=ApprovalDecision.APPROVE))
+        answered = STEP.model_copy(update={"answered": answer})
+        result = _run(tmp_path, model, run_id=run_id, step=answered, attempt=attempt)
+    return result
+
+
 def test_a_kinby_turn_names_each_view_it_wrote_and_its_workbench_serves_it_as_last_written(
     tmp_path,
 ):
     model = TurnModel(
-        _calling("view_write", id="board", title="Applications", spec=BOARD, data=DATA),
-        _calling("view_write", call="call-2", id="board", title="Jobs", spec=BOARD, data=DATA),
+        _calling("view_write", id="board", title="Applications", page=PAGE, data=DATA),
+        _calling("view_write", call="call-2", id="board", title="Jobs", page=PAGE, data=DATA),
         AIMessageChunk(content="The board is up."),
     )
 
-    result = _run(tmp_path, model)
+    result = _approved(tmp_path, model, writes=2)
 
     workbench = WorkbenchSteps(tmp_path / "workbench", tmp_path / "factories", tmp_path / "shipped")
     view = asyncio.run(workbench.view(ViewGetCommand(id="board")))
 
+    assert result.ending is StepEnding.CLEAN
     assert result.views == ["board"]
-    assert (view.id, view.title, view.data) == ("board", "Jobs", DATA)
+    assert (view.id, view.title, view.page, view.data) == ("board", "Jobs", PAGE, DATA)
 
 
 def test_a_failed_kinby_turn_still_hands_back_the_views_it_wrote(tmp_path):
     model = TurnModel(
-        _calling("view_write", id="board", title="Applications", spec=BOARD, data=DATA),
+        _calling("view_write", id="board", title="Applications", page=PAGE, data=DATA),
         RuntimeError("The provider went away."),
     )
 
-    result = _run(tmp_path, model)
+    result = _approved(tmp_path, model, writes=1)
 
     assert result.ending is StepEnding.FAILED
     assert result.views == ["board"]

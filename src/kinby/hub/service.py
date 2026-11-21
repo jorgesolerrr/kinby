@@ -1460,7 +1460,7 @@ class Hub:
     async def _hand_view(self, workbench_id: UUID, instance_id: UUID, view_id: ViewId) -> None:
         endpoint = await self._endpoint(self._active_workbench(workbench_id))
         view = await self._control.read_view(endpoint, ViewGetCommand(id=view_id))
-        command = ViewWriteCommand(id=view.id, title=view.title, spec=view.spec, data=view.data)
+        command = ViewWriteCommand.model_validate(view.model_dump(exclude={"updated_at"}))
         await self._relayed(instance_id, VIEW_WRITE.name, command.model_dump(mode="json"))
 
     async def run_transcript(self, command: FactoryRunTranscriptCommand) -> FactoryRunTranscript:

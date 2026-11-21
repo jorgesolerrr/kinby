@@ -208,8 +208,8 @@ option as its message. An instance sends at most 20 notifications a day, and
 ## Keep a view
 
 A routine can keep one of the instance's views current, such as a board of job
-applications the morning run updates. Write the view once with `view_write`, then
-have the prompt tell each run to keep it:
+applications the morning run updates. Write the view once with `view_write` in the
+turn the user asked in, then have the prompt tell each run to keep it:
 
 ```markdown
 Check the job boards for new postings. Read the applications view with view_read,
@@ -218,8 +218,9 @@ and add each new posting to it with view_patch. Leave the postings already there
 
 Each run reads the view first, so it patches what the view holds now. It changes
 the data with `view_patch`, such as adding one posting at `/data/postings/-`, rather
-than writing the whole view again. A view change does not tell the user. Notify
-only when the change needs them.
+than writing the whole view again. A run that calls `view_write` asks the user
+first, because a page is code, so a run never writes the page. A view change does
+not tell the user. Notify only when the change needs them.
 
 ## Change or remove a routine
 

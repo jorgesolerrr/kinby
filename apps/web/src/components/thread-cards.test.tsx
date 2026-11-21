@@ -19,6 +19,7 @@ import {
   thread,
   traceLine,
 } from "@/components/thread-testing"
+import { drawnPage } from "@/components/view-testing"
 
 describe("a thread's panel", () => {
   describe("a notification", () => {
@@ -398,7 +399,7 @@ describe("a thread's panel", () => {
         id: "applications",
         title: "Job board",
         updated_at,
-        spec: { components: [{ id: "root", component: "Text", text: { path: "/note" } }] },
+        page: "<p id=note></p><script>note.textContent = kinby.data.note</script>",
         data: { note },
       })
 
@@ -441,7 +442,7 @@ describe("a thread's panel", () => {
         expect(window.history.length).toBe(entries + 1)
         expect(following().params).toEqual({ id: "applications" })
         expect(pane().textContent).toContain("Changed Oct 25, 2026")
-        expect(pane().textContent).toContain("Acme: interview on Monday.")
+        expect(drawnPage(pane()).documentElement.innerHTML).toContain("Acme: interview on Monday.")
       })
 
       it("follows the view: a new snapshot shows, and an ended subscription shows it deleted", async () => {
@@ -450,12 +451,12 @@ describe("a thread's panel", () => {
         await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
 
         await act(async () => following().deliver(snapshot("Acme: offer.", "2026-10-26T08:00:00Z")))
-        expect(pane().textContent).toContain("Acme: offer.")
+        expect(drawnPage(pane()).documentElement.innerHTML).toContain("Acme: offer.")
         expect(pane().textContent).toContain("Changed Oct 26, 2026")
 
         await act(async () => following().end())
         expect(await screen.findByText("This view was deleted")).toBeDefined()
-        expect(screen.queryByText("Acme: offer.")).toBeNull()
+        expect(screen.queryByTitle("Job board")).toBeNull()
       })
 
       it("opens the view's tab on the screen from its header", async () => {
@@ -486,7 +487,7 @@ describe("a thread's panel", () => {
 
         await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
 
-        expect(pane().textContent).toContain("Acme: interview on Monday.")
+        expect(drawnPage(pane()).documentElement.innerHTML).toContain("Acme: interview on Monday.")
       })
 
       describe("on a phone", () => {
@@ -502,7 +503,9 @@ describe("a thread's panel", () => {
           const opened = drawer()
           if (opened === null) throw new Error("The drawer is not open.")
           expect(opened.textContent).toContain("Changed Oct 25, 2026")
-          expect(opened.textContent).toContain("Acme: interview on Monday.")
+          expect(drawnPage(opened).documentElement.innerHTML).toContain(
+            "Acme: interview on Monday.",
+          )
 
           await userEvent.click(within(opened).getByRole("button", { name: "Close" }))
 

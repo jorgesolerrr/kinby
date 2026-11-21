@@ -4964,229 +4964,6 @@ class FactoryRunSubscribeCommand(ContractModel):
     """Follow every factory run of the hub as its state changes. Nothing is replayed."""
 
 
-#: Where a binding reads in a view's data: an RFC 6901 JSON Pointer. Inside a list template it
-#: reads in the item.
-type JsonPointer = Annotated[str, Field(pattern=r"^(/.*)?$")]
-#: A component's id, unique in its spec. Children and templates name components by it.
-type ViewComponentId = Annotated[str, Field(min_length=1)]
-
-#: The component every view renders from.
-VIEW_ROOT = "root"
-
-
-class Binding(ContractModel):
-    """A prop whose value is read from the view's data. A path that does not resolve renders as
-    empty."""
-
-    path: JsonPointer
-
-
-class ListBinding(ContractModel):
-    """Children repeated from an array in the view's data: the template once per item, with its
-    paths read in the item."""
-
-    path: JsonPointer
-    template: ViewComponentId
-
-
-type TextProp = str | Binding
-
-
-class ViewCard(ContractModel):
-    """A card with an optional title and description, holding its children."""
-
-    id: ViewComponentId
-    component: Literal["Card"] = "Card"
-    title: TextProp | None = None
-    description: TextProp | None = None
-    children: list[ViewComponentId] | ListBinding = Field(default_factory=list)
-
-
-class ViewRow(ContractModel):
-    """Its children side by side, sharing the width, and wrapping onto the next line when they
-    run out of room."""
-
-    id: ViewComponentId
-    component: Literal["Row"] = "Row"
-    children: list[ViewComponentId] | ListBinding = Field(default_factory=list)
-
-
-class ViewText(ContractModel):
-    """A paragraph of text."""
-
-    id: ViewComponentId
-    component: Literal["Text"] = "Text"
-    text: TextProp
-
-
-class ViewLink(ContractModel):
-    """A link that opens its target, an http, https or mailto address, in a new tab."""
-
-    id: ViewComponentId
-    component: Literal["Link"] = "Link"
-    label: TextProp
-    href: TextProp
-
-
-class ViewTableColumn(ContractModel):
-    """A table column: its header, and the component each row shows in it, with the component's
-    paths read in the row."""
-
-    header: TextProp
-    cell: ViewComponentId
-
-
-class ViewTable(ContractModel):
-    """A table with one row per item of an array in the view's data."""
-
-    id: ViewComponentId
-    component: Literal["Table"] = "Table"
-    rows: Binding
-    columns: list[ViewTableColumn]
-
-
-class ViewBadge(ContractModel):
-    """A short label, such as a stage."""
-
-    id: ViewComponentId
-    component: Literal["Badge"] = "Badge"
-    label: TextProp
-
-
-class ViewKanban(ContractModel):
-    """A board with one column per item of an array in the view's data. Each column's title and
-    cards are read in its item."""
-
-    id: ViewComponentId
-    component: Literal["Kanban"] = "Kanban"
-    columns: Binding
-    title: TextProp
-    cards: ListBinding
-
-
-class ViewStat(ContractModel):
-    """One figure with its label, and an optional line under it."""
-
-    id: ViewComponentId
-    component: Literal["Stat"] = "Stat"
-    label: TextProp
-    value: TextProp
-    description: TextProp | None = None
-
-
-class ChartKind(StrEnum):
-    LINE = "line"
-    BAR = "bar"
-    AREA = "area"
-
-
-class ViewChartSeries(ContractModel):
-    label: str
-    value: Binding
-
-
-class ViewChart(ContractModel):
-    """A line, bar or area chart of the points in an array in the view's data. Each point's place
-    on the x axis and its series' values are read in the point."""
-
-    id: ViewComponentId
-    component: Literal["Chart"] = "Chart"
-    kind: ChartKind
-    points: Binding
-    x: Binding
-    series: Annotated[list[ViewChartSeries], Field(min_length=1)]
-
-
-class ViewChecklist(ContractModel):
-    """A read-only checklist with one entry per item of an array in the view's data. Each entry's
-    label and whether it is done are read in its item."""
-
-    id: ViewComponentId
-    component: Literal["Checklist"] = "Checklist"
-    items: Binding
-    label: TextProp
-    done: bool | Binding
-
-
-#: The view catalogue: every component a view can be composed from.
-type ViewComponent = Annotated[
-    ViewCard
-    | ViewRow
-    | ViewText
-    | ViewLink
-    | ViewTable
-    | ViewBadge
-    | ViewKanban
-    | ViewStat
-    | ViewChart
-    | ViewChecklist,
-    Field(discriminator="component"),
-]
-
-
-class ViewSpec(ContractModel):
-    """A view's layout: a flat list of components, one of them the root, that name their children
-    by id."""
-
-    components: list[ViewComponent]
-
-    @model_validator(mode="after")
-    def _a_tree_from_the_root(self) -> Self:
-        ids = [component.id for component in self.components]
-        duplicates = sorted({named for named in ids if ids.count(named) > 1})
-        if duplicates:
-            raise ValueError(f"Component ids must be unique; repeated: {', '.join(duplicates)}.")
-        if VIEW_ROOT not in ids:
-            raise ValueError(f'One component must have the id "{VIEW_ROOT}".')
-        named = {component.id: _named_components(component) for component in self.components}
-        for parent, children in named.items():
-            missing = [child for child in children if child not in named]
-            if missing:
-                raise ValueError(
-                    f'Component "{parent}" names components that do not exist: '
-                    f"{', '.join(missing)}."
-                )
-        cycle = _cycle(named)
-        if cycle is not None:
-            raise ValueError(f"Components must not contain themselves: {' -> '.join(cycle)}.")
-        return self
-
-
-def _named_components(component: ViewComponent) -> list[str]:
-    """The ids a component names as its children, its template or its cells."""
-    match component:
-        case (
-            ViewCard(children=ListBinding(template=template))
-            | ViewRow(children=ListBinding(template=template))
-            | ViewKanban(cards=ListBinding(template=template))
-        ):
-            return [template]
-        case ViewCard(children=list() as children) | ViewRow(children=list() as children):
-            return children
-        case ViewTable(columns=columns):
-            return [column.cell for column in columns]
-    return []
-
-
-def _cycle(named: dict[str, list[str]]) -> list[str] | None:
-    """A path of ids that comes back to where it started, if the components hold one."""
-    finished: set[str] = set()
-
-    def visit(component: str, path: list[str]) -> list[str] | None:
-        if component in path:
-            return [*path[path.index(component) :], component]
-        if component in finished:
-            return None
-        for child in named[component]:
-            found = visit(child, [*path, component])
-            if found is not None:
-                return found
-        finished.add(component)
-        return None
-
-    return next((cycle for start in named if (cycle := visit(start, [])) is not None), None)
-
-
 class ViewSummary(ContractModel):
     id: ViewId
     title: Annotated[str, Field(min_length=1)]
@@ -5194,10 +4971,12 @@ class ViewSummary(ContractModel):
 
 
 class View(ViewSummary):
-    """A page of UI an instance keeps: its layout from the view catalogue, and the data the
-    layout's bindings read."""
+    """A piece of UI an instance keeps: the page the agent wrote, as HTML, and the data the page
+    reads as ``kinby.data``."""
 
-    spec: ViewSpec
+    #: None for a view written for the view catalogue an older kinby drew, until it is written
+    #: again.
+    page: str | None
     data: dict[str, JsonValue]
 
 
@@ -5226,7 +5005,7 @@ class ViewWriteCommand(ContractModel):
 
     id: ViewId
     title: Annotated[str, Field(min_length=1)]
-    spec: ViewSpec
+    page: str
     data: dict[str, JsonValue]
 
 
