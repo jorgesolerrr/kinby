@@ -242,6 +242,18 @@ def test_a_kinby_turns_view_write_ends_its_attempt_asked(tmp_path):
     assert result.views == []
 
 
+def test_a_kinby_turns_view_write_asks_though_an_earlier_run_left_its_page_on_the_workbench(
+    tmp_path,
+):
+    write = _calling("view_write", id="board", title="Applications", page=PAGE, data=DATA)
+    _approved(tmp_path, TurnModel(write, AIMessageChunk(content="The board is up.")), writes=1)
+
+    result = _run(tmp_path, TurnModel(write))
+
+    assert result.ending is StepEnding.ASKED
+    assert isinstance(result.ask, WaitingApproval) and result.ask.request.name == "view_write"
+
+
 def _approved(tmp_path: Path, model: TurnModel, *, writes: int) -> StepResult:
     """The step's result once each of its turn's *writes* asked about is approved."""
     run_id = uuid4()
@@ -263,7 +275,7 @@ def test_a_kinby_turn_names_each_view_it_wrote_and_its_workbench_serves_it_as_la
         AIMessageChunk(content="The board is up."),
     )
 
-    result = _approved(tmp_path, model, writes=1)
+    result = _approved(tmp_path, model, writes=2)
 
     workbench = WorkbenchSteps(tmp_path / "workbench", tmp_path / "factories", tmp_path / "shipped")
     view = asyncio.run(workbench.view(ViewGetCommand(id="board")))
