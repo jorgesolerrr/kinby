@@ -4,7 +4,7 @@ import { screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import { detail } from "@/components/factories-testing"
-import { commit, listed, openLibrary } from "@/components/library-testing"
+import { commit, headerHeight, listed, openLibrary } from "@/components/library-testing"
 
 import software from "../../../../src/kinby/factories/shipped/software/factory.yaml?raw"
 
@@ -214,6 +214,51 @@ async function openMap(file = software, more: Answers = {}) {
 const height = (map: HTMLElement, label: string) =>
   Number(within(map).getByText(label).getAttribute("y"))
 
+/** Each route back on the map: its arc as points sampled from its path, and its label's box, its
+ * width estimated from its characters since jsdom measures no text. */
+function routesBack(map: HTMLElement) {
+  return Array.from(within(map).getByLabelText("Routes back").querySelectorAll("g"), (route) => {
+    const d = route.querySelector("path")?.getAttribute("d") ?? ""
+    const [x1, y1, cx1, cy1, cx2, cy2, x2, y2] = Array.from(d.matchAll(/-?[\d.]+/g), Number)
+    const points = Array.from({ length: 401 }, (_, step) => {
+      const t = step / 400
+      const s = 1 - t
+      const bezier = (a: number, b: number, c: number, e: number) =>
+        s ** 3 * a + 3 * s ** 2 * t * b + 3 * s * t ** 2 * c + t ** 3 * e
+      return { x: bezier(x1, cx1, cx2, x2), y: bezier(y1, cy1, cy2, y2) }
+    })
+    const label = route.querySelector("text")
+    const size = Number(label?.getAttribute("font-size"))
+    const half = ((label?.textContent ?? "").length * size * 0.6) / 2
+    const x = Number(label?.getAttribute("x"))
+    const y = Number(label?.getAttribute("y"))
+    const box = { left: x - half, right: x + half, top: y - size, bottom: y }
+    return { label: label?.textContent, points, box }
+  })
+}
+
+/** The labels each route back's label meets, by another route back's arc or label. */
+function collisions(map: HTMLElement) {
+  const routes = routesBack(map)
+  type Box = (typeof routes)[number]["box"]
+  const inside = ({ x, y }: { x: number; y: number }, box: Box) =>
+    box.left <= x && x <= box.right && box.top <= y && y <= box.bottom
+  const overlap = (one: Box, other: Box) =>
+    one.left < other.right &&
+    other.left < one.right &&
+    one.top < other.bottom &&
+    other.top < one.bottom
+  return routes.flatMap((route) =>
+    routes
+      .filter(
+        (other) =>
+          other !== route &&
+          (other.points.some((point) => inside(point, route.box)) || overlap(route.box, other.box)),
+      )
+      .map((other) => `${route.label} meets ${other.label}`),
+  )
+}
+
 describe("LibraryPage, the shipped software factory's map and cards", () => {
   it("draws each route back as an arc above the line, labelled with its outcome and max", async () => {
     const { map } = await openMap()
@@ -251,6 +296,37 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
     expect(Math.abs(height(map, "changes ×2") - height(map, "failed ×2"))).toBeGreaterThanOrEqual(
       16,
     )
+  })
+
+  it("keeps each route back's label clear of every other route back", async () => {
+    const { map } = await openMap()
+
+    expect(collisions(map)).toEqual([])
+  })
+
+  it("keeps clear the labels of routes back of different spans into the same step", async () => {
+    const { map } = await openMap(`name: software
+requires: {}
+work_item: { issue: int }
+steps:
+  - { id: plan, kind: agent, engine: claude, prompt: prompts/implement.md }
+  - { id: build, kind: agent, engine: claude, prompt: prompts/implement.md }
+  - id: lint
+    kind: code
+    call: tools/github.py:check
+    outcomes: { dirty: { back: build, max: 4 } }
+  - { id: test, kind: code, call: tools/github.py:check, failed: { back: build, max: 2 } }
+  - { id: ship, kind: code, call: tools/github.py:check }
+  - id: watch
+    kind: code
+    call: tools/github.py:check
+    outcomes:
+      redo: { back: build, max: 1 }
+      replan-from-scratch: { back: plan, max: 3 }
+`)
+
+    expect(within(map).getByLabelText("Routes back").querySelectorAll("path")).toHaveLength(4)
+    expect(collisions(map)).toEqual([])
   })
 
   it("draws each resumed session as a dotted arc below the line", async () => {
@@ -308,6 +384,17 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
 
     const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[8]
     expect(scrolled.mock.contexts).toEqual([babysit])
+  })
+
+  it("scrolls a step's card to below the Library's header, by the header's height", async () => {
+    await openMap()
+
+    const babysit = within(screen.getByRole("list", { name: "Steps" })).getAllByRole("listitem")[8]
+    const page = babysit.closest<HTMLElement>('[style*="--library-scroll-margin"]')
+    expect(page?.style.getPropertyValue("--library-scroll-margin")).toBe(
+      `calc(${headerHeight}px + var(--spacing) * 4)`,
+    )
+    expect(babysit.className).toContain("scroll-mt-(--library-scroll-margin)")
   })
 })
 
@@ -973,5 +1060,119 @@ describe("LibraryPage, a step from its run", () => {
       method: "factory.run.retry",
       params: { run_id: "r-stopped", latest: true },
     })
+  })
+})
+
+describe("LibraryPage, a step's last change", () => {
+  // Local times, so the lines show the same clock time wherever the test runs.
+  const at = (day: number) => new Date(2026, 10, day, 10, 0).toISOString()
+  const shippedSteps = ["ticket", "setup", "implement", "answer", "fix", "review", "checks"]
+  const changes: FactoryVersion[] = [
+    { version: "4".repeat(40), time: at(21), source: "web", steps: ["review"] },
+    { version: "3".repeat(40), time: at(20), source: "by_hand", steps: ["implement", "review"] },
+    { version: "2".repeat(40), time: at(19), source: "shipped_update", steps: ["checks"] },
+    { version: shippedVersion, time: at(18), source: "shipped", steps: shippedSteps },
+  ]
+
+  async function openChanges(history = changes, more: Answers = {}) {
+    const { caller, user } = openPage(software, history, more)
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+    await screen.findByRole("list", { name: "Steps" })
+    return { caller, user }
+  }
+
+  const line = (id: string) => within(card(id)).queryByRole("link")
+
+  it("shows each step's last change on its card, as History words its source", async () => {
+    await openChanges()
+
+    await waitFor(() => expect(line("review")).toBeTruthy())
+    expect(line("review")?.textContent).toBe("Saved from the web on Nov 21, 2026, 10:00 AM")
+    expect(line("implement")?.textContent).toBe("Changed by hand on Nov 20, 2026, 10:00 AM")
+    expect(line("checks")?.textContent).toBe("kinby's update, merged on Nov 19, 2026, 10:00 AM")
+    expect(line("ticket")?.textContent).toBe(
+      "kinby's version, unchanged since Nov 18, 2026, 10:00 AM",
+    )
+    expect(line("publish")).toBeNull()
+  })
+
+  it("shows it on an open card too", async () => {
+    const { user } = await openChanges()
+    await waitFor(() => expect(line("review")).toBeTruthy())
+
+    await user.click(within(card("review")).getByRole("button", { name: "review" }))
+
+    await within(card("review")).findByRole("form", { name: "review" })
+    expect(line("review")?.textContent).toBe("Saved from the web on Nov 21, 2026, 10:00 AM")
+  })
+
+  it("shows no last change on a shipped factory with no versions", async () => {
+    await openChanges([])
+
+    await screen.findByText(/kinby's version as it ships/)
+    expect(within(screen.getByRole("list", { name: "Steps" })).queryAllByRole("link")).toEqual([])
+  })
+
+  it("scrolls History to the version a card links to and unfolds its diff", async () => {
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
+    const { caller, user } = await openChanges()
+    await waitFor(() => expect(line("implement")).toBeTruthy())
+
+    await user.click(line("implement") as HTMLElement)
+
+    const row = within(screen.getByRole("list", { name: "History" })).getAllByRole("listitem")[1]
+    const diff = await within(row).findByRole("textbox", { name: "Diff" })
+    expect((diff as HTMLTextAreaElement).value).toBe(`diff of ${"3".repeat(40)}\n`)
+    expect(scrolled.mock.contexts).toEqual([row])
+    expect(caller.calls.filter((call) => call.method === "factory.version.diff")).toHaveLength(1)
+  })
+
+  it("shows the version a save made on the saved step's card and atop History", async () => {
+    const saved: FactoryVersion = {
+      version: "5".repeat(40),
+      time: at(22),
+      source: "web",
+      steps: ["implement"],
+    }
+    let history = changes
+    const { user } = await openChanges(changes, {
+      "factory.get": ({ name }) => factoryRead(name, software, history[0].version),
+      "factory.version.list": () => ({ versions: history }),
+      "factory.step.save": ({ name }) => {
+        history = [saved, ...changes]
+        return factoryRead(name, software, saved.version, "h-3")
+      },
+    })
+    await waitFor(() => expect(line("implement")).toBeTruthy())
+    await user.click(within(card("implement")).getByRole("button", { name: "implement" }))
+    const editor = within(await within(card("implement")).findByRole("form", { name: "implement" }))
+
+    await user.type(editor.getByRole("textbox", { name: "Timeout" }), "0")
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    await waitFor(() =>
+      expect(line("implement")?.textContent).toBe("Saved from the web on Nov 22, 2026, 10:00 AM"),
+    )
+    const rows = within(screen.getByRole("list", { name: "History" })).getAllByRole("listitem")
+    expect(rows).toHaveLength(5)
+    expect(within(rows[0]).getByText("implement")).toBeTruthy()
+  })
+
+  it("keeps the cards usable without the line when the versions can't be read", async () => {
+    const { user } = await openChanges(changes, {
+      "factory.version.list": () => {
+        throw new CallError({
+          code: "INTERNAL",
+          message: "The history is unreadable.",
+          retryable: false,
+        })
+      },
+    })
+
+    await screen.findByText("The history is unreadable.")
+    expect(within(screen.getByRole("list", { name: "Steps" })).queryAllByRole("link")).toEqual([])
+    await user.click(within(card("review")).getByRole("button", { name: "review" }))
+    expect(await within(card("review")).findByRole("form", { name: "review" })).toBeTruthy()
   })
 })

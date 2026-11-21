@@ -1,5 +1,11 @@
 import { CallError } from "@kinby/contract"
-import type { ConfigActor, ConfigChange, InstanceClient } from "@kinby/contract"
+import type {
+  ConfigActor,
+  ConfigChange,
+  FactoryVersion,
+  FactoryVersionSource,
+  InstanceClient,
+} from "@kinby/contract"
 
 type Caller = Pick<InstanceClient, "call">
 
@@ -25,6 +31,35 @@ export function lastChanged(change: ConfigChange | undefined, hash: string): str
   if (change === undefined) return "Never changed"
   if (change.hash != null && change.hash !== hash) return "Changed outside kinby"
   return `Last changed by ${ACTORS[change.actor]}, ${when(change.at)}`
+}
+
+/** Where each factory version came from, as History words it. */
+export const VERSION_SOURCES: Record<FactoryVersionSource, string> = {
+  web: "Saved from the web",
+  chat: "Changed from chat",
+  by_hand: "Changed by hand",
+  revert: "Reverted",
+  shipped: "kinby's version",
+  shipped_update: "kinby's update, merged",
+}
+
+/** The newest of a factory's `versions`, newest first, that changed `step`, if one did. */
+export function stepLastChange(
+  versions: FactoryVersion[],
+  step: string,
+): FactoryVersion | undefined {
+  return versions.find((version) => version.steps.includes(step))
+}
+
+/**
+ * Where a step's last change came from and when. The first version of a shipped factory lists
+ * every step, so a step only it lists is still kinby's, not a change the user made.
+ */
+export function stepChanged(version: FactoryVersion): string {
+  if (version.source === "shipped") {
+    return `${VERSION_SOURCES.shipped}, unchanged since ${when(version.time)}`
+  }
+  return `${VERSION_SOURCES[version.source]} on ${when(version.time)}`
 }
 
 /** The latest change to `file`, if the log has one. */

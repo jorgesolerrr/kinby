@@ -1,5 +1,5 @@
-import type { Client, Clock, FactoryVersion, FactoryVersionSource } from "@kinby/contract"
-import { useCallback, useEffect, useId, useState } from "react"
+import type { Client, FactoryVersion } from "@kinby/contract"
+import { useEffect, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { Badge } from "@/components/ui/badge"
@@ -9,53 +9,37 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { useHubCall } from "@/hooks/use-hub-call"
-import { useRead } from "@/hooks/use-read"
-import { when } from "@/lib/config-changes"
+import { VERSION_SOURCES, when } from "@/lib/config-changes"
 
 type Caller = Pick<Client, "call">
 
-const SOURCES: Record<FactoryVersionSource, string> = {
-  web: "Saved from the web",
-  chat: "Changed from chat",
-  by_hand: "Changed by hand",
-  revert: "Reverted",
-  shipped: "kinby's version",
-  shipped_update: "kinby's update, merged",
-}
-
 /**
- * A factory's versions, newest first: each one's time, source and the steps it changed, its diff,
- * and a revert to it. `onReverted` runs once a revert made a new version. `current` is the
- * factory's version as last read, undefined until it is: History reads again when it lags it.
+ * A factory's `versions`, newest first, or why they failed to read: each one's time, source and
+ * the steps it changed, its diff, and a revert to it. `onReverted` runs once a revert made a new
+ * version. `rowId` names each version's row, and `shown` asks for one: History scrolls to it and
+ * unfolds its diff, each time it is asked anew.
  */
 export function FactoryHistory({
   client,
-  clock,
   name,
-  current,
+  versions,
+  failure,
+  rowId,
+  shown,
   onReverted,
 }: {
   client: Caller
-  clock: Clock
   name: string
-  current: string | null | undefined
+  versions: FactoryVersion[] | undefined
+  failure: unknown
+  rowId: (version: string) => string
+  shown?: { version: string }
   onReverted: () => void
 }) {
-  const read = useCallback(
-    async () => (await client.call("factory.version.list", { name })).versions,
-    [client, name],
-  )
-  const { value: versions, failure, readAgain } = useRead(read, clock)
-  const behind =
-    versions !== undefined && current !== undefined && (versions[0]?.version ?? null) !== current
-  useEffect(() => {
-    if (behind) readAgain()
-  }, [behind, readAgain])
   const { busy, failure: revertFailure, ask } = useHubCall()
   const revert = (version: string) =>
     ask(async () => {
       await client.call("factory.revert", { name, version })
-      readAgain()
       onReverted()
     })
 
@@ -76,13 +60,15 @@ export function FactoryHistory({
       ) : (
         <ol aria-label="History" className="flex flex-col divide-y text-sm">
           {versions.map((version, index) => (
-            <li key={version.version}>
+            <li key={version.version} id={rowId(version.version)} className="scroll-mt-24">
               <Version
                 client={client}
                 name={name}
                 version={version}
                 current={index === 0}
                 busy={busy}
+                rowId={rowId(version.version)}
+                shown={shown?.version === version.version ? shown : undefined}
                 onRevert={() => void revert(version.version)}
               />
             </li>
@@ -93,13 +79,16 @@ export function FactoryHistory({
   )
 }
 
-/** One version's row, which unfolds to its diff, read when first unfolded. */
+/** One version's row, which unfolds to its diff, read when first unfolded, and unfolds and
+ * scrolls into view when `shown`. */
 function Version({
   client,
   name,
   version,
   current,
   busy,
+  rowId,
+  shown,
   onRevert,
 }: {
   client: Caller
@@ -107,23 +96,41 @@ function Version({
   version: FactoryVersion
   current: boolean
   busy: boolean
+  rowId: string
+  shown?: { version: string }
   onRevert: () => void
 }) {
   const id = useId()
+  const [open, setOpen] = useState(false)
+  const [wasShown, setWasShown] = useState(shown)
+  if (shown !== wasShown) {
+    setWasShown(shown)
+    if (shown !== undefined) setOpen(true)
+  }
+  useEffect(() => {
+    if (shown !== undefined) {
+      document.getElementById(rowId)?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }
+  }, [shown, rowId])
   const [diff, setDiff] = useState<string>()
-  const { failure, ask } = useHubCall()
-  const open = (opened: boolean) => {
-    if (!opened || diff !== undefined) return
-    void ask(async () => {
-      setDiff((await client.call("factory.version.diff", { name, version: version.version })).diff)
-    })
+  const [failure, setFailure] = useState<unknown>()
+  useEffect(() => {
+    if (!open || diff !== undefined) return
+    client.call("factory.version.diff", { name, version: version.version }).then(
+      (read) => setDiff(read.diff),
+      (error: unknown) => setFailure(error),
+    )
+  }, [open, diff, client, name, version.version])
+  const unfold = (opened: boolean) => {
+    setOpen(opened)
+    setFailure(undefined)
   }
 
   return (
-    <Collapsible onOpenChange={open}>
+    <Collapsible open={open} onOpenChange={unfold}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
         <span className="text-muted-foreground">{when(version.time)}</span>
-        <span>{SOURCES[version.source]}</span>
+        <span>{VERSION_SOURCES[version.source]}</span>
         {version.steps.length > 0 && (
           <span className="min-w-0 truncate font-mono">{version.steps.join(", ")}</span>
         )}

@@ -1,4 +1,4 @@
-import type { FactoryRunDetail } from "@kinby/contract"
+import type { FactoryRunDetail, FactoryVersion } from "@kinby/contract"
 import { cn } from "cn"
 import { CircleXIcon, PlusIcon } from "lucide-react"
 import { useEffect, useId, useState } from "react"
@@ -16,7 +16,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { stepChanged, stepLastChange } from "@/lib/config-changes"
 import { type FactoryStep, routeText } from "@/lib/factory-steps"
+
+/** A factory's versions, newest first, and how a step's card opens one in History. */
+interface StepHistory {
+  versions: FactoryVersion[]
+  rowId: (version: string) => string
+  onShow: (version: string) => void
+}
 
 /** A route between two steps, by their places in the factory, `to` the earlier one. */
 interface Arc {
@@ -27,21 +35,33 @@ interface Arc {
   failed?: boolean
 }
 
+/** Where a route back's label sits, in pixels: across from the first step, and up from where its
+ * arc leaves the line. */
+interface Box {
+  left: number
+  right: number
+  top: number
+}
+
 const GAP = 96
 const PAD = 48
 const NODE = 12
 const LANE = 20
 const RESUME_LANE = 8
+/** A route back's label's font size. */
+const LABEL = 10
 
 /** The factory's steps as a map, its routes back as arcs over the line and its resumed sessions
  * as dotted arcs under it, above a card for each step, which opens in place as its step editor.
- * A + after each card adds a step there. Opened from a run, it opens on the card of the run's
- * step. `onSaved` runs once a change made a new version. */
+ * A + after each card adds a step there. Each card says when its step last changed, as a link to
+ * that version in History. Opened from a run, it opens on the card of the run's step. `onSaved`
+ * runs once a change made a new version. */
 export function FactorySteps({
   steps,
   commands,
   saving,
   from,
+  history,
   onSaved,
 }: {
   steps: FactoryStep[]
@@ -50,6 +70,8 @@ export function FactorySteps({
   saving: StepSaving
   /** The run the factory was opened from, and the step whose card it opens. */
   from?: { step: string; run: FactoryRunDetail }
+  /** The factory's versions, once read. */
+  history?: StepHistory
   onSaved: () => void
 }) {
   const prefix = useId()
@@ -81,10 +103,11 @@ export function FactorySteps({
       />
       <ol aria-label="Steps" className="flex flex-col">
         {steps.map((step, place) => (
-          <li key={step.id} id={cardId(step.id)} className="scroll-mt-24">
+          <li key={step.id} id={cardId(step.id)} className="scroll-mt-(--library-scroll-margin)">
             <StepCard
               step={step}
               differs={saving.factory.differing_steps.includes(step.id)}
+              history={history}
               open={open === step.id}
               onToggle={() => setOpen(open === step.id ? undefined : step.id)}
             >
@@ -240,7 +263,7 @@ function FactoryMap({
                   x={(x(arc.from) + x(arc.to)) / 2}
                   y={line - NODE - rise - 4}
                   textAnchor="middle"
-                  fontSize={10}
+                  fontSize={LABEL}
                   className={arc.failed ? "fill-destructive" : "fill-primary"}
                 >
                   {arc.label}
@@ -342,16 +365,43 @@ function routesBack(step: FactoryStep, from: number, at: (id: string) => number)
   )
 }
 
-/** Each arc with its lane, counted out from the line: one past every shorter arc it overlaps, so
- * neither two arcs nor their labels meet. */
+/** Each arc with its lane, counted out from the line: one past every shorter arc it overlaps, and
+ * high enough to pass over each of their labels that sits inside it, so neither two arcs nor an arc
+ * and a label meet. */
 function laned(arcs: Arc[]): (Arc & { lane: number })[] {
   const span = (arc: Arc) => arc.from - arc.to
   const placed: (Arc & { lane: number })[] = []
   for (const arc of arcs.toSorted((one, other) => span(one) - span(other))) {
     const under = placed.filter((each) => each.to < arc.from && arc.to < each.from)
-    placed.push({ ...arc, lane: 1 + Math.max(0, ...under.map((each) => each.lane)) })
+    const nested = 1 + Math.max(0, ...under.map((each) => each.lane))
+    const over = under
+      .filter((each) => each.label !== undefined)
+      .map((each) => Math.ceil(reachOver(arc, labelBox(each)) / LANE))
+    placed.push({ ...arc, lane: Math.max(nested, ...over) })
   }
   return placed
+}
+
+/** The box the arc's label takes at its lane. jsdom measures no text, so its width is estimated
+ * from its characters. */
+function labelBox({ from, to, label = "", lane }: Arc & { lane: number }): Box {
+  const middle = ((from + to) / 2) * GAP
+  const half = (label.length * LABEL * 0.6) / 2
+  return { left: middle - half, right: middle + half, top: lane * LANE + 4 + LABEL }
+}
+
+/** How far `arc` must reach from the line to pass over `box`, or 0 when no reach does because the
+ * box sticks out past the arc's ends. */
+function reachOver(arc: Arc, box: Box): number {
+  const [x1, x2] = [arc.to * GAP, arc.from * GAP]
+  // Along the curve, x moves as 3t² - 2t³ and the height as 4t(1 - t) of the reach, so inverting
+  // the first gives the height at any x. It rises then falls, so it is lowest over a box at a side.
+  const share = (x: number) => {
+    const t = 0.5 - Math.sin(Math.asin(1 - (2 * (x - x1)) / (x2 - x1)) / 3)
+    return x1 < x && x < x2 ? 4 * t * (1 - t) : 0
+  }
+  const lowest = Math.min(share(box.left), share(box.right))
+  return lowest > 0 ? (box.top + 2) / lowest : 0
 }
 
 /** A curve from `x1` to `x2` that leaves the line at `y` and reaches `reach` from it at its
@@ -365,6 +415,7 @@ function curve(x1: number, x2: number, y: number, reach: number): string {
 function StepCard({
   step,
   differs,
+  history,
   open,
   onToggle,
   children,
@@ -372,10 +423,12 @@ function StepCard({
   step: FactoryStep
   /** Whether kinby ships another version of the step. */
   differs: boolean
+  history?: StepHistory
   open: boolean
   onToggle: () => void
   children: React.ReactNode
 }) {
+  const changed = history && stepLastChange(history.versions, step.id)
   return (
     <Card size="sm" variant={step.off ? "off" : "default"}>
       <CardHeader>
@@ -389,6 +442,20 @@ function StepCard({
         <CardDescription>
           {[step.kind, step.engine, step.model].filter(Boolean).join(" · ")}
         </CardDescription>
+        {history && changed && (
+          <CardDescription>
+            <a
+              href={`#${history.rowId(changed.version)}`}
+              className="hover:underline"
+              onClick={(event) => {
+                event.preventDefault()
+                history.onShow(changed.version)
+              }}
+            >
+              {stepChanged(changed)}
+            </a>
+          </CardDescription>
+        )}
         {(differs || step.off) && (
           <CardAction>
             <div className="flex gap-2">

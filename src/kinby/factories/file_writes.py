@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import io
 from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import TypeIs
 
 from pydantic import JsonValue
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.emitter import Emitter
 from ruamel.yaml.scalarstring import ScalarString
 
 
@@ -20,22 +23,141 @@ class StepNotDeclared(LookupError):
 
 
 def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
-    """The factory file *text* with the step of the entry's id declared as *entry*. Each line
-    outside that step stays as it was."""
-    yaml = _yaml()
-    document = yaml.load(text)
-    at = _place(document, entry.get("id"))
+    """The factory file *text* with the step of the entry's id declared as *entry*. Only the
+    lines of the values that changed are written again; every other line stays as it was."""
+    read = _yaml().load(text)
+    at = _place(read, entry.get("id"))
     old = text.splitlines(keepends=True)
-    before = _lines(document, at, len(old))
-    line, column = document["steps"].lc.item(at)
-    # Written as the file writes its steps, so the spliced step lines up with the others.
-    yaml.indent(mapping=2, sequence=column, offset=old[line].index("-"))
+    document = _yaml().load(text)
     _merge(document["steps"][at], entry)
+    line, column = read["steps"].lc.item(at)
+    plain, spaced = (
+        _step(_dumped(document, column, old[line].index("-"), spaced=spaced), at)
+        for spaced in (False, True)
+    )
+    step = _lines(read, at, len(old))
+    held = _Declared(read["steps"][at], old, _own(old, step, column), column)
+    return "".join(old[: held.own.start] + _written(held, plain, spaced) + old[held.own.stop :])
+
+
+@dataclass(frozen=True)
+class _Declared:
+    """A value of a factory file, and the lines of the file that declare it, without the comments
+    that follow them. Its key, or its step's first key, sits at *column*."""
+
+    value: object
+    lines: list[str]
+    own: range
+    column: int
+
+    def text(self) -> list[str]:
+        return self.lines[self.own.start : self.own.stop]
+
+    def text_at(self, column: int) -> list[str]:
+        """The lines, moved so the key sits at *column*."""
+        return [_shifted(line, column - self.column) for line in self.text()]
+
+
+def _dumped(document: CommentedMap, column: int, offset: int, *, spaced: bool) -> list[str]:
+    yaml = _yaml()
+    # Written as the file writes its steps, so the spliced lines line up with the others.
+    yaml.indent(mapping=2, sequence=column, offset=offset)
+    if spaced:
+        yaml.Emitter = _SpacedEmitter
     dumped = io.StringIO()
     yaml.dump(document, dumped)
-    new = dumped.getvalue().splitlines(keepends=True)
-    after = _lines(yaml.load(dumped.getvalue()), at, len(new))
-    return "".join(old[: before.start] + new[after.start : after.stop] + old[before.stop :])
+    return dumped.getvalue().splitlines(keepends=True)
+
+
+def _step(lines: list[str], at: int) -> _Declared:
+    document = _yaml().load("".join(lines))
+    column = document["steps"].lc.item(at)[1]
+    own = _own(lines, _lines(document, at, len(lines)), column)
+    return _Declared(document["steps"][at], lines, own, column)
+
+
+class _SpacedEmitter(Emitter):
+    """Writes a flow mapping with a space inside each brace, as `{ retry: 3 }`."""
+
+    def write_indicator(
+        self,
+        indicator: str,
+        need_whitespace: bool,  # noqa: FBT001 ruamel's signature
+        whitespace: bool = False,  # noqa: FBT001, FBT002 ruamel's signature
+        indention: bool = False,  # noqa: FBT001, FBT002 ruamel's signature
+    ) -> None:
+        if indicator.strip() == self.flow_map_start:
+            # Not followed by whitespace, so the key after it writes a space first.
+            whitespace = False
+        elif indicator == self.flow_map_end:
+            need_whitespace = True
+        super().write_indicator(indicator, need_whitespace, whitespace, indention)
+
+
+def _written(held: _Declared, plain: _Declared, spaced: _Declared) -> list[str]:
+    """The lines that declare *plain*'s value where *held* declares the value the file had:
+    *held*'s own lines for each value that stayed. *spaced* is *plain* with spaces inside its
+    flow mappings' braces, taken where *held* writes them so."""
+    was, now = held.value, plain.value
+    if was == now:
+        return held.text()
+    # Kept key by key only when the first key stays first, as it may share its line with the
+    # step's dash.
+    if _block(was) and _block(now) and next(iter(was)) == next(iter(now)):
+        return _written_keys(held, plain, spaced)
+    return (spaced if "{ " in "".join(held.text()) else plain).text_at(held.column)
+
+
+def _block(value: object) -> TypeIs[CommentedMap]:
+    return isinstance(value, CommentedMap) and bool(value) and not value.fa.flow_style()
+
+
+def _written_keys(held: _Declared, plain: _Declared, spaced: _Declared) -> list[str]:
+    """The lines of the block mapping *plain*, with *held*'s comments between its keys. A removed
+    key leaves its comments after the key before it."""
+    keys, plains, spaceds = _keys(held), _keys(plain), _keys(spaced)
+    first = next(iter(keys.values()))[0]
+    comments: dict[object, list[str]] = {}
+    kept = None
+    for key, (_, after) in keys.items():
+        kept = key if key in plains else kept
+        comments.setdefault(kept, []).extend(held.lines[after.start : after.stop])
+    lines = held.lines[held.own.start : first.own.start]
+    for key, (value, _) in plains.items():
+        if key in keys:
+            lines += _written(keys[key][0], value, spaceds[key][0]) + comments.get(key, [])
+        else:
+            lines += value.text_at(first.column)
+    return lines
+
+
+def _keys(mapping: _Declared) -> dict[object, tuple[_Declared, range]]:
+    """Each key of the block mapping *mapping*, with the lines that declare its value and the
+    comment lines after them."""
+    value = mapping.value
+    assert isinstance(value, CommentedMap)
+    keys = list(value)
+    starts = [value.lc.key(key)[0] for key in keys] + [mapping.own.stop]
+    spans = {}
+    for key, start, stop in zip(keys, starts, starts[1:], strict=False):
+        column = value.lc.key(key)[1]
+        own = _own(mapping.lines, range(start, stop), column)
+        spans[key] = (_Declared(value[key], mapping.lines, own, column), range(own.stop, stop))
+    return spans
+
+
+def _own(lines: list[str], span: range, column: int) -> range:
+    """*span* without the blank and comment lines at its end left of or at *column*, which a value
+    declared at *column* can't hold."""
+    stop = span.stop
+    while stop > span.start + 1 and _trails(lines[stop - 1], column):
+        stop -= 1
+    return range(span.start, stop)
+
+
+def _trails(line: str, column: int) -> bool:
+    stripped = line.lstrip()
+    return not stripped or (stripped.startswith("#") and len(line) - len(stripped) <= column)
 
 
 def with_step_from(text: str, other: str, step_id: str) -> str:

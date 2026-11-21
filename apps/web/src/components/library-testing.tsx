@@ -6,6 +6,24 @@ import userEvent from "@testing-library/user-event"
 
 import { LibraryPage } from "@/components/library-page"
 
+/** How tall the Library's header measures. */
+export const headerHeight = 180
+
+// jsdom lays nothing out, so it has no ResizeObserver, and the Library measures its header with
+// it. This one reports each element it observes as `headerHeight` tall, once.
+window.ResizeObserver = class {
+  report: ResizeObserverCallback
+  constructor(report: ResizeObserverCallback) {
+    this.report = report
+  }
+  observe(target: Element) {
+    const entry = { target, borderBoxSize: [{ blockSize: headerHeight, inlineSize: 0 }] }
+    this.report([entry as unknown as ResizeObserverEntry], this)
+  }
+  unobserve() {}
+  disconnect() {}
+}
+
 export const listed: LibraryListResult = {
   entries: [
     { kind: "factory", name: "software", description: null, source: "shipped" },

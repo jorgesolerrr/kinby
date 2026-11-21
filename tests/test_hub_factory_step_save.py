@@ -11,7 +11,7 @@ from kinby.contracts import (
 )
 from tests.test_hub import hub_client
 from tests.test_hub_factories import FACTORY, FILES, HOOKS, factory_hub, write_factory
-from tests.test_hub_factory_versions import read, sources, versions
+from tests.test_hub_factory_versions import diff, read, sources, versions
 
 COMMENTED = "# Tickets become pull requests.\n" + FACTORY.replace(
     "  - id: review\n",
@@ -72,7 +72,7 @@ def test_a_step_save_changes_only_that_step_its_prompt_and_its_hook(tmp_path):
                 "    outcomes: { clean: next, changes: { back: implement, max: 3 } }\n",
                 "    description: Reviews the branch.\n"
                 "    timeout: 15m\n"
-                "    outcomes: {clean: next, changes: {back: implement, max: 2}}\n",
+                "    outcomes: { clean: next, changes: { back: implement, max: 2 } }\n",
             ),
             "prompts/review.md": "Review the branch again.\n",
             "hooks/record.py": hook,
@@ -100,8 +100,38 @@ def test_a_step_save_keeps_the_comment_after_the_steps_last_field(tmp_path):
         assert isinstance(saved, FactoryResult)
         assert saved.files["factory.yaml"] == COMMENTED.replace(
             "    outcomes: { clean: next, changes: { back: implement, max: 3 } }\n",
-            "    failed:\n      retry: 2\n    outcomes: {clean: next}\n",
+            "    failed:\n      retry: 2\n    outcomes: { clean: next }\n",
         )
+
+    asyncio.run(scenario())
+
+
+def test_a_step_save_of_one_field_is_a_version_whose_diff_changes_that_line(tmp_path):
+    client = commented_hub(tmp_path)
+    implement = {
+        "id": "implement",
+        "kind": "agent",
+        "engine": "claude",
+        "prompt": "prompts/implement.md",
+        "check": "record_branch",
+        "results": {"branch": "str"},
+        "timeout": "45m",
+    }
+
+    async def scenario() -> None:
+        before = await read(client)
+        saved = await save(
+            client, FactoryStepSaveCommand(name="tickets", step=implement, hash=before.hash)
+        )
+
+        assert isinstance(saved, FactoryResult)
+        assert saved.version is not None
+        changed = [
+            line
+            for line in (await diff(client, saved.version)).splitlines()
+            if line.startswith(("-", "+")) and not line.startswith(("---", "+++"))
+        ]
+        assert changed == ["-    timeout: 60m", "+    timeout: 45m"]
 
     asyncio.run(scenario())
 
@@ -254,7 +284,7 @@ def test_a_step_save_keeps_steps_written_as_an_indentless_sequence(tmp_path):
         assert isinstance(saved, FactoryResult)
         assert saved.files["factory.yaml"] == indentless.replace(
             "  outcomes: { clean: next, changes: { back: implement, max: 3 } }\n",
-            "  timeout: 15m\n  outcomes: {clean: next, changes: {back: implement, max: 3}}\n",
+            "  timeout: 15m\n  outcomes: { clean: next, changes: { back: implement, max: 3 } }\n",
         )
 
     asyncio.run(scenario())
