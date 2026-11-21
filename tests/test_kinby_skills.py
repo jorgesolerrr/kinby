@@ -45,9 +45,9 @@ def test_disabling_defaults_omits_kinbys_write_routine(tmp_path, capsys):
     assert "skills:\nprompt sections:\n" in capsys.readouterr().out
 
 
-def _write_view_body(tmp_path):
+def _write_view(tmp_path):
     skills, _ = load_skills(load_instance(init_instance(tmp_path / "instance")))
-    return next(skill.body for skill in skills if skill.name == "write-view")
+    return next(skill for skill in skills if skill.name == "write-view")
 
 
 def test_fresh_instance_catalogues_kinbys_write_view(tmp_path):
@@ -63,11 +63,25 @@ def test_fresh_instance_catalogues_kinbys_write_view(tmp_path):
     assert f"- write-view: {skill.description}" in catalogue
 
 
-def test_write_view_example_is_a_view(tmp_path):
-    (example,) = re.findall(r"```json\n(.*?)\n```", _write_view_body(tmp_path), re.DOTALL)
-    arguments = json.loads(example)
+def test_write_view_examples_are_views(tmp_path):
+    skill = _write_view(tmp_path)
 
-    View.model_validate({**arguments, "updated_at": datetime.now(UTC)})
+    examples = re.findall(r"`(examples/[\w-]+\.md)`", skill.body)
+
+    assert len(examples) == 3
+    for example in examples:
+        text = (skill.source.parent / example).read_text(encoding="utf-8")
+        (page,) = re.findall(r"```html\n(.*?)\n```", text, re.DOTALL)
+        (data,) = re.findall(r"```json\n(.*?)\n```", text, re.DOTALL)
+        View.model_validate(
+            {
+                "id": "example",
+                "title": "Example",
+                "page": page,
+                "data": json.loads(data),
+                "updated_at": datetime.now(UTC),
+            }
+        )
 
 
 def _write_skill(root, name, body):
