@@ -113,7 +113,7 @@ def patch_view(instance: Instance, view_id: str, ops: Sequence[ViewPatchOperatio
         if any(pointer == "/page" or pointer.startswith("/page/") for pointer in pointers):
             raise ValueError(
                 f'Operation {number} ({op.op} "{op.path}") addresses the page, and a patch '
-                "changes only the title and the data. Write the page with view_write."
+                "changes only the title and the data. Change the page with view_edit."
             )
     current = read_view(instance, view_id)
     document = current.model_dump(mode="json", include={"title", "data"})
@@ -132,6 +132,33 @@ def patch_view(instance: Instance, view_id: str, ops: Sequence[ViewPatchOperatio
     )
     _store(instance, patched)
     return patched
+
+
+def edit_view(instance: Instance, view_id: str, old: str, new: str) -> View:
+    """Replace the one occurrence of *old* in the view's page with *new*. Refused when the page
+    holds *old* not once but never or more often."""
+    current = read_view(instance, view_id)
+    if current.page is None:
+        raise ValueError(
+            f'View "{view_id}" was written for an older kinby and has no page. '
+            "Write it again with view_write."
+        )
+    occurrences = current.page.count(old)
+    if occurrences == 0:
+        raise ValueError(
+            f'The text to replace is not in the page of view "{view_id}". '
+            "Read it with view_read for its exact text."
+        )
+    if occurrences > 1:
+        raise ValueError(
+            f'The text to replace appears {occurrences} times in the page of view "{view_id}". '
+            "Include more of the text around it, so it appears once."
+        )
+    edited = current.model_copy(
+        update={"page": current.page.replace(old, new), "updated_at": datetime.now(UTC)}
+    )
+    _store(instance, edited)
+    return edited
 
 
 def _store(instance: Instance, view: View) -> ViewChange:

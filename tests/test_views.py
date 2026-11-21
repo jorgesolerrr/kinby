@@ -554,8 +554,8 @@ def test_a_patch_changes_the_title_and_the_data_and_keeps_the_page(tmp_path: Pat
 @pytest.mark.parametrize(
     ("ops", "message"),
     [
-        ([{"op": "replace", "path": "/page", "value": "<h1>Sign in</h1>"}], "view_write"),
-        ([{"op": "copy", "from": "/page", "path": "/data/page"}], "view_write"),
+        ([{"op": "replace", "path": "/page", "value": "<h1>Sign in</h1>"}], "view_edit"),
+        ([{"op": "copy", "from": "/page", "path": "/data/page"}], "view_edit"),
         ([{"op": "remove", "path": "/title"}], "title"),
         ([{"op": "add", "path": "/data/notes", "value": "x" * 1_000_000}], "capped at 1 MB"),
         ([{"op": "remove", "path": "/data/missing"}], "missing"),
@@ -610,6 +610,136 @@ def test_a_patch_with_an_invalid_operation_is_a_tool_error_and_leaves_the_view(
         assert result.error
         assert changes(events) == []
         assert after == before
+
+    asyncio.run(scenario())
+
+
+def edit(old: str, new: str, view: str = "applications") -> tuple[str, dict[str, object]]:
+    return ("view_edit", {"id": view, "old": old, "new": new})
+
+
+RENAME_HEADING = edit("<h1>Applications</h1>", "<h1>Job board</h1>")
+
+
+def test_an_edit_replaces_one_string_in_the_page_which_a_subscriber_gets(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(
+            instance_at(tmp_path), calling(("view_write", board()), RENAME_HEADING)
+        )
+        await turn(dispatcher)
+        items = await snapshots(dispatcher)
+
+        async with asyncio.timeout(5):
+            await anext(items)
+            events = await turn(dispatcher)
+            edited = await anext(items)
+        await items.aclose()
+
+        assert [result.error for result in tool_results(events)] == [False]
+        assert changes(events) == [
+            ViewChanged(view="applications", title="Applications", change=ViewChange.CHANGED)
+        ]
+        assert isinstance(edited, View)
+        assert edited.page == PAGE.replace("<h1>Applications</h1>", "<h1>Job board</h1>")
+        assert (edited.title, edited.data) == ("Applications", DATA)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("edited", "message"),
+    [
+        (edit("<h2>Applications</h2>", "<h2>Jobs</h2>"), "not in the page"),
+        (edit('"postings"', '"jobs"'), "appears 2 times"),
+        (edit("<h1>Applications</h1>", "x" * 1_000_000), "capped at 1 MB"),
+        (edit("<h1>Applications</h1>", "<h1>Jobs</h1>", view="missing"), "not found"),
+    ],
+    ids=["missing", "twice", "cap", "no view"],
+)
+def test_an_edit_that_fails_is_a_tool_error_and_leaves_the_view(
+    tmp_path: Path, edited: tuple[str, dict[str, object]], message: str
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path), calling(("view_write", board()), edited))
+        await turn(dispatcher)
+        before = await call(dispatcher, "view.get", id="applications")
+
+        events = await turn(dispatcher)
+        after = await call(dispatcher, "view.get", id="applications")
+
+        [result] = tool_results(events)
+        assert result.error
+        assert message in result.output
+        assert changes(events) == []
+        assert after == before
+
+    asyncio.run(scenario())
+
+
+def test_an_edit_of_a_view_written_for_the_view_catalogue_is_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        catalogue_view(instance)
+        dispatcher = runtime(instance, calling(edit("Three", "Four", view="board")))
+
+        events = await turn(dispatcher)
+
+        [result] = tool_results(events)
+        assert result.error
+        assert "view_write" in result.output
+        assert changes(events) == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("mode", "action"),
+    [("full-access", "allow"), ("auto", "allow"), ("ask", "allow"), ("read-only", "deny")],
+)
+def test_a_users_turn_edits_a_page_unasked_in_every_mode_but_read_only(
+    tmp_path: Path, mode: str, action: str
+) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        seeded(instance)
+        permissions(instance, f'mode = "{mode}"\n')
+        runner = LangGraphRunner(instance, model_factory=lambda _: calling(RENAME_HEADING))
+
+        result, payloads = await _run_turn(runner)
+
+        assert isinstance(result, TurnOutcome)
+        gated = next(payload for payload in payloads if isinstance(payload, ToolGated))
+        assert (gated.action.value, gated.rule) == (action, "view.page")
+        written = [payload for payload in payloads if isinstance(payload, ViewChanged)]
+        assert len(written) == (1 if action == "allow" else 0)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["ask", "auto"])
+@pytest.mark.parametrize(
+    "edited",
+    [RENAME_HEADING, (RENAME_HEADING[0], {**RENAME_HEADING[1], "page": PAGE})],
+    ids=["edit", "edit naming the stored page"],
+)
+def test_a_routine_turn_asks_before_it_edits_a_page(
+    tmp_path: Path, mode: str, edited: tuple[str, dict[str, object]]
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        routine_file(instance, f"description: News\nmode: {mode}")
+        dispatcher = runtime(instance, calling(edited))
+
+        stop = await routine_stop(dispatcher)
+        view = await call(dispatcher, "view.get", id="applications")
+
+        assert isinstance(stop.payload, ApprovalRequested)
+        assert (stop.payload.name, stop.payload.rule) == ("view_edit", f"mode.{mode}.write")
+        assert isinstance(view, View)
+        assert view.page == PAGE
 
     asyncio.run(scenario())
 
