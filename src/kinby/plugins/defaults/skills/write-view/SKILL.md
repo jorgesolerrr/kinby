@@ -93,6 +93,10 @@ string to put in its place. It refuses when `old` is not in the page or appears 
 quote enough of the page around the change that it appears once. Write the page whole with
 `view_write` only to redesign it. A new page reloads the view for the user.
 
+`view_read` also returns the `errors` the page last raised when the user opened it: uncaught
+script errors and what the page's policy blocked. Fix the page when they show, and the next write
+of the view clears them.
+
 A view written for an older kinby has no page. Read its data with `view_read` and write it again
 with a page.
 

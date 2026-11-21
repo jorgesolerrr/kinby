@@ -38,7 +38,7 @@ from kinby.core.turns import ParkedTurn, TurnOutcome
 from kinby.instance import Instance, load_instance
 from kinby.instance.layout import VIEWS_DIR
 from kinby.instance.routine_grants import RoutineGrants
-from kinby.instance.views import write_view
+from kinby.instance.views import VIEW_ERROR_CAP_CHARS, VIEW_ERRORS_CAP, write_view
 from kinby.plugins import ToolContext
 from kinby.plugins.defaults.files import read
 from tests.helpers import thread_events
@@ -915,5 +915,105 @@ def test_deleting_a_view_the_instance_does_not_have_is_not_found(tmp_path: Path)
 
         assert isinstance(missing, ErrorEnvelope)
         assert missing.code is ErrorCode.NOT_FOUND
+
+    asyncio.run(scenario())
+
+
+ERRORS = ["Uncaught TypeError: kinby.data.posting is undefined"]
+
+
+def test_a_client_saves_a_pages_errors_without_changing_the_view(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        dispatcher = runtime(instance)
+        before = await call(dispatcher, "view.get", id="applications")
+        threads = await call(dispatcher, "thread.list")
+
+        saved = await call(dispatcher, "view.errors.set", id="applications", errors=ERRORS)
+        view = await call(dispatcher, "view.get", id="applications")
+
+        assert isinstance(before, View)
+        assert before.errors == []
+        assert saved == view
+        assert isinstance(view, View)
+        assert view.errors == ERRORS
+        assert view.model_dump(exclude={"errors"}) == before.model_dump(exclude={"errors"})
+        assert await call(dispatcher, "thread.list") == threads
+
+    asyncio.run(scenario())
+
+
+def test_view_read_returns_the_errors_the_page_raised(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        dispatcher = runtime(instance, calling(("view_read", {"id": "applications"})))
+        await call(dispatcher, "view.errors.set", id="applications", errors=ERRORS)
+
+        events = await turn(dispatcher)
+
+        [result] = tool_results(events)
+        assert not result.error
+        assert View.model_validate_json(result.output).errors == ERRORS
+
+    asyncio.run(scenario())
+
+
+def test_a_view_keeps_its_first_errors_each_cut_to_length(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        dispatcher = runtime(instance)
+        raised = [f"Error {number}: " + "x" * 5_000 for number in range(50)]
+
+        view = await call(dispatcher, "view.errors.set", id="applications", errors=raised)
+
+        assert isinstance(view, View)
+        assert view.errors == [error[:VIEW_ERROR_CAP_CHARS] for error in raised[:VIEW_ERRORS_CAP]]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        ("view_write", board()),
+        patch(ADD_INITECH),
+        ("view_write", board(page="<h1>Board</h1>")),
+        RENAME_HEADING,
+    ],
+    ids=["same-page", "data", "page", "edit"],
+)
+def test_the_next_write_of_the_view_clears_its_errors(
+    tmp_path: Path, change: tuple[str, dict[str, object]]
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        dispatcher = runtime(instance, calling(change))
+        await call(dispatcher, "view.errors.set", id="applications", errors=ERRORS)
+
+        events = await turn(dispatcher)
+        view = await call(dispatcher, "view.get", id="applications")
+
+        assert [result.error for result in tool_results(events)] == [False]
+        assert isinstance(view, View)
+        assert view.errors == []
+
+    asyncio.run(scenario())
+
+
+def test_saving_errors_for_a_view_the_instance_does_not_have_is_not_found(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        dispatcher = runtime(instance_at(tmp_path))
+
+        missing = await call(dispatcher, "view.errors.set", id="applications", errors=ERRORS)
+
+        assert isinstance(missing, ErrorEnvelope)
+        assert missing.code is ErrorCode.NOT_FOUND
+        assert await listed(dispatcher) == []
 
     asyncio.run(scenario())

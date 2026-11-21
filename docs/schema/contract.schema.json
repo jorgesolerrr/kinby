@@ -13498,6 +13498,12 @@
           },
           "type": "object"
         },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "id": {
           "$ref": "#/$defs/ViewId"
         },
@@ -13578,6 +13584,27 @@
         "id"
       ],
       "title": "ViewDeleteCommand",
+      "type": "object"
+    },
+    "ViewErrorsSetCommand": {
+      "additionalProperties": false,
+      "description": "Keep the errors a view's page raised as the web app drew it, in place of those it kept, so\nthe agent reads them. The view does not change otherwise, and no thread records it.",
+      "properties": {
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewId"
+        }
+      },
+      "required": [
+        "id",
+        "errors"
+      ],
+      "title": "ViewErrorsSetCommand",
       "type": "object"
     },
     "ViewGetCommand": {
@@ -17220,6 +17247,22 @@
           ],
           "type": "object"
         },
+        "view.errors.set": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/ViewErrorsSetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/View"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "view.get": {
           "additionalProperties": false,
           "properties": {
@@ -17692,6 +17735,7 @@
         "view.get",
         "view.write",
         "view.delete",
+        "view.errors.set",
         "instance.create",
         "instance.start",
         "instance.stop",

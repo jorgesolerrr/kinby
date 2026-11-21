@@ -8,6 +8,7 @@ from kinby.contracts import (
     Stream,
     View,
     ViewDeleteCommand,
+    ViewErrorsSetCommand,
     ViewGetCommand,
     ViewListCommand,
     ViewListResult,
@@ -16,7 +17,14 @@ from kinby.contracts import (
 )
 from kinby.core.errors import ViewNotFound
 from kinby.instance import Instance
-from kinby.instance.views import delete_view, list_views, read_view, watch_view, write_view
+from kinby.instance.views import (
+    delete_view,
+    list_views,
+    read_view,
+    save_view_errors,
+    watch_view,
+    write_view,
+)
 
 
 class InstanceViews:
@@ -57,6 +65,14 @@ class InstanceViews:
         the instance made it, so no thread records it."""
         write_view(self._instance, command.id, command.title, command.page, command.data)
         return await self.list(ViewListCommand())
+
+    async def set_errors(self, command: ViewErrorsSetCommand) -> View:
+        """Keep the errors the view's page raised as a client drew it. No turn made it, so no
+        thread records it."""
+        try:
+            return save_view_errors(self._instance, command.id, command.errors)
+        except LookupError as exc:
+            raise ViewNotFound(str(exc)) from exc
 
     async def delete(self, command: ViewDeleteCommand) -> ViewListResult:
         """Delete a view for a client. No turn made it, so no thread records it."""

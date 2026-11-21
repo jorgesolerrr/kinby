@@ -7,9 +7,10 @@ const SANDBOX_PATH = "/sandbox/"
 
 /**
  * Runs before the page: it hands the page its data and each change the app posts to it, follows
- * the app's theme, posts the page's height out, and opens a link to an http, https or mailto
- * address in a new tab. A page that hears no change, as one that reads kinby.data once, asks the
- * app to draw it again. It keeps its names to itself, so a page may use the same ones.
+ * the app's theme, posts the page's height and each uncaught error and policy violation out, and
+ * opens a link to an http, https or mailto address in a new tab. A page that hears no change, as
+ * one that reads kinby.data once, asks the app to draw it again. It keeps its names to itself, so
+ * a page may use the same ones.
  */
 const BRIDGE = `(() => {
   const kinby = window.kinby
@@ -34,6 +35,14 @@ const BRIDGE = `(() => {
     "*",
   )
   new ResizeObserver(post).observe(document.documentElement)
+  const report = (message) => parent.postMessage({ kinby: "error", message }, "*")
+  window.addEventListener("error", (event) => report(event.message))
+  window.addEventListener("unhandledrejection", (event) => {
+    report(\`Uncaught (in promise) \${event.reason}\`)
+  })
+  document.addEventListener("securitypolicyviolation", (event) => {
+    report(\`The page's policy blocked \${event.blockedURI} (\${event.effectiveDirective})\`)
+  })
   document.addEventListener("click", (event) => {
     const link = event.target instanceof Element ? event.target.closest("a[href]") : null
     if (link === null || !URL.canParse(link.getAttribute("href"))) return
@@ -88,6 +97,14 @@ export function viewDocument(
   drawn.head.prepend(policy, theme, base, bridge)
   drawn.documentElement.classList.toggle("dark", dark)
   return `<!doctype html>\n${drawn.documentElement.outerHTML}`
+}
+
+/** The error a view's frame posts, or undefined for any other message. */
+export function postedError(message: unknown): string | undefined {
+  if (typeof message !== "object" || message === null) return undefined
+  if (!("kinby" in message) || message.kinby !== "error" || !("message" in message))
+    return undefined
+  return typeof message.message === "string" ? message.message : undefined
 }
 
 /** The height a view's frame posts, or undefined for any other message. */
