@@ -397,8 +397,7 @@ class _ToolStep:
                 granted=call.name in self.granted,
                 marked_read_only=call.name in self.read_only,
                 user_started=self.context.user_started,
-                same_page=tool is not None
-                and tool.page
+                same_page=call.name == view_write.name
                 and holds_page(
                     self.context.tool_context.instance,
                     call.arguments.get("id"),

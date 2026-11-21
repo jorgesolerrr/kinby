@@ -135,8 +135,8 @@ class Tool:
     #: A view's data write, which runs unasked unless a rule names it (ADR 0108).
     view: bool = False
     #: A view's page write, which runs unasked on a turn the user starts unless a rule names it,
-    #: and asks as any write does on another turn. One that keeps the page the view holds is a
-    #: data write (ADR 0131).
+    #: and asks as any write does on another turn. A view_write that keeps the page the view
+    #: holds is a data write (ADR 0131).
     page: bool = False
     #: An authored tool, a write whatever it declares until the user marks it read-only
     #: (ADR 0109).
