@@ -1,4 +1,5 @@
 import type { View } from "@kinby/contract"
+import { cn } from "cn"
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 
 import { postedHeight, viewDocument } from "@/lib/view-document"
@@ -6,16 +7,19 @@ import { postedHeight, viewDocument } from "@/lib/view-document"
 /**
  * A view's page, drawn in a frame with an opaque origin: its scripts run and it may open a tab, but
  * it reaches neither the web app nor the network. The frame is as tall as the page says it is, and
- * the app hears only its own frame's window.
+ * the app hears only its own frame's window. A frame drawn without `scripts` runs none, the bridge's
+ * included, so it is a fixed height and scrolls inside.
  */
 export function ViewFrame({
   title,
   page,
   data,
+  scripts = true,
 }: {
   title: string
   page: string
   data: View["data"]
+  scripts?: boolean
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(0)
@@ -37,9 +41,9 @@ export function ViewFrame({
     <iframe
       ref={frame}
       title={title}
-      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+      sandbox={scripts ? "allow-scripts allow-popups allow-popups-to-escape-sandbox" : ""}
       srcDoc={drawn}
-      className="block h-(--page-height) w-full border-0"
+      className={cn("block w-full border-0", scripts ? "h-(--page-height)" : "h-96")}
       style={{ "--page-height": `${height}px` } as CSSProperties}
     />
   )

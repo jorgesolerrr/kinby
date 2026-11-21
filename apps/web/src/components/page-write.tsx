@@ -6,8 +6,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ViewFrame } from "@/components/view-frame"
 
 /**
- * The page a write asks to draw, as its approval shows it: drawn with its data in the frame a view
- * uses, then its source and what it changes in the page the view holds, a tab away each.
+ * The page a write asks to draw, as its approval shows it: drawn in the frame a view uses, then its
+ * data, its source and what it changes in the page the view holds, a tab away each. A frame can
+ * always navigate itself, so a script that ran before the user answered could send the page's data
+ * out (ADR 0131). The page is drawn with its scripts off.
  */
 export function PageWriteTabs({ write }: { write: PageWrite }) {
   const codeBlock =
@@ -17,11 +19,12 @@ export function PageWriteTabs({ write }: { write: PageWrite }) {
       <TabsList variant="line">
         <TabsTrigger value="page">Page</TabsTrigger>
         {write.stored_page !== null && <TabsTrigger value="changes">Changes</TabsTrigger>}
+        <TabsTrigger value="data">Data</TabsTrigger>
         <TabsTrigger value="source">Source</TabsTrigger>
       </TabsList>
       <TabsContent value="page">
-        <div className="max-h-96 overflow-y-auto rounded-lg border">
-          <ViewFrame title={write.title} page={write.page} data={write.data} />
+        <div className="overflow-hidden rounded-lg border">
+          <ViewFrame title={write.title} page={write.page} data={write.data} scripts={false} />
         </div>
       </TabsContent>
       {write.stored_page !== null && (
@@ -43,6 +46,9 @@ export function PageWriteTabs({ write }: { write: PageWrite }) {
           </pre>
         </TabsContent>
       )}
+      <TabsContent value="data">
+        <pre className={codeBlock}>{JSON.stringify(write.data, null, 2)}</pre>
+      </TabsContent>
       <TabsContent value="source">
         <pre className={codeBlock}>{write.page}</pre>
       </TabsContent>
