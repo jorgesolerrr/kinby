@@ -6,14 +6,7 @@ import type {
   InstanceSummary,
   McpServerFailed,
 } from "@kinby/contract"
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useId,
-  useState,
-  useSyncExternalStore,
-} from "react"
+import { type ReactNode, useCallback, useEffect, useId, useState } from "react"
 
 import { BrowserProfiles } from "@/components/browser-profiles"
 import { PageLink, RunBadge } from "@/components/factories-page"
@@ -32,23 +25,21 @@ import {
   ItemContent,
   ItemDescription,
   ItemGroup,
-  ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
-import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
 import { useRead } from "@/hooks/use-read"
 import { workItem } from "@/lib/factory-runs"
 import { instanceName, noticeKey, noticeTitle, observedState } from "@/lib/instances"
 import { lineName, readFloor, unfinished } from "@/lib/lines"
-import { linePath, openSkills, openView } from "@/lib/selection"
-import { BotIcon, ChevronRightIcon, CirclePauseIcon, LayoutDashboardIcon } from "lucide-react"
+import { linePath, openSkills } from "@/lib/selection"
+import { BotIcon, CirclePauseIcon } from "lucide-react"
 
 /**
  * An instance's Overview, under its header, which holds its name and lifecycle. A stopped instance
  * with setup pending opens on its setup card, and keeps it until it runs. Any other stopped one
  * says it is stopped. A running one opens on what needs the user: its logins not signed in, each
- * to sign in to, its MCP sign-ins not signed in, and its MCP servers that failed. Through `client`, its own connection, it lists
- * its views. Running or stopped, it shows its toolset, and one the hub opens browsers for lists its
+ * to sign in to, its MCP sign-ins not signed in, and its MCP servers that failed. Running or
+ * stopped, it shows its toolset, and one the hub opens browsers for lists its
  * browser profiles and its vault. `onChanged` hears a sign-in or a secret end, so the instances
  * are listed again. While a stop asked from the header drains, `stopping` keeps the running view.
  */
@@ -167,9 +158,6 @@ export function InstancePage({
             </ItemGroup>
           </SectionFrame>
         )}
-        {client !== undefined && (
-          <Views client={client} clock={clock} instanceId={instance.instance_id} name={name} />
-        )}
         {sections}
         {!needsYou && observedState(instance) === "running" && <ReadyForWork name={name} />}
       </Sections>
@@ -238,53 +226,6 @@ function OwnedLines({
 /** Overview's sections, one under the other. */
 function Sections({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-8 py-6">{children}</div>
-}
-
-/** The instance's views as rows, read again as the sidebar reads them. Picking one opens its page. */
-function Views({
-  client,
-  clock,
-  instanceId,
-  name,
-}: {
-  client: Pick<InstanceClient, "call" | "state" | "onStateChange">
-  clock: Clock
-  instanceId: string
-  name: string
-}) {
-  const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
-  const list = useCallback(() => client.call("view.list", {}), [client])
-  const [value] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
-  return (
-    <SectionFrame title="Views" lead={`Pages ${name} keeps current.`} variant="page">
-      {value !== undefined &&
-        (value.views.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No views yet.</p>
-        ) : (
-          <ItemGroup variant="outline" aria-label="Views">
-            {value.views.map((view) => (
-              <li key={view.id}>
-                <Item
-                  size="sm"
-                  render={<button type="button" aria-label={view.title} />}
-                  onClick={() => openView(instanceId, view.id)}
-                >
-                  <ItemMedia variant="icon">
-                    <LayoutDashboardIcon />
-                  </ItemMedia>
-                  <ItemContent>
-                    <ItemTitle>{view.title}</ItemTitle>
-                  </ItemContent>
-                  <ItemActions>
-                    <ChevronRightIcon className="text-muted-foreground" />
-                  </ItemActions>
-                </Item>
-              </li>
-            ))}
-          </ItemGroup>
-        ))}
-    </SectionFrame>
-  )
 }
 
 /** A running instance with nothing that needs the user, pointing to where its work happens. */
