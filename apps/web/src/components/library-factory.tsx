@@ -1,5 +1,5 @@
 import type { Client, Clock } from "@kinby/contract"
-import { useCallback, useId } from "react"
+import { useCallback, useEffect, useId, useState } from "react"
 import { parse } from "yaml"
 
 import { Failure } from "@/components/config-alerts"
@@ -22,8 +22,9 @@ interface FactoryFile {
 /**
  * A factory unfolded: its steps, its `factory.yaml` and its other files, read-only, and its
  * History, where it reverts to an earlier version. A shipped factory the user changed shows that
- * it differs from kinby's, and whether kinby's update waits for the user. Opened `from` a run, it
- * opens on the card of the run's step.
+ * it differs from kinby's, and whether kinby's update waits for the user. Its steps and its
+ * History read the same versions, so each card's last change is History's. Opened `from` a run,
+ * it opens on the card of the run's step.
  */
 export function FactoryEntry({
   client,
@@ -49,6 +50,24 @@ export function FactoryEntry({
     return { result, run, content, factory, files: Object.keys(others) }
   }, [client, name, runId])
   const { value: opened, failure, readAgain } = useRead(read, clock)
+  const readVersions = useCallback(
+    async () => (await client.call("factory.version.list", { name })).versions,
+    [client, name],
+  )
+  const history = useRead(readVersions, clock)
+  const readVersionsAgain = history.readAgain
+  const current = opened?.result.version
+  const behind =
+    history.value !== undefined &&
+    current !== undefined &&
+    (history.value[0]?.version ?? null) !== current
+  useEffect(() => {
+    if (behind) readVersionsAgain()
+  }, [behind, readVersionsAgain])
+  const rowPrefix = useId()
+  const rowId = (version: string) => `${rowPrefix}${version}`
+  /** The version a step's card asked History to show. */
+  const [shown, setShown] = useState<{ version: string }>()
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,6 +92,13 @@ export function FactoryEntry({
               commands={opened.factory.requires?.commands ?? []}
               saving={{ client, factory: opened.result }}
               from={from && opened.run && { step: from.step, run: opened.run }}
+              history={
+                history.value && {
+                  versions: history.value,
+                  rowId,
+                  onShow: (version) => setShown({ version }),
+                }
+              }
               onSaved={readAgain}
             />
             <Field>
@@ -87,10 +113,15 @@ export function FactoryEntry({
       </section>
       <FactoryHistory
         client={client}
-        clock={clock}
         name={name}
-        current={opened?.result.version}
-        onReverted={readAgain}
+        versions={history.value}
+        failure={history.failure}
+        rowId={rowId}
+        shown={shown}
+        onReverted={() => {
+          readAgain()
+          readVersionsAgain()
+        }}
       />
     </div>
   )
