@@ -326,6 +326,8 @@ class ToolCallResolution:
     approval_id: UUID | None
     #: What the tool's check found wrong with the arguments, which the model reads instead.
     refusal: str | None = None
+    #: The result the call already has: a refused preview's is recorded as it is decided.
+    made: ToolResult | None = None
 
 
 @dataclass(frozen=True)
@@ -1713,6 +1715,8 @@ class LangGraphRunner:
             )
         elif decision.action is GateAction.ASK:
             approval_id = uuid5(step.turn.turn_id, f"approval:{call.call_id}")
+            if (refused := self._refused_preview(step.turn, call)) is not None:
+                return refused
             try:
                 preview = await self._preview(step, call, approval_id)
             except PreviewRefused as exc:
@@ -1723,7 +1727,14 @@ class LangGraphRunner:
                     rule=PREVIEW_REFUSED,
                     decided_by=GateDecider.POLICY,
                 )
-                return ToolCallResolution(call, gate, None, str(exc))
+                result = ToolResult(
+                    call_id=call.call_id, name=call.name, output=str(exc), error=True
+                )
+                # A later call of the message may park the turn. Its resume hands the answers
+                # to the step's approvals by position, so it must find this call refused.
+                await step.context.emit(gate)
+                await step.context.emit(result)
+                return ToolCallResolution(call, gate, None, made=result)
             approval: ApprovalAnswer = interrupt(
                 ApprovalRequested(
                     approval_id=approval_id,
@@ -1759,6 +1770,34 @@ class LangGraphRunner:
             )
         return ToolCallResolution(call, gate, approval_id, answer.refusal)
 
+    def _refused_preview(
+        self, turn: PreparedTurnRequest, call: ToolCall
+    ) -> ToolCallResolution | None:
+        """The resolution of *call* when an earlier run of the step refused its preview."""
+        events = self._event_log.turn_events(turn.turn_id)
+        gate = next(
+            (
+                payload
+                for event in events
+                if isinstance(payload := event.payload, ToolGated)
+                and payload.call_id == call.call_id
+                and payload.rule == PREVIEW_REFUSED
+            ),
+            None,
+        )
+        result = next(
+            (
+                payload
+                for event in events
+                if isinstance(payload := event.payload, ToolResult)
+                and payload.call_id == call.call_id
+            ),
+            None,
+        )
+        if gate is None or result is None:
+            return None
+        return ToolCallResolution(call, gate, None, made=result)
+
     async def _preview(self, step: _ToolStep, call: ToolCall, approval_id: UUID) -> str | None:
         """What the approval of *call* shows. Raises PreviewRefused when its tool's preview
         refuses the call. An approval the turn already raised shows what it showed: a resume hands
@@ -1781,8 +1820,11 @@ class LangGraphRunner:
 
     async def _make(self, step: _ToolStep, resolution: ToolCallResolution) -> ToolResult:
         """Make a decided call as its tool: run it when allowed, cut its result to the cap, and
-        emit its gate decision and its result."""
+        emit its gate decision and its result. A call made as it was decided keeps its result."""
         call = resolution.call
+        if resolution.made is not None:
+            self._forget_tool_call(step.turn, call)
+            return resolution.made
         await step.context.emit(resolution.gate)
         if resolution.gate.action is GateOutcome.DENY:
             result = ToolResult(

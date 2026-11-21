@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -1052,11 +1053,7 @@ def test_malformed_injected_bash_regex_fails_at_the_turn_boundary(tmp_path: Path
         runner.prepare_for_turn()
 
 
-def test_a_resume_asks_again_for_a_call_whose_preview_turned_refused(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        instance = _instance(tmp_path)
-        (instance.path / "tools" / "write_note.py").write_text(
-            """from dataclasses import replace
+_PREVIEWED_NOTE = """from dataclasses import replace
 
 from kinby.plugins import tool
 from kinby.plugins.tools import PreviewRefused
@@ -1072,51 +1069,75 @@ async def _preview(arguments, instance):
     return f"Writes {arguments['note']}."
 
 write_note = replace(write_note, preview=_preview)
-""",
-            encoding="utf-8",
-        )
-        model = ScriptedModel(
-            [
-                AIMessageChunk(
-                    content="",
-                    tool_calls=[
-                        {
-                            "name": "write_note",
-                            "args": {"note": note},
-                            "id": f"write-{note}",
-                            "type": "tool_call",
-                        }
-                        for note in ("first", "second")
-                    ],
-                ),
-                AIMessageChunk(content="Done."),
-            ]
-        )
-        log = EventLog(instance.manifest.state_dir)
-        runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
-        preparation = runner.prepare_for_turn()
-        turn = PreparedTurnRequest(
-            thread_id=uuid4(),
-            turn_id=uuid4(),
-            message="Write two notes.",
-            model=preparation.model,
-            permission_mode=PermissionMode.ASK,
-            system_prompt=SystemPrompt("System prompt"),
-        )
+"""
 
-        async def emit(payload: Payload) -> Event:
-            return await log.append(turn.thread_id, turn.turn_id, payload)
 
-        context = TurnContext(preparation.budgets, emit)
+@dataclass(frozen=True)
+class _NotesTurn:
+    """A turn whose one model message asks to write the notes "first" and "second". The first
+    note's preview refuses while the instance holds a "refused" file."""
+
+    instance: Instance
+    runner: LangGraphRunner
+    log: EventLog
+    turn: PreparedTurnRequest
+    context: TurnContext
+
+    def payloads(self) -> list[Payload]:
+        return [event.payload for event in self.log.turn_events(self.turn.turn_id)]
+
+
+def _notes_turn(tmp_path: Path) -> _NotesTurn:
+    instance = _instance(tmp_path)
+    (instance.path / "tools" / "write_note.py").write_text(_PREVIEWED_NOTE, encoding="utf-8")
+    model = ScriptedModel(
+        [
+            AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_note",
+                        "args": {"note": note},
+                        "id": f"write-{note}",
+                        "type": "tool_call",
+                    }
+                    for note in ("first", "second")
+                ],
+            ),
+            AIMessageChunk(content="Done."),
+        ]
+    )
+    log = EventLog(instance.manifest.state_dir)
+    runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+    preparation = runner.prepare_for_turn()
+    turn = PreparedTurnRequest(
+        thread_id=uuid4(),
+        turn_id=uuid4(),
+        message="Write two notes.",
+        model=preparation.model,
+        permission_mode=PermissionMode.ASK,
+        system_prompt=SystemPrompt("System prompt"),
+    )
+
+    async def emit(payload: Payload) -> Event:
+        return await log.append(turn.thread_id, turn.turn_id, payload)
+
+    return _NotesTurn(instance, runner, log, turn, TurnContext(preparation.budgets, emit))
+
+
+def test_a_resume_asks_again_for_a_call_whose_preview_turned_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notes = _notes_turn(tmp_path)
+        runner, turn, context = notes.runner, notes.turn, notes.context
 
         assert isinstance(await runner.run(turn, context), ParkedTurn)
-        (instance.path / "refused").touch()
+        (notes.instance.path / "refused").touch()
         parked = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.APPROVE), context)
         completed = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.DENY), context)
 
         assert isinstance(parked, ParkedTurn)
         assert isinstance(completed, TurnOutcome)
-        payloads = [event.payload for event in log.turn_events(turn.turn_id)]
+        payloads = notes.payloads()
         approvals = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
         assert [(approval.arguments, approval.preview) for approval in approvals] == [
             ({"note": "first"}, "Writes first."),
@@ -1126,6 +1147,34 @@ write_note = replace(write_note, preview=_preview)
         assert [(result.call_id, result.error) for result in results] == [
             ("write-first", False),
             ("write-second", True),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_resume_keeps_the_refusal_of_a_preview_that_passes_since(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        notes = _notes_turn(tmp_path)
+        runner, turn, context = notes.runner, notes.turn, notes.context
+        (notes.instance.path / "refused").touch()
+
+        assert isinstance(await runner.run(turn, context), ParkedTurn)
+        (notes.instance.path / "refused").unlink()
+        completed = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.APPROVE), context)
+
+        assert isinstance(completed, TurnOutcome)
+        payloads = notes.payloads()
+        approvals = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+        assert [approval.arguments for approval in approvals] == [{"note": "second"}]
+        gated = [payload for payload in payloads if isinstance(payload, ToolGated)]
+        assert [(gate.call_id, gate.action, gate.rule) for gate in gated] == [
+            ("write-first", GateOutcome.DENY, "preview.refused"),
+            ("write-second", GateOutcome.ALLOW, "mode.ask.write"),
+        ]
+        results = [payload for payload in payloads if isinstance(payload, ToolResult)]
+        assert [(result.call_id, result.output, result.error) for result in results] == [
+            ("write-first", "The note is gone.", True),
+            ("write-second", "second", False),
         ]
 
     asyncio.run(scenario())
