@@ -225,7 +225,7 @@ def _change(operation: str, arguments: dict[str, object]) -> AIMessageChunk:
             "review",
             FACTORY.replace(
                 "  - { id: review, kind: approve, summary: Review the issue. }\n",
-                "  - {id: review, kind: approve, summary: Review the issue and its comments.}\n",
+                "  - { id: review, kind: approve, summary: Review the issue and its comments. }\n",
             ),
         ),
         (
@@ -243,7 +243,7 @@ def _change(operation: str, arguments: dict[str, object]) -> AIMessageChunk:
             "land",
             FACTORY.replace(
                 "  - { id: land, kind: approve, summary: Land the change. }\n",
-                "  - {id: land, kind: approve, off: true, summary: Land the change.}\n",
+                "  - { id: land, kind: approve, off: true, summary: Land the change. }\n",
             ),
         ),
     ],
@@ -391,7 +391,7 @@ def test_the_owner_reads_the_factory_of_its_line_and_previews_a_change_to_it(tmp
             assert got == await read(hub_client(owner.hub))
             assert not isinstance(previewed, ErrorEnvelope), previewed
             assert previewed.lines == ["cec-backend, owned by alice", "landing, owned by home"]
-            assert "+  - {id: land, kind: approve, off: true, summary: Land the change.}\n" in (
+            assert "+  - { id: land, kind: approve, off: true, summary: Land the change. }\n" in (
                 previewed.diff
             )
 

@@ -108,15 +108,12 @@ def test_turning_a_step_off_and_on_is_one_version_each_that_keeps_the_rest_of_th
         listed = await versions(client)
 
         outcomes = "    outcomes: { clean: next, changes: { back: implement, max: 3 } }\n"
-        rewritten = "    outcomes: {clean: next, changes: {back: implement, max: 3}}\n"
         assert isinstance(off, FactoryResult)
         assert off.files["factory.yaml"] == before.files["factory.yaml"].replace(
-            outcomes, "    off: true\n" + rewritten
+            outcomes, "    off: true\n" + outcomes
         )
         assert isinstance(on, FactoryResult)
-        assert on.files == before.files | {
-            "factory.yaml": before.files["factory.yaml"].replace(outcomes, rewritten)
-        }
+        assert on.files == before.files
         assert sources(listed[:2]) == 2 * [(FactoryVersionSource.WEB, ["review"])]
         assert len(listed) == 3
 
