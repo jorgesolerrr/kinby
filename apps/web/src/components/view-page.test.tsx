@@ -1,7 +1,7 @@
 import type { InstanceClient, View } from "@kinby/contract"
 import { CallError } from "@kinby/contract"
 import { stubSubscriber } from "@kinby/contract/testing"
-import { act, render, screen } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { ViewPage } from "@/components/view-page"
@@ -81,14 +81,22 @@ describe("ViewPage", () => {
     ])
   })
 
-  it("stamps a fresh nonce on every script the page was written with, and on no handler", async () => {
+  it("stamps the nonce on every inline script the page was written with, and on no handler", async () => {
     await openPage(view())
     const first = drawnPage(frame())
 
-    const scripts = [...first.querySelectorAll("script")]
-    expect(scripts).toHaveLength(3)
-    expect(scripts.every((script) => script.nonce === nonce(first))).toBe(true)
+    const inline = [...first.querySelectorAll<HTMLScriptElement>("script:not([src])")]
+    expect(inline).toHaveLength(2)
+    expect(inline.every((script) => script.nonce === nonce(first))).toBe(true)
     expect(first.getElementById("sort")?.hasAttribute("nonce")).toBe(false)
+  })
+
+  it("leaves a script loaded from an address without the nonce, so only the policy's path admits it", async () => {
+    await openPage(view())
+
+    const [remote] = drawnPage(frame()).querySelectorAll("script[src]")
+    expect(remote.getAttribute("src")).toBe("https://cdn.example/chart.js")
+    expect(remote.hasAttribute("nonce")).toBe(false)
   })
 
   it("loads a new nonce with each snapshot", async () => {
@@ -131,6 +139,16 @@ describe("ViewPage", () => {
     await openPage(view())
 
     expect(drawnPage(frame()).documentElement.classList.contains("dark")).toBe(true)
+  })
+
+  it("draws the page again in the app's theme when the theme changes while it is open", async () => {
+    await openPage(view())
+
+    await act(async () => document.documentElement.classList.add("dark"))
+
+    await waitFor(() =>
+      expect(drawnPage(frame()).documentElement.classList.contains("dark")).toBe(true),
+    )
   })
 
   it("draws each new snapshot of the view as it arrives", async () => {

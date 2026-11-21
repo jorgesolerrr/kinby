@@ -1,5 +1,12 @@
 import type { View } from "@kinby/contract"
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
+import {
+  type CSSProperties,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { postedHeight, viewDocument } from "@/lib/view-document"
 
@@ -19,7 +26,7 @@ export function ViewFrame({
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(0)
-  const dark = document.documentElement.classList.contains("dark")
+  const dark = useSyncExternalStore(onRootClassChange, rootIsDark)
   const drawn = useMemo(
     () => viewDocument(page, data, { dark, origin: window.location.origin }),
     [page, data, dark],
@@ -43,4 +50,15 @@ export function ViewFrame({
       style={{ "--page-height": `${height}px` } as CSSProperties}
     />
   )
+}
+
+/** Call `listener` each time the root's classes change, as the theme store's switch does. */
+function onRootClassChange(listener: () => void): () => void {
+  const observer = new MutationObserver(listener)
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
+  return () => observer.disconnect()
+}
+
+function rootIsDark(): boolean {
+  return document.documentElement.classList.contains("dark")
 }
