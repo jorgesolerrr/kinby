@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 
 from pydantic import JsonValue, TypeAdapter
 
-from kinby.contracts import ViewChange, ViewChanged, ViewId
+from kinby.contracts import PageWrite, ViewChange, ViewChanged, ViewId
+from kinby.instance import Instance
 from kinby.instance.views import (
     ViewPatchOperation,
     delete_view,
     edit_view,
+    edited_page,
     list_views,
     patch_view,
     read_view,
     write_view,
+    written_page,
 )
 from kinby.plugins.tools import Tool, ToolContext, tool
 
@@ -90,3 +94,22 @@ async def view_delete(id: ViewId, context: ToolContext) -> str:
         ViewChanged(view=id, title=deleted.title, change=ViewChange.DELETED)
     )
     return f"Deleted view {id}."
+
+
+def page_write(
+    name: str, arguments: Mapping[str, JsonValue], instance: Instance
+) -> PageWrite | None:
+    """What a call of view_write or view_edit would draw, for its approval to show. None for a
+    call of another tool, and for one the tool would refuse."""
+    try:
+        match name, arguments:
+            case (
+                view_write.name,
+                {"id": str(id), "title": str(title), "page": str(page), "data": dict(data)},
+            ):
+                return written_page(instance, id, title, page, data)
+            case view_edit.name, {"id": str(id), "old": str(old), "new": str(new)}:
+                return edited_page(instance, id, old, new)
+    except LookupError, ValueError:
+        pass
+    return None
