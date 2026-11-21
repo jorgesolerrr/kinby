@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreBinaries": ["uv"],
-  "ignore": [".design-sync/**"],
+  "ignore": [".design-sync/**", "src/kinby/hub/sandbox/**"],
   "workspaces": {
     "apps/web": {
       "entry": ["src/components/ui/*.tsx"]
