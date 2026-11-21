@@ -719,12 +719,19 @@ def test_a_users_turn_edits_a_page_unasked_in_every_mode_but_read_only(
 
 
 @pytest.mark.parametrize("mode", ["ask", "auto"])
-def test_a_routine_turn_asks_before_it_edits_a_page(tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize(
+    "edited",
+    [RENAME_HEADING, (RENAME_HEADING[0], {**RENAME_HEADING[1], "page": PAGE})],
+    ids=["edit", "edit naming the stored page"],
+)
+def test_a_routine_turn_asks_before_it_edits_a_page(
+    tmp_path: Path, mode: str, edited: tuple[str, dict[str, object]]
+) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)
         seeded(instance)
         routine_file(instance, f"description: News\nmode: {mode}")
-        dispatcher = runtime(instance, calling(RENAME_HEADING))
+        dispatcher = runtime(instance, calling(edited))
 
         stop = await routine_stop(dispatcher)
         view = await call(dispatcher, "view.get", id="applications")
