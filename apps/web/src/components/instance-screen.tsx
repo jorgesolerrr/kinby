@@ -2,6 +2,7 @@ import type { Clock, InstanceClient, ViewSummary } from "@kinby/contract"
 import { EllipsisIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 
+import { Composer } from "@/components/composer"
 import { Failure } from "@/components/config-alerts"
 import {
   AlertDialog,
@@ -23,7 +24,15 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ViewPage } from "@/components/view-page"
 import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
-import { homePath, landAt, openView, useScreenOpen, useViewOpen, viewPath } from "@/lib/selection"
+import {
+  homePath,
+  landAt,
+  openView,
+  selectThread,
+  useScreenOpen,
+  useViewOpen,
+  viewPath,
+} from "@/lib/selection"
 
 /** The view last open on an instance's screen in this browser, by instance. */
 const LAST_OPEN = "kinby-screen-"
@@ -33,7 +42,9 @@ const LAST_OPEN = "kinby-screen-"
  * `usePolled` says, over the view the URL opens, at full width. With none named, it opens on the
  * view last open for the instance in this browser, or else the most recently changed one, and an
  * instance with no views lands on the home screen sent to it. The open tab's menu offers Delete,
- * and a delete that succeeds shows the next view, or the one before it, or the home screen.
+ * and a delete that succeeds shows the next view, or the one before it, or the home screen. Under
+ * the open view, a composer starts a thread as the home screen's does, and opens it with the view
+ * in the pane beside it.
  */
 export function InstanceScreen({
   client,
@@ -50,6 +61,7 @@ export function InstanceScreen({
   const viewId = useViewOpen()
   const connected = useSyncExternalStore(client.onStateChange, client.state) === "connected"
   const list = useCallback(async () => (await client.call("view.list", {})).views, [client])
+  const listSkills = useCallback(async () => (await client.call("skill.list", {})).skills, [client])
   const [listed, listAgain] = usePolled(list, clock, connected, POLL_INTERVAL_MS)
   const views = useMemo(
     () => listed?.toSorted((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)),
@@ -72,6 +84,12 @@ export function InstanceScreen({
     const next = views[at + 1] ?? views[at - 1]
     landAt(next === undefined ? homePath(instanceId) : viewPath(instanceId, next.id))
     void listAgain()
+  }
+  const send = async (message: string, skills: string[]) => {
+    if (viewId === undefined) return
+    const created = await client.call("thread.create", {})
+    await client.call("thread.turn.start", { thread_id: created.id, message, skills })
+    selectThread(instanceId, created.id, { kind: "view", viewId })
   }
   return (
     <Tabs
@@ -100,6 +118,19 @@ export function InstanceScreen({
           {/* The tab panel sets small text, and a view reads at the base size, as in the pane. */}
           <div className="pt-2 text-base">
             <ViewPage key={viewId} client={client} viewId={viewId} />
+          </div>
+          <div className="sticky bottom-0 bg-background pt-4">
+            <div className="mx-auto max-w-3xl">
+              <Composer
+                draftKey={`screen-${instanceId}`}
+                label="Message"
+                placeholder={`Ask ${name} to change this view`}
+                name={name}
+                connected={connected}
+                onSend={send}
+                listSkills={listSkills}
+              />
+            </div>
           </div>
         </TabsContent>
       )}

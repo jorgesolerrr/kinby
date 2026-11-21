@@ -158,9 +158,12 @@ export function selectInstance(instanceId: string): void {
   navigate(instancePath(instanceId))
 }
 
-/** Select one of an instance's threads the same way. */
-export function selectThread(instanceId: string, threadId: string): void {
-  navigate(threadPath(instanceId, threadId))
+/** Select one of an instance's threads the same way, with `pane` open beside it when given. */
+export function selectThread(instanceId: string, threadId: string, pane?: Pane): void {
+  const path = threadPath(instanceId, threadId)
+  navigate(
+    pane === undefined ? path : `${path}?${new URLSearchParams({ [PANE]: paneValue(pane) })}`,
+  )
 }
 
 /** Select a thread scrolled to one of its turns the same way. */
@@ -284,10 +287,14 @@ export function closeSettings(): void {
  * Back goes back to what was open before.
  */
 export function openPane(pane: Pane): void {
-  const value = pane.kind === "takeover" ? TAKEOVER : VIEW_PANE + pane.viewId
+  const value = paneValue(pane)
   if (new URLSearchParams(window.location.search).get(PANE) === value) return
   window.history.pushState(null, "", searchUrl(PANE, value))
   changed()
+}
+
+function paneValue(pane: Pane): string {
+  return pane.kind === "takeover" ? TAKEOVER : VIEW_PANE + pane.viewId
 }
 
 /** Close the pane, keeping the thread, in the same history entry. */
