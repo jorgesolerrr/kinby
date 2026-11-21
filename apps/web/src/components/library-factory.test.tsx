@@ -214,6 +214,51 @@ async function openMap(file = software, more: Answers = {}) {
 const height = (map: HTMLElement, label: string) =>
   Number(within(map).getByText(label).getAttribute("y"))
 
+/** Each route back on the map: its arc as points sampled from its path, and its label's box, its
+ * width estimated from its characters since jsdom measures no text. */
+function routesBack(map: HTMLElement) {
+  return Array.from(within(map).getByLabelText("Routes back").querySelectorAll("g"), (route) => {
+    const d = route.querySelector("path")?.getAttribute("d") ?? ""
+    const [x1, y1, cx1, cy1, cx2, cy2, x2, y2] = Array.from(d.matchAll(/-?[\d.]+/g), Number)
+    const points = Array.from({ length: 401 }, (_, step) => {
+      const t = step / 400
+      const s = 1 - t
+      const bezier = (a: number, b: number, c: number, e: number) =>
+        s ** 3 * a + 3 * s ** 2 * t * b + 3 * s * t ** 2 * c + t ** 3 * e
+      return { x: bezier(x1, cx1, cx2, x2), y: bezier(y1, cy1, cy2, y2) }
+    })
+    const label = route.querySelector("text")
+    const size = Number(label?.getAttribute("font-size"))
+    const half = ((label?.textContent ?? "").length * size * 0.6) / 2
+    const x = Number(label?.getAttribute("x"))
+    const y = Number(label?.getAttribute("y"))
+    const box = { left: x - half, right: x + half, top: y - size, bottom: y }
+    return { label: label?.textContent, points, box }
+  })
+}
+
+/** The labels each route back's label meets, by another route back's arc or label. */
+function collisions(map: HTMLElement) {
+  const routes = routesBack(map)
+  type Box = (typeof routes)[number]["box"]
+  const inside = ({ x, y }: { x: number; y: number }, box: Box) =>
+    box.left <= x && x <= box.right && box.top <= y && y <= box.bottom
+  const overlap = (one: Box, other: Box) =>
+    one.left < other.right &&
+    other.left < one.right &&
+    one.top < other.bottom &&
+    other.top < one.bottom
+  return routes.flatMap((route) =>
+    routes
+      .filter(
+        (other) =>
+          other !== route &&
+          (other.points.some((point) => inside(point, route.box)) || overlap(route.box, other.box)),
+      )
+      .map((other) => `${route.label} meets ${other.label}`),
+  )
+}
+
 describe("LibraryPage, the shipped software factory's map and cards", () => {
   it("draws each route back as an arc above the line, labelled with its outcome and max", async () => {
     const { map } = await openMap()
@@ -251,6 +296,37 @@ describe("LibraryPage, the shipped software factory's map and cards", () => {
     expect(Math.abs(height(map, "changes ×2") - height(map, "failed ×2"))).toBeGreaterThanOrEqual(
       16,
     )
+  })
+
+  it("keeps each route back's label clear of every other route back", async () => {
+    const { map } = await openMap()
+
+    expect(collisions(map)).toEqual([])
+  })
+
+  it("keeps clear the labels of routes back of different spans into the same step", async () => {
+    const { map } = await openMap(`name: software
+requires: {}
+work_item: { issue: int }
+steps:
+  - { id: plan, kind: agent, engine: claude, prompt: prompts/implement.md }
+  - { id: build, kind: agent, engine: claude, prompt: prompts/implement.md }
+  - id: lint
+    kind: code
+    call: tools/github.py:check
+    outcomes: { dirty: { back: build, max: 4 } }
+  - { id: test, kind: code, call: tools/github.py:check, failed: { back: build, max: 2 } }
+  - { id: ship, kind: code, call: tools/github.py:check }
+  - id: watch
+    kind: code
+    call: tools/github.py:check
+    outcomes:
+      redo: { back: build, max: 1 }
+      replan-from-scratch: { back: plan, max: 3 }
+`)
+
+    expect(within(map).getByLabelText("Routes back").querySelectorAll("path")).toHaveLength(4)
+    expect(collisions(map)).toEqual([])
   })
 
   it("draws each resumed session as a dotted arc below the line", async () => {
