@@ -1,4 +1,5 @@
-"""Keep an instance's views, each one file in views/ that only this module writes (ADR 0108)."""
+"""Keep an instance's views, each one file in views/ that only this module writes (ADR 0108,
+ADR 0131)."""
 
 from __future__ import annotations
 
@@ -14,21 +15,15 @@ from typing import Annotated, Literal
 import jsonpatch
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
-from kinby.contracts import (
-    ContractModel,
-    JsonPointer,
-    View,
-    ViewChange,
-    ViewId,
-    ViewSpec,
-    ViewSummary,
-)
+from kinby.contracts import ContractModel, View, ViewChange, ViewId, ViewSummary
 from kinby.instance.dataclasses import Instance
 from kinby.instance.layout import VIEWS_DIR
 
 #: The most a view takes up serialized, so a whole snapshot stays cheap to send.
 VIEW_CAP_BYTES = 1_000_000
 _VIEW_ID = TypeAdapter(ViewId)
+#: Where a patch operation reads or writes in a view: an RFC 6901 JSON Pointer.
+type JsonPointer = Annotated[str, Field(pattern=r"^(/.*)?$")]
 
 #: Who hears of each write, by the view's file, and hears None once it is deleted. Writes run in
 #: worker threads, and a watcher only schedules the view on its event loop, so it is called under
@@ -60,37 +55,57 @@ type ViewPatchOperation = Annotated[
 ]
 
 
+class _CatalogueView(ViewSummary):
+    """A view as an older kinby wrote it, for the view catalogue: a spec where a page is now."""
+
+    spec: JsonValue
+    data: dict[str, JsonValue]
+
+
+_STORED = TypeAdapter(View | _CatalogueView)
+
+
 def list_views(instance: Instance) -> list[ViewSummary]:
     """Every view of the instance, by id."""
-    views = (
-        View.model_validate_json(path.read_bytes())
-        for path in sorted((instance.path / VIEWS_DIR).glob("*.json"))
-    )
+    views = (_load(path) for path in sorted((instance.path / VIEWS_DIR).glob("*.json")))
     return [ViewSummary(id=view.id, title=view.title, updated_at=view.updated_at) for view in views]
 
 
 def read_view(instance: Instance, view_id: str) -> View:
-    path = _view_path(instance, view_id)
+    """The view, with no page when it was written for the view catalogue."""
     try:
-        return View.model_validate_json(path.read_bytes())
+        return _load(_view_path(instance, view_id))
     except FileNotFoundError:
         raise LookupError(f'View "{view_id}" was not found.') from None
 
 
+def _load(path: Path) -> View:
+    stored = _STORED.validate_json(path.read_bytes())
+    if isinstance(stored, _CatalogueView):
+        return View(**stored.model_dump(exclude={"spec"}), page=None)
+    return stored
+
+
 def write_view(
-    instance: Instance, view_id: str, title: str, spec: ViewSpec, data: dict[str, JsonValue]
+    instance: Instance, view_id: str, title: str, page: str, data: dict[str, JsonValue]
 ) -> ViewChange:
     """Create or replace a view, whole. A reader sees the old view or the new one, never half."""
-    view = View(id=view_id, title=title, spec=spec, data=data, updated_at=datetime.now(UTC))
+    view = View(id=view_id, title=title, page=page, data=data, updated_at=datetime.now(UTC))
     return _store(instance, view)
 
 
 def patch_view(instance: Instance, view_id: str, ops: Sequence[ViewPatchOperation]) -> View:
-    """Apply *ops* in order to the view's title, spec and data, and write the result only if it
-    is still a valid view."""
-    document = read_view(instance, view_id).model_dump(
-        mode="json", include={"title", "spec", "data"}
-    )
+    """Apply *ops* in order to the view's title and data, and write the result only if it is
+    still a valid view. An operation that reads or writes the page is refused."""
+    for number, op in enumerate(ops):
+        pointers = (op.path, op.from_) if isinstance(op, FromOperation) else (op.path,)
+        if any(pointer == "/page" or pointer.startswith("/page/") for pointer in pointers):
+            raise ValueError(
+                f'Operation {number} ({op.op} "{op.path}") addresses the page, and a patch '
+                "changes only the title and the data. Write the page with view_write."
+            )
+    current = read_view(instance, view_id)
+    document = current.model_dump(mode="json", include={"title", "data"})
     for number, op in enumerate(ops):
         try:
             operation = op.model_dump(mode="json", by_alias=True)
@@ -101,7 +116,9 @@ def patch_view(instance: Instance, view_id: str, ops: Sequence[ViewPatchOperatio
                 f'Operation {number} ({op.op} "{op.path}") does not apply to the view. '
                 "Read it with view_read for its paths."
             ) from None
-    patched = View.model_validate({**document, "id": view_id, "updated_at": datetime.now(UTC)})
+    patched = View.model_validate(
+        {**document, "id": view_id, "page": current.page, "updated_at": datetime.now(UTC)}
+    )
     _store(instance, patched)
     return patched
 

@@ -504,6 +504,26 @@ def test_an_explicit_web_app_replaces_the_one_the_image_carries(
     asyncio.run(scenario())
 
 
+def test_the_hub_serves_a_views_base_stylesheet_ahead_of_the_web_app(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        web_app = built_web_app(tmp_path / "app")
+        async with (
+            served(hub, web_app=web_app) as address,
+            aiohttp.ClientSession() as session,
+        ):
+            base = await session.get(url(address, "/sandbox/base.css"))
+            base_body = await base.text()
+            missing = await session.get(url(address, "/sandbox/missing.js"))
+
+        assert base.status == 200
+        assert base.content_type == "text/css"
+        assert "var(--background)" in base_body
+        assert missing.status == 404
+
+    asyncio.run(scenario())
+
+
 def test_a_hub_without_a_built_app_still_serves_the_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

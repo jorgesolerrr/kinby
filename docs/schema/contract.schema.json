@@ -319,20 +319,6 @@
       "title": "BashPermissions",
       "type": "object"
     },
-    "Binding": {
-      "additionalProperties": false,
-      "description": "A prop whose value is read from the view's data. A path that does not resolve renders as\nempty.",
-      "properties": {
-        "path": {
-          "$ref": "#/$defs/JsonPointer"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "title": "Binding",
-      "type": "object"
-    },
     "BrowserClick": {
       "additionalProperties": false,
       "properties": {
@@ -1473,15 +1459,6 @@
       ],
       "title": "ChannelUpdateCommand",
       "type": "object"
-    },
-    "ChartKind": {
-      "enum": [
-        "line",
-        "bar",
-        "area"
-      ],
-      "title": "ChartKind",
-      "type": "string"
     },
     "ClientFrame": {
       "discriminator": {
@@ -4861,10 +4838,6 @@
       "title": "ItemFrame",
       "type": "object"
     },
-    "JsonPointer": {
-      "pattern": "^(/.*)?$",
-      "type": "string"
-    },
     "JsonValue": {},
     "LibraryEntry": {
       "additionalProperties": false,
@@ -5750,24 +5723,6 @@
         "line_id"
       ],
       "title": "LineUpdateCommand",
-      "type": "object"
-    },
-    "ListBinding": {
-      "additionalProperties": false,
-      "description": "Children repeated from an array in the view's data: the template once per item, with its\npaths read in the item.",
-      "properties": {
-        "path": {
-          "$ref": "#/$defs/JsonPointer"
-        },
-        "template": {
-          "$ref": "#/$defs/ViewComponentId"
-        }
-      },
-      "required": [
-        "path",
-        "template"
-      ],
-      "title": "ListBinding",
       "type": "object"
     },
     "LiveFact": {
@@ -11323,16 +11278,6 @@
       "title": "TargetFile",
       "type": "string"
     },
-    "TextProp": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/$defs/Binding"
-        }
-      ]
-    },
     "ThreadApprovalRespondCommand": {
       "additionalProperties": false,
       "properties": {
@@ -13498,7 +13443,7 @@
     },
     "View": {
       "additionalProperties": false,
-      "description": "A page of UI an instance keeps: its layout from the view catalogue, and the data the\nlayout's bindings read.",
+      "description": "A piece of UI an instance keeps: the page the agent wrote, as HTML, and the data the page\nreads as ``kinby.data``.",
       "properties": {
         "data": {
           "additionalProperties": {
@@ -13509,8 +13454,15 @@
         "id": {
           "$ref": "#/$defs/ViewId"
         },
-        "spec": {
-          "$ref": "#/$defs/ViewSpec"
+        "page": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "title": {
           "minLength": 1,
@@ -13525,89 +13477,10 @@
         "id",
         "title",
         "updated_at",
-        "spec",
+        "page",
         "data"
       ],
       "title": "View",
-      "type": "object"
-    },
-    "ViewBadge": {
-      "additionalProperties": false,
-      "description": "A short label, such as a stage.",
-      "properties": {
-        "component": {
-          "const": "Badge",
-          "default": "Badge",
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "label": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "id",
-        "label",
-        "component"
-      ],
-      "title": "ViewBadge",
-      "type": "object"
-    },
-    "ViewCard": {
-      "additionalProperties": false,
-      "description": "A card with an optional title and description, holding its children.",
-      "properties": {
-        "children": {
-          "anyOf": [
-            {
-              "items": {
-                "$ref": "#/$defs/ViewComponentId"
-              },
-              "type": "array"
-            },
-            {
-              "$ref": "#/$defs/ListBinding"
-            }
-          ]
-        },
-        "component": {
-          "const": "Card",
-          "default": "Card",
-          "type": "string"
-        },
-        "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TextProp"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "title": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TextProp"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "id",
-        "component"
-      ],
-      "title": "ViewCard",
       "type": "object"
     },
     "ViewChange": {
@@ -13647,155 +13520,6 @@
       "title": "ViewChanged",
       "type": "object"
     },
-    "ViewChart": {
-      "additionalProperties": false,
-      "description": "A line, bar or area chart of the points in an array in the view's data. Each point's place\non the x axis and its series' values are read in the point.",
-      "properties": {
-        "component": {
-          "const": "Chart",
-          "default": "Chart",
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "kind": {
-          "$ref": "#/$defs/ChartKind"
-        },
-        "points": {
-          "$ref": "#/$defs/Binding"
-        },
-        "series": {
-          "items": {
-            "$ref": "#/$defs/ViewChartSeries"
-          },
-          "minItems": 1,
-          "type": "array"
-        },
-        "x": {
-          "$ref": "#/$defs/Binding"
-        }
-      },
-      "required": [
-        "id",
-        "kind",
-        "points",
-        "x",
-        "series",
-        "component"
-      ],
-      "title": "ViewChart",
-      "type": "object"
-    },
-    "ViewChartSeries": {
-      "additionalProperties": false,
-      "properties": {
-        "label": {
-          "type": "string"
-        },
-        "value": {
-          "$ref": "#/$defs/Binding"
-        }
-      },
-      "required": [
-        "label",
-        "value"
-      ],
-      "title": "ViewChartSeries",
-      "type": "object"
-    },
-    "ViewChecklist": {
-      "additionalProperties": false,
-      "description": "A read-only checklist with one entry per item of an array in the view's data. Each entry's\nlabel and whether it is done are read in its item.",
-      "properties": {
-        "component": {
-          "const": "Checklist",
-          "default": "Checklist",
-          "type": "string"
-        },
-        "done": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "$ref": "#/$defs/Binding"
-            }
-          ]
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "items": {
-          "$ref": "#/$defs/Binding"
-        },
-        "label": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "id",
-        "items",
-        "label",
-        "done",
-        "component"
-      ],
-      "title": "ViewChecklist",
-      "type": "object"
-    },
-    "ViewComponent": {
-      "discriminator": {
-        "mapping": {
-          "Badge": "#/$defs/ViewBadge",
-          "Card": "#/$defs/ViewCard",
-          "Chart": "#/$defs/ViewChart",
-          "Checklist": "#/$defs/ViewChecklist",
-          "Kanban": "#/$defs/ViewKanban",
-          "Link": "#/$defs/ViewLink",
-          "Row": "#/$defs/ViewRow",
-          "Stat": "#/$defs/ViewStat",
-          "Table": "#/$defs/ViewTable",
-          "Text": "#/$defs/ViewText"
-        },
-        "propertyName": "component"
-      },
-      "oneOf": [
-        {
-          "$ref": "#/$defs/ViewCard"
-        },
-        {
-          "$ref": "#/$defs/ViewRow"
-        },
-        {
-          "$ref": "#/$defs/ViewText"
-        },
-        {
-          "$ref": "#/$defs/ViewLink"
-        },
-        {
-          "$ref": "#/$defs/ViewTable"
-        },
-        {
-          "$ref": "#/$defs/ViewBadge"
-        },
-        {
-          "$ref": "#/$defs/ViewKanban"
-        },
-        {
-          "$ref": "#/$defs/ViewStat"
-        },
-        {
-          "$ref": "#/$defs/ViewChart"
-        },
-        {
-          "$ref": "#/$defs/ViewChecklist"
-        }
-      ]
-    },
-    "ViewComponentId": {
-      "minLength": 1,
-      "type": "string"
-    },
     "ViewDeleteCommand": {
       "additionalProperties": false,
       "properties": {
@@ -13826,66 +13550,6 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
       "type": "string"
     },
-    "ViewKanban": {
-      "additionalProperties": false,
-      "description": "A board with one column per item of an array in the view's data. Each column's title and\ncards are read in its item.",
-      "properties": {
-        "cards": {
-          "$ref": "#/$defs/ListBinding"
-        },
-        "columns": {
-          "$ref": "#/$defs/Binding"
-        },
-        "component": {
-          "const": "Kanban",
-          "default": "Kanban",
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "title": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "id",
-        "columns",
-        "title",
-        "cards",
-        "component"
-      ],
-      "title": "ViewKanban",
-      "type": "object"
-    },
-    "ViewLink": {
-      "additionalProperties": false,
-      "description": "A link that opens its target, an http, https or mailto address, in a new tab.",
-      "properties": {
-        "component": {
-          "const": "Link",
-          "default": "Link",
-          "type": "string"
-        },
-        "href": {
-          "$ref": "#/$defs/TextProp"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "label": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "id",
-        "label",
-        "href",
-        "component"
-      ],
-      "title": "ViewLink",
-      "type": "object"
-    },
     "ViewListCommand": {
       "additionalProperties": false,
       "properties": {},
@@ -13906,95 +13570,6 @@
         "views"
       ],
       "title": "ViewListResult",
-      "type": "object"
-    },
-    "ViewRow": {
-      "additionalProperties": false,
-      "description": "Its children side by side, sharing the width, and wrapping onto the next line when they\nrun out of room.",
-      "properties": {
-        "children": {
-          "anyOf": [
-            {
-              "items": {
-                "$ref": "#/$defs/ViewComponentId"
-              },
-              "type": "array"
-            },
-            {
-              "$ref": "#/$defs/ListBinding"
-            }
-          ]
-        },
-        "component": {
-          "const": "Row",
-          "default": "Row",
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        }
-      },
-      "required": [
-        "id",
-        "component"
-      ],
-      "title": "ViewRow",
-      "type": "object"
-    },
-    "ViewSpec": {
-      "additionalProperties": false,
-      "description": "A view's layout: a flat list of components, one of them the root, that name their children\nby id.",
-      "properties": {
-        "components": {
-          "items": {
-            "$ref": "#/$defs/ViewComponent"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "components"
-      ],
-      "title": "ViewSpec",
-      "type": "object"
-    },
-    "ViewStat": {
-      "additionalProperties": false,
-      "description": "One figure with its label, and an optional line under it.",
-      "properties": {
-        "component": {
-          "const": "Stat",
-          "default": "Stat",
-          "type": "string"
-        },
-        "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TextProp"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "label": {
-          "$ref": "#/$defs/TextProp"
-        },
-        "value": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "id",
-        "label",
-        "value",
-        "component"
-      ],
-      "title": "ViewStat",
       "type": "object"
     },
     "ViewSubscribeCommand": {
@@ -14034,79 +13609,6 @@
       "title": "ViewSummary",
       "type": "object"
     },
-    "ViewTable": {
-      "additionalProperties": false,
-      "description": "A table with one row per item of an array in the view's data.",
-      "properties": {
-        "columns": {
-          "items": {
-            "$ref": "#/$defs/ViewTableColumn"
-          },
-          "type": "array"
-        },
-        "component": {
-          "const": "Table",
-          "default": "Table",
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "rows": {
-          "$ref": "#/$defs/Binding"
-        }
-      },
-      "required": [
-        "id",
-        "rows",
-        "columns",
-        "component"
-      ],
-      "title": "ViewTable",
-      "type": "object"
-    },
-    "ViewTableColumn": {
-      "additionalProperties": false,
-      "description": "A table column: its header, and the component each row shows in it, with the component's\npaths read in the row.",
-      "properties": {
-        "cell": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "header": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "header",
-        "cell"
-      ],
-      "title": "ViewTableColumn",
-      "type": "object"
-    },
-    "ViewText": {
-      "additionalProperties": false,
-      "description": "A paragraph of text.",
-      "properties": {
-        "component": {
-          "const": "Text",
-          "default": "Text",
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/ViewComponentId"
-        },
-        "text": {
-          "$ref": "#/$defs/TextProp"
-        }
-      },
-      "required": [
-        "id",
-        "text",
-        "component"
-      ],
-      "title": "ViewText",
-      "type": "object"
-    },
     "ViewWriteCommand": {
       "additionalProperties": false,
       "description": "Create or replace a view, whole, as a step of a run the instance owns wrote it.",
@@ -14120,8 +13622,8 @@
         "id": {
           "$ref": "#/$defs/ViewId"
         },
-        "spec": {
-          "$ref": "#/$defs/ViewSpec"
+        "page": {
+          "type": "string"
         },
         "title": {
           "minLength": 1,
@@ -14131,7 +13633,7 @@
       "required": [
         "id",
         "title",
-        "spec",
+        "page",
         "data"
       ],
       "title": "ViewWriteCommand",

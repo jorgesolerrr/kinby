@@ -2,11 +2,10 @@ import asyncio
 import json
 import re
 from datetime import UTC, date, datetime
-from typing import get_args
 from uuid import uuid4
 
 from kinby.cli import main
-from kinby.contracts import PermissionMode, View, ViewComponent
+from kinby.contracts import PermissionMode, View
 from kinby.core.prompt import PromptSectionName, assemble_system_prompt
 from kinby.instance import init_instance, load_instance
 from kinby.plugins import Tool, ToolContext
@@ -62,16 +61,6 @@ def test_fresh_instance_catalogues_kinbys_write_view(tmp_path):
         section.text for section in sections if section.name == PromptSectionName.SKILLS
     )
     assert f"- write-view: {skill.description}" in catalogue
-
-
-def test_write_view_names_every_component_of_the_view_catalogue(tmp_path):
-    """A new catalogue component fails this until write-view teaches it."""
-    (catalogue, _) = get_args(ViewComponent.__value__)
-    tags = {component.model_fields["component"].default for component in get_args(catalogue)}
-
-    cited = set(re.findall(r"`([A-Za-z]+)`", _write_view_body(tmp_path)))
-
-    assert tags - cited == set()
 
 
 def test_write_view_example_is_a_view(tmp_path):

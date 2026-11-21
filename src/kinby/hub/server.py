@@ -38,11 +38,14 @@ _UNAUTHORIZED = "authentication failed"
 
 WEB_APP = Path("/usr/local/share/kinby/web")
 """Where the hub image carries the built web app."""
+SANDBOX = Path(__file__).parent / "sandbox"
+"""What a view's page may load: its base stylesheet (ADR 0131)."""
 
 
 class HubContractServer:
     """Serve the hub's contract at ``/ws``, the browser session's routes, the channels' public
-    routes, the route an MCP sign-in comes back to, and the web app."""
+    routes, the route an MCP sign-in comes back to, what a view's page may load, and the web
+    app."""
 
     def __init__(
         self,
@@ -107,6 +110,7 @@ class HubContractServer:
         application.router.add_post("/lines/{line_id}/signals", self._line_signal)
         application.router.add_post("/channels/{channel_id}/{kind}", self._channel)
         application.router.add_get(CALLBACK_PATH, self._mcp_sign_in, allow_head=False)
+        application.router.add_static("/sandbox", SANDBOX)
         if self._web_app.is_dir():
             _add_web_app(application, self._web_app)
 

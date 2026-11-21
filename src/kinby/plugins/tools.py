@@ -137,8 +137,11 @@ class Tool:
     consolidation: bool = False
     #: The notify tool, which runs unasked unless a rule names it (ADR 0103).
     notify: bool = False
-    #: A view write, which runs unasked unless a rule names it (ADR 0108).
+    #: A view's data write, which runs unasked unless a rule names it (ADR 0108).
     view: bool = False
+    #: A view's page write, which runs unasked on a turn the user starts unless a rule names it,
+    #: and asks as any write does on another turn (ADR 0131).
+    page: bool = False
     #: An authored tool, a write whatever it declares until the user marks it read-only
     #: (ADR 0109).
     authored: bool = False
@@ -197,6 +200,7 @@ def tool(
     hub: bool = False,
     notify: bool = False,
     view: bool = False,
+    page: bool = False,
 ) -> Callable[[ToolFunction], Tool]:
     """Build a structured tool from a function signature and docstring."""
 
@@ -226,6 +230,7 @@ def tool(
             hub=hub,
             notify=notify,
             view=view,
+            page=page,
             context_parameter=context_parameter,
         )
 

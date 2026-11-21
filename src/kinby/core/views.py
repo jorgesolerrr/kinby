@@ -55,7 +55,7 @@ class InstanceViews:
     async def write(self, command: ViewWriteCommand) -> ViewListResult:
         """Write a view a step of one of the instance's runs wrote on its workbench. No turn of
         the instance made it, so no thread records it."""
-        write_view(self._instance, command.id, command.title, command.spec, command.data)
+        write_view(self._instance, command.id, command.title, command.page, command.data)
         return await self.list(ViewListCommand())
 
     async def delete(self, command: ViewDeleteCommand) -> ViewListResult:
