@@ -7,9 +7,11 @@ import { FactoryHistory } from "@/components/factory-history"
 import { FactorySteps } from "@/components/factory-steps"
 import type { FactoryStep } from "@/lib/factory-steps"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
+import { useHubCall } from "@/hooks/use-hub-call"
 import { useRead } from "@/hooks/use-read"
 import type { StepLink } from "@/lib/selection"
 
@@ -22,9 +24,9 @@ interface FactoryFile {
 /**
  * A factory unfolded: its steps, its `factory.yaml` and its other files, read-only, and its
  * History, where it reverts to an earlier version. A shipped factory the user changed shows that
- * it differs from kinby's, and whether kinby's update waits for the user. Its steps and its
- * History read the same versions, so each card's last change is History's. Opened `from` a run,
- * it opens on the card of the run's step.
+ * it differs from kinby's, with a reset to kinby's, and whether kinby's update waits for the user.
+ * Its steps and its History read the same versions, so each card's last change is History's.
+ * Opened `from` a run, it opens on the card of the run's step.
  */
 export function FactoryEntry({
   client,
@@ -50,6 +52,12 @@ export function FactoryEntry({
     return { result, run, content, factory, files: Object.keys(others) }
   }, [client, name, runId])
   const { value: opened, failure, readAgain } = useRead(read, clock)
+  const { busy, failure: resetFailure, ask } = useHubCall()
+  const reset = () =>
+    ask(async () => {
+      await client.call("factory.reset", { name })
+      readAgain()
+    })
   const readVersions = useCallback(
     async () => (await client.call("factory.version.list", { name })).versions,
     [client, name],
@@ -75,10 +83,16 @@ export function FactoryEntry({
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-base font-semibold">What it&apos;s made of</h2>
           {opened?.result.differs_from_shipped && (
-            <Badge variant="secondary">Differs from shipped</Badge>
+            <>
+              <Badge variant="secondary">Differs from shipped</Badge>
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => void reset()}>
+                Reset to shipped
+              </Button>
+            </>
           )}
           {opened?.result.shipped_update_waiting && <Badge>Update waiting</Badge>}
         </div>
+        {resetFailure !== undefined && <Failure error={resetFailure} />}
         {opened === undefined ? (
           failure === undefined ? (
             <Skeleton className="h-72 w-full" />
