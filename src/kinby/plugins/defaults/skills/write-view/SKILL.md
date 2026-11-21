@@ -1,119 +1,104 @@
 ---
 name: write-view
-description: Compose a view's spec and data from the view catalogue. Use when creating or reshaping a view.
+description: Write a view's page and data. Use when creating or reshaping a view.
 ---
 
-A view is a page of UI the user opens in the web app. Its `spec` lays it out from the view
-catalogue, and its `data` holds what it shows. Call `view_write` with the view's `id`, `title`,
-`spec` and `data` to create or replace one. A view is capped at 1 MB.
+A view is a page the user opens in the web app. Its `page` is HTML you write, and its `data` is a
+JSON object the page shows. Call `view_write` with the view's `id`, `title`, `page` and `data` to
+create or replace one. The whole view is capped at 1 MB.
 
-## The spec
+On a turn the user starts, `view_write` runs without asking. On any other turn, such as a
+routine's, it asks the user first, because a page is code.
 
-The spec is `{"components": [...]}`, a flat list of components. Each one has a unique `id` and a
-`component` naming what it is in the catalogue. The component with the id `root` is the one
-rendered. A component names its children, its template or its table cells by id. Every id it
-names must exist, and no component may contain itself.
+## The page and its data
 
-Keep the layout in the spec and the content in the data. Then a routine that refreshes the view
-changes only the data.
+Keep the layout in the page and the content in the data. Then a routine that refreshes the view
+changes only the data, with `view_patch`, and never asks. A view you make once, such as a trip
+plan, may keep everything in its page.
 
-## Props
+The page reads the view's data as `kinby.data` when it loads. Draw it with a script:
 
-A prop is a literal, or a binding `{"path": "<JSON Pointer>"}` that reads the data, such as
-`{"path": "/stages/0/name"}`. The pointer `""` reads the whole data, or the whole item inside a
-list. A text prop is a string, or a binding to a string, number or boolean. A binding that names
-nothing renders as empty.
+```html
+<h1>Applications</h1>
+<ul id="postings"></ul>
+<script>
+  const list = document.getElementById("postings")
+  for (const posting of kinby.data.postings) {
+    const item = document.createElement("li")
+    item.textContent = posting.company
+    list.append(item)
+  }
+</script>
+```
 
-## Lists
+Put text from the data in with `textContent`, never `innerHTML`, so a value can't become markup.
 
-`Card` and `Row` children may be a list instead of ids:
-`{"path": "/postings", "template": "posting"}` renders the `posting` component once per item of
-the array at `/postings`. Inside it, the template and the components it names read their paths in
-the item, so `{"path": "/company"}` is the item's company.
+## What runs
 
-The repeating components work the same way. Each reads an array, and reads some props in each
-item:
+The page runs in a sandbox. It reaches nothing over the network: no `fetch`, no remote images, no
+scripts or stylesheets from a CDN. Images go in the page as `data:` addresses. Forms don't submit.
 
-| Component | Array | Read in each item |
-|---|---|---|
-| `Table` | `rows` | each column's `cell` |
-| `Kanban` | `columns` | `title` and `cards` |
-| `Chart` | `points` | `x` and each series' `value` |
-| `Checklist` | `items` | `label` and `done` |
+Only the `<script>` elements you write in the page run. A handler written as an attribute, such as
+`onclick="..."`, never runs, and neither does script you add later. Attach every handler from
+script:
 
-## The view catalogue
+```js
+document.getElementById("sort").addEventListener("click", () => sortByDate())
+```
 
-Optional props are marked with ?.
+A link to an `http`, `https` or `mailto` address opens in a new tab.
 
-| Component | Props | Shows |
-|---|---|---|
-| `Card` | `title`?, `description`?, `children`? | A card that stacks its children. |
-| `Row` | `children`? | Its children side by side, wrapping when they run out of room, such as a few Stats. |
-| `Text` | `text` | A paragraph. |
-| `Link` | `label`, `href` | A link opening an http, https or mailto address in a new tab. |
-| `Badge` | `label` | A short label, such as a stage. |
-| `Stat` | `label`, `value`, `description`? | One figure with its label, and a line under it. |
-| `Table` | `rows`, `columns` | One row per item. A column is `{"header": <text>, "cell": "<component id>"}`. |
-| `Kanban` | `columns`, `title`, `cards` | One column per item, titled `title`. `cards` is a list `{"path", "template"}` read in the column. |
-| `Chart` | `kind`, `points`, `x`, `series` | A `line`, `bar` or `area` chart. A series is `{"label": "<text>", "value": <binding to a number>}`; give at least one. |
-| `Checklist` | `items`, `label`, `done` | A read-only checklist. `done` is a boolean, or a binding that is checked when it reads `true`. |
+## The theme
 
-`rows`, `points`, `x`, `items` and a `Kanban`'s `columns` are always bindings.
+The page has kinby's theme as CSS variables, and they follow the app's light or dark theme. Use
+them, not your own colours:
+
+| Variable | For |
+|---|---|
+| `--background`, `--foreground` | The page and its text. |
+| `--card`, `--card-foreground` | A raised surface and its text. |
+| `--muted`, `--muted-foreground` | A quiet surface, and secondary text. |
+| `--primary`, `--primary-foreground` | kinby's green, and text on it. |
+| `--secondary`, `--accent`, `--accent-foreground` | Soft fills, such as a selected row. |
+| `--border` | Lines and dividers. |
+| `--destructive`, `--success` | Bad and good news. |
+| `--chart-1` to `--chart-5` | Series in a drawing, in this order. |
+| `--radius` | The corner of a card, 10px. |
+
+A base stylesheet sets the page's background, text and spacing, and styles headings, links and
+tables. Style the rest with a `<style>` element or `style` attributes.
 
 ## Changing a view
 
-To change part of a view, call `view_read`, then `view_patch` with JSON Patch operations instead
-of writing it again. Paths address the view as `view_read` returns it: `/data/postings/-` appends
-a posting, `/spec/components/2/columns/-` adds a column to the third component, and `/title`
-renames it. The patched view must still be valid, or nothing is written.
+To change the title or the data, call `view_read`, then `view_patch` with JSON Patch operations
+instead of writing the view again. Paths address the view as `view_read` returns it:
+`/data/postings/-` appends a posting, and `/title` renames it. A patch can't touch the page: write
+the view again with `view_write` to change it.
+
+A view written for an older kinby has no page. Read its data with `view_read` and write it again
+with a page.
 
 ## Example
 
-A board of job applications: two figures over a kanban of stages.
+A board of job applications, by stage.
 
 ```json
 {
   "id": "applications",
   "title": "Applications",
-  "spec": {
-    "components": [
-      {"id": "root", "component": "Card", "title": "Job search", "children": ["numbers", "board"]},
-      {"id": "numbers", "component": "Row", "children": ["open", "sent"]},
-      {"id": "open", "component": "Stat", "label": "Open", "value": {"path": "/open"}},
-      {"id": "sent", "component": "Stat", "label": "Sent this week", "value": {"path": "/sent"}},
-      {
-        "id": "board",
-        "component": "Kanban",
-        "columns": {"path": "/stages"},
-        "title": {"path": "/name"},
-        "cards": {"path": "/applications", "template": "application"}
-      },
-      {
-        "id": "application",
-        "component": "Card",
-        "title": {"path": "/company"},
-        "description": {"path": "/role"},
-        "children": ["posting"]
-      },
-      {"id": "posting", "component": "Link", "label": "Posting", "href": {"path": "/url"}}
-    ]
-  },
+  "page": "<style>.stages{display:flex;gap:1rem}.stage{flex:1;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem}</style>\n<div class=\"stages\" id=\"stages\"></div>\n<script>\n  for (const stage of kinby.data.stages) {\n    const column = document.createElement(\"section\")\n    column.className = \"stage\"\n    const title = document.createElement(\"h2\")\n    title.textContent = stage.name\n    column.append(title)\n    for (const application of stage.applications) {\n      const link = document.createElement(\"a\")\n      link.href = application.url\n      link.textContent = application.company\n      column.append(link, document.createElement(\"br\"))\n    }\n    document.getElementById(\"stages\").append(column)\n  }\n</script>",
   "data": {
-    "open": 3,
-    "sent": 5,
     "stages": [
       {
         "name": "Applied",
         "applications": [
-          {"company": "Acme", "role": "Engineer", "url": "https://jobs.example/acme"},
-          {"company": "Globex", "role": "Designer", "url": "https://jobs.example/globex"}
+          {"company": "Acme", "url": "https://jobs.example/acme"},
+          {"company": "Globex", "url": "https://jobs.example/globex"}
         ]
       },
       {
         "name": "Interview",
-        "applications": [
-          {"company": "Initech", "role": "Engineer", "url": "https://jobs.example/initech"}
-        ]
+        "applications": [{"company": "Initech", "url": "https://jobs.example/initech"}]
       }
     ]
   }

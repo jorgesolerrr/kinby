@@ -1,58 +1,52 @@
-import type { InstanceClient, View, ViewComponent } from "@kinby/contract"
+import type { InstanceClient, View } from "@kinby/contract"
 import { CallError } from "@kinby/contract"
 import { stubSubscriber } from "@kinby/contract/testing"
-import { act, render, screen, within } from "@testing-library/react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { act, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it } from "vitest"
 
 import { ViewPage } from "@/components/view-page"
+import { drawnPage } from "@/components/view-testing"
 
-const BOARD: ViewComponent[] = [
-  { id: "root", component: "Card", title: { path: "/heading" }, children: ["intro", "postings"] },
-  { id: "intro", component: "Text", text: "Open applications, by company." },
-  { id: "postings", component: "Card", children: { path: "/postings", template: "posting" } },
-  {
-    id: "posting",
-    component: "Card",
-    title: { path: "/company" },
-    description: { path: "/stage" },
-    children: ["link"],
-  },
-  { id: "link", component: "Link", label: "Posting", href: { path: "/url" } },
-]
+const PAGE = `<h1>Applications</h1>
+<ul id="postings"></ul>
+<button id="sort" onclick="sort()">Sort</button>
+<script>
+  for (const posting of kinby.data.postings) document.getElementById("postings").append(posting.company)
+</script>
+<script src="https://cdn.example/chart.js"></script>`
 
 const DATA: View["data"] = {
-  heading: "Applications",
-  postings: [
-    { company: "Acme", stage: "Interview", url: "https://jobs.example/acme" },
-    { company: "Globex", stage: "Applied", url: "javascript:alert(1)" },
-  ],
+  postings: [{ company: "Acme" }, { company: "Globex" }],
 }
 
-function view(components: ViewComponent[] = BOARD, data: View["data"] = DATA): View {
-  return {
-    id: "applications",
-    title: "Job board",
-    updated_at: "2026-10-25T09:30:00Z",
-    spec: { components },
-    data,
-  }
+function view(page: string | null = PAGE, data: View["data"] = DATA): View {
+  return { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z", page, data }
 }
 
-function openPage(shown: View) {
+/** The view page following the view, once it shows `shown`. */
+async function openPage(shown: View) {
   const subscriber = stubSubscriber()
   const page = render(<ViewPage client={subscriber} viewId="applications" />)
   const [subscription] = subscriber.subscriptions
-  act(() => subscription.deliver(shown))
+  await act(async () => subscription.deliver(shown))
   return { subscription, page }
 }
 
+function frame(): HTMLIFrameElement {
+  return screen.getByTitle("Job board") as HTMLIFrameElement
+}
+
+/** The nonce the frame's policy lets scripts run with. */
+function nonce(drawn: Document): string | undefined {
+  const policy = drawn.querySelector("meta[http-equiv=Content-Security-Policy]")
+  return policy?.getAttribute("content")?.match(/'nonce-([^']+)'/)?.[1]
+}
+
 describe("ViewPage", () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
+  afterEach(() => document.documentElement.classList.remove("dark"))
 
   it("shows when the view last changed", async () => {
-    const { subscription } = openPage(view())
+    const { subscription } = await openPage(view())
 
     expect(await screen.findByText(/Changed Oct 25, 2026/)).toBeTruthy()
     expect([subscription.method, subscription.params]).toEqual([
@@ -61,25 +55,124 @@ describe("ViewPage", () => {
     ])
   })
 
-  it("shows each new snapshot of the view as it arrives", async () => {
-    const { subscription } = openPage(view())
-    expect(await screen.findByText("Globex")).toBeTruthy()
+  it("draws the page in a frame that may run scripts and open popups but has no origin of its own", async () => {
+    await openPage(view())
 
-    const postings = [...(DATA.postings as object[]), { company: "Initech", stage: "Applied" }]
+    const allowed = frame().getAttribute("sandbox")?.split(" ")
+    expect(allowed).toContain("allow-scripts")
+    expect(allowed).toContain("allow-popups")
+    expect(allowed).not.toContain("allow-same-origin")
+  })
+
+  it("starts the frame's document with a policy that reaches only the hub's sandbox", async () => {
+    await openPage(view())
+
+    const drawn = drawnPage(frame())
+    const policy = drawn.head.firstElementChild
+    expect(policy?.getAttribute("http-equiv")).toBe("Content-Security-Policy")
+    const sandbox = `${window.location.origin}/sandbox/`
+    expect(policy?.getAttribute("content")?.split("; ")).toEqual([
+      "default-src 'none'",
+      `script-src 'nonce-${nonce(drawn)}' ${sandbox}`,
+      `style-src 'unsafe-inline' ${sandbox}`,
+      "img-src data:",
+      "form-action 'none'",
+      "base-uri 'none'",
+    ])
+  })
+
+  it("stamps a fresh nonce on every script the page was written with, and on no handler", async () => {
+    await openPage(view())
+    const first = drawnPage(frame())
+
+    const scripts = [...first.querySelectorAll("script")]
+    expect(scripts).toHaveLength(3)
+    expect(scripts.every((script) => script.nonce === nonce(first))).toBe(true)
+    expect(first.getElementById("sort")?.hasAttribute("nonce")).toBe(false)
+  })
+
+  it("loads a new nonce with each snapshot", async () => {
+    const { subscription } = await openPage(view())
+    const first = nonce(drawnPage(frame()))
+
+    await act(async () => subscription.deliver(view(PAGE, { ...DATA })))
+
+    expect(nonce(drawnPage(frame()))).not.toBe(first)
+  })
+
+  it("hands the page the view's data as kinby.data, where no value becomes script", async () => {
+    const sneaky = { note: "</script><script>alert(1)</script>" }
+    await openPage(view(PAGE, sneaky))
+
+    const drawn = drawnPage(frame())
+    const [bridge] = drawn.querySelectorAll("script")
+    expect(drawn.querySelectorAll("script")).toHaveLength(3)
+    expect(bridge.textContent).toContain("window.kinby")
+    expect(bridge.textContent).toContain(
+      String.raw`"\u003c/script>\u003cscript>alert(1)\u003c/script>"`,
+    )
+  })
+
+  it("carries the theme's tokens for light and dark and the hub's base stylesheet", async () => {
+    await openPage(view())
+
+    const drawn = drawnPage(frame())
+    const tokens = drawn.head.querySelector("style")?.textContent ?? ""
+    expect(tokens).toMatch(/:root\s*\{[^}]*--background:/)
+    expect(tokens).toMatch(/\.dark\s*\{[^}]*--background:/)
+    const base = drawn.head.querySelector("link[rel=stylesheet]")
+    expect(base?.getAttribute("href")).toBe(`${window.location.origin}/sandbox/base.css`)
+    expect(drawn.documentElement.classList.contains("dark")).toBe(false)
+  })
+
+  it("draws the page dark when the app is dark", async () => {
+    document.documentElement.classList.add("dark")
+
+    await openPage(view())
+
+    expect(drawnPage(frame()).documentElement.classList.contains("dark")).toBe(true)
+  })
+
+  it("draws each new snapshot of the view as it arrives", async () => {
+    const { subscription } = await openPage(view())
+
+    const postings = [...(DATA.postings as object[]), { company: "Initech" }]
     act(() =>
-      subscription.deliver({
-        ...view(BOARD, { ...DATA, postings }),
-        updated_at: "2026-10-26T08:00:00Z",
-      }),
+      subscription.deliver({ ...view(PAGE, { postings }), updated_at: "2026-10-26T08:00:00Z" }),
     )
 
-    expect(await screen.findByText("Initech")).toBeTruthy()
-    expect(screen.getByText(/Changed Oct 26, 2026/)).toBeTruthy()
+    expect(await screen.findByText(/Changed Oct 26, 2026/)).toBeTruthy()
+    expect(drawnPage(frame()).querySelector("script")?.textContent).toContain("Initech")
+  })
+
+  it("grows the frame to the height its page posts, and hears no other window", async () => {
+    await openPage(view())
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { kinby: "height", height: 480 },
+          source: frame().contentWindow,
+        }),
+      )
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { kinby: "height", height: 9000 }, source: window }),
+      )
+    })
+
+    expect(frame().style.getPropertyValue("--page-height")).toBe("480px")
+  })
+
+  it("says a view written for an older kinby can be written again, and draws nothing", async () => {
+    await openPage(view(null))
+
+    expect(await screen.findByText("Written for an older kinby")).toBeTruthy()
+    expect(screen.getByText(/Ask the instance to write it again/)).toBeTruthy()
+    expect(screen.queryByTitle("Job board")).toBeNull()
   })
 
   it("keeps the view it shows when the subscription fails, and says why", async () => {
-    const { subscription } = openPage(view())
-    expect(await screen.findByText("Globex")).toBeTruthy()
+    const { subscription } = await openPage(view())
 
     act(() =>
       subscription.fail(
@@ -88,7 +181,7 @@ describe("ViewPage", () => {
     )
 
     expect(await screen.findByText("The instance broke.")).toBeTruthy()
-    expect(screen.getByText("Globex")).toBeTruthy()
+    expect(frame()).toBeTruthy()
   })
 
   it("says the view was deleted when its subscription ends, and drops what it showed", async () => {
@@ -104,13 +197,13 @@ describe("ViewPage", () => {
         cancel() {},
       })) as InstanceClient["subscribe"]
     render(<ViewPage client={{ subscribe }} viewId="applications" />)
-    expect(await screen.findByText("Globex")).toBeTruthy()
+    expect(await screen.findByTitle("Job board")).toBeTruthy()
 
     act(() => end())
 
     expect(await screen.findByText("This view was deleted")).toBeTruthy()
     expect(screen.queryByText(/Changed/)).toBeNull()
-    expect(screen.queryByText("Globex")).toBeNull()
+    expect(screen.queryByTitle("Job board")).toBeNull()
   })
 
   it("says the view was deleted when the instance does not find it", async () => {
@@ -132,286 +225,10 @@ describe("ViewPage", () => {
   })
 
   it("stops following the view when the page closes", async () => {
-    const { subscription, page } = openPage(view())
-    await screen.findByText("Globex")
+    const { subscription, page } = await openPage(view())
 
     page.unmount()
 
     expect(subscription.cancelled).toBe(true)
-  })
-
-  it("renders its components with the data they bind", async () => {
-    openPage(view())
-
-    expect(await screen.findByText("Applications")).toBeTruthy()
-    expect(screen.getByText("Open applications, by company.")).toBeTruthy()
-    expect(screen.getByText("Interview")).toBeTruthy()
-  })
-
-  it("repeats a list template once per item, reading its paths in the item", async () => {
-    openPage(view())
-
-    expect(await screen.findByText("Acme")).toBeTruthy()
-    expect(screen.getByText("Globex")).toBeTruthy()
-    expect(screen.getAllByText("Posting")).toHaveLength(2)
-  })
-
-  it("opens a link's target in a new tab, and shows one it cannot open as text", async () => {
-    openPage(view())
-
-    const [link] = await screen.findAllByRole("link", { name: "Posting" })
-    expect(link.getAttribute("href")).toBe("https://jobs.example/acme")
-    expect(link.getAttribute("target")).toBe("_blank")
-    expect(screen.getAllByRole("link")).toHaveLength(1)
-  })
-
-  it("shows an unresolved path as empty", async () => {
-    openPage(view(BOARD, { postings: [] }))
-
-    expect(await screen.findByText("Open applications, by company.")).toBeTruthy()
-    expect(screen.queryByText("Applications")).toBeNull()
-  })
-
-  it("shows an unknown component as an inline error and the rest of the view", async () => {
-    const marquee = { id: "intro", component: "Marquee" } as unknown as ViewComponent
-    openPage(view([BOARD[0], marquee, ...BOARD.slice(2)]))
-
-    const error = await screen.findByRole("alert")
-    expect(within(error).getByText(/"Marquee"/)).toBeTruthy()
-    expect(screen.getByText("Applications")).toBeTruthy()
-    expect(screen.getByText("Acme")).toBeTruthy()
-  })
-
-  it("shows a component that fails to render as an inline error and the rest of the view", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {})
-    const broken = { id: "intro", component: "Card", children: 5 } as unknown as ViewComponent
-    openPage(view([BOARD[0], broken, ...BOARD.slice(2)]))
-
-    expect(await screen.findByRole("alert")).toBeTruthy()
-    expect(screen.getByText("Applications")).toBeTruthy()
-    expect(screen.getByText("Acme")).toBeTruthy()
-  })
-})
-
-/** A view with every component of the catalogue: a job board as a kanban, a table and more. */
-const CATALOGUE: ViewComponent[] = [
-  {
-    id: "root",
-    component: "Card",
-    title: "Job search",
-    children: ["intro", "open", "board", "postings", "trend", "todo"],
-  },
-  { id: "intro", component: "Text", text: "Where every application stands." },
-  {
-    id: "open",
-    component: "Stat",
-    label: "Open",
-    value: { path: "/open" },
-    description: "+1 today",
-  },
-  {
-    id: "board",
-    component: "Kanban",
-    columns: { path: "/stages" },
-    title: { path: "/name" },
-    cards: { path: "/applications", template: "application" },
-  },
-  { id: "application", component: "Card", title: { path: "/company" } },
-  {
-    id: "postings",
-    component: "Table",
-    rows: { path: "/postings" },
-    columns: [
-      { header: "Company", cell: "company" },
-      { header: "Stage", cell: "stage" },
-      { header: "Posting", cell: "posting" },
-    ],
-  },
-  { id: "company", component: "Text", text: { path: "/company" } },
-  { id: "stage", component: "Badge", label: { path: "/stage" } },
-  { id: "posting", component: "Link", label: "Open", href: { path: "/url" } },
-  {
-    id: "trend",
-    component: "Chart",
-    kind: "line",
-    points: { path: "/weeks" },
-    x: { path: "/week" },
-    series: [{ label: "Applications sent", value: { path: "/sent" } }],
-  },
-  {
-    id: "todo",
-    component: "Checklist",
-    items: { path: "/todo" },
-    label: { path: "/task" },
-    done: { path: "/done" },
-  },
-]
-
-const SEARCH: View["data"] = {
-  open: 3,
-  stages: [
-    { name: "Applied", applications: [{ company: "Acme" }, { company: "Globex" }] },
-    { name: "Interview", applications: [{ company: "Initech" }] },
-  ],
-  postings: [
-    { company: "Acme", stage: "Applied", url: "https://jobs.example/acme" },
-    { company: "Initech", stage: "Interview", url: "https://jobs.example/initech" },
-  ],
-  weeks: [
-    { week: "W1", sent: 2 },
-    { week: "W2", sent: 5 },
-  ],
-  todo: [
-    { task: "Follow up with Acme", done: true },
-    { task: "Update the CV", done: false },
-  ],
-}
-
-describe("ViewPage, with every catalogue component", () => {
-  it("renders each component with the data it binds", async () => {
-    openPage(view(CATALOGUE, SEARCH))
-
-    expect(await screen.findByText("Where every application stands.")).toBeTruthy()
-    const stat = screen.getByRole("region", { name: "Open" })
-    expect(within(stat).getByText("3")).toBeTruthy()
-    expect(within(stat).getByText("+1 today")).toBeTruthy()
-    expect(screen.getByRole("region", { name: "Applied" })).toBeTruthy()
-    expect(within(screen.getByRole("table")).getByText("Interview")).toBeTruthy()
-    expect(screen.getByText("Applications sent")).toBeTruthy()
-    expect(document.querySelector(".recharts-line")).toBeTruthy()
-    const done = screen.getByRole("checkbox", { name: "Follow up with Acme" })
-    expect(done.getAttribute("aria-checked")).toBe("true")
-    const open = screen.getByRole("checkbox", { name: "Update the CV" })
-    expect(open.getAttribute("aria-checked")).toBe("false")
-    expect(screen.queryByRole("alert")).toBeNull()
-  })
-
-  it("shows a kanban column per entry in the data, with a card per item", async () => {
-    openPage(view(CATALOGUE, SEARCH))
-
-    const applied = await screen.findByRole("region", { name: "Applied" })
-    const interview = screen.getByRole("region", { name: "Interview" })
-    expect(within(applied).getByText("Acme")).toBeTruthy()
-    expect(within(applied).getByText("Globex")).toBeTruthy()
-    expect(within(interview).getByText("Initech")).toBeTruthy()
-    expect(within(interview).queryByText("Acme")).toBeNull()
-  })
-
-  it("shows a table row per item, each cell read in its row", async () => {
-    openPage(view(CATALOGUE, SEARCH))
-
-    const table = await screen.findByRole("table")
-    const [header, ...rows] = within(table).getAllByRole("row")
-    expect(
-      within(header)
-        .getAllByRole("columnheader")
-        .map((cell) => cell.textContent),
-    ).toEqual(["Company", "Stage", "Posting"])
-    expect(
-      rows.map((row) =>
-        within(row)
-          .getAllByRole("cell")
-          .map((cell) => cell.textContent),
-      ),
-    ).toEqual([
-      ["Acme", "Applied", "Open"],
-      ["Initech", "Interview", "Open"],
-    ])
-    expect(within(rows[1]).getByRole("link").getAttribute("href")).toBe(
-      "https://jobs.example/initech",
-    )
-  })
-
-  it("wraps the text in a table's cells", async () => {
-    openPage(view(CATALOGUE, SEARCH))
-
-    const table = await screen.findByRole("table")
-    for (const cell of within(table).getAllByRole("cell")) {
-      expect(cell.className).not.toMatch(/whitespace-nowrap/)
-    }
-  })
-
-  it.each([
-    ["bar", ".recharts-bar"],
-    ["area", ".recharts-area"],
-  ] as const)("draws a %s chart", async (kind, drawn) => {
-    const chart = { ...CATALOGUE[9], kind } as ViewComponent
-    openPage(view([...CATALOGUE.slice(0, 9), chart, CATALOGUE[10]], SEARCH))
-
-    expect(await screen.findByText("Applications sent")).toBeTruthy()
-    expect(document.querySelector(drawn)).toBeTruthy()
-  })
-})
-
-/** Hub health: a row of figures over two cards side by side, and a row repeated from the data. */
-const HEALTH: ViewComponent[] = [
-  { id: "root", component: "Card", title: "Hub health", children: ["figures", "panels"] },
-  { id: "figures", component: "Row", children: ["runs", "stopped", "spend"] },
-  { id: "runs", component: "Stat", label: "Factory runs started", value: { path: "/runs" } },
-  {
-    id: "stopped",
-    component: "Stat",
-    label: "Factory runs stopped by a failed check",
-    value: { path: "/stopped" },
-  },
-  {
-    id: "spend",
-    component: "Stat",
-    label: "Model spend",
-    value: { path: "/spend" },
-    description: "Oct 14–25, per-token prices",
-  },
-  { id: "panels", component: "Row", children: ["instances", "coders"] },
-  {
-    id: "instances",
-    component: "Card",
-    title: "Instances",
-    children: { path: "/instances", template: "instance" },
-  },
-  { id: "instance", component: "Text", text: { path: "/name" } },
-  { id: "coders", component: "Card", title: "Coders", children: ["coder-row"] },
-  { id: "coder-row", component: "Row", children: { path: "/coders", template: "coder" } },
-  { id: "coder", component: "Badge", label: { path: "/name" } },
-]
-
-const HEALTH_DATA: View["data"] = {
-  runs: 41,
-  stopped: 3,
-  spend: "$12.40",
-  instances: [{ name: "Kinby" }, { name: "Ada" }],
-  coders: [{ name: "claude" }, { name: "codex" }],
-}
-
-describe("ViewPage, with rows", () => {
-  it("sets a row's stats side by side in one wrapping container, each with its full label", async () => {
-    openPage(view(HEALTH, HEALTH_DATA))
-
-    const labels = ["Factory runs started", "Factory runs stopped by a failed check", "Model spend"]
-    const stats = await Promise.all(
-      labels.map((label) => screen.findByRole("region", { name: label })),
-    )
-    const rows = new Set(stats.map((stat) => stat.parentElement))
-    expect(rows.size).toBe(1)
-    expect([...rows][0]?.classList).toContain("flex-wrap")
-    stats.forEach((stat, index) => expect(within(stat).getByText(labels[index])).toBeTruthy())
-    expect(screen.getByText("Oct 14–25, per-token prices")).toBeTruthy()
-    expect(screen.queryByRole("alert")).toBeNull()
-  })
-
-  it("sets cards side by side in a row inside a card", async () => {
-    openPage(view(HEALTH, HEALTH_DATA))
-
-    const instances = (await screen.findByText("Instances")).closest("[data-slot=card]")
-    const coders = screen.getByText("Coders").closest("[data-slot=card]")
-    expect(instances?.parentElement).toBe(coders?.parentElement)
-    expect(within(instances as HTMLElement).getByText("Ada")).toBeTruthy()
-  })
-
-  it("repeats a row's template once per item, reading its paths in the item", async () => {
-    openPage(view(HEALTH, HEALTH_DATA))
-
-    const claude = await screen.findByText("claude")
-    expect(screen.getByText("codex").parentElement).toBe(claude.parentElement)
-    expect(claude.parentElement?.classList).toContain("flex-wrap")
   })
 })

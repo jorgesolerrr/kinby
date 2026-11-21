@@ -297,6 +297,9 @@ class ModelContext:
     system_message: SystemMessage
     gate_policy: GatePolicy
     permission_mode: PermissionMode
+    #: Whether the user started the turn, rather than a routine, a factory run or the home
+    #: instance.
+    user_started: bool
     tools: ToolSnapshot
     #: The tools a call through tool search or from a script reaches: the loaded ones but tool
     #: search's own, and the searchable ones.
@@ -396,6 +399,7 @@ class _ToolStep:
                 self.context.tool_context.workspace,
                 granted=call.name in self.granted,
                 marked_read_only=call.name in self.read_only,
+                user_started=self.context.user_started,
                 seen_urls=self.seen_urls,
                 saved_outputs=self.saved_outputs,
             )
@@ -764,6 +768,7 @@ class LangGraphRunner:
                 self._instance.manifest.workspace.path,
                 granted=tool.name in granted,
                 marked_read_only=tool.name in read_only,
+                user_started=isinstance(turn.origin, UserOrigin),
             )
         }
 
@@ -948,6 +953,7 @@ class LangGraphRunner:
                             ),
                             gate_policy=self._gate_policy,
                             permission_mode=turn.permission_mode,
+                            user_started=isinstance(turn.origin, UserOrigin),
                             tools=tools,
                             reachable=reachable,
                             scripted=scripted,

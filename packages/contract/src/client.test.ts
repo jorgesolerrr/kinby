@@ -263,7 +263,7 @@ describe("client", () => {
       id: "board",
       title,
       updated_at: "2026-10-25T09:30:00Z",
-      spec: { components: [{ id: "root", component: "Text", text: title }] },
+      page: `<h1>${title}</h1>`,
       data: {},
     })
 

@@ -41,11 +41,10 @@ def test_the_tools_of_a_home_user_turn_fit_the_budgets(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("tool", [view_write, view_patch], ids=lambda tool: tool.name)
-def test_the_view_writes_leave_the_view_catalogue_to_its_skill(tool):
+def test_the_view_writes_leave_how_to_write_a_view_to_its_skill(tool):
     sent = definition(tool)
 
     assert len(sent) < 1_000
-    assert "Kanban" not in sent
     assert "write-view" in sent
 
 
