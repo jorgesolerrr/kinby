@@ -1,6 +1,7 @@
 import type { ApprovalDecision, InstanceClient } from "@kinby/contract"
 import { type ReactNode, type Ref, useId, useRef, useState } from "react"
 
+import { PageWriteTabs } from "@/components/page-write"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -110,9 +111,13 @@ export function ApprovalCard({
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-2">
-            <pre className="max-h-40 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap">
-              {JSON.stringify(approval.arguments, null, 2)}
-            </pre>
+            {approval.pageWrite === undefined ? (
+              <pre className="max-h-40 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap">
+                {JSON.stringify(approval.arguments, null, 2)}
+              </pre>
+            ) : (
+              <PageWriteTabs write={approval.pageWrite} />
+            )}
             {approval.preview !== undefined && (
               <pre className="max-h-80 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap">
                 {approval.preview}

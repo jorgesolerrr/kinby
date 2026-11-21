@@ -212,7 +212,7 @@ from kinby.plugins.tools import (
     ToolBroker,
     ToolContext,
 )
-from kinby.plugins.views import view_write
+from kinby.plugins.views import page_write, view_write
 
 logger = logging.getLogger(__name__)
 
@@ -1760,6 +1760,9 @@ class LangGraphRunner:
                     arguments=call.arguments,
                     rule=decision.rule,
                     preview=preview,
+                    page_write=page_write(
+                        call.name, call.arguments, step.context.tool_context.instance
+                    ),
                 )
             )
             if approval.decision is ApprovalDecision.ALLOW_IN_ROUTINE:

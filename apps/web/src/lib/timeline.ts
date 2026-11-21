@@ -4,6 +4,7 @@ import type {
   GateDecider,
   GateOutcome,
   JsonValue,
+  PageWrite,
   TurnStarted,
   TurnVerdict,
   ViewChange,
@@ -62,6 +63,8 @@ export interface ParkedApproval {
   rule: string
   /** What the approval shows beside the arguments, when the tool says more about its call. */
   preview?: string
+  /** The page a call that writes one would draw, shown in place of the arguments. */
+  pageWrite?: PageWrite
 }
 
 /** A takeover the user has not finished: why the agent handed them the browser. */
@@ -222,6 +225,7 @@ function projectTurn(previous: TurnBlock, { payload, sequence, timestamp }: Even
         arguments: payload.arguments,
         rule: payload.rule,
         ...(payload.preview != null && { preview: payload.preview }),
+        ...(payload.page_write != null && { pageWrite: payload.page_write }),
       }
       return { ...turn, approval }
     }

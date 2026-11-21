@@ -407,6 +407,18 @@ class Warning(ContractModel):
     message: str
 
 
+class PageWrite(ContractModel):
+    """A write of a view's page, as its approval draws it (ADR 0131)."""
+
+    #: The view's title, page and data as they would be after the write.
+    title: str
+    page: str
+    data: dict[str, JsonValue]
+    #: The page the view holds now, which the write's source is read against. None for a view
+    #: that does not exist yet or was written for the view catalogue.
+    stored_page: str | None
+
+
 class ApprovalRequested(ContractModel):
     type: Literal[EventType.APPROVAL_REQUESTED] = EventType.APPROVAL_REQUESTED
     approval_id: UUID
@@ -415,6 +427,9 @@ class ApprovalRequested(ContractModel):
     rule: GateRule
     #: What the approval shows beside the arguments, for a tool that says more about its call.
     preview: str | None = None
+    #: The page a call that writes one would draw. None for any other call, and for one the
+    #: view tool would refuse.
+    page_write: PageWrite | None = None
 
 
 class TakeoverRequested(ContractModel):

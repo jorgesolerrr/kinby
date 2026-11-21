@@ -20,6 +20,7 @@ from kinby.contracts import (
     LineHandInCommand,
     LineSetupCommand,
     LineSetupResult,
+    PageWrite,
     StepEnding,
     StepResult,
     View,
@@ -27,7 +28,7 @@ from kinby.contracts import (
     WaitingApproval,
 )
 from kinby.instance.views import write_view
-from tests.test_factory_runs import settled
+from tests.test_factory_runs import detail, settled
 from tests.test_factory_waits import parked
 from tests.test_hub_factories import write_factory
 from tests.test_hub_line_asks import KEYED
@@ -135,6 +136,8 @@ def _asks_to_write(page: str) -> StepResult:
         name="view_write",
         arguments={"id": "board", "title": "Applications", "page": page, "data": REFRESHED},
         rule=GateRule("mode.ask.write"),
+        # Drawn against the workbench's own store, which holds no board.
+        page_write=PageWrite(title="Applications", page=page, data=REFRESHED, stored_page=None),
     )
     return StepResult(
         ending=StepEnding.ASKED,
@@ -203,5 +206,10 @@ def test_an_agent_steps_write_of_a_page_its_owner_does_not_hold_parks_its_run(
             await parked(hub.hub, run.run_id)
 
             assert len(hub.control.steps) == 1
+            [attempt] = (await detail(hub.hub, run.run_id)).attempts
+            assert isinstance(attempt.ask, WaitingApproval)
+            assert attempt.ask.request.page_write == PageWrite(
+                title="Applications", page=PAGE, data=REFRESHED, stored_page=held
+            )
 
     asyncio.run(scenario())

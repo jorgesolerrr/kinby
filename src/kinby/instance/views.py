@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 import jsonpatch
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
-from kinby.contracts import ContractModel, View, ViewChange, ViewId, ViewSummary
+from kinby.contracts import ContractModel, PageWrite, View, ViewChange, ViewId, ViewSummary
 from kinby.instance.dataclasses import Instance
 from kinby.instance.layout import VIEWS_DIR
 
@@ -138,27 +138,54 @@ def edit_view(instance: Instance, view_id: str, old: str, new: str) -> View:
     """Replace the one occurrence of *old* in the view's page with *new*. Refused when the page
     holds *old* not once but never or more often."""
     current = read_view(instance, view_id)
+    edited = current.model_copy(
+        update={"page": _edited(current, old, new), "updated_at": datetime.now(UTC)}
+    )
+    _store(instance, edited)
+    return edited
+
+
+def written_page(
+    instance: Instance, view_id: str, title: str, page: str, data: dict[str, JsonValue]
+) -> PageWrite:
+    """What writing the view whole would draw, beside the page it holds now."""
+    try:
+        stored = read_view(instance, view_id).page
+    except LookupError:
+        stored = None
+    return PageWrite(title=title, page=page, data=data, stored_page=stored)
+
+
+def edited_page(instance: Instance, view_id: str, old: str, new: str) -> PageWrite:
+    """What editing the view's page would draw, beside the page it holds now. Refused as
+    edit_view refuses."""
+    current = read_view(instance, view_id)
+    return PageWrite(
+        title=current.title,
+        page=_edited(current, old, new),
+        data=current.data,
+        stored_page=current.page,
+    )
+
+
+def _edited(current: View, old: str, new: str) -> str:
     if current.page is None:
         raise ValueError(
-            f'View "{view_id}" was written for an older kinby and has no page. '
+            f'View "{current.id}" was written for an older kinby and has no page. '
             "Write it again with view_write."
         )
     occurrences = current.page.count(old)
     if occurrences == 0:
         raise ValueError(
-            f'The text to replace is not in the page of view "{view_id}". '
+            f'The text to replace is not in the page of view "{current.id}". '
             "Read it with view_read for its exact text."
         )
     if occurrences > 1:
         raise ValueError(
-            f'The text to replace appears {occurrences} times in the page of view "{view_id}". '
+            f'The text to replace appears {occurrences} times in the page of view "{current.id}". '
             "Include more of the text around it, so it appears once."
         )
-    edited = current.model_copy(
-        update={"page": current.page.replace(old, new), "updated_at": datetime.now(UTC)}
-    )
-    _store(instance, edited)
-    return edited
+    return current.page.replace(old, new)
 
 
 def _store(instance: Instance, view: View) -> ViewChange:

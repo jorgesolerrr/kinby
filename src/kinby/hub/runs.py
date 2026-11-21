@@ -23,6 +23,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -1007,7 +1008,8 @@ class FactoryRuns:
             if isinstance(answer, StepResult):
                 answer = await self._views_handed(instance_id, queued.run_id, answer)
                 answer = self._own_usage(queued.run_id, answer)
-                if await self._writes_owners_data(queued.run_id, answer):
+                answer = await self._drawn_against_owner(queued.run_id, answer)
+                if _writes_only_data(answer):
                     self._registry.end_attempt(queued.run_id, answer)
                     approved = StepAnswer(decision=ApprovalDecision.APPROVE)
                     moved = self._registry.answer_ask(queued.run_id, approved)
@@ -1056,21 +1058,21 @@ class FactoryRuns:
                 taken.append(view_id)
         return result.model_copy(update={"views": taken})
 
-    async def _writes_owners_data(self, run_id: UUID, result: StepResult) -> bool:
-        """Whether *result* asks to write a view whole with the page the owner of the run's line
-        holds for it, which writes only the view's data and so needs no approval (ADR 0131). A
-        view the owner holds with another page, with none, or not at all asks the user."""
+    async def _drawn_against_owner(self, run_id: UUID, result: StepResult) -> StepResult:
+        """*result* with the page write it asks for read against the view the owner of the run's
+        line holds, since the workbench's turn could read only its own (ADR 0131). A view the
+        owner does not hold, holds with no page, or fails to read leaves no stored page."""
         ask = result.ask
-        if not isinstance(ask, WaitingApproval) or ask.request.name != view_write.name:
-            return False
-        view_id, page = ask.request.arguments.get("id"), ask.request.arguments.get("page")
-        if not isinstance(view_id, str) or not isinstance(page, str):
-            return False
-        try:
-            held = await self._owner_page(self._existing(run_id).instance_id, view_id)
-        except Exception:
-            return False
-        return held == page
+        if not isinstance(ask, WaitingApproval) or ask.request.page_write is None:
+            return result
+        view_id = ask.request.arguments.get("id")
+        held = None
+        if isinstance(view_id, str):
+            with suppress(Exception):
+                held = await self._owner_page(self._existing(run_id).instance_id, view_id)
+        drawn = ask.request.page_write.model_copy(update={"stored_page": held})
+        request = ask.request.model_copy(update={"page_write": drawn})
+        return result.model_copy(update={"ask": ask.model_copy(update={"request": request})})
 
     def _own_usage(self, run_id: UUID, result: StepResult) -> StepResult:
         """*result* with its coding client's run counting only its own tokens: what the run's
@@ -1693,6 +1695,18 @@ def _unfinishable(
         return None
     recorded = "no step recorded" if lacking not in held else "a step recorded as false"
     return f'The run\'s done_requires needs "{lacking}", which {recorded}.'
+
+
+def _writes_only_data(result: StepResult) -> bool:
+    """Whether *result* asks to write a view whole with the page it holds, which writes only the
+    view's data and so needs no approval (ADR 0131)."""
+    ask = result.ask
+    return (
+        isinstance(ask, WaitingApproval)
+        and ask.request.name == view_write.name
+        and (drawn := ask.request.page_write) is not None
+        and drawn.page == drawn.stored_page
+    )
 
 
 def _noted(result: StepResult, reason: str, ending: StepEnding = StepEnding.FAILED) -> StepResult:
