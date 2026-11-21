@@ -829,13 +829,75 @@ describe("LibraryPage, a shipped factory the user changed", () => {
 
     expect(screen.getByText("Differs from shipped")).toBeTruthy()
     expect(screen.getByText("Update waiting")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Reset to shipped" })).toBeTruthy()
   })
 
-  it("shows neither mark on kinby's version", async () => {
+  it("shows neither mark nor a reset on kinby's version", async () => {
     await openMap()
 
     expect(screen.queryByText("Differs from shipped")).toBeNull()
     expect(screen.queryByText("Update waiting")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reset to shipped" })).toBeNull()
+  })
+
+  it("resets to shipped, then reads the factory and its history again", async () => {
+    const reset: FactoryVersion = {
+      version: "3".repeat(40),
+      time: "2026-11-21T10:00:00Z",
+      source: "shipped",
+      steps: ["review"],
+    }
+    let history = versions
+    const { caller, user } = await openMap(software, {
+      "factory.get": ({ name }) => ({
+        ...changed(name),
+        version: history[0].version,
+        differs_from_shipped: history === versions,
+        shipped_update_waiting: history === versions,
+      }),
+      "factory.version.list": () => ({ versions: history }),
+      "factory.reset": ({ name }) => {
+        history = [reset, ...versions]
+        return { ...changed(name), version: reset.version }
+      },
+    })
+    const rows = () =>
+      within(screen.getByRole("list", { name: "History" })).getAllByRole("listitem")
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    const reads = caller.calls.length
+
+    await user.click(screen.getByRole("button", { name: "Reset to shipped" }))
+
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    expect(within(rows()[0]).getByText("kinby's version")).toBeTruthy()
+    expect(screen.queryByText("Differs from shipped")).toBeNull()
+    expect(screen.queryByText("Update waiting")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reset to shipped" })).toBeNull()
+    const after = caller.calls.slice(reads)
+    expect(after.filter((call) => call.method === "factory.reset")).toEqual([
+      { method: "factory.reset", params: { name: "software" } },
+    ])
+    expect(after.map((call) => call.method)).toEqual(
+      expect.arrayContaining(["factory.get", "factory.version.list"]),
+    )
+  })
+
+  it("shows why a reset failed, and keeps the factory as it was", async () => {
+    const { user } = await openMap(software, {
+      ...read({ differs_from_shipped: true }),
+      "factory.reset": () => {
+        throw new CallError({
+          code: "INVALID_ARGUMENT",
+          message: "kinby doesn't ship a factory named software.",
+          retryable: false,
+        })
+      },
+    })
+
+    await user.click(screen.getByRole("button", { name: "Reset to shipped" }))
+
+    expect(await screen.findByText("kinby doesn't ship a factory named software.")).toBeTruthy()
+    expect(screen.getByText("Differs from shipped")).toBeTruthy()
   })
 
   it("offers kinby's version on each step that differs, and takes it against the hash it read", async () => {
