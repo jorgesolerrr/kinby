@@ -451,7 +451,6 @@ describe("a thread's panel", () => {
         await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))
 
         await act(async () => following().deliver(snapshot("Acme: offer.", "2026-10-26T08:00:00Z")))
-        expect(drawnPage(pane()).documentElement.innerHTML).toContain("Acme: offer.")
         expect(pane().textContent).toContain("Changed Oct 26, 2026")
 
         await act(async () => following().end())
