@@ -30,9 +30,9 @@ const BRIDGE = `(() => {
 /**
  * The document a view's frame draws (ADR 0131): a content security policy first, then the theme's
  * tokens for light and dark, the hub's base stylesheet and the bridge, then the page. The policy
- * reaches nothing but the hub's sandbox path, and runs only the scripts carrying this load's nonce:
- * the bridge and each script the page was written with. A handler written as an attribute, or
- * script added later, never runs.
+ * reaches nothing but the hub's sandbox path. It runs the scripts that path serves, and the inline
+ * scripts carrying this load's nonce: the bridge and each one the page was written with. A handler
+ * written as an attribute, or script added later, never runs.
  */
 export function viewDocument(
   page: string,
@@ -42,7 +42,11 @@ export function viewDocument(
   const nonce = crypto.randomUUID()
   const sandbox = `${origin}${SANDBOX_PATH}`
   const drawn = new DOMParser().parseFromString(page, "text/html")
-  for (const script of drawn.querySelectorAll("script")) script.setAttribute("nonce", nonce)
+  // A nonce admits a script from any address, so a script with a src gets none and only the
+  // policy's sandbox path admits it.
+  for (const script of drawn.querySelectorAll("script:not([src])")) {
+    script.setAttribute("nonce", nonce)
+  }
 
   const policy = drawn.createElement("meta")
   policy.httpEquiv = "Content-Security-Policy"
