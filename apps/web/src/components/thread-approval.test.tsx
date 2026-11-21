@@ -516,7 +516,7 @@ describe("a thread's panel", () => {
       return screen.getByRole("region", { name: /^Approve view_edit/ })
     }
 
-    it("draws the page with its data in the frame a view uses", async () => {
+    it("draws the page with its data in the document a view's frame uses", async () => {
       const approval = await parkedOnEdit()
 
       const drawn = drawnPage(within(approval).getByTitle("Job board"))
@@ -530,6 +530,22 @@ describe("a thread's panel", () => {
       ])
       expect(drawn.head.textContent).toContain('"company":"Acme"')
       expect(approval.textContent).not.toContain('"old":')
+    })
+
+    it("runs none of the page's scripts before the user answers, so it cannot navigate away with its data", async () => {
+      const approval = await parkedOnEdit()
+
+      expect(within(approval).getByTitle("Job board").getAttribute("sandbox")).toBe("")
+    })
+
+    it("shows the page's data a click away", async () => {
+      const approval = await parkedOnEdit()
+
+      await userEvent.setup().click(within(approval).getByRole("tab", { name: "Data" }))
+
+      expect(JSON.parse(within(approval).getByRole("tabpanel").textContent ?? "")).toEqual({
+        postings: [{ company: "Acme" }],
+      })
     })
 
     it("shows the page's source a click away", async () => {
