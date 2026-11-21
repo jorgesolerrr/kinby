@@ -134,7 +134,7 @@ export function ThreadPanel({
               status:
                 followed.view === undefined ? "" : `Changed ${when(followed.view.updated_at)}`,
               openAsPage: () => openView(instanceId, viewId),
-              body: <ViewPane key={viewId} followed={followed} />,
+              body: <ViewPane key={viewId} client={client} followed={followed} />,
             }
           : replayed && takeoverOpen && latest !== undefined && takeover !== undefined
             ? {

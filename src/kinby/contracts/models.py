@@ -4978,6 +4978,9 @@ class View(ViewSummary):
     #: again.
     page: str | None
     data: dict[str, JsonValue]
+    #: What the page last raised as the web app drew it, such as an uncaught script error. The next
+    #: write of the view clears them.
+    errors: list[str] = Field(default_factory=list)
 
 
 class ViewListCommand(ContractModel):
@@ -5007,6 +5010,15 @@ class ViewWriteCommand(ContractModel):
     title: Annotated[str, Field(min_length=1)]
     page: str
     data: dict[str, JsonValue]
+
+
+class ViewErrorsSetCommand(ContractModel):
+    """Keep the errors a view's page raised as the web app drew it, in place of those it kept, so
+    the agent reads them. The view does not change otherwise, and no thread records it."""
+
+    id: ViewId
+    #: The first ones are kept, each cut to length.
+    errors: list[str]
 
 
 class ViewDeleteCommand(ContractModel):

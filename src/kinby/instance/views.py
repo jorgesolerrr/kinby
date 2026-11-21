@@ -21,6 +21,9 @@ from kinby.instance.layout import VIEWS_DIR
 
 #: The most a view takes up serialized, so a whole snapshot stays cheap to send.
 VIEW_CAP_BYTES = 1_000_000
+#: How many of the errors a page raised a view keeps, and how long each may be.
+VIEW_ERRORS_CAP = 10
+VIEW_ERROR_CAP_CHARS = 1_000
 _VIEW_ID = TypeAdapter(ViewId)
 #: Where a patch operation reads or writes in a view: an RFC 6901 JSON Pointer.
 type JsonPointer = Annotated[str, Field(pattern=r"^(/.*)?$")]
@@ -123,6 +126,18 @@ def patch_view(instance: Instance, view_id: str, ops: Sequence[ViewPatchOperatio
     return patched
 
 
+def save_view_errors(instance: Instance, view_id: str, errors: Sequence[str]) -> View:
+    """Keep the first of *errors* the view's page raised, each cut to length, in place of those it
+    kept. The view does not change otherwise, so nobody watching it hears of it."""
+    path = _view_path(instance, view_id)
+    kept = [error[:VIEW_ERROR_CAP_CHARS] for error in errors[:VIEW_ERRORS_CAP]]
+    # Read and replaced under the lock, so a write that lands meanwhile is never lost.
+    with _watchers_lock:
+        view = read_view(instance, view_id).model_copy(update={"errors": kept})
+        os.replace(_staged(path, view.model_dump_json().encode()), path)
+    return view
+
+
 def _store(instance: Instance, view: View) -> ViewChange:
     path = _view_path(instance, view.id)
     serialized = view.model_dump_json().encode()
@@ -133,15 +148,21 @@ def _store(instance: Instance, view: View) -> ViewChange:
             "Keep less data in it."
         )
     change = ViewChange.CHANGED if path.exists() else ViewChange.CREATED
-    path.parent.mkdir(exist_ok=True)
-    with NamedTemporaryFile(dir=path.parent, prefix=".", suffix=".tmp", delete=False) as staged:
-        staged.write(serialized)
+    staged = _staged(path, serialized)
     # Replaced and announced under one lock, so watchers hear of writes in the order they land.
     with _watchers_lock:
-        os.replace(staged.name, path)
+        os.replace(staged, path)
         for watcher in _watchers.get(path, ()):
             watcher(view)
     return change
+
+
+def _staged(path: Path, serialized: bytes) -> str:
+    """*serialized* in a file beside *path*, for replacing it whole."""
+    path.parent.mkdir(exist_ok=True)
+    with NamedTemporaryFile(dir=path.parent, prefix=".", suffix=".tmp", delete=False) as staged:
+        staged.write(serialized)
+    return staged.name
 
 
 def delete_view(instance: Instance, view_id: str) -> View:
