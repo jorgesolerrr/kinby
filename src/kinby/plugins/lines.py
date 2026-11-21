@@ -48,7 +48,7 @@ from kinby.contracts import (
 from kinby.core.errors import PermissionDenied
 from kinby.instance import Instance
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, HubRefused, call_hub
-from kinby.plugins.tools import Tool, ToolContext, tool
+from kinby.plugins.tools import PreviewRefused, Tool, ToolContext, tool
 
 
 def line_tools() -> tuple[Tool, ...]:
@@ -197,8 +197,13 @@ async def _change_preview(arguments: Mapping[str, JsonValue], instance: Instance
     command = {"operation": arguments.get("operation"), "arguments": arguments.get("arguments")}
     try:
         answer = await call_hub(FACTORY_OWNED_CHANGE_PREVIEW.name, command, "the preview")
-    except (HubRefused, ConnectionError) as exc:
-        return str(exc)
+    except HubRefused as exc:
+        raise PreviewRefused(str(exc)) from exc
+    except ConnectionError as exc:
+        # The approval must show the diff and every line, which an unanswered preview lacks.
+        raise PreviewRefused(
+            f"The hub could not answer the preview, so the change did not run. Try again. {exc}"
+        ) from exc
     previewed = FactoryChangePreview.model_validate(answer)
     lines = "\n".join(f"- {line}" for line in previewed.lines)
     return (

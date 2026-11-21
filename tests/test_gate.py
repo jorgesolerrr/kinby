@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.tools import StructuredTool
 
 from kinby.contracts import (
+    ApprovalDecision,
     ApprovalRequested,
     Event,
     GateDecider,
@@ -21,8 +22,16 @@ from kinby.contracts import (
     ToolGated,
     ToolResult,
 )
+from kinby.core.events import EventLog
 from kinby.core.turn_runner import LangGraphRunner
-from kinby.core.turns import ParkedTurn, PreparedTurnRequest, TurnContext, TurnOutcome, TurnResult
+from kinby.core.turns import (
+    ApprovalAnswer,
+    ParkedTurn,
+    PreparedTurnRequest,
+    TurnContext,
+    TurnOutcome,
+    TurnResult,
+)
 from kinby.instance import Instance, load_instance
 from kinby.instance.permissions import BashPolicy, GatePolicy, PermissionsError
 
@@ -1041,3 +1050,82 @@ def test_malformed_injected_bash_regex_fails_at_the_turn_boundary(tmp_path: Path
         match=r"^gate policy override: bash\.ask\.0: invalid regex:",
     ):
         runner.prepare_for_turn()
+
+
+def test_a_resume_asks_again_for_a_call_whose_preview_turned_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = _instance(tmp_path)
+        (instance.path / "tools" / "write_note.py").write_text(
+            """from dataclasses import replace
+
+from kinby.plugins import tool
+from kinby.plugins.tools import PreviewRefused
+
+@tool(write=True)
+def write_note(note: str) -> str:
+    \"\"\"Write one note.\"\"\"
+    return note
+
+async def _preview(arguments, instance):
+    if arguments["note"] == "first" and (instance.path / "refused").exists():
+        raise PreviewRefused("The note is gone.")
+    return f"Writes {arguments['note']}."
+
+write_note = replace(write_note, preview=_preview)
+""",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_note",
+                            "args": {"note": note},
+                            "id": f"write-{note}",
+                            "type": "tool_call",
+                        }
+                        for note in ("first", "second")
+                    ],
+                ),
+                AIMessageChunk(content="Done."),
+            ]
+        )
+        log = EventLog(instance.manifest.state_dir)
+        runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: model)
+        preparation = runner.prepare_for_turn()
+        turn = PreparedTurnRequest(
+            thread_id=uuid4(),
+            turn_id=uuid4(),
+            message="Write two notes.",
+            model=preparation.model,
+            permission_mode=PermissionMode.ASK,
+            system_prompt=SystemPrompt("System prompt"),
+        )
+
+        async def emit(payload: Payload) -> Event:
+            return await log.append(turn.thread_id, turn.turn_id, payload)
+
+        context = TurnContext(preparation.budgets, emit)
+
+        assert isinstance(await runner.run(turn, context), ParkedTurn)
+        (instance.path / "refused").touch()
+        parked = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.APPROVE), context)
+        completed = await runner.resume(turn, ApprovalAnswer(ApprovalDecision.DENY), context)
+
+        assert isinstance(parked, ParkedTurn)
+        assert isinstance(completed, TurnOutcome)
+        payloads = [event.payload for event in log.turn_events(turn.turn_id)]
+        approvals = [payload for payload in payloads if isinstance(payload, ApprovalRequested)]
+        assert [(approval.arguments, approval.preview) for approval in approvals] == [
+            ({"note": "first"}, "Writes first."),
+            ({"note": "second"}, "Writes second."),
+        ]
+        results = [payload for payload in payloads if isinstance(payload, ToolResult)]
+        assert [(result.call_id, result.error) for result in results] == [
+            ("write-first", False),
+            ("write-second", True),
+        ]
+
+    asyncio.run(scenario())

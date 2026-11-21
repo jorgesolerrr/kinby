@@ -96,6 +96,7 @@ from kinby.core.events import EventLog
 from kinby.core.gate import (
     AUTHORED_RULE,
     INVALID_ARGUMENTS,
+    PREVIEW_REFUSED,
     URL_READS,
     GateDecision,
     asks_every_call,
@@ -202,6 +203,7 @@ from kinby.plugins.tool_search import (
     wrong_arguments,
 )
 from kinby.plugins.tools import (
+    PreviewRefused,
     RecallReporter,
     RunReporter,
     ScriptCallFailed,
@@ -1711,11 +1713,17 @@ class LangGraphRunner:
             )
         elif decision.action is GateAction.ASK:
             approval_id = uuid5(step.turn.turn_id, f"approval:{call.call_id}")
-            preview = (
-                await tool.preview(call.arguments, step.context.tool_context.instance)
-                if tool is not None and tool.preview is not None
-                else None
-            )
+            try:
+                preview = await self._preview(step, call, approval_id)
+            except PreviewRefused as exc:
+                gate = ToolGated(
+                    call_id=call.call_id,
+                    name=call.name,
+                    action=GateOutcome.DENY,
+                    rule=PREVIEW_REFUSED,
+                    decided_by=GateDecider.POLICY,
+                )
+                return ToolCallResolution(call, gate, None, str(exc))
             approval: ApprovalAnswer = interrupt(
                 ApprovalRequested(
                     approval_id=approval_id,
@@ -1750,6 +1758,26 @@ class LangGraphRunner:
                 decided_by=GateDecider.POLICY,
             )
         return ToolCallResolution(call, gate, approval_id, answer.refusal)
+
+    async def _preview(self, step: _ToolStep, call: ToolCall, approval_id: UUID) -> str | None:
+        """What the approval of *call* shows. Raises PreviewRefused when its tool's preview
+        refuses the call. An approval the turn already raised shows what it showed: a resume hands
+        the answers to the step's approvals by position, so it must raise each of them again."""
+        raised = next(
+            (
+                payload
+                for event in self._event_log.turn_events(step.turn.turn_id)
+                if isinstance(payload := event.payload, ApprovalRequested)
+                and payload.approval_id == approval_id
+            ),
+            None,
+        )
+        if raised is not None:
+            return raised.preview
+        tool = step.context.tool(call)
+        if tool is None or tool.preview is None:
+            return None
+        return await tool.preview(call.arguments, step.context.tool_context.instance)
 
     async def _make(self, step: _ToolStep, resolution: ToolCallResolution) -> ToolResult:
         """Make a decided call as its tool: run it when allowed, cut its result to the cap, and

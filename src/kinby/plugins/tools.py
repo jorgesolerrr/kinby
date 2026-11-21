@@ -32,13 +32,18 @@ NotificationReporter = Callable[
     [NotificationRaised | NotificationAccepted | NotificationRefused], Awaitable[Event]
 ]
 ViewReporter = Callable[[ViewChanged], Awaitable[object]]
-#: What an approval of a call shows beside its arguments, from the call's arguments.
+#: What an approval of a call shows beside its arguments, from the call's arguments. Raises
+#: PreviewRefused when the call cannot run, so no approval is raised for it.
 Preview = Callable[[Mapping[str, JsonValue], Instance], Awaitable[str | None]]
 #: What is wrong with a call's arguments, or None when the tool takes them.
 ArgumentCheck = Callable[[Mapping[str, JsonValue]], str | None]
 #: Makes a script's call to a tool as the turn makes the model's, and returns the tool's output.
 #: Raises ScriptCallFailed when the call does not run or the tool fails.
 ScriptCall = Callable[["Tool", Mapping[str, JsonValue]], Awaitable[str]]
+
+
+class PreviewRefused(Exception):
+    """A call whose preview shows it cannot run. The gate denies it, and the model reads why."""
 
 
 class ScriptCallFailed(Exception):
