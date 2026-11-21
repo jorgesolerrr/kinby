@@ -125,6 +125,7 @@ from kinby.hub.registry import (
     RunStopRef,
 )
 from kinby.plugins.notify import approval_notification, takeover_notification
+from kinby.plugins.views import view_write
 
 if TYPE_CHECKING:
     from kinby.hub.outbox import Outbox
@@ -166,6 +167,9 @@ type FolderRemover = Callable[[UUID, RunFolderRemoveCommand], Awaitable[object]]
 #: Read the view with this id from the workbench with the first id, and write it among the views
 #: of the instance with the second. Raises when it did not.
 type ViewHandover = Callable[[UUID, UUID, ViewId], Awaitable[object]]
+#: The page of the view with this id that the instance with this id holds, None for a view it
+#: holds with no page. Raises when it holds no such view.
+type OwnerPage = Callable[[UUID, ViewId], Awaitable[str | None]]
 
 _logger = logging.getLogger(__name__)
 
@@ -251,6 +255,7 @@ class FactoryRuns:
         outbox: Outbox,
         remove_folder: FolderRemover,
         hand_view: ViewHandover,
+        owner_page: OwnerPage,
     ) -> None:
         self._registry = registry
         self._factories = factories
@@ -259,6 +264,7 @@ class FactoryRuns:
         self._outbox = outbox
         self._remove_folder = remove_folder
         self._hand_view = hand_view
+        self._owner_page = owner_page
         #: The steps, needs_human and ended calls and folder removals waiting for each workbench,
         #: and the run stops waiting for each owner, by id.
         self._queues: dict[UUID, asyncio.Queue[_Queued]] = {}
@@ -1000,7 +1006,15 @@ class FactoryRuns:
             answer = await self._run_step(instance_id, command)
             if isinstance(answer, StepResult):
                 answer = await self._views_handed(instance_id, queued.run_id, answer)
-                self._advance(queued.run_id, self._own_usage(queued.run_id, answer))
+                answer = self._own_usage(queued.run_id, answer)
+                if await self._writes_owners_data(queued.run_id, answer):
+                    self._registry.end_attempt(queued.run_id, answer)
+                    approved = StepAnswer(decision=ApprovalDecision.APPROVE)
+                    moved = self._registry.answer_ask(queued.run_id, approved)
+                    self._publish(moved)
+                    self._enqueue(moved)
+                else:
+                    self._advance(queued.run_id, answer)
                 return
             if isinstance(answer, UndeliveredCall):
                 self._publish(self._registry.drop_attempt(queued.run_id))
@@ -1041,6 +1055,22 @@ class FactoryRuns:
             else:
                 taken.append(view_id)
         return result.model_copy(update={"views": taken})
+
+    async def _writes_owners_data(self, run_id: UUID, result: StepResult) -> bool:
+        """Whether *result* asks to write a view whole with the page the owner of the run's line
+        holds for it, which writes only the view's data and so needs no approval (ADR 0131). A
+        view the owner holds with another page, with none, or not at all asks the user."""
+        ask = result.ask
+        if not isinstance(ask, WaitingApproval) or ask.request.name != view_write.name:
+            return False
+        view_id, page = ask.request.arguments.get("id"), ask.request.arguments.get("page")
+        if not isinstance(view_id, str) or not isinstance(page, str):
+            return False
+        try:
+            held = await self._owner_page(self._existing(run_id).instance_id, view_id)
+        except Exception:
+            return False
+        return held == page
 
     def _own_usage(self, run_id: UUID, result: StepResult) -> StepResult:
         """*result* with its coding client's run counting only its own tokens: what the run's
