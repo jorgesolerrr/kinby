@@ -209,6 +209,17 @@
         "name": {
           "type": "string"
         },
+        "page_write": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageWrite"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "preview": {
           "anyOf": [
             {
@@ -8007,6 +8018,42 @@
         "runs"
       ],
       "title": "OwnedLine",
+      "type": "object"
+    },
+    "PageWrite": {
+      "additionalProperties": false,
+      "description": "A write of a view's page, as its approval draws it (ADR 0131).",
+      "properties": {
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "page": {
+          "type": "string"
+        },
+        "stored_page": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "page",
+        "data",
+        "stored_page"
+      ],
+      "title": "PageWrite",
       "type": "object"
     },
     "PermissionMode": {

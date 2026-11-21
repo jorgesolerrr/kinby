@@ -23,6 +23,7 @@ import { Failure } from "@/components/config-alerts"
 import { PageLink } from "@/components/factories-page"
 import { LiveBrowser, type LiveBrowserInput } from "@/components/live-browser"
 import { PageColumn } from "@/components/page-column"
+import { PageWriteTabs } from "@/components/page-write"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -517,6 +518,11 @@ function Waiting({
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-3">
+            {wait.kind === "ask" &&
+              wait.ask.request.type === "approval.requested" &&
+              wait.ask.request.page_write != null && (
+                <PageWriteTabs write={wait.ask.request.page_write} />
+              )}
             {(wait.kind === "needs-human" || wait.kind === "approval") && (
               <Field orientation="horizontal">
                 <Switch id={latestId} checked={latest} onCheckedChange={setLatest} />

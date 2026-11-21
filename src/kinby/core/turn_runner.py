@@ -210,7 +210,7 @@ from kinby.plugins.tools import (
     ToolBroker,
     ToolContext,
 )
-from kinby.plugins.views import view_write
+from kinby.plugins.views import page_write, view_write
 
 logger = logging.getLogger(__name__)
 
@@ -1725,8 +1725,9 @@ class LangGraphRunner:
             )
         elif decision.action is GateAction.ASK:
             approval_id = uuid5(step.turn.turn_id, f"approval:{call.call_id}")
+            instance = step.context.tool_context.instance
             preview = (
-                await tool.preview(call.arguments, step.context.tool_context.instance)
+                await tool.preview(call.arguments, instance)
                 if tool is not None and tool.preview is not None
                 else None
             )
@@ -1737,6 +1738,7 @@ class LangGraphRunner:
                     arguments=call.arguments,
                     rule=decision.rule,
                     preview=preview,
+                    page_write=page_write(call.name, call.arguments, instance),
                 )
             )
             if approval.decision is ApprovalDecision.ALLOW_IN_ROUTINE:

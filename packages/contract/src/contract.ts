@@ -1650,9 +1650,21 @@ export interface ApprovalRequested {
     [k: string]: JsonValue;
   };
   name: string;
+  page_write?: PageWrite | null;
   preview?: string | null;
   rule: string;
   type: "approval.requested";
+}
+/**
+ * A write of a view's page, as its approval draws it (ADR 0131).
+ */
+export interface PageWrite {
+  data: {
+    [k: string]: JsonValue;
+  };
+  page: string;
+  stored_page: string | null;
+  title: string;
 }
 /**
  * A takeover a workbench's turn parked on, which the user finishes on the hub.
