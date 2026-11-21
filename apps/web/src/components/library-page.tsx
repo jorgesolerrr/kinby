@@ -12,7 +12,7 @@ import {
   SearchIcon,
   SparklesIcon,
 } from "lucide-react"
-import { type ReactNode, useCallback, useId, useState } from "react"
+import { type CSSProperties, type ReactNode, useCallback, useId, useState } from "react"
 
 import { Failure } from "@/components/config-alerts"
 import { FactoryEntry } from "@/components/library-factory"
@@ -138,6 +138,16 @@ export function LibraryPage({
   const kind = useLibraryTab() ?? "skill"
   const [query, setQuery] = useState("")
   const stepLink = useStepLink()
+  // The header's title row wraps on a narrow screen, so a step's card scrolls clear of the
+  // header by its measured height.
+  const [headerHeight, setHeaderHeight] = useState(0)
+  const measureHeader = useCallback((header: HTMLElement) => {
+    const observer = new ResizeObserver(([entry]) =>
+      setHeaderHeight(entry.borderBoxSize[0].blockSize),
+    )
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [])
   // Kept with the tab it opened on, so Back to another tab opens nothing.
   const [opened, setOpened] = useState<{ kind: LibraryKind; open: Open } | undefined>(
     () => stepLink && { kind: "factory", open: { entry: stepLink.factory } },
@@ -229,8 +239,16 @@ export function LibraryPage({
   )
 
   return (
-    <Tabs value={kind} onValueChange={(picked: LibraryKind) => openLibraryTab(picked)}>
-      <header className="sticky top-0 z-10 border-b bg-background">
+    <Tabs
+      value={kind}
+      onValueChange={(picked: LibraryKind) => openLibraryTab(picked)}
+      style={
+        {
+          "--library-scroll-margin": `calc(${headerHeight}px + var(--spacing) * 4)`,
+        } as CSSProperties
+      }
+    >
+      <header ref={measureHeader} className="sticky top-0 z-10 border-b bg-background">
         <PageColumn className="flex flex-col gap-4 pt-6">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
