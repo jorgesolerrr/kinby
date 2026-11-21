@@ -524,6 +524,20 @@ def test_the_hub_serves_a_views_base_stylesheet_ahead_of_the_web_app(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_the_hub_serves_a_views_pinned_chart_library(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        hub = hub_at(tmp_path / "hub")
+        async with served(hub) as address, aiohttp.ClientSession() as session:
+            chart = await session.get(url(address, "/sandbox/chart.js"))
+            chart_body = await chart.text()
+
+        assert chart.status == 200
+        assert chart.content_type in {"text/javascript", "application/javascript"}
+        assert "Chart.js v4.6.1" in chart_body.splitlines()[1]
+
+    asyncio.run(scenario())
+
+
 def test_a_hub_without_a_built_app_still_serves_the_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
