@@ -390,6 +390,44 @@ def test_a_routine_turn_asks_before_it_writes_a_page(tmp_path: Path, mode: str) 
     asyncio.run(scenario())
 
 
+def test_a_routine_turn_asks_before_it_creates_a_view(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nmode: ask")
+        dispatcher = runtime(instance, writing(board()))
+
+        stop = await routine_stop(dispatcher)
+
+        assert isinstance(stop.payload, ApprovalRequested)
+        assert (stop.payload.name, stop.payload.rule) == ("view_write", "mode.ask.write")
+        assert await listed(dispatcher) == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["ask", "auto"])
+def test_a_routine_turn_writes_a_view_whole_with_its_page_without_parking(
+    tmp_path: Path, mode: str
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        seeded(instance)
+        routine_file(instance, f"description: News\nmode: {mode}")
+        refreshed = {**DATA, "postings": [{"company": "Initech"}]}
+        dispatcher = runtime(instance, writing(board(data=refreshed)))
+
+        events = await fire_routine(dispatcher)
+        view = await call(dispatcher, "view.get", id="applications")
+
+        assert not any(isinstance(event.payload, ApprovalRequested) for event in events)
+        [gated] = [event.payload for event in events if isinstance(event.payload, ToolGated)]
+        assert (gated.action.value, gated.rule) == ("allow", "view")
+        assert isinstance(view, View)
+        assert (view.page, view.data) == (PAGE, refreshed)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("mode", ["ask", "auto"])
 def test_a_routine_turn_patches_a_views_data_without_parking(tmp_path: Path, mode: str) -> None:
     async def scenario() -> None:

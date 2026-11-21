@@ -86,6 +86,17 @@ def _load(path: Path) -> View:
     return stored
 
 
+def holds_page(instance: Instance, view_id: object, page: object) -> bool:
+    """Whether the instance holds a view *view_id* whose page is *page*, so writing it whole
+    with that page changes only its data."""
+    if not isinstance(view_id, str) or not isinstance(page, str):
+        return False
+    try:
+        return read_view(instance, view_id).page == page
+    except LookupError, ValueError:
+        return False
+
+
 def write_view(
     instance: Instance, view_id: str, title: str, page: str, data: dict[str, JsonValue]
 ) -> ViewChange:

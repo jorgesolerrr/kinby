@@ -263,7 +263,7 @@ def test_a_kinby_turn_names_each_view_it_wrote_and_its_workbench_serves_it_as_la
         AIMessageChunk(content="The board is up."),
     )
 
-    result = _approved(tmp_path, model, writes=2)
+    result = _approved(tmp_path, model, writes=1)
 
     workbench = WorkbenchSteps(tmp_path / "workbench", tmp_path / "factories", tmp_path / "shipped")
     view = asyncio.run(workbench.view(ViewGetCommand(id="board")))

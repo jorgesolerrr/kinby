@@ -161,6 +161,7 @@ from kinby.instance.permissions import (
 )
 from kinby.instance.read_only_tools import read_only_tools, set_read_only
 from kinby.instance.routine_grants import RoutineGrants
+from kinby.instance.views import holds_page
 from kinby.memory import GraphStore, MemoryDelivery, deliver_memory, memory_index
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
@@ -400,6 +401,13 @@ class _ToolStep:
                 granted=call.name in self.granted,
                 marked_read_only=call.name in self.read_only,
                 user_started=self.context.user_started,
+                same_page=tool is not None
+                and tool.page
+                and holds_page(
+                    self.context.tool_context.instance,
+                    call.arguments.get("id"),
+                    call.arguments.get("page"),
+                ),
                 seen_urls=self.seen_urls,
                 saved_outputs=self.saved_outputs,
             )
