@@ -946,6 +946,10 @@ export interface Contract {
       command: ViewDeleteCommand;
       result: ViewListResult;
     };
+    "view.errors.set": {
+      command: ViewErrorsSetCommand;
+      result: View;
+    };
     "view.get": {
       command: ViewGetCommand;
       result: View;
@@ -3840,7 +3844,12 @@ export interface ViewSummary {
   title: string;
   updated_at: string;
 }
-export interface ViewGetCommand {
+/**
+ * Keep the errors a view's page raised as the web app drew it, in place of those it kept, so
+ * the agent reads them. The view does not change otherwise, and no thread records it.
+ */
+export interface ViewErrorsSetCommand {
+  errors: string[];
   id: ViewId;
 }
 /**
@@ -3851,10 +3860,14 @@ export interface View {
   data: {
     [k: string]: JsonValue;
   };
+  errors?: string[];
   id: ViewId;
   page: string | null;
   title: string;
   updated_at: string;
+}
+export interface ViewGetCommand {
+  id: ViewId;
 }
 export interface ViewListCommand {}
 /**

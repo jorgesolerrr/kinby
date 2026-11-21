@@ -1,7 +1,8 @@
 import type { InstanceClient, View } from "@kinby/contract"
 import { CallError } from "@kinby/contract"
-import { stubSubscriber } from "@kinby/contract/testing"
+import { stubCaller, stubSubscriber } from "@kinby/contract/testing"
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ViewPage } from "@/components/view-page"
@@ -26,16 +27,24 @@ function view(page: string | null = PAGE, data: View["data"] = DATA): View {
 /** The view page following the view, once it shows `shown`. */
 async function openPage(shown: View) {
   const subscriber = stubSubscriber()
-  const page = render(<ViewPage client={subscriber} viewId="applications" />)
+  const caller = stubCaller({ "view.errors.set": () => shown })
+  const page = render(<ViewPage client={{ ...caller, ...subscriber }} viewId="applications" />)
   const [subscription] = subscriber.subscriptions
   await act(async () => subscription.deliver(shown))
   // jsdom loads a frame a task after inserting it.
   await act(() => new Promise((resolve) => setTimeout(resolve)))
-  return { subscription, page }
+  return { subscription, page, calls: caller.calls }
 }
 
 function frame(): HTMLIFrameElement {
   return screen.getByTitle("Job board") as HTMLIFrameElement
+}
+
+/** Post `message` out of the view's frame, or out of `source`. */
+function postOut(message: unknown, source: Window | null = frame().contentWindow) {
+  act(() => {
+    window.dispatchEvent(new MessageEvent("message", { data: message, source }))
+  })
 }
 
 /** What the web app posts into the frame. */
@@ -241,6 +250,46 @@ describe("ViewPage", () => {
     expect(frame().style.getPropertyValue("--page-height")).toBe("480px")
   })
 
+  it("shows the errors its frame posts above the view, and saves each new one to the view", async () => {
+    const { calls } = await openPage(view())
+    const typo = "Uncaught TypeError: kinby.data.posting is undefined"
+    const blocked = "The page's policy blocked inline (script-src-attr)"
+
+    postOut({ kinby: "error", message: typo })
+    postOut({ kinby: "error", message: typo })
+    postOut({ kinby: "error", message: "Not from the frame" }, window)
+    postOut({ kinby: "error", message: blocked })
+
+    expect(screen.getByText(typo)).toBeTruthy()
+    expect(screen.getByText(blocked)).toBeTruthy()
+    expect(screen.queryByText("Not from the frame")).toBeNull()
+    expect(calls).toEqual([
+      { method: "view.errors.set", params: { id: "applications", errors: [typo] } },
+      { method: "view.errors.set", params: { id: "applications", errors: [typo, blocked] } },
+    ])
+  })
+
+  it("copies the errors the page raised", async () => {
+    const user = userEvent.setup()
+    await openPage(view())
+    postOut({ kinby: "error", message: "First" })
+    postOut({ kinby: "error", message: "Second" })
+
+    await user.click(screen.getByRole("button", { name: "Copy" }))
+
+    expect(await navigator.clipboard.readText()).toBe("First\nSecond")
+  })
+
+  it("drops the errors it shows when a snapshot brings new data", async () => {
+    const { subscription, calls } = await openPage(view())
+    postOut({ kinby: "error", message: "Uncaught TypeError" })
+
+    await act(async () => subscription.deliver(view(PAGE, { postings: [] })))
+
+    expect(screen.queryByText("Uncaught TypeError")).toBeNull()
+    expect(calls).toHaveLength(1)
+  })
+
   it("says a view written for an older kinby can be written again, and draws nothing", async () => {
     await openPage(view(null))
 
@@ -274,7 +323,7 @@ describe("ViewPage", () => {
         head: new Promise<number>(() => {}),
         cancel() {},
       })) as InstanceClient["subscribe"]
-    render(<ViewPage client={{ subscribe }} viewId="applications" />)
+    render(<ViewPage client={{ ...stubCaller({}), subscribe }} viewId="applications" />)
     expect(await screen.findByTitle("Job board")).toBeTruthy()
 
     act(() => end())
@@ -286,7 +335,7 @@ describe("ViewPage", () => {
 
   it("says the view was deleted when the instance does not find it", async () => {
     const subscriber = stubSubscriber()
-    render(<ViewPage client={subscriber} viewId="applications" />)
+    render(<ViewPage client={{ ...stubCaller({}), ...subscriber }} viewId="applications" />)
 
     act(() =>
       subscriber.subscriptions[0].fail(

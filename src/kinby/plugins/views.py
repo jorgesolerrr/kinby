@@ -41,7 +41,7 @@ def view_list(context: ToolContext) -> str:
 
 @tool(write=False)
 def view_read(id: ViewId, context: ToolContext) -> str:
-    """Read one view whole: its title, page and data."""
+    """Read one view whole: its title, page and data, and the errors its page last raised."""
     return read_view(context.instance, id).model_dump_json()
 
 

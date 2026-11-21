@@ -275,6 +275,7 @@ from kinby.contracts.models import (
     VaultEntryListResult,
     View,
     ViewDeleteCommand,
+    ViewErrorsSetCommand,
     ViewGetCommand,
     ViewListCommand,
     ViewListResult,
@@ -535,6 +536,7 @@ VIEW_GET = Method("view.get", Scope.INSTANCE_READ, ViewGetCommand, View)
 VIEW_SUBSCRIBE = Subscription("view.subscribe", Scope.INSTANCE_READ, ViewSubscribeCommand, View)
 VIEW_WRITE = Method("view.write", Scope.INSTANCE_ADMIN, ViewWriteCommand, ViewListResult)
 VIEW_DELETE = Method("view.delete", Scope.INSTANCE_ADMIN, ViewDeleteCommand, ViewListResult)
+VIEW_ERRORS_SET = Method("view.errors.set", Scope.INSTANCE_ADMIN, ViewErrorsSetCommand, View)
 
 INSTANCE_CREATE = Method(
     "instance.create", Scope.HUB_ADMIN, InstanceCreateCommand, LifecycleOperationResult
@@ -964,6 +966,7 @@ METHODS = (
     VIEW_GET,
     VIEW_WRITE,
     VIEW_DELETE,
+    VIEW_ERRORS_SET,
     INSTANCE_CREATE,
     INSTANCE_START,
     INSTANCE_STOP,

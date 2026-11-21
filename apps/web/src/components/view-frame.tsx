@@ -1,39 +1,63 @@
 import type { View } from "@kinby/contract"
 import { cn } from "cn"
-import { type CSSProperties, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { CheckIcon, CircleAlertIcon, CopyIcon } from "lucide-react"
+import {
+  type CSSProperties,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
-import { asksRedraw, postedHeight, viewDocument } from "@/lib/view-document"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { asksRedraw, postedError, postedHeight, viewDocument } from "@/lib/view-document"
+
+/** As many of the errors a page raises as the instance keeps. */
+const ERRORS_KEPT = 10
 
 /**
  * A view's page, drawn in a frame with an opaque origin: its scripts run and it may open a tab, but
  * it reaches neither the web app nor the network. A new page reloads the frame, and new data or a
  * new theme is posted into the page it has loaded, which reloads only if it hears no change. The frame is as tall as the page says it is,
- * and the app hears only its own frame's window. A frame drawn without `scripts` runs none, the
- * bridge's included, so it is a fixed height and scrolls inside.
+ * and the app hears only its own frame's window. The errors the page raises show above it, each
+ * once, until a new page or new data, and `onErrors` hears the list each time it grows. A frame
+ * drawn without `scripts` runs none, the bridge's included, so it is a fixed height and scrolls
+ * inside.
  */
 export function ViewFrame({
   title,
   page,
   data,
   scripts = true,
+  onErrors,
 }: {
   title: string
   page: string
   data: View["data"]
   scripts?: boolean
+  onErrors?: (errors: string[]) => void
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(0)
+  const [errors, setErrors] = useState<string[]>([])
   const dark = useSyncExternalStore(onRootClassChange, rootIsDark)
   const [drawn, setDrawn] = useState(() => draw(page, data, dark))
-  if (drawn.page !== page) setDrawn(draw(page, data, dark))
+  if (drawn.page !== page) {
+    setDrawn(draw(page, data, dark))
+    setErrors([])
+  }
   // What the page the frame has loaded shows, undefined until it loads.
   const shown = useRef<Drawn>(undefined)
   const follow = () => {
     const target = frame.current?.contentWindow
     const held = shown.current
     if (target == null || held?.document !== drawn.document) return
-    if (held.data !== data) target.postMessage({ kinby: "data", data }, "*")
+    if (held.data !== data) {
+      target.postMessage({ kinby: "data", data }, "*")
+      setErrors([])
+    }
     if (held.dark !== dark) target.postMessage({ kinby: "theme", dark }, "*")
     shown.current = { ...drawn, data, dark }
   }
@@ -44,23 +68,67 @@ export function ViewFrame({
       if (asksRedraw(event.data)) setDrawn(draw(page, data, dark))
       const posted = postedHeight(event.data)
       if (posted !== undefined) setHeight(posted)
+      const error = postedError(event.data)
+      if (error === undefined) return
+      setErrors((shown) =>
+        shown.includes(error) || shown.length >= ERRORS_KEPT ? shown : [...shown, error],
+      )
     }
     window.addEventListener("message", heard)
     return () => window.removeEventListener("message", heard)
   }, [page, data, dark])
+  const report = useEffectEvent((raised: string[]) => onErrors?.(raised))
+  useEffect(() => {
+    if (errors.length > 0) report(errors)
+  }, [errors])
   return (
-    <iframe
-      ref={frame}
-      title={title}
-      sandbox={scripts ? "allow-scripts allow-popups allow-popups-to-escape-sandbox" : ""}
-      srcDoc={drawn.document}
-      onLoad={() => {
-        shown.current = drawn
-        follow()
-      }}
-      className={cn("block w-full border-0", scripts ? "h-(--page-height)" : "h-96")}
-      style={{ "--page-height": `${height}px` } as CSSProperties}
-    />
+    <>
+      {errors.length > 0 && <PageErrors errors={errors} />}
+      <iframe
+        ref={frame}
+        title={title}
+        sandbox={scripts ? "allow-scripts allow-popups allow-popups-to-escape-sandbox" : ""}
+        srcDoc={drawn.document}
+        onLoad={() => {
+          shown.current = drawn
+          follow()
+        }}
+        className={cn("block w-full border-0", scripts ? "h-(--page-height)" : "h-96")}
+        style={{ "--page-height": `${height}px` } as CSSProperties}
+      />
+    </>
+  )
+}
+
+function PageErrors({ errors }: { errors: string[] }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    await navigator.clipboard.writeText(errors.join("\n"))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2_000)
+  }
+  return (
+    <Alert variant="destructive">
+      <CircleAlertIcon />
+      <AlertTitle>
+        The page raised {errors.length === 1 ? "an error" : `${errors.length} errors`}
+      </AlertTitle>
+      <AlertDescription>
+        <ul>
+          {errors.map((error) => (
+            <li key={error} className="font-mono break-all">
+              {error}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+      <AlertAction>
+        <Button size="sm" variant="outline" onClick={() => void copy()}>
+          {copied ? <CheckIcon /> : <CopyIcon />}
+          Copy
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }
 
