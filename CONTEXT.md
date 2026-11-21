@@ -778,13 +778,13 @@ What an **instance** can do beyond its workspace: its **tool groups** and the **
 
 ### View
 
-A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. A view a kinby **agent step** of a **line**'s run writes belongs to the line's owner, and the run's attempt names it. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a layout composed from the **view catalogue** plus the data it shows, and it outlives any **thread**. The user reads it; in v1 the user changes it only by asking the agent.
+A piece of UI that belongs to one **instance** and that its **turns** and **routines** keep current, such as a board of job applications a daily routine updates. A view a kinby **agent step** of a **line**'s run writes belongs to the line's owner, and the run's attempt names it. The agent creates, reshapes and fills a view whenever it judges a view shows something more precisely than a message would. A view is a page the agent writes plus the data the page shows, and it outlives any **thread**. Any turn or routine fills the data unasked; the page is written unasked only on a turn the user starts. The page runs apart from the web app and reaches nothing outside itself. The user reads it and works it, by filtering or sorting, and changes it only by asking the agent.
 _Avoid_: artifact, widget, dashboard, surface
 
-### View catalogue
+### Screen
 
-The fixed set of components kinby ships from which every **view** is composed. A view can use only what the catalogue holds, so no view carries code of its own; the catalogue grows only with a kinby release.
-_Avoid_: component library
+Where an **instance**'s **views** show in the web app, one tab each. Opening the instance lands on it.
+_Avoid_: dashboard, home (that is the **home instance**), views page
 
 ### Hub tool
 

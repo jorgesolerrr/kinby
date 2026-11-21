@@ -1,5 +1,7 @@
 # A view is a catalogue spec in the instance, written without asking
 
+Superseded by [ADR 0131](0131-a-view-is-a-page-the-agent-writes-run-in-a-sandbox.md).
+
 Ticket [#526](https://github.com/jorgesolerrr/kinby/issues/526): an instance should be able to show the user something more precise than a message, such as a board of job applications a daily routine keeps current. The research in [#519](https://github.com/jorgesolerrr/kinby/issues/519) found three tiers of generative UI (fixed components, a declared spec over a catalogue, sandboxed code) and no product that keeps a long-lived view a routine updates every morning. kinby gains the **view**.
 
 ## Decision
