@@ -39,7 +39,7 @@ _UNAUTHORIZED = "authentication failed"
 WEB_APP = Path("/usr/local/share/kinby/web")
 """Where the hub image carries the built web app."""
 SANDBOX = Path(__file__).parent / "sandbox"
-"""What a view's page may load: its base stylesheet (ADR 0131)."""
+"""What a view's page may load: its base stylesheet and Chart.js (ADR 0131)."""
 
 
 class HubContractServer:

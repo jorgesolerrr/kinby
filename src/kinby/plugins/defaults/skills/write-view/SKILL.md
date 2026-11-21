@@ -80,6 +80,62 @@ them, not your own colours:
 A base stylesheet sets the page's background, text and spacing, and styles headings, links and
 tables. Style the rest with a `<style>` element or `style` attributes.
 
+## Charts
+
+The hub serves Chart.js 4.6.1 to every page. Include it with a script tag before the script that
+draws, and it defines `Chart`:
+
+```html
+<script src="/sandbox/chart.js"></script>
+```
+
+It is the only script library the hub serves. See https://www.chartjs.org/docs/4.6.1/ for its options.
+
+Chart.js draws on a canvas, which can't read the theme's CSS variables, and it can't shade the
+colours they hold. Turn each token into an `rgb()` colour with `token` below, and draw again when
+the theme switches, which changes the class of the page's root:
+
+```html
+<canvas id="spending" role="img" aria-label="Spending by month"></canvas>
+<script src="/sandbox/chart.js"></script>
+<script>
+  const swatch = document.createElement("canvas").getContext("2d", { willReadFrequently: true })
+  function token(name) {
+    swatch.clearRect(0, 0, 1, 1)
+    swatch.fillStyle = getComputedStyle(document.documentElement).getPropertyValue(name)
+    swatch.fillRect(0, 0, 1, 1)
+    const [red, green, blue] = swatch.getImageData(0, 0, 1, 1).data
+    return `rgb(${red}, ${green}, ${blue})`
+  }
+
+  let chart
+  function draw(data) {
+    Chart.defaults.color = token("--muted-foreground")
+    Chart.defaults.borderColor = token("--border")
+    chart?.destroy()
+    chart = new Chart(document.getElementById("spending"), {
+      type: "line",
+      data: {
+        labels: data.months.map((month) => month.name),
+        datasets: [
+          {
+            label: "Spent",
+            data: data.months.map((month) => month.total),
+            borderColor: token("--chart-1"),
+            backgroundColor: token("--chart-1"),
+          },
+        ],
+      },
+    })
+  }
+  draw(kinby.data)
+  kinby.onData(draw)
+  new MutationObserver(() => draw(kinby.data)).observe(document.documentElement, {
+    attributeFilter: ["class"],
+  })
+</script>
+```
+
 ## Changing a view
 
 Call `view_read` first, then change only what needs changing instead of writing the view again.
