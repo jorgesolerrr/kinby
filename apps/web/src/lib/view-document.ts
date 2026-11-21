@@ -6,11 +6,26 @@ import tokens from "@/tokens.css?raw"
 const SANDBOX_PATH = "/sandbox/"
 
 /**
- * Runs before the page: it hands the page its data, posts the page's height out, and opens a link
- * to an http, https or mailto address in a new tab. It keeps its names to itself, so a page may
- * use the same ones.
+ * Runs before the page: it hands the page its data and each change the app posts to it, follows
+ * the app's theme, posts the page's height out, and opens a link to an http, https or mailto
+ * address in a new tab. It keeps its names to itself, so a page may use the same ones.
  */
 const BRIDGE = `(() => {
+  const kinby = window.kinby
+  const listeners = []
+  kinby.onData = (callback) => {
+    listeners.push(callback)
+  }
+  window.addEventListener("message", (event) => {
+    const message = event.data
+    if (event.source !== parent || typeof message !== "object" || message === null) return
+    if (message.kinby === "data") {
+      kinby.data = message.data
+      for (const callback of listeners) callback(message.data)
+    } else if (message.kinby === "theme") {
+      document.documentElement.classList.toggle("dark", message.dark === true)
+    }
+  })
   const links = ["http:", "https:", "mailto:"]
   const post = () => parent.postMessage(
     { kinby: "height", height: Math.ceil(document.documentElement.getBoundingClientRect().height) },
