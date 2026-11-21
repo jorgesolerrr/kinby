@@ -1,10 +1,4 @@
-import type {
-  InstanceClient,
-  InstanceSummary,
-  ThreadFilter,
-  ThreadSummary,
-  ViewSummary,
-} from "@kinby/contract"
+import type { InstanceClient, InstanceSummary, ThreadFilter, ThreadSummary } from "@kinby/contract"
 import {
   type FakeClock,
   fakeClock,
@@ -47,19 +41,12 @@ function inSet(threads: ThreadSummary[], filter: ThreadFilter | undefined): Thre
   }
 }
 
-/**
- * A hub whose instances list the threads `threads` and the views `views` hold for them, on
- * connections that stay up.
- */
-function fakeHub(
-  threads: Record<string, ThreadSummary[]>,
-  views: Record<string, ViewSummary[]> = {},
-) {
+/** A hub whose instances list the threads `threads` holds for them, on connections that stay up. */
+function fakeHub(threads: Record<string, ThreadSummary[]>) {
   const opened: string[] = []
   const closed: string[] = []
   return {
     threads,
-    views,
     opened,
     closed,
     instance(instanceId: string): InstanceClient {
@@ -71,7 +58,6 @@ function fakeHub(
             ceiling: "full-access",
             cursor: null,
           }),
-          "view.list": () => ({ views: views[instanceId] ?? [] }),
         }),
         ...stubSubscriber(),
         state: () => "connected",
@@ -118,9 +104,14 @@ function adaGroup(fields: Partial<InstanceSummary>, threads: ThreadSummary[] = [
   return { group: groupOf("Ada"), hub, clock }
 }
 
-/** An instance's row, the button named by the instance that folds its group. */
+/** An instance's row, the link named by the instance that opens its screen. */
 function rowOf(name: string) {
-  return screen.getByRole("button", { name: new RegExp(`^${name}`) })
+  return screen.getByRole("link", { name: new RegExp(`^${name}`) })
+}
+
+/** The chevron that folds an instance's group. */
+function foldOf(name: string) {
+  return screen.getByRole("button", { name: `${name}'s threads` })
 }
 
 function groupOf(name: string) {
@@ -142,9 +133,14 @@ function waiting(group: ReturnType<typeof groupOf>) {
   return group.queryByText(/ waiting for you$/)?.textContent
 }
 
-/** The links under a group, by their names. */
+/** The links under a group's row, by their names. */
 function links(group: ReturnType<typeof groupOf>) {
-  return group.queryAllByRole("link").map((link) => link.textContent)
+  const under = group.queryByRole("list")
+  return under === null
+    ? []
+    : within(under)
+        .getAllByRole("link")
+        .map((link) => link.textContent)
 }
 
 beforeEach(() => {
@@ -161,8 +157,8 @@ describe("the instance groups", () => {
     ]
     render(sidebar(fakeHub({}), fakeClock(), listed))
 
-    const buttons = screen.getAllByRole("button")
-    const rows = ["Kinby", "Ada", "research"].map((name) => buttons.indexOf(rowOf(name)))
+    const links = screen.getAllByRole("link")
+    const rows = ["Kinby", "Ada", "research"].map((name) => links.indexOf(rowOf(name)))
     expect(rows).toEqual(rows.toSorted((a, b) => a - b))
   })
 
@@ -181,7 +177,7 @@ describe("the instance groups", () => {
     const { group, clock } = adaGroup({ process: "running" })
     await act(() => clock.advance(0))
 
-    expect(screen.getByRole("button", { name: "Ada" })).toBeDefined()
+    expect(screen.getByRole("link", { name: "Ada" })).toBeDefined()
     expect(group.queryByText("running")).toBeNull()
   })
 
@@ -251,7 +247,7 @@ describe("folding an instance's group", () => {
     return { hub, clock }
   }
 
-  const expanded = (name: string) => rowOf(name).getAttribute("aria-expanded")
+  const expanded = (name: string) => foldOf(name).getAttribute("aria-expanded")
 
   it("starts unfolded at home, and folded elsewhere while nothing waits", async () => {
     const { clock } = groups()
@@ -279,16 +275,16 @@ describe("folding an instance's group", () => {
     expect(expanded("Ada")).toBe("false")
   })
 
-  it("folds and unfolds on a click of its row, which opens nothing", async () => {
+  it("folds and unfolds on a click of its chevron, which opens nothing", async () => {
     const { clock } = groups({ "instance-2": [thread({ id: "t1", title: "Deploy notes" })] })
     const user = userEvent.setup()
     expect(await groupOf("Kinby").findByRole("link", { name: "Deploy notes" })).toBeDefined()
 
-    await user.click(rowOf("Kinby"))
+    await user.click(foldOf("Kinby"))
     expect(expanded("Kinby")).toBe("false")
     expect(groupOf("Kinby").queryByRole("link", { name: "Deploy notes" })).toBeNull()
 
-    await user.click(rowOf("Ada"))
+    await user.click(foldOf("Ada"))
     expect(expanded("Ada")).toBe("true")
     expect(window.location.pathname).toBe("/")
     await act(() => clock.advance(0))
@@ -298,7 +294,7 @@ describe("folding an instance's group", () => {
     const { hub, clock } = groups()
     const user = userEvent.setup()
     await act(() => clock.advance(0))
-    await user.click(rowOf("Kinby"))
+    await user.click(foldOf("Kinby"))
 
     hub.threads["instance-2"] = [thread({ id: "t1", status: "failed" })]
     await act(() => clock.advance(5_000))
@@ -308,48 +304,59 @@ describe("folding an instance's group", () => {
   })
 })
 
+describe("an instance's row", () => {
+  const ada = instanceSummary({ instance_id: "instance-1", persona_name: "Ada" })
+
+  it("opens the instance's screen", async () => {
+    render(sidebar(fakeHub({}), fakeClock(), [ada]))
+
+    await userEvent.click(rowOf("Ada"))
+
+    expect(window.location.pathname).toBe("/instances/instance-1/views")
+  })
+
+  it.each([
+    ["its screen", "/instances/instance-1/views/applications"],
+    ["one of its page's tabs", "/instances/instance-1/memory"],
+  ])("is marked current while %s is open", (_, path) => {
+    window.history.replaceState(null, "", path)
+    render(sidebar(fakeHub({}), fakeClock(), [ada], ada))
+
+    expect(rowOf("Ada").getAttribute("aria-current")).toBe("page")
+  })
+
+  it("is not marked current while one of its threads is open", () => {
+    window.history.replaceState(null, "", "/instances/instance-1/threads/t1")
+    render(sidebar(fakeHub({}), fakeClock(), [ada], ada))
+
+    expect(rowOf("Ada").getAttribute("aria-current")).toBeNull()
+  })
+})
+
 describe("a running instance's group", () => {
-  const board = { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" }
-  const reading = { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" }
   const kinby = instanceSummary({ instance_id: "instance-1", persona_name: "Kinby", home: true })
 
-  /** The sidebar listing Kinby, at home and running with `threads` and `views`. */
-  function kinbyGroup(
-    threads: ThreadSummary[],
-    views: ViewSummary[] = [],
-    selectedClient?: InstanceClient,
-  ) {
-    const hub = fakeHub({ "instance-1": threads }, { "instance-1": views })
+  /** The sidebar listing Kinby, at home and running with `threads`. */
+  function kinbyGroup(threads: ThreadSummary[], selectedClient?: InstanceClient) {
+    const hub = fakeHub({ "instance-1": threads })
     const clock = fakeClock()
     const selected = selectedClient === undefined ? undefined : kinby
     render(sidebar(hub, clock, [kinby], selected, selectedClient))
     return { hub, clock, group: groupOf("Kinby") }
   }
 
-  it("lists its views, its 4 most recent sidebar threads, then All threads", async () => {
-    const { group } = kinbyGroup(
-      [
-        thread({ id: "t1", title: "Deploy notes" }),
-        thread({ id: "t2", title: "Old plan", archived: true }),
-        thread({ id: "t3", title: "Review" }),
-        thread({ id: "t4", title: "Groceries" }),
-        thread({ id: "t5", title: "Taxes" }),
-        thread({ id: "t6", title: "Holidays" }),
-      ],
-      [board, reading],
-    )
+  it("lists its 4 most recent sidebar threads, then All threads", async () => {
+    const { group } = kinbyGroup([
+      thread({ id: "t1", title: "Deploy notes" }),
+      thread({ id: "t2", title: "Old plan", archived: true }),
+      thread({ id: "t3", title: "Review" }),
+      thread({ id: "t4", title: "Groceries" }),
+      thread({ id: "t5", title: "Taxes" }),
+      thread({ id: "t6", title: "Holidays" }),
+    ])
 
     await group.findByRole("link", { name: "Deploy notes" })
-    await group.findByRole("link", { name: "Job board" })
-    expect(links(group)).toEqual([
-      "Job board",
-      "Reading list",
-      "Deploy notes",
-      "Review",
-      "Groceries",
-      "Taxes",
-      "All threads",
-    ])
+    expect(links(group)).toEqual(["Deploy notes", "Review", "Groceries", "Taxes", "All threads"])
   })
 
   it("names each thread by its title and describes it by its status", async () => {
@@ -371,29 +378,15 @@ describe("a running instance's group", () => {
     expect(description("Untitled thread")).toBeUndefined()
   })
 
-  it("opens a thread, a view and the thread list page at their paths", async () => {
-    const { group } = kinbyGroup([thread({ id: "t1", title: "Deploy notes" })], [board])
+  it("opens a thread and the thread list page at their paths", async () => {
+    const { group } = kinbyGroup([thread({ id: "t1", title: "Deploy notes" })])
     const user = userEvent.setup()
 
     await user.click(await group.findByRole("link", { name: "Deploy notes" }))
     expect(window.location.pathname).toBe("/instances/instance-1/threads/t1")
 
-    await user.click(await group.findByRole("link", { name: "Job board" }))
-    expect(window.location.pathname).toBe("/instances/instance-1/views/applications")
-
     await user.click(group.getByRole("link", { name: "All threads" }))
     expect(window.location.pathname).toBe("/instances/instance-1/threads")
-  })
-
-  it("lists a view a turn created on the next poll", async () => {
-    const { hub, clock, group } = kinbyGroup([])
-    await act(() => clock.advance(0))
-    expect(group.queryByRole("link", { name: "Job board" })).toBeNull()
-
-    hub.views["instance-1"] = [board]
-    await act(() => clock.advance(5_000))
-
-    expect(group.getByRole("link", { name: "Job board" })).toBeDefined()
   })
 
   it("says No threads yet until it lists a thread", async () => {
@@ -406,16 +399,6 @@ describe("a running instance's group", () => {
     expect(links(group)).toEqual(["Deploy notes", "All threads"])
   })
 
-  it("says No threads yet until it lists a view", async () => {
-    const { hub, clock, group } = kinbyGroup([])
-    expect(await group.findByRole("link", { name: "No threads yet" })).toBeDefined()
-
-    hub.views["instance-1"] = [board]
-    await act(() => clock.advance(5_000))
-
-    expect(links(group)).toEqual(["Job board", "All threads"])
-  })
-
   it("lists the selected instance on its connection, marking the open thread", async () => {
     window.history.replaceState(null, "", "/instances/instance-1/threads/t2")
     const selectedClient = fakeHub({
@@ -424,7 +407,7 @@ describe("a running instance's group", () => {
         thread({ id: "t2", title: "Review" }),
       ],
     }).instance("instance-1")
-    const { hub, group } = kinbyGroup([], [], selectedClient)
+    const { hub, group } = kinbyGroup([], selectedClient)
 
     const open = await group.findByRole("link", { name: "Review" })
 
@@ -433,19 +416,6 @@ describe("a running instance's group", () => {
       group.getByRole("link", { name: "Deploy notes" }).getAttribute("aria-current"),
     ).toBeNull()
     expect(hub.opened).toEqual([])
-  })
-
-  it("marks the open view", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1/views/applications")
-    const selectedClient = fakeHub({}, { "instance-1": [board, reading] }).instance("instance-1")
-    const { group } = kinbyGroup([], [], selectedClient)
-
-    const open = await group.findByRole("link", { name: "Job board" })
-
-    expect(open.getAttribute("aria-current")).toBe("page")
-    expect(
-      group.getByRole("link", { name: "Reading list" }).getAttribute("aria-current"),
-    ).toBeNull()
   })
 
   it("shows what the open thread listed on the selected connection without waiting for a poll", async () => {
@@ -457,7 +427,6 @@ describe("a running instance's group", () => {
           ceiling: "full-access",
           cursor: null,
         }),
-        "view.list": () => ({ views: [] }),
       }),
       state: () => "connected" as const,
       onStateChange: () => () => {},

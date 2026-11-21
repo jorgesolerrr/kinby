@@ -281,7 +281,7 @@ describe("the thread list page", () => {
       </SidebarProvider>,
     )
     const user = userEvent.setup()
-    const sidebar = within(screen.getByRole("button", { name: "Ada" }).closest("li")!)
+    const sidebar = within(screen.getByRole("link", { name: "Ada" }).closest("li")!)
     const sidebarTitles = () =>
       sidebar.queryAllByRole("link").flatMap((link) =>
         within(link)

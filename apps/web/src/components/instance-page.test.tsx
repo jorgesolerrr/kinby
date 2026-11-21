@@ -6,7 +6,6 @@ import type {
   InstanceToolsetResult,
   InstanceSummary,
   OperationGetResult,
-  ViewSummary,
 } from "@kinby/contract"
 import {
   type Answers,
@@ -668,7 +667,7 @@ describe("what needs the user on a running instance", () => {
 describe("the views of a running instance", () => {
   const running = { ...stopped, intended_state: "running", process: "running" } as const
 
-  async function openWithViews(views: ViewSummary[]) {
+  it("have no section on Overview, which leaves them to the screen", async () => {
     const caller = {
       ...stubCaller({
         "instance.status": () => status({ process: "running" }),
@@ -676,7 +675,11 @@ describe("the views of a running instance", () => {
       }),
       ...stubSubscriber(),
     }
-    const client = reached({ "view.list": () => ({ views }) })
+    const client = reached({
+      "view.list": () => ({
+        views: [{ id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" }],
+      }),
+    })
     const clock = fakeClock()
     render(
       <InstancePage
@@ -688,41 +691,10 @@ describe("the views of a running instance", () => {
       />,
     )
     await act(() => clock.advance(0))
-    return {
-      clock,
-      section: within(screen.getByRole("region", { name: "Views" })),
-      user: userEvent.setup(),
-    }
-  }
 
-  it("lists the instance's views as rows, and opens the one picked", async () => {
-    window.history.replaceState(null, "", "/instances/instance-1")
-    const { section, user } = await openWithViews([
-      { id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" },
-      { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" },
-    ])
-
-    const rows = within(section.getByRole("list", { name: "Views" })).getAllByRole("listitem")
-    expect(rows.map((row) => row.textContent)).toEqual(["Job board", "Reading list"])
-    await user.click(section.getByRole("button", { name: "Job board" }))
-
-    expect(window.location.pathname).toBe("/instances/instance-1/views/applications")
-  })
-
-  it("says when the instance has no views yet", async () => {
-    const { section } = await openWithViews([])
-
-    expect(section.getByText("No views yet.")).toBeDefined()
-  })
-
-  it("lists a view the instance makes while Overview is open", async () => {
-    const views: ViewSummary[] = []
-    const { clock, section } = await openWithViews(views)
-
-    views.push({ id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" })
-    await act(() => clock.advance(5_000))
-
-    expect(section.getByRole("button", { name: "Job board" })).toBeDefined()
+    expect(await screen.findByRole("region", { name: "Toolset" })).toBeDefined()
+    expect(screen.queryByRole("region", { name: "Views" })).toBeNull()
+    expect(screen.queryByText("Job board")).toBeNull()
   })
 })
 
@@ -842,11 +814,7 @@ describe("the row groups of Overview", () => {
       }),
       ...stubSubscriber(),
     }
-    const client = reached({
-      "view.list": () => ({
-        views: [{ id: "applications", title: "Job board", updated_at: "2026-10-25T09:30:00Z" }],
-      }),
-    })
+    const client = reached({})
     const instance: InstanceSummary = {
       ...stopped,
       intended_state: "running",
@@ -871,7 +839,7 @@ describe("the row groups of Overview", () => {
       within(needsYou).getByRole("listitem", { name: "MCP server fetch failed" }),
     ).toBeDefined()
     const lists = [needsYou]
-    for (const name of ["Views", "Browser profiles", "Vault", "Toolset"]) {
+    for (const name of ["Browser profiles", "Vault", "Toolset"]) {
       lists.push(await screen.findByRole("list", { name }))
     }
     for (const list of lists) {

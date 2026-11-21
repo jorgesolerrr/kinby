@@ -428,7 +428,7 @@ describe("a thread's panel", () => {
       const marker = () => screen.getByRole("link", { name: "Created the view Job board" })
       const pane = () => screen.getByRole("region", { name: "Job board" })
 
-      it("opens from the view's line, which still links to the view's page", async () => {
+      it("opens from the view's line, which still links to the view's tab", async () => {
         const { following } = await openWritten()
         const entries = window.history.length
 
@@ -458,7 +458,7 @@ describe("a thread's panel", () => {
         expect(screen.queryByText("Acme: offer.")).toBeNull()
       })
 
-      it("opens the view's page from its header", async () => {
+      it("opens the view's tab on the screen from its header", async () => {
         const { following } = await openWritten()
         await userEvent.click(marker())
         await act(async () => following().deliver(snapshot("Acme: interview on Monday.")))

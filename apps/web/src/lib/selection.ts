@@ -122,9 +122,14 @@ export function statsPath(instanceId: string): string {
   return tabPath(instanceId, STATS)
 }
 
-/** One of an instance's views, on its own page. */
+/** An instance's screen, which opens on one of its views. */
+export function screenPath(instanceId: string): string {
+  return `${instancePath(instanceId)}/${VIEWS}`
+}
+
+/** One of an instance's views, as its tab on the screen. */
 export function viewPath(instanceId: string, viewId: string): string {
-  return `${instancePath(instanceId)}/${VIEWS}/${encodeURIComponent(viewId)}`
+  return `${screenPath(instanceId)}/${encodeURIComponent(viewId)}`
 }
 
 export function libraryPath(kind: LibraryKind): string {
@@ -217,7 +222,7 @@ export function openStats(instanceId: string): void {
   navigate(statsPath(instanceId))
 }
 
-/** Open one of an instance's views the same way. */
+/** Open one of an instance's views, on its screen, the same way. */
 export function openView(instanceId: string, viewId: string): void {
   navigate(viewPath(instanceId, viewId))
 }
@@ -229,6 +234,12 @@ export function openView(instanceId: string, viewId: string): void {
 export function landOn(instanceId: string, threadId?: string): void {
   const path = threadId === undefined ? instancePath(instanceId) : threadPath(instanceId, threadId)
   window.history.replaceState(null, "", path + window.location.search)
+  changed()
+}
+
+/** Open a page by its path in place of the current history entry, so Back skips the page it leaves. */
+export function landAt(path: string): void {
+  window.history.replaceState(null, "", path)
   changed()
 }
 
@@ -326,12 +337,17 @@ export function useThreadsOpen(): boolean {
   return useSyncExternalStore(subscribe, threadsOpen)
 }
 
-/** The tab the URL opens on its instance's page, or none off the page, as on a thread or a view. */
+/** The tab the URL opens on its instance's page, or none off the page, as on a thread or the screen. */
 export function useInstanceTab(): InstanceTab | undefined {
   return useSyncExternalStore(subscribe, openedTab)
 }
 
-/** The view the URL opens under its instance, if it names one. */
+/** Whether the URL opens its instance's screen, on one of its views or none. */
+export function useScreenOpen(): boolean {
+  return useSyncExternalStore(subscribe, screenOpen)
+}
+
+/** The view the URL opens on its instance's screen, if it names one. */
 export function useViewOpen(): string | undefined {
   return useSyncExternalStore(subscribe, openedView)
 }
@@ -466,6 +482,11 @@ export function linkedSection(): ConfigLink | undefined {
 export function linkedNode(): string | undefined {
   const [, section, instanceId, memory, node] = window.location.pathname.split("/")
   return section === SECTION && instanceId && memory === MEMORY && node ? decoded(node) : undefined
+}
+
+function screenOpen(): boolean {
+  const [, section, instanceId, views] = window.location.pathname.split("/")
+  return section === SECTION && Boolean(instanceId) && views === VIEWS
 }
 
 function openedView(): string | undefined {
