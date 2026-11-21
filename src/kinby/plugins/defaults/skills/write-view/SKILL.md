@@ -17,20 +17,31 @@ Keep the layout in the page and the content in the data. Then a routine that ref
 changes only the data, with `view_patch`, and never asks. A view you make once, such as a trip
 plan, may keep everything in its page.
 
-The page reads the view's data as `kinby.data` when it loads. Draw it with a script:
+The page reads the view's data as `kinby.data`. While the user has the view open, a change to the
+data doesn't reload the page: `kinby.onData(callback)` calls `callback` with the new data, and
+`kinby.data` holds it. Draw from a function, call it with `kinby.data`, and hand it to
+`kinby.onData`:
 
 ```html
 <h1>Applications</h1>
 <ul id="postings"></ul>
 <script>
-  const list = document.getElementById("postings")
-  for (const posting of kinby.data.postings) {
-    const item = document.createElement("li")
-    item.textContent = posting.company
-    list.append(item)
+  function draw(data) {
+    const items = data.postings.map((posting) => {
+      const item = document.createElement("li")
+      item.textContent = posting.company
+      return item
+    })
+    document.getElementById("postings").replaceChildren(...items)
   }
+  draw(kinby.data)
+  kinby.onData(draw)
 </script>
 ```
+
+A redraw keeps the user's scroll position. Keep what the user chose, such as a filter or a sort, in
+a variable outside `draw`, and apply it there, so the redraw keeps it too. A page that never calls
+`kinby.onData` loads again with each change, and the user loses their place.
 
 Put text from the data in with `textContent`, never `innerHTML`, so a value can't become markup.
 
@@ -80,7 +91,7 @@ patch can't touch the page.
 To change the page, call `view_edit` with `old`, an exact string from the page, and `new`, the
 string to put in its place. It refuses when `old` is not in the page or appears more than once, so
 quote enough of the page around the change that it appears once. Write the page whole with
-`view_write` only to redesign it.
+`view_write` only to redesign it. A new page reloads the view for the user.
 
 A view written for an older kinby has no page. Read its data with `view_read` and write it again
 with a page.
@@ -93,7 +104,7 @@ A board of job applications, by stage.
 {
   "id": "applications",
   "title": "Applications",
-  "page": "<style>.stages{display:flex;gap:1rem}.stage{flex:1;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem}</style>\n<div class=\"stages\" id=\"stages\"></div>\n<script>\n  for (const stage of kinby.data.stages) {\n    const column = document.createElement(\"section\")\n    column.className = \"stage\"\n    const title = document.createElement(\"h2\")\n    title.textContent = stage.name\n    column.append(title)\n    for (const application of stage.applications) {\n      const link = document.createElement(\"a\")\n      link.href = application.url\n      link.textContent = application.company\n      column.append(link, document.createElement(\"br\"))\n    }\n    document.getElementById(\"stages\").append(column)\n  }\n</script>",
+  "page": "<style>.stages{display:flex;gap:1rem}.stage{flex:1;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem}</style>\n<div class=\"stages\" id=\"stages\"></div>\n<script>\n  function draw(data) {\n    const columns = data.stages.map((stage) => {\n      const column = document.createElement(\"section\")\n      column.className = \"stage\"\n      const title = document.createElement(\"h2\")\n      title.textContent = stage.name\n      column.append(title)\n      for (const application of stage.applications) {\n        const link = document.createElement(\"a\")\n        link.href = application.url\n        link.textContent = application.company\n        column.append(link, document.createElement(\"br\"))\n      }\n      return column\n    })\n    document.getElementById(\"stages\").replaceChildren(...columns)\n  }\n  draw(kinby.data)\n  kinby.onData(draw)\n</script>",
   "data": {
     "stages": [
       {
