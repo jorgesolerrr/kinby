@@ -68,6 +68,26 @@ def test_a_changed_key_in_a_block_mapping_changes_only_its_line():
     )
 
 
+def test_a_key_written_again_lines_up_with_the_keys_beside_it():
+    indented = (
+        FACTORY.replace("      done: next\n", "          done: next\n")
+        .replace(
+            "      short: { back: research, max: 2 }\n",
+            "          short: { back: research, max: 2 }\n",
+        )
+        .replace("      # Too short", "          # Too short")
+    )
+    changed = {"done": "next", "short": {"back": "research", "max": 3}}
+    added = {"done": "next", "long": "next", "short": {"back": "research", "max": 2}}
+
+    assert with_step(indented, DRAFT | {"outcomes": changed}) == indented.replace(
+        "max: 2", "max: 3"
+    )
+    assert with_step(indented, DRAFT | {"outcomes": added}) == indented.replace(
+        "          short:", "          long: next\n          short:"
+    )
+
+
 def test_a_removed_key_drops_only_its_lines():
     without = {key: value for key, value in DRAFT.items() if key not in {"description", "timeout"}}
 

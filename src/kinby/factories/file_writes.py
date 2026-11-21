@@ -36,21 +36,26 @@ def with_step(text: str, entry: Mapping[str, JsonValue]) -> str:
         for spaced in (False, True)
     )
     step = _lines(read, at, len(old))
-    held = _Declared(read["steps"][at], old, _own(old, step, column))
+    held = _Declared(read["steps"][at], old, _own(old, step, column), column)
     return "".join(old[: held.own.start] + _written(held, plain, spaced) + old[held.own.stop :])
 
 
 @dataclass(frozen=True)
 class _Declared:
     """A value of a factory file, and the lines of the file that declare it, without the comments
-    that follow them."""
+    that follow them. Its key, or its step's first key, sits at *column*."""
 
     value: object
     lines: list[str]
     own: range
+    column: int
 
     def text(self) -> list[str]:
         return self.lines[self.own.start : self.own.stop]
+
+    def text_at(self, column: int) -> list[str]:
+        """The lines, moved so the key sits at *column*."""
+        return [_shifted(line, column - self.column) for line in self.text()]
 
 
 def _dumped(document: CommentedMap, column: int, offset: int, *, spaced: bool) -> list[str]:
@@ -67,9 +72,8 @@ def _dumped(document: CommentedMap, column: int, offset: int, *, spaced: bool) -
 def _step(lines: list[str], at: int) -> _Declared:
     document = _yaml().load("".join(lines))
     column = document["steps"].lc.item(at)[1]
-    return _Declared(
-        document["steps"][at], lines, _own(lines, _lines(document, at, len(lines)), column)
-    )
+    own = _own(lines, _lines(document, at, len(lines)), column)
+    return _Declared(document["steps"][at], lines, own, column)
 
 
 class _SpacedEmitter(Emitter):
@@ -101,7 +105,7 @@ def _written(held: _Declared, plain: _Declared, spaced: _Declared) -> list[str]:
     # step's dash.
     if _block(was) and _block(now) and next(iter(was)) == next(iter(now)):
         return _written_keys(held, plain, spaced)
-    return (spaced if "{ " in "".join(held.text()) else plain).text()
+    return (spaced if "{ " in "".join(held.text()) else plain).text_at(held.column)
 
 
 def _block(value: object) -> TypeIs[CommentedMap]:
@@ -112,18 +116,18 @@ def _written_keys(held: _Declared, plain: _Declared, spaced: _Declared) -> list[
     """The lines of the block mapping *plain*, with *held*'s comments between its keys. A removed
     key leaves its comments after the key before it."""
     keys, plains, spaceds = _keys(held), _keys(plain), _keys(spaced)
-    first = next(iter(keys.values()))[0].own.start
+    first = next(iter(keys.values()))[0]
     comments: dict[object, list[str]] = {}
     kept = None
     for key, (_, after) in keys.items():
         kept = key if key in plains else kept
         comments.setdefault(kept, []).extend(held.lines[after.start : after.stop])
-    lines = held.lines[held.own.start : first]
+    lines = held.lines[held.own.start : first.own.start]
     for key, (value, _) in plains.items():
         if key in keys:
             lines += _written(keys[key][0], value, spaceds[key][0]) + comments.get(key, [])
         else:
-            lines += value.text()
+            lines += value.text_at(first.column)
     return lines
 
 
@@ -136,8 +140,9 @@ def _keys(mapping: _Declared) -> dict[object, tuple[_Declared, range]]:
     starts = [value.lc.key(key)[0] for key in keys] + [mapping.own.stop]
     spans = {}
     for key, start, stop in zip(keys, starts, starts[1:], strict=False):
-        own = _own(mapping.lines, range(start, stop), value.lc.key(key)[1])
-        spans[key] = (_Declared(value[key], mapping.lines, own), range(own.stop, stop))
+        column = value.lc.key(key)[1]
+        own = _own(mapping.lines, range(start, stop), column)
+        spans[key] = (_Declared(value[key], mapping.lines, own, column), range(own.stop, stop))
     return spans
 
 
