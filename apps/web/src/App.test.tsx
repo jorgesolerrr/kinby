@@ -148,8 +148,11 @@ const unnamed = instanceSummary({
   process: "stopped",
 })
 
-/** An instance's row, the button named by the instance that folds its group. */
-const instanceRow = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}`) })
+/** An instance's row, the link named by the instance that opens its screen. */
+const instanceRow = (name: string) => screen.findByRole("link", { name: new RegExp(`^${name}`) })
+
+/** The chevron that folds an instance's group. */
+const instanceFold = (name: string) => screen.findByRole("button", { name: `${name}'s threads` })
 
 /** The browser shows or hides the tab, as switching to another one does. */
 function showPage(visibility: DocumentVisibilityState) {
@@ -195,7 +198,7 @@ describe("the instances", () => {
   it("lists every instance in the sidebar by its name, saying which one is stopped", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
-    expect(await screen.findByRole("button", { name: "Ada" })).toBeDefined()
+    expect(await screen.findByRole("link", { name: "Ada" })).toBeDefined()
     expect((await instanceGroup("research")).getByText("stopped")).toBeDefined()
   })
 
@@ -225,14 +228,36 @@ describe("the instances", () => {
   it("opens an instance's page from its row menu, and unfolds its group", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
-    expect((await instanceRow("research")).getAttribute("aria-expanded")).toBe("false")
+    expect((await instanceFold("research")).getAttribute("aria-expanded")).toBe("false")
 
     await user.click(await screen.findByRole("button", { name: "Menu for research" }))
     await user.click(await screen.findByRole("menuitem", { name: "Overview" }))
 
     expect(window.location.pathname).toBe("/instances/hub-unnamed")
     expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
-    expect((await instanceRow("research")).getAttribute("aria-expanded")).toBe("true")
+    expect((await instanceFold("research")).getAttribute("aria-expanded")).toBe("true")
+  })
+
+  it("lands on the composer sent to an instance picked in the sidebar while it has no views", async () => {
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await instanceRow("Ada"))
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"))
+    expect(window.location.search).toBe("?to=hub-ada")
+    expect(await screen.findByRole("textbox", { name: "Message" })).toBeDefined()
+  })
+
+  it("says a stopped instance is not running where its screen would be", async () => {
+    openApp({ signedIn: true, instances: [ada, unnamed] })
+    const user = userEvent.setup()
+
+    await user.click(await instanceRow("research"))
+
+    expect(window.location.pathname).toBe("/instances/hub-unnamed/views")
+    expect(await screen.findByText("research is not running")).toBeDefined()
+    expect(screen.getByText("Start it from its page to see its views.")).toBeDefined()
   })
 
   it("restores the selection from the URL on a reload or an opened link", async () => {
@@ -241,7 +266,7 @@ describe("the instances", () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
-    expect((await instanceRow("research")).getAttribute("aria-expanded")).toBe("true")
+    expect((await instanceFold("research")).getAttribute("aria-expanded")).toBe("true")
   })
 
   it("opens the thread the URL names, marked in its group, with its instance and title in the main header", async () => {
@@ -439,7 +464,7 @@ describe("the instances", () => {
     const { hub } = openApp({ signedIn: true, instances: [ada, unnamed] })
 
     expect(await screen.findByRole("button", { name: "Start" })).toBeDefined()
-    expect((await instanceGroup("research")).queryAllByRole("link")).toEqual([])
+    expect((await instanceGroup("research")).queryByRole("list")).toBeNull()
     expect(hub.sockets.map((socket) => socket.url)).not.toContain(
       "ws://hub.test/instances/hub-unnamed/ws",
     )
@@ -479,7 +504,7 @@ describe("the instances", () => {
     })
 
     expect(screen.getByText("stopped")).toBeDefined()
-    expect(await screen.findByRole("button", { name: "research" })).toBeDefined()
+    expect(await screen.findByRole("link", { name: "research" })).toBeDefined()
   })
 
   it("lists the instances again every 30 seconds while the page is visible, and not while hidden", async () => {
@@ -531,6 +556,7 @@ describe("the sidebar", () => {
       "New thread",
       "Library",
       "Factories",
+      "Rresearchstopped",
       "New instance",
     ])
     const newInstance = screen.getByRole("link", { name: "New instance" })
@@ -621,7 +647,7 @@ describe("the sidebar", () => {
     const group = await instanceGroup("Ada")
     expect(await group.findByText("1 waiting for you")).toBeDefined()
     expect(group.getByRole("link", { name: "Deploy notes" })).toBeDefined()
-    expect((await instanceRow("Ada")).getAttribute("aria-expanded")).toBe("true")
+    expect((await instanceFold("Ada")).getAttribute("aria-expanded")).toBe("true")
     expect((await instanceGroup("research")).queryByText(/waiting for you/)).toBeNull()
   })
 
@@ -1527,7 +1553,7 @@ describe("the Instances section", () => {
     expect(window.location.pathname).toBe("/instances/hub-grace")
     expect(await screen.findByText("Grace is stopped")).toBeDefined()
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined()
-    expect((await instanceRow("Grace")).getAttribute("aria-expanded")).toBe("true")
+    expect((await instanceFold("Grace")).getAttribute("aria-expanded")).toBe("true")
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
   })
 

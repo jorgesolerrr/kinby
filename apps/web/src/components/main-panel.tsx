@@ -4,6 +4,7 @@ import type * as React from "react"
 
 import { ConfigPanel } from "@/components/config-panel"
 import { InstanceHeader, type Lifecycle } from "@/components/instance-header"
+import { InstanceScreen } from "@/components/instance-screen"
 import { InstancePage } from "@/components/instance-page"
 import { MemoryPage } from "@/components/memory-page"
 import { PageColumn } from "@/components/page-column"
@@ -12,7 +13,6 @@ import { RoutinesSection } from "@/components/routines-section"
 import { StatsPage } from "@/components/stats-page"
 import { ThreadListPage } from "@/components/thread-list-page"
 import { ThreadPanel } from "@/components/thread-panel"
-import { ViewPage } from "@/components/view-page"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -37,10 +37,10 @@ import {
 import { CirclePauseIcon, PlayIcon, ServerIcon } from "lucide-react"
 
 /**
- * The selected thread's panel, the selected instance's thread list, one of its views, or its page
- * open on `tab`, or why there is none. A thread, the thread list, or a view opens once
- * `instanceClient` reaches its instance, and needs a running one. With none selected, it shows the
- * home screen, preset to send `to` an instance. `onChanged` lists the instances again.
+ * The selected thread's panel, the selected instance's thread list, its screen, or its page open on
+ * `tab`, or why there is none. A thread, the thread list, or the screen opens once `instanceClient`
+ * reaches its instance, and needs a running one. With none selected, it shows the home screen,
+ * preset to send `to` an instance. `onChanged` lists the instances again.
  */
 export function MainPanel({
   caller,
@@ -50,7 +50,7 @@ export function MainPanel({
   threadId,
   threadsOpen = false,
   tab = "overview",
-  viewId,
+  screenOpen = false,
   to,
   instanceClient,
   onChanged,
@@ -62,7 +62,7 @@ export function MainPanel({
   threadId: string | undefined
   threadsOpen?: boolean
   tab?: InstanceTab
-  viewId?: string
+  screenOpen?: boolean
   to?: string
   instanceClient: Pick<InstanceClient, "call" | "subscribe" | "state" | "onStateChange"> | undefined
   onChanged: () => void
@@ -97,17 +97,18 @@ export function MainPanel({
       />
     )
   }
-  if (selected !== undefined && viewId !== undefined) {
+  if (selected !== undefined && screenOpen) {
     if (selected.process !== "running") {
       return <NotRunning instance={selected} what="views" />
     }
     if (instanceClient === undefined) return null
     return (
-      <ViewPage
-        key={`${selected.instance_id} ${viewId}`}
+      <InstanceScreen
+        key={selected.instance_id}
         client={instanceClient}
+        clock={clock}
         instanceId={selected.instance_id}
-        viewId={viewId}
+        name={instanceName(selected)}
       />
     )
   }

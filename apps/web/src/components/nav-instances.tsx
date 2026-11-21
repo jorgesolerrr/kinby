@@ -1,10 +1,4 @@
-import type {
-  Clock,
-  InstanceClient,
-  InstanceSummary,
-  ThreadSummary,
-  ViewSummary,
-} from "@kinby/contract"
+import type { Clock, InstanceClient, InstanceSummary, ThreadSummary } from "@kinby/contract"
 import { cn } from "cn"
 import {
   BellDotIcon,
@@ -18,7 +12,7 @@ import {
   ShieldAlertIcon,
   SquarePenIcon,
 } from "lucide-react"
-import { useCallback, useId, useState, useSyncExternalStore } from "react"
+import { useId, useState } from "react"
 
 import { InstanceAvatar } from "@/components/instance-avatar"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -43,20 +37,19 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useOpenFromSidebar } from "@/hooks/use-open-from-sidebar"
-import { POLL_INTERVAL_MS, usePolled } from "@/hooks/use-polled"
 import { useSidebarThreads } from "@/hooks/use-sidebar-threads"
 import { INSTANCE_TABS, instanceName, shownState } from "@/lib/instances"
 import {
   CREATE_PATH,
   homePath,
+  screenPath,
   tabPath,
   threadPath,
   threadsPath,
   useInstanceTab,
+  useScreenOpen,
   useSelectedThreadId,
   useThreadsOpen,
-  useViewOpen,
-  viewPath,
 } from "@/lib/selection"
 import { needsYou, threadTitle } from "@/lib/thread-list"
 
@@ -147,10 +140,10 @@ export function NavInstances({
 }
 
 /**
- * An instance's row, which folds the group under it, and its menu. The row says when the instance
- * is not running, and shows an ember dot while its sidebar threads need the user.
- * Under a running instance, listed on the connection `reached`, come its views, its most recent
- * sidebar threads, and "All threads".
+ * An instance's row, which opens its screen, its chevron, which folds the group under it, and its
+ * menu. The row says when the instance is not running, and shows an ember dot while its sidebar
+ * threads need the user. Under a running instance, listed on the connection `reached`, come its
+ * most recent sidebar threads and "All threads".
  */
 function InstanceGroup({
   instance,
@@ -170,42 +163,49 @@ function InstanceGroup({
   const name = instanceName(instance)
   const running = instance.process === "running"
   const threads = useSidebarThreads(reached, clock)
-  const views = useViews(reached, clock)
   const count = (threads ?? []).filter(needsYou).length
   // A group opens by itself until the user folds or unfolds it, and the user's choice then holds.
   const [opened, setOpened] = useState(false)
   if (!opened && (instance.home || count > 0 || isSelected)) setOpened(true)
   const open = folded ?? opened
   const tab = useInstanceTab()
+  const screenOpen = useScreenOpen()
+  const openPage = useOpenFromSidebar()
+  const path = screenPath(instance.instance_id)
+  const current = isSelected && (tab !== undefined || screenOpen)
   return (
     <Collapsible open={open} onOpenChange={onFold} render={<SidebarMenuItem />}>
-      <CollapsibleTrigger render={<SidebarMenuButton isActive={isSelected && tab !== undefined} />}>
-        <InstanceAvatar avatar={instance.avatar} name={name} size="sm" />
-        <span className="truncate font-medium">{name}</span>
-        {!running && (
-          <span className="shrink-0 text-xs text-muted-foreground">{shownState(instance)}</span>
-        )}
-        {count > 0 && (
-          <span className="ml-auto size-2 shrink-0 rounded-full bg-ember">
-            <span className="sr-only">{count} waiting for you</span>
-          </span>
-        )}
-        <ChevronRightIcon
-          className={cn("transition-transform", count === 0 && "ml-auto", open && "rotate-90")}
-        />
+      <SidebarMenuButton
+        isActive={current}
+        aria-current={current ? "page" : undefined}
+        className="group-has-data-[sidebar=menu-action]/menu-item:pr-14"
+        onClick={(event) => {
+          event.preventDefault()
+          openPage(path)
+        }}
+        render={
+          <a href={path}>
+            <InstanceAvatar avatar={instance.avatar} name={name} size="sm" />
+            <span className="truncate font-medium">{name}</span>
+            {!running && (
+              <span className="shrink-0 text-xs text-muted-foreground">{shownState(instance)}</span>
+            )}
+            {count > 0 && (
+              <span className="ml-auto size-2 shrink-0 rounded-full bg-ember">
+                <span className="sr-only">{count} waiting for you</span>
+              </span>
+            )}
+          </a>
+        }
+      />
+      <CollapsibleTrigger render={<SidebarMenuAction aria-label={`${name}'s threads`} />}>
+        <ChevronRightIcon className={cn("transition-transform", open && "rotate-90")} />
       </CollapsibleTrigger>
       <InstanceMenu instanceId={instance.instance_id} name={name} running={running} />
       {reached !== undefined && (
         <CollapsibleContent>
           <SidebarMenuSub>
-            <InstanceViews
-              views={views ?? []}
-              instanceId={instance.instance_id}
-              isSelected={isSelected}
-            />
-            {threads?.length === 0 && views?.length === 0 && (
-              <NoThreads instanceId={instance.instance_id} />
-            )}
+            {threads?.length === 0 && <NoThreads instanceId={instance.instance_id} />}
             <RecentThreads
               threads={(threads ?? []).slice(0, RECENT)}
               instanceId={instance.instance_id}
@@ -216,23 +216,6 @@ function InstanceGroup({
       )}
     </Collapsible>
   )
-}
-
-/** `client`'s instance's views, listed again as `usePolled` says. Undefined until they are listed. */
-function useViews(client: Reached | undefined, clock: Clock): ViewSummary[] | undefined {
-  const list = useCallback(async () => (await client?.call("view.list", {}))?.views, [client])
-  return usePolled(list, clock, useConnected(client), POLL_INTERVAL_MS)[0]
-}
-
-function useConnected(client: Reached | undefined): boolean {
-  return (
-    useSyncExternalStore(client?.onStateChange ?? unsubscribed, () => client?.state()) ===
-    "connected"
-  )
-}
-
-function unsubscribed(): () => void {
-  return () => {}
 }
 
 /**
@@ -253,7 +236,9 @@ function InstanceMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        render={<SidebarMenuAction showOnHover aria-label={`Menu for ${name}`} />}
+        render={
+          <SidebarMenuAction showOnHover aria-label={`Menu for ${name}`} className="right-7" />
+        }
       >
         <MoreHorizontalIcon />
       </DropdownMenuTrigger>
@@ -277,40 +262,7 @@ function InstanceMenu({
   )
 }
 
-/** An instance's views, each linking to its page, with the one the URL opens marked current. */
-function InstanceViews({
-  views,
-  instanceId,
-  isSelected,
-}: {
-  views: ViewSummary[]
-  instanceId: string
-  isSelected: boolean
-}) {
-  const openedView = useViewOpen()
-  const open = useOpenFromSidebar()
-  return views.map((view) => {
-    const isOpen = isSelected && view.id === openedView
-    const path = viewPath(instanceId, view.id)
-    return (
-      <SidebarMenuSubItem key={view.id}>
-        <SidebarMenuSubButton
-          isActive={isOpen}
-          aria-current={isOpen ? "page" : undefined}
-          href={path}
-          onClick={(event) => {
-            event.preventDefault()
-            open(path)
-          }}
-        >
-          <span>{view.title}</span>
-        </SidebarMenuSubButton>
-      </SidebarMenuSubItem>
-    )
-  })
-}
-
-/** The muted row of a group with no threads and no views, opening the home screen sent to it. */
+/** The muted row of a group with no threads, opening the home screen sent to it. */
 function NoThreads({ instanceId }: { instanceId: string }) {
   const open = useOpenFromSidebar()
   const path = homePath(instanceId)

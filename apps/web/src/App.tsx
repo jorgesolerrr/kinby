@@ -31,13 +31,13 @@ import {
   useOpenLine,
   useOpenRun,
   usePath,
+  useScreenOpen,
   useSelectedInstanceId,
   useSelectedThreadId,
   useSendTo,
   useSettingsOpen,
   useSettingsSection,
   useThreadsOpen,
-  useViewOpen,
 } from "@/lib/selection"
 import { threadList, threadTitle } from "@/lib/thread-list"
 
@@ -63,7 +63,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
   const creating = useCreating()
   const tab = useInstanceTab()
   const configOpen = tab === "config"
-  const viewId = useViewOpen()
+  const screenOpen = useScreenOpen()
   const libraryOpen = useLibraryTab() !== undefined
   const factoriesOpen = useFactoriesOpen()
   const lineId = useOpenLine()
@@ -145,7 +145,7 @@ function Shell({ client, clock, connected }: { client: Client; clock: Clock; con
                   threadId={threadId}
                   threadsOpen={threadsOpen}
                   tab={tab}
-                  viewId={viewId}
+                  screenOpen={screenOpen}
                   to={sendTo}
                   instanceClient={instanceClient}
                   onChanged={listAgain}
