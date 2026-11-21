@@ -149,6 +149,56 @@ describe("an instance's screen", () => {
   })
 })
 
+describe("the composer under the open view", () => {
+  /** Write `text` in the composer and send it once Send is ready. */
+  async function send(text: string) {
+    const user = userEvent.setup()
+    await user.type(screen.getByRole("textbox", { name: "Message" }), text)
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+        "false",
+      ),
+    )
+    await user.click(screen.getByRole("button", { name: "Send" }))
+  }
+
+  it("starts a thread with the message, and opens it with the view in the pane beside it", async () => {
+    const { caller } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING], {
+      "thread.create": () => ({ id: "thread-1", created_at: "2026-10-26T08:00:00Z" }),
+      "thread.turn.start": () => ({ sequence: 1, thread_id: "thread-1", turn_id: "turn-1" }),
+    })
+    const entries = window.history.length
+
+    await send("Fold the read ones")
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-1"),
+    )
+    expect(window.location.search).toBe("?pane=view.reading")
+    expect(window.history.length).toBe(entries + 1)
+    expect(
+      caller.calls.filter(({ method }) => method.startsWith("thread.")).map(({ params }) => params),
+    ).toEqual([{}, { thread_id: "thread-1", message: "Fold the read ones", skills: [] }])
+  })
+
+  it("says why a send failed, and keeps the message and the view", async () => {
+    await openScreen("/instances/hub-ada/views/reading", [READING], {
+      "thread.create": () => {
+        throw new CallError({ code: "INTERNAL", message: "The disk is full.", retryable: false })
+      },
+    })
+
+    await send("Fold the read ones")
+
+    expect(await screen.findByText("The disk is full.")).toBeDefined()
+    expect(window.location.pathname).toBe("/instances/hub-ada/views/reading")
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveProperty(
+      "value",
+      "Fold the read ones",
+    )
+  })
+})
+
 describe("deleting a view from its tab's menu", () => {
   it("deletes it once confirmed, and shows the next view", async () => {
     const { caller } = await openScreen(
