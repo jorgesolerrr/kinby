@@ -121,6 +121,28 @@ describe("ViewPage", () => {
     expect(posted()).toEqual([])
   })
 
+  it("draws the page again with the latest data when the page asks, and not when another window does", async () => {
+    const { subscription } = await openPage(view())
+    const postings = [{ company: "Initech" }]
+    await act(async () => subscription.deliver(view(PAGE, { postings })))
+    const drawn = frame().getAttribute("srcdoc")
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { kinby: "redraw" }, source: window }),
+      )
+    })
+    expect(frame().getAttribute("srcdoc")).toBe(drawn)
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { kinby: "redraw" }, source: frame().contentWindow }),
+      )
+    })
+    expect(frame().getAttribute("srcdoc")).not.toBe(drawn)
+    expect(drawnPage(frame()).querySelector("script")?.textContent).toContain("Initech")
+  })
+
   it("posts nothing into a new page until it loads, then posts what changed since", async () => {
     const { subscription } = await openPage(view())
     const posted = posts()

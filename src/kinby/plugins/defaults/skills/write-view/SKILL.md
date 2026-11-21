@@ -40,7 +40,8 @@ data doesn't reload the page: `kinby.onData(callback)` calls `callback` with the
 ```
 
 A redraw keeps the user's scroll position. Keep what the user chose, such as a filter or a sort, in
-a variable outside `draw`, and apply it there, so the redraw keeps it too.
+a variable outside `draw`, and apply it there, so the redraw keeps it too. A page that never calls
+`kinby.onData` loads again with each change, and the user loses their place.
 
 Put text from the data in with `textContent`, never `innerHTML`, so a value can't become markup.
 
