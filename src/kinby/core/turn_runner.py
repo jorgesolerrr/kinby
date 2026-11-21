@@ -161,6 +161,7 @@ from kinby.instance.permissions import (
 )
 from kinby.instance.read_only_tools import read_only_tools, set_read_only
 from kinby.instance.routine_grants import RoutineGrants
+from kinby.instance.views import holds_page
 from kinby.memory import GraphStore, MemoryDelivery, deliver_memory, memory_index
 from kinby.memory.consolidation import consolidate_tool, consolidation_step
 from kinby.memory.learning_review import learning_review_step
@@ -300,6 +301,9 @@ class ModelContext:
     #: Whether the user started the turn, rather than a routine, a factory run or the home
     #: instance.
     user_started: bool
+    #: Whether the turn keeps the instance's own views. A factory run's go to the owner of its
+    #: line, whose view the hub compares a page write with (ADR 0131).
+    own_views: bool
     tools: ToolSnapshot
     #: The tools a call through tool search or from a script reaches: the loaded ones but tool
     #: search's own, and the searchable ones.
@@ -400,6 +404,14 @@ class _ToolStep:
                 granted=call.name in self.granted,
                 marked_read_only=call.name in self.read_only,
                 user_started=self.context.user_started,
+                same_page=self.context.own_views
+                and tool is not None
+                and tool.page
+                and holds_page(
+                    self.context.tool_context.instance,
+                    call.arguments.get("id"),
+                    call.arguments.get("page"),
+                ),
                 seen_urls=self.seen_urls,
                 saved_outputs=self.saved_outputs,
             )
@@ -954,6 +966,7 @@ class LangGraphRunner:
                             gate_policy=self._gate_policy,
                             permission_mode=turn.permission_mode,
                             user_started=isinstance(turn.origin, UserOrigin),
+                            own_views=not isinstance(turn.origin, FactoryRunOrigin),
                             tools=tools,
                             reachable=reachable,
                             scripted=scripted,

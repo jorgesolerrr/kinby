@@ -218,8 +218,9 @@ and add each new posting to it with view_patch. Leave the postings already there
 
 Each run reads the view first, so it patches what the view holds now. It changes
 the data with `view_patch`, such as adding one posting at `/data/postings/-`, rather
-than writing the whole view again. A run that calls `view_write` asks the user
-first, because a page is code, so a run never writes the page. A view change does
+than writing the whole view again. A run whose `view_write` creates a view or
+changes its page asks the user first, because a page is code. One that writes the
+view whole with the page it already has changes only the data, and never asks. A view change does
 not tell the user. Notify only when the change needs them.
 
 ## Change or remove a routine
