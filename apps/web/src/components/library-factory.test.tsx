@@ -1000,3 +1000,117 @@ describe("LibraryPage, a step from its run", () => {
     })
   })
 })
+
+describe("LibraryPage, a step's last change", () => {
+  // Local times, so the lines show the same clock time wherever the test runs.
+  const at = (day: number) => new Date(2026, 10, day, 10, 0).toISOString()
+  const shippedSteps = ["ticket", "setup", "implement", "answer", "fix", "review", "checks"]
+  const changes: FactoryVersion[] = [
+    { version: "4".repeat(40), time: at(21), source: "web", steps: ["review"] },
+    { version: "3".repeat(40), time: at(20), source: "by_hand", steps: ["implement", "review"] },
+    { version: "2".repeat(40), time: at(19), source: "shipped_update", steps: ["checks"] },
+    { version: shippedVersion, time: at(18), source: "shipped", steps: shippedSteps },
+  ]
+
+  async function openChanges(history = changes, more: Answers = {}) {
+    const { caller, user } = openPage(software, history, more)
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+    await screen.findByRole("list", { name: "Steps" })
+    return { caller, user }
+  }
+
+  const line = (id: string) => within(card(id)).queryByRole("link")
+
+  it("shows each step's last change on its card, as History words its source", async () => {
+    await openChanges()
+
+    await waitFor(() => expect(line("review")).toBeTruthy())
+    expect(line("review")?.textContent).toBe("Saved from the web on Nov 21, 2026, 10:00 AM")
+    expect(line("implement")?.textContent).toBe("Changed by hand on Nov 20, 2026, 10:00 AM")
+    expect(line("checks")?.textContent).toBe("kinby's update, merged on Nov 19, 2026, 10:00 AM")
+    expect(line("ticket")?.textContent).toBe(
+      "kinby's version, unchanged since Nov 18, 2026, 10:00 AM",
+    )
+    expect(line("publish")).toBeNull()
+  })
+
+  it("shows it on an open card too", async () => {
+    const { user } = await openChanges()
+    await waitFor(() => expect(line("review")).toBeTruthy())
+
+    await user.click(within(card("review")).getByRole("button", { name: "review" }))
+
+    await within(card("review")).findByRole("form", { name: "review" })
+    expect(line("review")?.textContent).toBe("Saved from the web on Nov 21, 2026, 10:00 AM")
+  })
+
+  it("shows no last change on a shipped factory with no versions", async () => {
+    await openChanges([])
+
+    await screen.findByText(/kinby's version as it ships/)
+    expect(within(screen.getByRole("list", { name: "Steps" })).queryAllByRole("link")).toEqual([])
+  })
+
+  it("scrolls History to the version a card links to and unfolds its diff", async () => {
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
+    const { caller, user } = await openChanges()
+    await waitFor(() => expect(line("implement")).toBeTruthy())
+
+    await user.click(line("implement") as HTMLElement)
+
+    const row = within(screen.getByRole("list", { name: "History" })).getAllByRole("listitem")[1]
+    const diff = await within(row).findByRole("textbox", { name: "Diff" })
+    expect((diff as HTMLTextAreaElement).value).toBe(`diff of ${"3".repeat(40)}\n`)
+    expect(scrolled.mock.contexts).toEqual([row])
+    expect(caller.calls.filter((call) => call.method === "factory.version.diff")).toHaveLength(1)
+  })
+
+  it("shows the version a save made on the saved step's card and atop History", async () => {
+    const saved: FactoryVersion = {
+      version: "5".repeat(40),
+      time: at(22),
+      source: "web",
+      steps: ["implement"],
+    }
+    let history = changes
+    const { user } = await openChanges(changes, {
+      "factory.get": ({ name }) => factoryRead(name, software, history[0].version),
+      "factory.version.list": () => ({ versions: history }),
+      "factory.step.save": ({ name }) => {
+        history = [saved, ...changes]
+        return factoryRead(name, software, saved.version, "h-3")
+      },
+    })
+    await waitFor(() => expect(line("implement")).toBeTruthy())
+    await user.click(within(card("implement")).getByRole("button", { name: "implement" }))
+    const editor = within(await within(card("implement")).findByRole("form", { name: "implement" }))
+
+    await user.type(editor.getByRole("textbox", { name: "Timeout" }), "0")
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    await waitFor(() =>
+      expect(line("implement")?.textContent).toBe("Saved from the web on Nov 22, 2026, 10:00 AM"),
+    )
+    const rows = within(screen.getByRole("list", { name: "History" })).getAllByRole("listitem")
+    expect(rows).toHaveLength(5)
+    expect(within(rows[0]).getByText("implement")).toBeTruthy()
+  })
+
+  it("keeps the cards usable without the line when the versions can't be read", async () => {
+    const { user } = await openChanges(changes, {
+      "factory.version.list": () => {
+        throw new CallError({
+          code: "INTERNAL",
+          message: "The history is unreadable.",
+          retryable: false,
+        })
+      },
+    })
+
+    await screen.findByText("The history is unreadable.")
+    expect(within(screen.getByRole("list", { name: "Steps" })).queryAllByRole("link")).toEqual([])
+    await user.click(within(card("review")).getByRole("button", { name: "review" }))
+    expect(await within(card("review")).findByRole("form", { name: "review" })).toBeTruthy()
+  })
+})

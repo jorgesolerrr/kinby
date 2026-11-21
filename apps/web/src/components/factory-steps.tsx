@@ -1,4 +1,4 @@
-import type { FactoryRunDetail } from "@kinby/contract"
+import type { FactoryRunDetail, FactoryVersion } from "@kinby/contract"
 import { cn } from "cn"
 import { CircleXIcon, PlusIcon } from "lucide-react"
 import { useEffect, useId, useState } from "react"
@@ -16,7 +16,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { stepChanged, stepLastChange } from "@/lib/config-changes"
 import { type FactoryStep, routeText } from "@/lib/factory-steps"
+
+/** A factory's versions, newest first, and how a step's card opens one in History. */
+interface StepHistory {
+  versions: FactoryVersion[]
+  rowId: (version: string) => string
+  onShow: (version: string) => void
+}
 
 /** A route between two steps, by their places in the factory, `to` the earlier one. */
 interface Arc {
@@ -45,13 +53,15 @@ const LABEL = 10
 
 /** The factory's steps as a map, its routes back as arcs over the line and its resumed sessions
  * as dotted arcs under it, above a card for each step, which opens in place as its step editor.
- * A + after each card adds a step there. Opened from a run, it opens on the card of the run's
- * step. `onSaved` runs once a change made a new version. */
+ * A + after each card adds a step there. Each card says when its step last changed, as a link to
+ * that version in History. Opened from a run, it opens on the card of the run's step. `onSaved`
+ * runs once a change made a new version. */
 export function FactorySteps({
   steps,
   commands,
   saving,
   from,
+  history,
   onSaved,
 }: {
   steps: FactoryStep[]
@@ -60,6 +70,8 @@ export function FactorySteps({
   saving: StepSaving
   /** The run the factory was opened from, and the step whose card it opens. */
   from?: { step: string; run: FactoryRunDetail }
+  /** The factory's versions, once read. */
+  history?: StepHistory
   onSaved: () => void
 }) {
   const prefix = useId()
@@ -95,6 +107,7 @@ export function FactorySteps({
             <StepCard
               step={step}
               differs={saving.factory.differing_steps.includes(step.id)}
+              history={history}
               open={open === step.id}
               onToggle={() => setOpen(open === step.id ? undefined : step.id)}
             >
@@ -402,6 +415,7 @@ function curve(x1: number, x2: number, y: number, reach: number): string {
 function StepCard({
   step,
   differs,
+  history,
   open,
   onToggle,
   children,
@@ -409,10 +423,12 @@ function StepCard({
   step: FactoryStep
   /** Whether kinby ships another version of the step. */
   differs: boolean
+  history?: StepHistory
   open: boolean
   onToggle: () => void
   children: React.ReactNode
 }) {
+  const changed = history && stepLastChange(history.versions, step.id)
   return (
     <Card size="sm" variant={step.off ? "off" : "default"}>
       <CardHeader>
@@ -426,6 +442,20 @@ function StepCard({
         <CardDescription>
           {[step.kind, step.engine, step.model].filter(Boolean).join(" · ")}
         </CardDescription>
+        {history && changed && (
+          <CardDescription>
+            <a
+              href={`#${history.rowId(changed.version)}`}
+              className="hover:underline"
+              onClick={(event) => {
+                event.preventDefault()
+                history.onShow(changed.version)
+              }}
+            >
+              {stepChanged(changed)}
+            </a>
+          </CardDescription>
+        )}
         {(differs || step.off) && (
           <CardAction>
             <div className="flex gap-2">

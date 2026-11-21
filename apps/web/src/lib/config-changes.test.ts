@@ -1,8 +1,8 @@
-import type { ConfigChange } from "@kinby/contract"
+import type { ConfigChange, FactoryVersion, FactoryVersionSource } from "@kinby/contract"
 import { stubCaller } from "@kinby/contract/testing"
 import { describe, expect, it } from "vitest"
 
-import { lastChanged, readWithChange } from "@/lib/config-changes"
+import { lastChanged, readWithChange, stepChanged, stepLastChange } from "@/lib/config-changes"
 
 // A local time, so the line shows the same clock time wherever the test runs.
 const saved: ConfigChange = {
@@ -56,5 +56,55 @@ describe("readWithChange", () => {
 
     expect(lastChanged(change, result.hash)).toBe("Changed outside kinby")
     expect(caller.calls).toHaveLength(2)
+  })
+})
+
+const version = (source: FactoryVersionSource, steps: string[], day = 19): FactoryVersion => ({
+  version: `${source}-${day}`,
+  time: new Date(2026, 10, day, 10, 0).toISOString(),
+  source,
+  steps,
+})
+
+describe("stepLastChange", () => {
+  const versions = [
+    version("web", ["review"], 20),
+    version("by_hand", ["implement", "review"], 19),
+    version("shipped", ["implement", "review", "publish"], 18),
+  ]
+
+  it("picks the newest version that lists the step", () => {
+    expect(stepLastChange(versions, "review")).toBe(versions[0])
+    expect(stepLastChange(versions, "implement")).toBe(versions[1])
+    expect(stepLastChange(versions, "publish")).toBe(versions[2])
+  })
+
+  it("picks no version for a step no version lists, or a factory without versions", () => {
+    expect(stepLastChange(versions, "added-by-hand-in-yaml")).toBeUndefined()
+    expect(stepLastChange([], "review")).toBeUndefined()
+  })
+})
+
+describe("stepChanged", () => {
+  it("words each source of a step's last change, with its time", () => {
+    expect(stepChanged(version("web", ["review"]))).toBe(
+      "Saved from the web on Nov 19, 2026, 10:00 AM",
+    )
+    expect(stepChanged(version("chat", ["review"]))).toBe(
+      "Changed from chat on Nov 19, 2026, 10:00 AM",
+    )
+    expect(stepChanged(version("by_hand", ["review"]))).toBe(
+      "Changed by hand on Nov 19, 2026, 10:00 AM",
+    )
+    expect(stepChanged(version("revert", ["review"]))).toBe("Reverted on Nov 19, 2026, 10:00 AM")
+    expect(stepChanged(version("shipped_update", ["review"]))).toBe(
+      "kinby's update, merged on Nov 19, 2026, 10:00 AM",
+    )
+  })
+
+  it("says a step only kinby's first version lists is kinby's, not the user's change", () => {
+    expect(stepChanged(version("shipped", ["review"]))).toBe(
+      "kinby's version, unchanged since Nov 19, 2026, 10:00 AM",
+    )
   })
 })
