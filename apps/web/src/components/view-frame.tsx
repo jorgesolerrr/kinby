@@ -1,12 +1,12 @@
 import type { View } from "@kinby/contract"
 import { type CSSProperties, useEffect, useRef, useState, useSyncExternalStore } from "react"
 
-import { postedHeight, viewDocument } from "@/lib/view-document"
+import { asksRedraw, postedHeight, viewDocument } from "@/lib/view-document"
 
 /**
  * A view's page, drawn in a frame with an opaque origin: its scripts run and it may open a tab, but
  * it reaches neither the web app nor the network. A new page reloads the frame, and new data or a
- * new theme is posted into the page it has loaded. The frame is as tall as the page says it is,
+ * new theme is posted into the page it has loaded, which reloads only if it hears no change. The frame is as tall as the page says it is,
  * and the app hears only its own frame's window.
  */
 export function ViewFrame({
@@ -37,12 +37,13 @@ export function ViewFrame({
   useEffect(() => {
     const heard = (event: MessageEvent) => {
       if (frame.current === null || event.source !== frame.current.contentWindow) return
+      if (asksRedraw(event.data)) setDrawn(draw(page, data, dark))
       const posted = postedHeight(event.data)
       if (posted !== undefined) setHeight(posted)
     }
     window.addEventListener("message", heard)
     return () => window.removeEventListener("message", heard)
-  }, [])
+  }, [page, data, dark])
   return (
     <iframe
       ref={frame}
