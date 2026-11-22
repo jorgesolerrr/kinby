@@ -43,7 +43,9 @@ _RULES = (
 )
 _CONTRACT = (
     "Call consolidate once with every fact. The call covers every episode of this batch, "
-    "including those that produced no fact. A refused call writes nothing and covers nothing."
+    "including those that produced no fact. A refused call writes nothing and covers nothing. "
+    "A fact citing the sources of a fact shown here that changed since this frame is skipped, "
+    "and the episodes it cites stay uncovered."
 )
 
 
@@ -120,9 +122,18 @@ class _ConsolidationFrame:
         )
 
 
+@dataclass(frozen=True)
+class _Consolidated:
+    """What a consolidate call wrote and covered, and the changed facts it skipped for."""
+
+    facts: tuple[NodeId, ...]
+    episodes: tuple[NodeId, ...]
+    changed: tuple[NodeId, ...]
+
+
 _FRAME = TypeAdapter(_ConsolidationFrame)
 #: Writes a consolidate call started, held until they finish, since the loop holds tasks weakly.
-_finishing: set[asyncio.Task[tuple[NodeId, ...]]] = set()
+_finishing: set[asyncio.Task[_Consolidated]] = set()
 
 
 class ConsolidationRefused(ValueError):
@@ -185,13 +196,15 @@ def consolidate_tool(
 
     async def write_and_cover(
         frame: _ConsolidationFrame, facts: tuple[LearnedFact, ...]
-    ) -> tuple[NodeId, ...]:
-        written = await asyncio.to_thread(_write, graph, frame, facts, thread_id, today())
+    ) -> _Consolidated:
+        consolidated = await asyncio.to_thread(_write, graph, frame, facts, thread_id, today())
         # The log, not the turn's emit, which refuses events once the turn is interrupted.
         await log.append(
-            thread_id, turn_id, MemoryConsolidated(episodes=frame.batch, facts=written)
+            thread_id,
+            turn_id,
+            MemoryConsolidated(episodes=consolidated.episodes, facts=consolidated.facts),
         )
-        return written
+        return consolidated
 
     @tool(write=True)
     async def consolidate(facts: tuple[LearnedFact, ...]) -> str:
@@ -201,15 +214,26 @@ def consolidate_tool(
         batch, earlier episodes the frame shows, or the sources of a fact it shows. A fact
         citing a forgotten fact's sources is refused unless it also cites an episode recorded
         after the forget. Call with no facts when the batch teaches nothing. A refused call
-        writes nothing and covers nothing.
+        writes nothing and covers nothing. A fact citing the sources of a shown fact that
+        changed since the frame is skipped, and the episodes it cites stay uncovered.
         """
         frame = await asyncio.to_thread(_turn_frame, log, thread_id, turn_id)
         writing = asyncio.create_task(write_and_cover(frame, facts))
         _finishing.add(writing)
         writing.add_done_callback(_finishing.discard)
         # An interrupt cancels this call but not the writes, so no fact lands without coverage.
-        written = await asyncio.shield(writing)
-        return f"Wrote {len(written)} facts and covered {len(frame.batch)} episodes."
+        consolidated = await asyncio.shield(writing)
+        report = (
+            f"Wrote {len(consolidated.facts)} facts "
+            f"and covered {len(consolidated.episodes)} episodes."
+        )
+        if consolidated.changed:
+            changed = ", ".join(f'"{node}"' for node in consolidated.changed)
+            report += (
+                f" Skipped the facts citing the sources of {changed}, which changed since the "
+                "frame. Their episodes stay uncovered for the next consolidation."
+            )
+        return report
 
     return replace(consolidate, consolidation=True)
 
@@ -261,17 +285,7 @@ def _frame(
         ),
         episodes=tuple(_framed_episode(episode) for episode in batch),
         earlier=tuple(_framed_episode(episode) for episode in framed_earlier),
-        facts=tuple(
-            _FramedFact(
-                node=fact.node,
-                date=fact.date,
-                description=fact.description,
-                subjects=fact.subjects,
-                body=fact.body,
-                sources=fact.sources,
-            )
-            for fact in framed_facts
-        ),
+        facts=tuple(_framed_fact(fact) for fact in framed_facts),
         forgotten=tuple(
             _FramedForgottenFact(
                 node=gone.fact.node,
@@ -293,6 +307,17 @@ def _framed_episode(episode: Episode) -> _FramedEpisode:
         description=episode.description,
         subjects=episode.subjects,
         body=episode.body,
+    )
+
+
+def _framed_fact(fact: Fact) -> _FramedFact:
+    return _FramedFact(
+        node=fact.node,
+        date=fact.date,
+        description=fact.description,
+        subjects=fact.subjects,
+        body=fact.body,
+        sources=fact.sources,
     )
 
 
@@ -334,11 +359,24 @@ def _write(
     facts: tuple[LearnedFact, ...],
     thread_id: UUID,
     learned_on: date,
-) -> tuple[NodeId, ...]:
-    episodes = {node.node: node for node in graph.nodes() if isinstance(node, Episode)}
+) -> _Consolidated:
+    """Write *facts*, skipping each that takes the place of a framed fact changed since."""
+    nodes = graph.nodes()
+    episodes = {node.node: node for node in nodes if isinstance(node, Episode)}
+    live = {node.node: node for node in nodes if isinstance(node, Fact)}
+    changed = [
+        framed
+        for framed in frame.facts
+        if framed.node not in live or _framed_fact(live[framed.node]) != framed
+    ]
+    replacing = {
+        fact: [framed.node for framed in changed if set(fact.sources) & set(framed.sources)]
+        for fact in facts
+    }
+    kept = [fact for fact in facts if not replacing[fact]]
     forgotten = graph.forgotten_facts()
     refusals: list[str] = []
-    for fact in facts:
+    for fact in kept:
         if len(set(fact.sources)) < MIN_SOURCES:
             refusals.append(f'Fact "{fact.description}" cites fewer than {MIN_SOURCES} episodes.')
         elif any(
@@ -356,7 +394,7 @@ def _write(
                 refusals.append(f'Source "{source}" is not an episode.')
     if refusals:
         raise ConsolidationRefused(" ".join(("Nothing was written.", *refusals)))
-    return tuple(
+    written = tuple(
         graph.remember(
             Fact(
                 node=new_node_id(learned_on, fact.description),
@@ -369,7 +407,13 @@ def _write(
                 workbench=_shared_workbench(episodes[source] for source in fact.sources),
             )
         )
-        for fact in facts
+        for fact in kept
+    )
+    uncovered = {source for fact in facts if replacing[fact] for source in fact.sources}
+    return _Consolidated(
+        facts=written,
+        episodes=tuple(episode for episode in frame.batch if episode not in uncovered),
+        changed=tuple(dict.fromkeys(node for nodes in replacing.values() for node in nodes)),
     )
 
 
