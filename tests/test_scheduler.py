@@ -653,7 +653,7 @@ def test_a_delivery_for_a_routine_with_a_live_run_waits_and_starts_after_it(tmp_
 
 
 class ParkingRunner(ApprovalReplRunner):
-    """Parks the turns of one kind of origin on an approval and holds every other turn until
+    """Parks each turn *parks* picks on an approval and holds every other turn until
     released."""
 
     def __init__(self, parks):
@@ -662,7 +662,7 @@ class ParkingRunner(ApprovalReplRunner):
         self.release = asyncio.Event()
 
     async def run(self, turn, context):
-        if isinstance(turn.origin, self.parks):
+        if self.parks(turn):
             return await super().run(turn, context)
         await self.release.wait()
         return TurnOutcome()
@@ -673,7 +673,7 @@ def test_a_parked_approval_is_answered_while_another_thread_runs(tmp_path, parks
     async def scenario():
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News")
-        runner = ParkingRunner(parks)
+        runner = ParkingRunner(lambda turn: isinstance(turn.origin, parks))
         dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
 
         async def user_turn():
@@ -705,6 +705,40 @@ def test_a_parked_approval_is_answered_while_another_thread_runs(tmp_path, parks
         assert isinstance(answered, AcceptedResult), answered
         assert isinstance(resumed[-1].payload, TurnCompleted)
         assert still_live
+
+    asyncio.run(scenario())
+
+
+def test_a_parked_run_waits_to_resume_while_its_routine_has_a_live_run(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = ParkingRunner(lambda turn: not runner.parked.is_set())
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+        parked = await call(dispatcher, "routine.run", name="news")
+        await runner.parked.wait()
+        await dispatcher.scheduler.drain()
+        live = await call(dispatcher, "routine.run", name="news")
+        answer = {
+            "thread_id": parked.thread_id,
+            "approval_id": "11111111-1111-1111-1111-111111111111",
+            "decision": "approve",
+        }
+
+        refused = await call(dispatcher, "thread.approval.respond", **answer)
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+        answered = await call(dispatcher, "thread.approval.respond", **answer)
+        resumed = await events_for(dispatcher, parked.thread_id)
+
+        assert isinstance(live, AcceptedResult), live
+        assert refused.code == "THREAD_BUSY" and refused.retryable
+        assert refused.message == (
+            f'Routine "news" is already running on thread "{live.thread_id}", so this answer was '
+            "not taken. Try again when that run finishes."
+        )
+        assert isinstance(answered, AcceptedResult), answered
+        assert isinstance(resumed[-1].payload, TurnCompleted)
 
     asyncio.run(scenario())
 
@@ -750,14 +784,14 @@ def test_a_routine_does_not_run_twice_at_once_by_hand(tmp_path):
         assert refused.code == "THREAD_BUSY" and refused.retryable
         assert refused.message == (
             f'Routine "news" is already running on thread "{run.thread_id}", so this run was not '
-            "taken. Run it again when that run finishes."
+            "taken. Try again when that run finishes."
         )
         assert len(routine_runs(instance)) == 1
 
     asyncio.run(scenario())
 
 
-def test_no_routine_starts_while_a_revert_runs(tmp_path):
+def test_no_routine_starts_while_a_revert_runs_and_a_tick_waits_for_it(tmp_path):
     from tests.test_turn_snapshots import BlockingRestoreSnapshotStore
 
     async def scenario():
@@ -777,13 +811,21 @@ def test_no_routine_starts_while_a_revert_runs(tmp_path):
 
         refused = await call(dispatcher, "routine.run", name="news")
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
-        await dispatcher.scheduler.tick()
+        ticking = asyncio.create_task(dispatcher.scheduler.tick())
+        for _ in range(20):
+            await asyncio.sleep(0)
+        waited = not ticking.done()
+        while_reverting = routine_runs(instance)
         snapshots.release.set()
         reverted = await reverting
+        async with asyncio.timeout(3):
+            await ticking
+        await dispatcher.scheduler.drain()
 
         assert refused.code == "INSTANCE_BUSY" and refused.retryable
-        assert routine_runs(instance) == []
+        assert waited and while_reverting == []
         assert isinstance(reverted, AcceptedResult), reverted
+        assert len(routine_runs(instance)) == 1
 
     asyncio.run(scenario())
 

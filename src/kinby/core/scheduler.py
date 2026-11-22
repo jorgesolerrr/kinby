@@ -45,7 +45,6 @@ from kinby.core.errors import (
     InstanceDraining,
     ModelUnpriced,
     RoutineNotFound,
-    ThreadBusy,
 )
 from kinby.core.events import EventLog
 from kinby.core.routine_history import (
@@ -345,12 +344,7 @@ class Scheduler:
             name=routine.name, trigger=trigger, dreaming_stage=routine.is_dreaming_stage
         )
         self._turns.require_available()
-        thread = self._turns.live_routines().get(routine.name)
-        if thread is not None:
-            raise ThreadBusy(
-                f'Routine "{routine.name}" is already running on thread "{thread}", so this run '
-                "was not taken. Run it again when that run finishes."
-            )
+        self._turns.require_routine_idle(routine.name, "run")
         accepted = await self._turns.wake_new_thread(
             f"{routine.name} · {self._local_minute(now)}", routine.prompt, origin
         )
@@ -375,6 +369,8 @@ class Scheduler:
 
     async def tick(self) -> None:
         """Start the oldest ready work, and pass again at once after it for the rest."""
+        # Due work a revert refuses stays due, so a pass during one would come round at once.
+        await self._turns.wait_reverted()
         async with self._pass:
             self._reread_manifest()
             await self._handle_failures()

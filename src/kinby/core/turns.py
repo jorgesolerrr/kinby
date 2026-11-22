@@ -337,6 +337,24 @@ class Turns:
             if (pending := parked_on(events)) is not None
         }
 
+    def require_routine_idle(self, name: RoutineName, refused: str) -> None:
+        """Refuse *refused*, such as a run, while the routine has a live run: a routine never
+        runs twice at once."""
+        thread = self.live_routines().get(name)
+        if thread is not None:
+            raise ThreadBusy(
+                f'Routine "{name}" is already running on thread "{thread}", so this {refused} '
+                "was not taken. Try again when that run finishes."
+            )
+
+    async def wait_reverted(self) -> None:
+        """Wait until no revert runs."""
+        while True:
+            self._changed.clear()
+            if not any(isinstance(claim, RevertClaim) for claim in self._claims.values()):
+                return
+            await self._changed.wait()
+
     def require_available(self) -> None:
         """Refuse a new turn while a revert runs. Turns on other threads never refuse one
         (ADR 0133)."""
@@ -830,8 +848,10 @@ class Turns:
     ) -> AcceptedResult:
         """Resume the turn parked at *parked* with *answer*."""
         if isinstance(origin, RoutineOrigin):
-            # A parked routine let a revert in, so it starts again like a new turn.
+            # A parked routine let a revert and its routine's next run in, so it starts again
+            # like a new turn.
             self.require_available()
+            self.require_routine_idle(origin.name, "answer")
         # The parked turn itself owns the instance reservation.
         claim = TurnClaim(origin)
         self._claims[parked.thread_id] = claim
