@@ -3,12 +3,15 @@
 
 import asyncio
 import base64
+import io
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
+from PIL import Image
 
 from kinby.contracts import (
     UPLOAD_BYTES,
@@ -25,8 +28,10 @@ from kinby.contracts import (
 from kinby.core.dispatcher import ScheduledDispatcher
 from kinby.core.events import EventLog
 from kinby.core.snapshots import WorkspaceSnapshots
+from kinby.core.turn_runner import ChatModel
 from kinby.instance import Instance
 from tests.test_cleared_results import RecordingModel, closed
+from tests.test_compaction import LONG, CompactingModel, compact
 from tests.test_routines import signal_runtime
 from tests.test_saved_outputs import instance_at, until
 from tests.test_scheduler import call
@@ -35,7 +40,7 @@ TODAY = "2026-11-22"
 
 
 def runtime(
-    instance: Instance, model: RecordingModel, snapshots: WorkspaceSnapshots | None = None
+    instance: Instance, model: ChatModel, snapshots: WorkspaceSnapshots | None = None
 ) -> ScheduledDispatcher:
     dispatcher, _ = signal_runtime(
         instance,
@@ -252,3 +257,155 @@ def test_reverting_the_uploads_turn_keeps_the_upload(tmp_path: Path) -> None:
 
     assert any(isinstance(payload, WorkspaceReverted) for payload in recorded)
     assert (instance.manifest.workspace.path / path).read_bytes() == b"date,amount\n"
+
+
+def png(width: int, height: int, *, noise: bool = False) -> bytes:
+    image = (
+        Image.frombytes("RGB", (width, height), os.urandom(width * height * 3))
+        if noise
+        else Image.new("RGB", (width, height), "white")
+    )
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
+def user_messages(request: list[BaseMessage]) -> list[HumanMessage]:
+    return [message for message in request if isinstance(message, HumanMessage)]
+
+
+def images(message: HumanMessage) -> list[dict[str, object]]:
+    return [
+        block
+        for block in message.content
+        if isinstance(block, dict) and block.get("type") == "image"
+    ]
+
+
+def test_an_image_upload_arrives_as_an_image_block_on_its_message(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    model = RecordingModel([])
+    dispatcher = runtime(instance, model)
+    screenshot = png(40, 30)
+
+    async def scenario() -> str:
+        path = await put(dispatcher, "positions.png", screenshot)
+        await run_turn(dispatcher, await new_thread(dispatcher), "List my positions.", [path])
+        return path
+
+    path = asyncio.run(scenario())
+
+    [user] = user_messages(model.requests[-1])
+    assert user.text == f"List my positions.\n\nUploaded: {path}"
+    assert images(user) == [
+        {
+            "type": "image",
+            "base64": base64.b64encode(screenshot).decode(),
+            "mime_type": "image/png",
+        }
+    ]
+
+
+def test_a_pdf_and_a_csv_arrive_as_paths_only(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    model = RecordingModel([])
+    dispatcher = runtime(instance, model)
+
+    async def scenario() -> list[str]:
+        paths = [await put(dispatcher, "march.csv", b"1"), await put(dispatcher, "s.pdf", b"%PDF")]
+        await run_turn(dispatcher, await new_thread(dispatcher), "Total it.", paths)
+        return paths
+
+    paths = asyncio.run(scenario())
+
+    [user] = user_messages(model.requests[-1])
+    assert user.text == f"Total it.\n\nUploaded: {', '.join(paths)}"
+    assert images(user) == []
+
+
+def test_an_image_block_stays_in_the_next_turns_request(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    model = RecordingModel([], [])
+    dispatcher = runtime(instance, model)
+    screenshot = png(40, 30)
+
+    async def scenario() -> None:
+        path = await put(dispatcher, "positions.png", screenshot)
+        thread_id = await new_thread(dispatcher)
+        await run_turn(dispatcher, thread_id, "List my positions.", [path])
+        await run_turn(dispatcher, thread_id, "Which one gained most?", [])
+
+    asyncio.run(scenario())
+
+    first, second = user_messages(model.requests[-1])
+    assert [block["base64"] for block in images(first)] == [base64.b64encode(screenshot).decode()]
+    assert second.text == "Which one gained most?"
+
+
+def test_an_upload_gone_from_the_workspace_is_named_as_gone(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    model = RecordingModel([], [])
+    dispatcher = runtime(instance, model)
+
+    async def scenario() -> str:
+        path = await put(dispatcher, "positions.png", png(40, 30))
+        thread_id = await new_thread(dispatcher)
+        await run_turn(dispatcher, thread_id, "List my positions.", [path])
+        (instance.manifest.workspace.path / path).unlink()
+        await run_turn(dispatcher, thread_id, "And now?", [])
+        return path
+
+    path = asyncio.run(scenario())
+
+    first, _ = user_messages(model.requests[-1])
+    assert first.text == f"List my positions.\n\nUploaded: {path} (gone from the workspace)"
+    assert images(first) == []
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "noise"), [(3000, 200, False), (1400, 1400, True)], ids=["wide", "heavy"]
+)
+def test_an_image_over_the_limit_arrives_scaled_and_stays_whole_on_disk(
+    tmp_path: Path, width: int, height: int, noise: bool
+) -> None:
+    instance = instance_at(tmp_path)
+    screenshot = png(width, height, noise=noise)
+    model = RecordingModel([])
+    dispatcher = runtime(instance, model)
+
+    async def scenario() -> str:
+        path = await put(dispatcher, "positions.png", screenshot)
+        await run_turn(dispatcher, await new_thread(dispatcher), "Read it.", [path])
+        return path
+
+    path = asyncio.run(scenario())
+
+    [user] = user_messages(model.requests[-1])
+    [block] = images(user)
+    sent = block["base64"]
+    assert isinstance(sent, str)
+    assert len(sent) <= 5 * 1024 * 1024
+    with Image.open(io.BytesIO(base64.b64decode(sent))) as image:
+        assert image.format == "PNG"
+        assert max(image.size) <= 2000
+        assert image.width / image.height == pytest.approx(width / height, rel=0.05)
+    assert (instance.manifest.workspace.path / path).read_bytes() == screenshot
+
+
+def test_a_compactions_summary_request_names_the_uploads(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    model = CompactingModel([], [], "Summary one.")
+    dispatcher = runtime(instance, model)
+
+    async def scenario() -> str:
+        path = await put(dispatcher, "positions.png", png(40, 30))
+        thread_id = await new_thread(dispatcher)
+        await run_turn(dispatcher, thread_id, "a" * LONG, [path])
+        await run_turn(dispatcher, thread_id, "b" * LONG, [])
+        await compact(dispatcher, thread_id, "the positions")
+        return path
+
+    path = asyncio.run(scenario())
+
+    [summary_call] = model.requests[-1]
+    assert f"User: {'a' * LONG}\n\nUploaded: {path}" in summary_call.text

@@ -113,7 +113,6 @@ from kinby.core.prompt import (
     prompt_version,
     render_skill_references,
     render_system_prompt,
-    render_uploads,
     render_wake,
     with_searchable_groups,
 )
@@ -143,6 +142,7 @@ from kinby.core.turns import (
     TurnRequest,
     TurnResult,
 )
+from kinby.core.uploads import sent_uploads, user_message
 from kinby.instance import (
     Budgets,
     Instance,
@@ -940,7 +940,6 @@ class LangGraphRunner:
             )
         wake = render_wake(turn.origin, prepared.message, prepared.payload)
         if isinstance(graph_input, ModelState):
-            wake = render_uploads(wake, turn.uploads)
             wake = render_skill_references(referenced_skills(skills, turn.skills), wake)
             wake = await self._pre_searched(wake, prepared.message, emit)
         model = self._model_factory(turn.model)
@@ -989,7 +988,7 @@ class LangGraphRunner:
                                 view_reporter=emit,
                                 browser=self._browser,
                             ),
-                            user_message=HumanMessage(content=wake),
+                            user_message=user_message(wake, turn.uploads),
                             budgets=budgets,
                             compaction=latest_compaction(
                                 self._event_log.thread_events(turn.thread_id)
@@ -1636,7 +1635,12 @@ class LangGraphRunner:
         """Send the model *messages* under *compaction* and *cut*, streaming its text."""
         response: AIMessageChunk | None = None
         started_at = asyncio.get_running_loop().time()
-        request_messages = [context.system_message, *sent_history(messages, compaction, cut)]
+        sent = sent_history(messages, compaction, cut)
+        workspace = self._instance.manifest.workspace.path
+        request_messages = [
+            context.system_message,
+            *await asyncio.to_thread(sent_uploads, sent, workspace),
+        ]
         async for chunk in context.model.astream(
             _mark_cache_prefix(state.turn.model, request_messages)
         ):
