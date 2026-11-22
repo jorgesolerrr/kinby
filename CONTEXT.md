@@ -348,7 +348,7 @@ _Avoid_: git diff (the workspace may not be a Git repository), changes (when the
 
 ### Workspace revert
 
-A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted. It runs only while no other turn runs on the **instance**, since every thread shares the workspace.
+A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted. It runs only while no other turn runs on the **instance**, since every thread shares the workspace. When only **routine runs** are in its way, the user can have it interrupt them first; it never interrupts the user's own turn.
 _Avoid_: rollback, undo
 
 ### Turn target

@@ -368,24 +368,45 @@ async def _revert_turn(
         THREAD_TURN_REVERT_PREVIEW,
         ThreadTurnRevertPreviewCommand(thread_id=thread_id, turn_id=target),
     )
+    interrupt_routines = False
+    if isinstance(preview, ErrorEnvelope) and preview.code is ErrorCode.ROUTINES_RUNNING:
+        interrupt_routines = True
+        _render_error(preview, repl_io.stderr)
+        if not await _confirmed("Interrupt them to preview the revert? [y/N] ", repl_io):
+            return
+        preview = await client.call(
+            THREAD_TURN_REVERT_PREVIEW,
+            ThreadTurnRevertPreviewCommand(
+                thread_id=thread_id, turn_id=target, interrupt_routines=True
+            ),
+        )
     if isinstance(preview, ErrorEnvelope):
         _render_error(preview, repl_io.stderr)
         return
     _render_files(preview.files, repl_io.stdout)
-    repl_io.stdout.write(f"Revert {len(preview.files)} files to before {preview.turn_id}? [y/N] ")
-    repl_io.stdout.flush()
-    answer = (await repl_io.stdin.readline()).rstrip("\r\n")
-    if answer != "y":
+    if not await _confirmed(
+        f"Revert {len(preview.files)} files to before {preview.turn_id}? [y/N] ", repl_io
+    ):
         return
     result = await client.call(
         THREAD_TURN_REVERT,
-        ThreadTurnRevertCommand(thread_id=thread_id, turn_id=preview.turn_id),
+        ThreadTurnRevertCommand(
+            thread_id=thread_id,
+            turn_id=preview.turn_id,
+            interrupt_routines=interrupt_routines,
+        ),
     )
     if isinstance(result, ErrorEnvelope):
         _render_error(result, repl_io.stderr)
         return
     repl_io.stdout.write(f"Workspace reverted to before {preview.turn_id}.\n")
     repl_io.stdout.flush()
+
+
+async def _confirmed(question: str, repl_io: _ReplIO) -> bool:
+    repl_io.stdout.write(question)
+    repl_io.stdout.flush()
+    return (await repl_io.stdin.readline()).rstrip("\r\n") == "y"
 
 
 def _render_files(files: Sequence[FileChange], stdout: TextIO) -> None:

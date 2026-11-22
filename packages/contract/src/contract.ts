@@ -219,6 +219,7 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "THREAD_BUSY"
   | "INSTANCE_BUSY"
+  | "ROUTINES_RUNNING"
   | "INSTANCE_DRAINING"
   | "TURN_OPEN"
   | "NO_ACTIVE_TURN"
@@ -3755,10 +3756,12 @@ export interface ThreadTurnRateCommand {
   verdict: TurnVerdict;
 }
 export interface ThreadTurnRevertCommand {
+  interrupt_routines?: boolean;
   thread_id: string;
   turn_id: string;
 }
 export interface ThreadTurnRevertPreviewCommand {
+  interrupt_routines?: boolean;
   thread_id: string;
   turn_id: string;
 }

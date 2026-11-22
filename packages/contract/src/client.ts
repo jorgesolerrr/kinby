@@ -490,6 +490,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   NOT_FOUND: true,
   THREAD_BUSY: true,
   INSTANCE_BUSY: true,
+  ROUTINES_RUNNING: true,
   INSTANCE_DRAINING: true,
   TURN_OPEN: true,
   NO_ACTIVE_TURN: true,

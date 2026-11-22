@@ -696,9 +696,11 @@ def test_steps_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
 def test_seconds_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
     async def scenario() -> None:
         model = ApprovalChatModel(delay=0.6)
-        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 1.0")
+        dispatcher, thread_id = await _budget_session(tmp_path, model, "seconds = 2.0")
         requested = await _park_budget_turn(dispatcher, thread_id)
-        resumed_model = DelayedCompletingChatModel(delay=0.6)
+        # The resumed call fits a fresh budget but not what the parked segment left of it,
+        # which still leaves room for a slow checkpoint before the resume.
+        resumed_model = DelayedCompletingChatModel(delay=1.6)
         instance = load_instance(tmp_path / "bounded")
         runner = LangGraphRunner(instance, model_factory=lambda _: resumed_model)
         restarted = build_dispatcher(
@@ -714,7 +716,7 @@ def test_seconds_budget_does_not_reset_after_approval(tmp_path: Path) -> None:
 
         assert events[-1].payload == TurnFailed(
             code=ErrorCode.BUDGET_EXCEEDED,
-            message="The turn exceeded the seconds budget of 1.0.",
+            message="The turn exceeded the seconds budget of 2.0.",
             input_tokens=5,
             output_tokens=1,
             cache_read_tokens=3,

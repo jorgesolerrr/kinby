@@ -146,6 +146,9 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     THREAD_BUSY = "THREAD_BUSY"
     INSTANCE_BUSY = "INSTANCE_BUSY"
+    #: Only routine runs are in a workspace revert's way. The same revert with
+    #: interrupt_routines interrupts them first.
+    ROUTINES_RUNNING = "ROUTINES_RUNNING"
     INSTANCE_DRAINING = "INSTANCE_DRAINING"
     TURN_OPEN = "TURN_OPEN"
     NO_ACTIVE_TURN = "NO_ACTIVE_TURN"
@@ -832,11 +835,15 @@ class ThreadTurnDiffCommand(ContractModel):
 class ThreadTurnRevertCommand(ContractModel):
     thread_id: UUID
     turn_id: UUID
+    #: Interrupt the live routine runs in the revert's way first. A user's turn is never one.
+    interrupt_routines: bool = False
 
 
 class ThreadTurnRevertPreviewCommand(ContractModel):
     thread_id: UUID
     turn_id: UUID
+    #: Interrupt the live routine runs in the preview's way first, as a revert does.
+    interrupt_routines: bool = False
 
 
 class ThreadTurnRevertPreviewResult(ContractModel):

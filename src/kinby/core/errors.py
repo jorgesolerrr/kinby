@@ -204,6 +204,12 @@ class InstanceBusy(CoreError):
     retryable = True
 
 
+class RoutinesRunning(CoreError):
+    """Only routine runs are in a workspace revert's way."""
+
+    code = ErrorCode.ROUTINES_RUNNING
+
+
 class InstanceDraining(CoreError):
     """The instance is finishing its accepted work and takes no new work."""
 
