@@ -1,8 +1,10 @@
+import { readFile } from "node:fs/promises"
+
 import { describe, expect, expectTypeOf, it, vi } from "vitest"
 
-import { CallError, createClient, type Transport } from "./client"
+import { CALL_LIMIT, CallError, createClient, type Transport } from "./client"
 import type { Event, InstanceListResult, InstanceStatusResult, View } from "./index"
-import { type FakeHub, fakeClock, fakeHub } from "./testing"
+import { type FakeHub, fakeClock, fakeHub, limitedHub } from "./testing"
 
 const ORIGIN = "https://hub.example"
 
@@ -157,6 +159,70 @@ describe("client", () => {
     expect(socket.sent).toHaveLength(1)
     expect(hub.sockets).toHaveLength(2)
     expect(lastSocket(hub).sent).toEqual([])
+  })
+
+  it("holds calls past the hub's limit until one finishes, and answers each with its own", async () => {
+    const hub = limitedHub({
+      "routine.read": ({ name }) => {
+        if (name === "gone") {
+          throw new CallError({ code: "NOT_FOUND", message: "Gone.", retryable: false })
+        }
+        return { name, content: "", hash: `hash-${name}` }
+      },
+    })
+    const client = createClient(ORIGIN, hub.transport, fakeClock())
+    await vi.waitFor(() => expect(client.state()).toBe("connected"))
+
+    const names = Array.from({ length: 20 }, (_, index) => (index === 15 ? "gone" : `r${index}`))
+    const reads = await Promise.allSettled(
+      names.map((name) => client.call("routine.read", { name })),
+    )
+
+    expect(hub.mostInFlight).toBe(CALL_LIMIT)
+    expect(
+      reads.map((read) => (read.status === "fulfilled" ? read.value.hash : "refused")),
+    ).toEqual(names.map((name) => (name === "gone" ? "refused" : `hash-${name}`)))
+    expect(reads[15]).toMatchObject({ reason: { code: "NOT_FOUND" } })
+  })
+
+  it("sends a call that unblocks a turn past the ordinary calls in flight", async () => {
+    const { client, socket } = await connected()
+
+    for (let index = 0; index <= CALL_LIMIT; index += 1) {
+      void client.call("routine.read", { name: `r${index}` })
+    }
+    void client.call("thread.approval.respond", {
+      thread_id: "t",
+      approval_id: "a",
+      decision: "approve",
+    })
+
+    expect(socket.sent.map((frame) => (frame as { method: string }).method)).toEqual([
+      ...Array<string>(CALL_LIMIT).fill("routine.read"),
+      "thread.approval.respond",
+    ])
+  })
+
+  it("rejects the calls it holds when the socket drops, as never sent", async () => {
+    const { client, socket } = await connected()
+
+    for (let index = 0; index < CALL_LIMIT; index += 1) {
+      void client.call("routine.read", { name: `r${index}` }).catch(() => {})
+    }
+    const held = client.call("routine.read", { name: "held" })
+    socket.drop()
+
+    await expect(held).rejects.toMatchObject({ code: "CONNECTION_LOST", retryable: true })
+    expect(socket.sent).toHaveLength(CALL_LIMIT)
+  })
+
+  it("holds calls at the contract server's limit", async () => {
+    const server = await readFile(
+      new URL("../../../src/kinby/core/contract_server.py", import.meta.url),
+      "utf8",
+    )
+
+    expect(server).toMatch(new RegExp(`^CALL_LIMIT = ${CALL_LIMIT}$`, "m"))
   })
 
   it("ends signed out when the upgrade is refused, and opens no second socket", async () => {
