@@ -1,7 +1,8 @@
 import asyncio
 import random
 import threading
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Self
@@ -289,6 +290,68 @@ def test_the_frame_groups_the_batch_by_subject_with_the_facts_on_it(tmp_path: Pa
     learned_fact = GraphStore(instance.path).open(covering.facts[0])
     assert isinstance(learned_fact, Fact)
     assert learned_fact.sources == (old, new)
+
+
+class ChangingModel(ConsolidatingModel):
+    """Run *change* once the frame is read, as a chat writing memory alongside the stage."""
+
+    def __init__(self, facts: list[dict[str, object]], change: Callable[[], object]) -> None:
+        super().__init__(facts)
+        self.change = change
+
+    async def astream(self, messages: Sequence[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+        if not self.messages:
+            self.change()
+        async for chunk in super().astream(messages):
+            yield chunk
+
+
+@pytest.mark.parametrize("change", ["rewritten", "forgotten"])
+def test_a_fact_taking_the_place_of_a_fact_changed_after_the_frame_is_skipped(
+    tmp_path: Path, change: str
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Moved billing to the new provider", _DAY - timedelta(days=30))
+    fire(instance, ConsolidatingModel())
+    area = fact(instance, "Billing lives in the payments service", ("billing",), (old,))
+    new = episode(instance, "Billing retries failed cards")
+    monday = episode(instance, "Sent the invoices late on Monday")
+    thursday = episode(instance, "Sent the invoices late on Thursday", _DAY + timedelta(days=3))
+    memory = GraphStore(instance.path)
+    framed = memory.open(area)
+    assert isinstance(framed, Fact)
+    changes = {
+        "rewritten": lambda: memory.remember(replace(framed, body="Billing moved to ledger.")),
+        "forgotten": lambda: memory.forget(area, _DAY),
+    }
+    model = ChangingModel(
+        [
+            learned("Billing lives in payments and retries cards", old, new),
+            learned("Invoices go out late", monday, thursday),
+        ],
+        changes[change],
+    )
+
+    events = fire(instance, model)
+
+    [result] = [
+        event.payload
+        for event in events
+        if isinstance(event.payload, ToolResult) and event.payload.name == "consolidate"
+    ][1:]
+    assert not result.error
+    assert area in result.output
+    [covering] = consolidated(events)
+    assert covering.episodes == (monday, thursday)
+    [written] = covering.facts
+    assert memory.open(written).description == "Invoices go out late"
+    facts = [node for node in memory.nodes() if isinstance(node, Fact)]
+    assert [node.node for node in facts] == [written] + ([area] if change == "rewritten" else [])
+    if change == "rewritten":
+        assert memory.open(area).body == "Billing moved to ledger."
+    [offered] = consolidated(fire(instance, ConsolidatingModel()))
+    assert offered.episodes == (new,)
 
 
 def test_a_fact_from_one_episode_is_refused(tmp_path: Path) -> None:
