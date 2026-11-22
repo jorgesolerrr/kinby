@@ -16,7 +16,7 @@ from kinby.frontmatter import parse_frontmatter, required_string
 from kinby.instance import Budgets, Instance
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
 from kinby.instance.permissions import GatePolicy, constrain_mode, load_permissions
-from kinby.plugins.intake import intake_tools
+from kinby.plugins.intake import intake_tools, run_line_intake
 from kinby.plugins.registry import ToolRegistry, ToolSnapshot, load_tool_file
 from kinby.plugins.tools import Tool
 
@@ -56,6 +56,8 @@ CONSOLIDATION_STEP = SharedCodeStep("consolidate")
 REFLECTION_STEP = SharedCodeStep("reflect")
 LEARNING_REVIEW_STEP = SharedCodeStep("learning_review")
 DREAMING_STEPS = (CONSOLIDATION_STEP, REFLECTION_STEP, LEARNING_REVIEW_STEP)
+#: The code step that makes a routine a line's intake.
+INTAKE_STEP = SharedCodeStep(run_line_intake.name)
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,10 @@ class Routine:
     @property
     def is_dreaming_stage(self) -> bool:
         return self.code_step in DREAMING_STEPS
+
+    @property
+    def is_intake(self) -> bool:
+        return self.code_step == INTAKE_STEP
 
 
 def load_routines(

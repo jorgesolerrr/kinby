@@ -14,6 +14,7 @@ from uuid import UUID
 
 import aiohttp
 import pytest
+from aiohttp import web
 from pydantic import SecretStr
 
 from kinby.cli.client import ContractClient
@@ -24,11 +25,13 @@ from kinby.contracts import (
     LINE_SETUP,
     WORKBENCH_LIST,
     WORKBENCH_START,
+    AcceptedResult,
     ErrorCode,
     ErrorEnvelope,
     FactoryRun,
     FactoryRunListCommand,
     FactoryRunListResult,
+    IntakeRunCommand,
     Line,
     LineIntakeCommand,
     LineRemoveCommand,
@@ -37,6 +40,7 @@ from kinby.contracts import (
     NewWorkbench,
     OperationState,
     RoutineListResult,
+    RoutineRunOutcome,
     RoutineSummary,
     WorkbenchCreateCommand,
     WorkbenchListCommand,
@@ -53,13 +57,15 @@ from kinby.core.dispatcher import (
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.turn_runner import ChatModel, LangGraphRunner
-from kinby.hub import Hub
+from kinby.hub import ControlUnreachable, HttpInstanceControl, Hub, control
 from kinby.instance import Instance
+from kinby.plugins import intake
 from tests.test_contract_server import served as instance_served
 from tests.test_factory_runs import intake_client, started
 from tests.test_hub import (
     FakeControl,
     FakeRuntime,
+    control_server,
     created_instance,
     finished_operation,
     hub_at,
@@ -70,7 +76,7 @@ from tests.test_hub_factories import write_factory
 from tests.test_hub_routing import control_token
 from tests.test_hub_server import served, url
 from tests.test_hub_workbenches import CEC_BACKEND, created, finished
-from tests.test_routines import RoutineModel, instance_at
+from tests.test_routines import RoutineModel, instance_at, routine_file
 from tests.test_scheduler import FakeClock, call
 
 TICKETS = {
@@ -502,5 +508,154 @@ def test_a_setup_without_the_delivery_secret_creates_no_workbench(tmp_path, monk
                 'secret "WEBHOOK_SECRET".'
             }
             assert listed == WorkbenchListResult(workbenches=[])
+
+    asyncio.run(scenario())
+
+
+NINE_ONE = datetime(2026, 11, 13, 9, 1, tzinfo=UTC)
+
+
+async def _holding_intake(owned: Owned) -> Line:
+    """The line, whose intake the scheduler fired and the workbench holds unanswered."""
+    line = await _line(owned)
+    owned.control.intake_release.clear()
+    # The first pass arms the routines from the clock.
+    await owned.dispatcher.scheduler.tick()
+    owned.clock.now = NINE_ONE
+    async with asyncio.timeout(5):
+        await owned.dispatcher.scheduler.tick()
+        await owned.control.intake_asked.wait()
+    return line
+
+
+async def _released(owned: Owned) -> None:
+    owned.control.intake_release.set()
+    await owned.dispatcher.scheduler.drain()
+
+
+async def _user_turn(owned: Owned) -> AcceptedResult | ErrorEnvelope:
+    thread = await call(owned.dispatcher, "thread.create")
+    return await call(owned.dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+
+
+def test_a_user_turn_starts_while_the_lines_intake_waits_on_its_workbench(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            await _holding_intake(hub)
+
+            started = await _user_turn(hub)
+            await _released(hub)
+
+            assert isinstance(started, AcceptedResult), started
+
+    asyncio.run(scenario())
+
+
+def test_another_routine_fires_while_the_lines_intake_runs_but_the_intake_waits_for_itself(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            routine_file(hub.instance, "description: News\nschedule: 30 9 * * *")
+            line = await _holding_intake(hub)
+            assert await _delivered(hub, line, {"action": "labeled"}) == 202
+
+            hub.clock.now = datetime(2026, 11, 13, 9, 31, tzinfo=UTC)
+            async with asyncio.timeout(5):
+                await hub.dispatcher.scheduler.tick()
+                await hub.dispatcher.scheduler.tick()
+            news = next(routine for routine in await _routines(hub) if routine.name == "news")
+            intakes_while_live = len(hub.control.intakes)
+            await _released(hub)
+            await hub.fired()
+
+            assert news.last_run is not None
+            assert intakes_while_live == 1
+            assert len(hub.control.intakes) == 2
+
+    asyncio.run(scenario())
+
+
+def test_the_scheduler_does_not_spin_on_a_live_intake_that_is_due_again(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            await _holding_intake(hub)
+            hub.clock.now = datetime(2026, 11, 14, 9, 1, tzinfo=UTC)
+            scheduler = hub.dispatcher.scheduler
+            tick = scheduler.tick
+            passes = 0
+
+            async def counted() -> None:
+                nonlocal passes
+                passes += 1
+                await tick()
+
+            monkeypatch.setattr(scheduler, "tick", counted)
+            scheduler.start()
+            # Yields to the loop only: a spinning worker passes again on each round.
+            for _ in range(200):
+                await asyncio.sleep(0)
+            await scheduler.stop()
+            await _released(hub)
+
+            assert passes == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_revert_waits_for_the_lines_intake(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            done = await _user_turn(hub)
+            assert isinstance(done, AcceptedResult), done
+            await hub.dispatcher.scheduler.drain()
+            await _holding_intake(hub)
+
+            refused = await call(
+                hub.dispatcher,
+                "thread.turn.revert",
+                thread_id=done.thread_id,
+                turn_id=done.turn_id,
+            )
+            await _released(hub)
+
+            assert isinstance(refused, ErrorEnvelope), refused
+            assert refused.code is ErrorCode.INSTANCE_BUSY
+
+    asyncio.run(scenario())
+
+
+def test_an_intake_the_hub_never_answers_fails_its_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(intake, "HUB_INTAKE_SECONDS", 0.1)
+
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            line = await _holding_intake(hub)
+            async with asyncio.timeout(5):
+                await hub.dispatcher.scheduler.drain()
+            [routine] = await _routines(hub)
+            await _released(hub)
+
+            assert routine.name == line.intake
+            assert routine.last_run is not None
+            assert routine.last_run.outcome is RoutineRunOutcome.FAILED
+            assert routine.failure_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_the_hub_stops_waiting_on_a_workbench_that_never_answers_its_intake(monkeypatch):
+    monkeypatch.setattr(control, "INTAKE_SECONDS", 0.1)
+
+    async def silent(opened: web.WebSocketResponse) -> None:
+        await opened.receive()
+        await opened.receive()
+
+    async def scenario() -> None:
+        async with control_server(silent) as endpoint, asyncio.timeout(5):
+            with pytest.raises(ControlUnreachable, match="did not answer"):
+                await HttpInstanceControl().run_intake(
+                    endpoint, IntakeRunCommand(factory="tickets", call="scan_issues")
+                )
 
     asyncio.run(scenario())
