@@ -27,6 +27,7 @@ from kinby.contracts import (
     TurnCompleted,
     TurnInterrupted,
     TurnStarted,
+    UserOrigin,
     is_turn_closing,
 )
 from kinby.core.dispatcher import (
@@ -51,6 +52,7 @@ from tests.helpers import (
     turn_config_stub,
     write_events,
 )
+from tests.test_repl import ApprovalReplRunner
 from tests.test_routines import instance_at, routine_file
 
 
@@ -136,13 +138,16 @@ class BodyRecordingRunner(ScriptedRunner):
         return await super().run(turn, context)
 
 
-def runtime(instance, clock, runner=None):
+def runtime(instance, clock, runner=None, snapshots=None):
     return build_dispatcher(
         instance.manifest.state_dir,
         event_log=EventLog(instance.manifest.state_dir, clock=clock),
         turns=ScheduledTurnConfig(
             TurnConfig(
-                fixed_turn_preparation, fixed_permission_ceiling, runner or ScriptedRunner()
+                fixed_turn_preparation,
+                fixed_permission_ceiling,
+                runner or ScriptedRunner(),
+                snapshots=snapshots,
             ),
             SchedulerConfig(instance, clock),
         ),
@@ -462,7 +467,7 @@ class BlockingRunner(ScriptedRunner):
         return await super().run(turn, context)
 
 
-def test_payload_run_returns_while_a_user_turn_runs_then_fires_once_after_it(
+def test_payload_run_returns_while_a_user_turn_runs_and_fires_once(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -487,11 +492,6 @@ def test_payload_run_returns_while_a_user_turn_runs_then_fires_once_after_it(
                 payload={"body": "later", "content_type": "text/plain"},
             )
         assert isinstance(received, AcceptedResult)
-        await asyncio.sleep(0)
-        assert [
-            type(event.payload)
-            for event in EventLog(instance.manifest.state_dir).thread_events(received.thread_id)
-        ] == [SignalReceived]
 
         runner.release.set()
         await events_for(dispatcher, received.thread_id)
@@ -506,7 +506,96 @@ def test_payload_run_returns_while_a_user_turn_runs_then_fires_once_after_it(
     asyncio.run(scenario())
 
 
-def test_instance_busy_serializes_routines_but_not_users(tmp_path):
+def routine_runs(instance, name="news"):
+    """The routine runs that started, oldest first."""
+    return [
+        event
+        for event in every_event(EventLog(instance.manifest.state_dir))
+        if isinstance(event.payload, TurnStarted)
+        and isinstance(event.payload.origin, RoutineOrigin)
+        and event.payload.origin.name == name
+    ]
+
+
+def closed(instance, thread_id):
+    events = EventLog(instance.manifest.state_dir).thread_events(thread_id)
+    return any(is_turn_closing(event.payload) for event in events)
+
+
+def test_a_user_turn_starts_while_a_routine_run_is_live(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+        await call(dispatcher, "routine.run", name="news")
+        thread = await call(dispatcher, "thread.create")
+
+        started = await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert isinstance(started, AcceptedResult), started
+        assert closed(instance, started.thread_id)
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_runs_by_hand_and_by_schedule_while_user_turns_are_live(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        routine_file(instance, "description: Scan\nschedule: * * * * *", name="scan")
+        runner = BlockingRunner()
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, runner)
+        await dispatcher.scheduler.tick()
+        for _ in range(2):
+            thread = await call(dispatcher, "thread.create")
+            await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+
+        by_hand = await call(dispatcher, "routine.run", name="news")
+        clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
+        async with asyncio.timeout(3):
+            await dispatcher.scheduler.tick()
+        scheduled = routine_runs(instance, "scan")
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert isinstance(by_hand, AcceptedResult), by_hand
+        assert [event.payload.origin.trigger for event in scheduled] == [RoutineTrigger.SCHEDULED]
+
+    asyncio.run(scenario())
+
+
+def test_a_second_routine_fires_while_the_first_ones_run_is_live(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: 1 9 * * *")
+        routine_file(instance, "description: Scan\nschedule: 2 9 * * *", name="scan")
+        runner = BlockingRunner()
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, runner)
+        await dispatcher.scheduler.tick()
+        clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+
+        clock.now = datetime(2026, 9, 6, 9, 2, tzinfo=UTC)
+        async with asyncio.timeout(3):
+            await dispatcher.scheduler.tick()
+        [news] = routine_runs(instance)
+        news_live = not closed(instance, news.thread_id)
+        scan = routine_runs(instance, "scan")
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert news_live
+        assert len(scan) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_tick_skips_a_routine_whose_run_is_live_and_fires_it_once_that_run_closes(tmp_path):
     async def scenario():
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News\nschedule: * * * * *")
@@ -514,34 +603,205 @@ def test_instance_busy_serializes_routines_but_not_users(tmp_path):
         clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
         dispatcher = runtime(instance, clock, runner)
         await dispatcher.scheduler.tick()
-        one = await call(dispatcher, "thread.create")
-        two = await call(dispatcher, "thread.create")
-        assert isinstance(
-            await call(dispatcher, "thread.turn.start", thread_id=one.id, message="Hi"),
-            AcceptedResult,
-        )
-        assert isinstance(
-            await call(dispatcher, "thread.turn.start", thread_id=two.id, message="Hi"),
-            AcceptedResult,
-        )
-        refused = await call(dispatcher, "routine.run", name="news")
-        assert refused.code == "INSTANCE_BUSY"
-        assert refused.retryable and "news" in refused.message
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
-        ticking = asyncio.create_task(dispatcher.scheduler.tick())
-        await asyncio.sleep(0)
-        assert not ticking.done()
-        runner.release.set()
-        await ticking
-        await dispatcher.scheduler.drain()
-        runner.release.clear()
-        accepted = await call(dispatcher, "routine.run", name="news")
-        assert isinstance(accepted, AcceptedResult)
-        busy = await call(dispatcher, "thread.turn.start", thread_id=one.id, message="Hi")
-        assert busy.code == "INSTANCE_BUSY" and busy.retryable
-        assert busy.message == 'Routine "news" is running. Send again when it finishes.'
+        await dispatcher.scheduler.tick()
+
+        clock.now = datetime(2026, 9, 6, 9, 2, tzinfo=UTC)
+        async with asyncio.timeout(3):
+            await dispatcher.scheduler.tick()
+        while_live = len(routine_runs(instance))
         runner.release.set()
         await dispatcher.scheduler.drain()
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
+
+        assert while_live == 1
+        assert len(routine_runs(instance)) == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_delivery_for_a_routine_with_a_live_run_waits_and_starts_after_it(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+        await call(dispatcher, "routine.run", name="news")
+        received = await call(
+            dispatcher,
+            "routine.run",
+            name="news",
+            payload={"body": "later", "content_type": "text/plain"},
+        )
+
+        await dispatcher.scheduler.tick()
+        while_live = await call(dispatcher, "routine.list")
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
+
+        assert isinstance(received, AcceptedResult), received
+        assert while_live.routines[0].pending == 1
+        assert [
+            type(event.payload)
+            for event in EventLog(instance.manifest.state_dir).thread_events(received.thread_id)
+        ] == [SignalReceived, TurnStarted, MessageDelta, TurnCompleted]
+
+    asyncio.run(scenario())
+
+
+class ParkingRunner(ApprovalReplRunner):
+    """Parks the turns of one kind of origin on an approval and holds every other turn until
+    released."""
+
+    def __init__(self, parks):
+        super().__init__()
+        self.parks = parks
+        self.release = asyncio.Event()
+
+    async def run(self, turn, context):
+        if isinstance(turn.origin, self.parks):
+            return await super().run(turn, context)
+        await self.release.wait()
+        return TurnOutcome()
+
+
+@pytest.mark.parametrize("parks", [RoutineOrigin, UserOrigin])
+def test_a_parked_approval_is_answered_while_another_thread_runs(tmp_path, parks):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = ParkingRunner(parks)
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+
+        async def user_turn():
+            thread = await call(dispatcher, "thread.create")
+            return await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+
+        async def routine_run():
+            return await call(dispatcher, "routine.run", name="news")
+
+        parking, running = (
+            (routine_run, user_turn) if parks is RoutineOrigin else (user_turn, routine_run)
+        )
+        parked = await parking()
+        await runner.parked.wait()
+        live = await running()
+        answered = await call(
+            dispatcher,
+            "thread.approval.respond",
+            thread_id=parked.thread_id,
+            approval_id="11111111-1111-1111-1111-111111111111",
+            decision="approve",
+        )
+        resumed = await events_for(dispatcher, parked.thread_id)
+        still_live = not closed(instance, live.thread_id)
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert isinstance(live, AcceptedResult), live
+        assert isinstance(answered, AcceptedResult), answered
+        assert isinstance(resumed[-1].payload, TurnCompleted)
+        assert still_live
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_in_a_live_routine_runs_thread_is_refused_and_not_taken(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+        run = await call(dispatcher, "routine.run", name="news")
+
+        refused = await call(dispatcher, "thread.turn.start", thread_id=run.thread_id, message="Hi")
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert refused.code == "THREAD_BUSY" and refused.retryable
+        assert refused.message == (
+            f'Thread "{run.thread_id}" already has a running turn, so this one was not taken. '
+            "Send it again when that turn finishes."
+        )
+        assert [
+            event.payload.message
+            for event in EventLog(instance.manifest.state_dir).thread_events(run.thread_id)
+            if isinstance(event.payload, TurnStarted)
+        ] == ["Read the news."]
+
+    asyncio.run(scenario())
+
+
+def test_a_routine_does_not_run_twice_at_once_by_hand(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+        run = await call(dispatcher, "routine.run", name="news")
+
+        refused = await call(dispatcher, "routine.run", name="news")
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert refused.code == "THREAD_BUSY" and refused.retryable
+        assert refused.message == (
+            f'Routine "news" is already running on thread "{run.thread_id}", so this run was not '
+            "taken. Run it again when that run finishes."
+        )
+        assert len(routine_runs(instance)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_no_routine_starts_while_a_revert_runs(tmp_path):
+    from tests.test_turn_snapshots import BlockingRestoreSnapshotStore
+
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: * * * * *")
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        snapshots = BlockingRestoreSnapshotStore()
+        dispatcher = runtime(instance, clock, snapshots=snapshots)
+        await dispatcher.scheduler.tick()
+        thread = await call(dispatcher, "thread.create")
+        done = await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+        await events_for(dispatcher, thread.id)
+        reverting = asyncio.create_task(
+            call(dispatcher, "thread.turn.revert", thread_id=thread.id, turn_id=done.turn_id)
+        )
+        await asyncio.wait_for(snapshots.entered.wait(), timeout=3)
+
+        refused = await call(dispatcher, "routine.run", name="news")
+        clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        snapshots.release.set()
+        reverted = await reverting
+
+        assert refused.code == "INSTANCE_BUSY" and refused.retryable
+        assert routine_runs(instance) == []
+        assert isinstance(reverted, AcceptedResult), reverted
+
+    asyncio.run(scenario())
+
+
+def test_stopping_interrupts_every_live_routine_run(tmp_path):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        routine_file(instance, "description: Scan", name="scan")
+        runner = BlockingRunner()
+        dispatcher = runtime(instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner)
+        runs = [await call(dispatcher, "routine.run", name=name) for name in ("news", "scan")]
+
+        async with asyncio.timeout(3):
+            await dispatcher.scheduler.interrupt()
+            ends = [(await events_for(dispatcher, run.thread_id))[-1] for run in runs]
+
+        assert [type(end.payload) for end in ends] == [TurnInterrupted, TurnInterrupted]
 
     asyncio.run(scenario())
 
@@ -621,6 +881,7 @@ def test_failed_signal_firings_disable_routine_at_ten(
                 payload={"body": str(count), "content_type": "text/plain"},
             )
             await dispatcher.scheduler.tick()
+            await dispatcher.scheduler.drain()
             listed = await call(dispatcher, "routine.list")
             assert not isinstance(listed, ErrorEnvelope)
             assert listed.routines[0].failure_count == count
@@ -983,6 +1244,7 @@ def test_scheduler_fires_every_pending_delivery_in_receipt_order(tmp_path: Path)
 
         for _ in received:
             await dispatcher.scheduler.tick()
+            await dispatcher.scheduler.drain()
 
         assert [
             event.thread_id
@@ -1041,11 +1303,7 @@ def test_cli_parked_routine_reports_non_success(tmp_path, capsys, monkeypatch):
     assert not any(isinstance(event.payload, TurnInterrupted) for event in events)
 
 
-@pytest.mark.parametrize("thread_count", [1, 8])
-def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
-    from kinby.core.events import EventLog
-    from tests.test_repl import ApprovalReplRunner
-
+def test_a_routine_runs_while_a_user_turn_is_parked_after_a_restart(tmp_path):
     async def scenario():
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News")
@@ -1055,27 +1313,18 @@ def test_availability_reads_history_once(tmp_path, monkeypatch, thread_count):
         user = await call(dispatcher, "thread.create")
         await call(dispatcher, "thread.turn.start", thread_id=user.id, message="Note this")
         await runner.parked.wait()
-        for _ in range(thread_count - 1):
-            await call(dispatcher, "thread.create")
         restarted = runtime(instance, clock)
-        reads = 0
-        latest_in_open_turns = EventLog.latest_in_open_turns
 
-        def counted_events(log, types):
-            nonlocal reads
-            reads += 1
-            return latest_in_open_turns(log, types)
+        accepted = await call(restarted, "routine.run", name="news")
+        await restarted.scheduler.drain()
 
-        monkeypatch.setattr(EventLog, "latest_in_open_turns", counted_events)
-        busy = await call(restarted, "routine.run", name="news")
-        assert busy.code == "INSTANCE_BUSY"
-        # One read checks availability, however many threads the instance has.
-        assert reads == 1
+        assert isinstance(accepted, AcceptedResult), accepted
+        assert closed(instance, accepted.thread_id)
 
     asyncio.run(scenario())
 
 
-def test_repl_waits_visibly_and_shows_routines(tmp_path):
+def test_repl_starts_a_turn_while_a_routine_runs_and_shows_routines(tmp_path):
     async def scenario():
         instance = instance_at(tmp_path)
         routine_file(instance, "description: News")
@@ -1095,11 +1344,11 @@ def test_repl_waits_visibly_and_shows_routines(tmp_path):
             )
         )
         async with asyncio.timeout(3):
-            while "INSTANCE_BUSY" not in stderr.getvalue():
+            while not EventLog(instance.manifest.state_dir).thread_events(thread.id):
                 await asyncio.sleep(0)
         runner.release.set()
         assert await repl == 0
-        assert stderr.getvalue().count("INSTANCE_BUSY") == 1
+        assert "INSTANCE_BUSY" not in stderr.getvalue()
         starts = [
             event.payload
             for event in EventLog(instance.manifest.state_dir).thread_events(thread.id)
@@ -1486,6 +1735,7 @@ def test_reenable_with_failed_history_is_not_undone(tmp_path):
         await dispatcher.scheduler.tick()
         clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
         await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
         routine = (await call(dispatcher, "routine.list")).routines[0]
         assert routine.enabled and routine.failure_count == 1
         assert "enabled: true" in path.read_text()

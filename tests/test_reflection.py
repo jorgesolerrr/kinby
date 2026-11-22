@@ -30,7 +30,6 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.dispatcher import ScheduledTurnConfig, TurnConfig, build_dispatcher
-from kinby.core.errors import InstanceBusy
 from kinby.core.events import EventLog
 from kinby.core.scheduler import SchedulerConfig
 from kinby.core.threads import ThreadStore
@@ -395,7 +394,7 @@ class HeldModel:
         yield AIMessageChunk(content="Hello.", usage_metadata=usage)
 
 
-def test_an_approved_reflection_resumes_only_once_the_instance_is_free(tmp_path: Path) -> None:
+def test_an_approved_reflection_resumes_while_a_user_turn_runs(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     reflection_stage(instance)
     consolidate(instance, "Invoices go out on the first")
@@ -422,12 +421,12 @@ def test_an_approved_reflection_resumes_only_once_the_instance_is_free(tmp_path:
             runner.permission_ceiling,
             no_recap,
         )
-        await turns.wake(store.create(None).id, "Hello", UserOrigin())
-        with pytest.raises(InstanceBusy):
-            await turns.respond(approve)
-        held.release.set()
-        await turns.wait_idle()
+        user = store.create(None)
+        await turns.wake(user.id, "Hello", UserOrigin())
         await turns.respond(approve)
+        await until(log, approval.thread_id, lambda event: is_turn_closing(event.payload))
+        assert not any(is_turn_closing(event.payload) for event in log.thread_events(user.id))
+        held.release.set()
         await turns.wait_idle()
         return log.thread_events(approval.thread_id)
 

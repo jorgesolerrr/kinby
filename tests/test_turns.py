@@ -1288,7 +1288,10 @@ def test_start_rejects_a_second_turn_while_the_first_is_running(tmp_path: Path) 
         assert isinstance(first, AcceptedResult)
         assert second == ErrorEnvelope(
             code=ErrorCode.THREAD_BUSY,
-            message=f'Thread "{created.id}" already has a running turn.',
+            message=(
+                f'Thread "{created.id}" already has a running turn, so this one was not taken. '
+                "Send it again when that turn finishes."
+            ),
             retryable=True,
         )
 
@@ -2006,7 +2009,10 @@ def test_start_rejects_a_new_turn_while_parked_after_restart(tmp_path: Path) -> 
         )
         assert second == ErrorEnvelope(
             code=ErrorCode.THREAD_BUSY,
-            message=f'Thread "{created.id}" already has a running turn.',
+            message=(
+                f'Thread "{created.id}" already has a running turn, so this one was not taken. '
+                "Send it again when that turn finishes."
+            ),
             retryable=True,
         )
 

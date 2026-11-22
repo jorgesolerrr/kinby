@@ -300,15 +300,16 @@ class FileChange(ContractModel):
 
 
 class RoutineOrigin(ContractModel):
-    """A routine's run. ``dreaming_stage`` and ``intake`` say whether the routine was a dreaming
-    stage, or a line's intake, when its turn started, so a later reader never reloads a routine
-    file that may have changed."""
+    """A routine's run. ``dreaming_stage`` says whether the routine was a dreaming stage when
+    its turn started, so a later reader never reloads a routine file that may have changed."""
 
     kind: Literal["routine"] = "routine"
     name: RoutineName
     trigger: RoutineTrigger
     delivery_id: DeliveryId | None = None
     dreaming_stage: bool = False
+    #: Whether the routine was a line's intake. Nothing reads it since a turn holds only its own
+    #: thread (ADR 0133). Kept so a turn recorded with it still reads.
     intake: bool = False
 
 

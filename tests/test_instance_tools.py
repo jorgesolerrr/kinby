@@ -321,8 +321,9 @@ def test_routine_delete_refuses_pending_deliveries_and_they_still_fire(
             )
 
         assert target.is_dir()
-        await dispatcher.scheduler.tick()
-        await dispatcher.scheduler.tick()
+        for _ in range(2):
+            await dispatcher.scheduler.tick()
+            await dispatcher.scheduler.drain()
         assert (await call(dispatcher, "routine.list")).routines[0].pending == 0
         assert len((await call(dispatcher, "thread.list", filter="all")).threads) == 2
 

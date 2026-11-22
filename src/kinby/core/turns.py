@@ -307,22 +307,12 @@ class Turns:
         """What each thread is working on: a live turn, a reserved one, or a parked approval."""
         return {**self._live(), **self._parked()}
 
-    def holding(self) -> dict[UUID, Origin]:
-        """What holds the instance: what is running, except what holds only its own thread. A
-        routine parked on an approval does (ADR 0115), and so does a line's intake, whose model
-        never runs while it waits on the hub."""
-        live = {thread: origin for thread, origin in self._live().items() if not _is_intake(origin)}
-        parked = {
-            thread: origin
-            for thread, origin in self._parked().items()
-            if not isinstance(origin, RoutineOrigin)
-        }
-        return {**live, **parked}
-
-    def live_routines(self) -> set[RoutineName]:
-        """The routines with a live run. None fires again until its run ends."""
+    def live_routines(self) -> dict[RoutineName, UUID]:
+        """The thread of each routine's live run. None fires again until its run ends."""
         return {
-            origin.name for origin in self._live().values() if isinstance(origin, RoutineOrigin)
+            origin.name: thread
+            for thread, origin in self._live().items()
+            if isinstance(origin, RoutineOrigin)
         }
 
     def _live(self) -> dict[UUID, Origin]:
@@ -347,18 +337,12 @@ class Turns:
             if (pending := parked_on(events)) is not None
         }
 
-    def require_available(self, origin: Origin) -> None:
+    def require_available(self) -> None:
+        """Refuse a new turn while a revert runs. Turns on other threads never refuse one
+        (ADR 0133)."""
         self.require_admitting()
         if any(isinstance(claim, RevertClaim) for claim in self._claims.values()):
             raise InstanceBusy("A revert is running. Wait for it to finish before starting a turn.")
-        if isinstance(origin, RoutineOrigin) and origin.name in self.live_routines():
-            raise InstanceBusy(f'Routine "{origin.name}" is already running.')
-        running = self.holding().values()
-        routine = next((item for item in running if isinstance(item, RoutineOrigin)), None)
-        if routine is not None:
-            raise InstanceBusy(f'Routine "{routine.name}" is running. Send again when it finishes.')
-        if running and isinstance(origin, RoutineOrigin):
-            raise InstanceBusy(f'Routine "{origin.name}" is waiting for the running user turn.')
 
     @asynccontextmanager
     async def compacting(self, thread_id: UUID) -> AsyncIterator[None]:
@@ -374,11 +358,10 @@ class Turns:
             self._release_claim(thread_id, claim)
 
     async def wait_idle(self) -> None:
-        """Wait until nothing holds the instance: no live turn but an intake's, no parked
-        approval but a routine's, no claim."""
+        """Wait until no live turn and no claim is left."""
         while True:
             self._changed.clear()
-            if not self.holding() and not self._claims:
+            if not self._live() and not self._claims:
                 return
             await self._changed.wait()
 
@@ -393,23 +376,14 @@ class Turns:
             await self._changed.wait()
 
     async def drain(self) -> None:
-        await _settled([running.task for running in self._running.values()])
+        tasks = [running.task for running in self._running.values()]
+        if tasks:
+            await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
-    async def drain_holding(self) -> None:
-        """Wait for the live turns that hold the instance, and not for an intake's."""
-        await _settled(
-            [
-                running.task
-                for running in self._running.values()
-                if not _is_intake(running.request.origin)
-            ]
-        )
-
-    async def interrupt_routine(self) -> None:
+    async def interrupt_routines(self) -> None:
         for thread_id, running in tuple(self._running.items()):
             if not running.task.done() and isinstance(running.request.origin, RoutineOrigin):
                 await self.interrupt(ThreadTurnInterruptCommand(thread_id=thread_id))
-                return
 
     async def interrupt_all(self) -> None:
         """Interrupt every live turn and parked approval, including one still being reserved."""
@@ -532,8 +506,14 @@ class Turns:
 
     def _claim_revert(self, thread_id: UUID) -> RevertClaim:
         # The workspace is shared by every thread, so a revert under any running
-        # turn, an intake's included, would change the files out from under it.
-        if self._live() or self.holding() or self._claims:
+        # turn would change the files out from under it. A parked routine holds only
+        # its own thread (ADR 0115).
+        parked = self._parked().values()
+        if (
+            self._live()
+            or self._claims
+            or any(not isinstance(origin, RoutineOrigin) for origin in parked)
+        ):
             raise InstanceBusy("A turn is running. Wait for it to finish before reverting.")
         claim = RevertClaim()
         self._claims[thread_id] = claim
@@ -604,8 +584,12 @@ class Turns:
         skills: tuple[SkillName, ...] = (),
     ) -> AcceptedResult:
         self.require_thread(thread_id)
-        self.require_available(origin)
-        self._require_idle(thread_id)
+        self.require_available()
+        if not self._idle(thread_id):
+            raise ThreadBusy(
+                f'Thread "{thread_id}" already has a running turn, so this one was not taken. '
+                "Send it again when that turn finishes."
+            )
         return await self._wake(lambda: thread_id, message, origin, uuid4(), skills=skills)
 
     async def wake_recorded(
@@ -617,7 +601,7 @@ class Turns:
         delivery_body: str | None,
     ) -> AcceptedResult:
         self.require_thread(thread_id)
-        self.require_available(origin)
+        self.require_available()
         return await self._wake(lambda: thread_id, message, origin, turn_id, delivery_body)
 
     async def ask(self, command: ThreadAskCommand) -> AcceptedResult:
@@ -632,7 +616,7 @@ class Turns:
         origin: Origin,
         skills: tuple[SkillName, ...] = (),
     ) -> AcceptedResult:
-        self.require_available(origin)
+        self.require_available()
         return await self._wake(
             lambda: self._store.create(title).id, message, origin, uuid4(), skills=skills
         )
@@ -846,8 +830,8 @@ class Turns:
     ) -> AcceptedResult:
         """Resume the turn parked at *parked* with *answer*."""
         if isinstance(origin, RoutineOrigin):
-            # A parked routine let other work in, so it takes the instance back like a new turn.
-            self.require_available(origin)
+            # A parked routine let a revert in, so it starts again like a new turn.
+            self.require_available()
         # The parked turn itself owns the instance reservation.
         claim = TurnClaim(origin)
         self._claims[parked.thread_id] = claim
@@ -894,13 +878,16 @@ class Turns:
             raise ThreadNotFound(f'Thread "{thread_id}" was not found.')
 
     def _require_idle(self, thread_id: UUID) -> None:
-        """Refuse when a turn on the thread runs, waits, or is being started, or the thread is
-        held some other way."""
+        if not self._idle(thread_id):
+            raise _thread_busy(thread_id)
+
+    def _idle(self, thread_id: UUID) -> bool:
+        """Whether no turn on the thread runs, waits, or is being started, and nothing else
+        holds the thread."""
         running = self._running.get(thread_id)
         active = running is not None and not running.task.done()
         parked = parked_on(self._log.thread_events(thread_id))
-        if thread_id in self._claims or active or parked is not None:
-            raise _thread_busy(thread_id)
+        return thread_id not in self._claims and not active and parked is None
 
     def _release_claim(
         self,
@@ -1071,15 +1058,6 @@ class Turns:
                     "task": task,
                 }
             )
-
-
-def _is_intake(origin: Origin) -> bool:
-    return isinstance(origin, RoutineOrigin) and origin.intake
-
-
-async def _settled(tasks: Sequence[asyncio.Task[None]]) -> None:
-    if tasks:
-        await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
 
 def _turn_origin(events: Sequence[Event], turn_id: UUID) -> Origin:
