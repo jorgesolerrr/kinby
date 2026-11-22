@@ -66,6 +66,7 @@ from kinby.contracts import (
     THREAD_UNARCHIVE,
     TOOL_LIST,
     TOOL_READ_ONLY_SET,
+    UPLOAD_PUT,
     USAGE_GET,
     VIEW_DELETE,
     VIEW_ERRORS_SET,
@@ -132,6 +133,7 @@ from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_su
 from kinby.core.titles import TitleWriter
 from kinby.core.turn_metrics import TurnKey, TurnMetricsResult, metrics_events, turn_metrics
 from kinby.core.turns import TurnPreparation, TurnRunner, Turns
+from kinby.core.uploads import InstanceUploads
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.core.views import InstanceViews
 from kinby.instance import Instance, ModelPrice
@@ -447,6 +449,10 @@ def build_dispatcher(
         dispatcher.register(MEMORY_ADD, memory.add)
         dispatcher.register(MEMORY_CORRECT, memory.correct)
         dispatcher.register(MEMORY_FORGET, memory.forget)
+        uploads = InstanceUploads(
+            turns.scheduler.instance.manifest.workspace.path, turns.scheduler.clock
+        )
+        dispatcher.register(UPLOAD_PUT, uploads.put)
         views = InstanceViews(turns.scheduler.instance)
         dispatcher.register(VIEW_LIST, views.list)
         dispatcher.register(VIEW_GET, views.get)

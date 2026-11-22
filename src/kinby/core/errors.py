@@ -153,6 +153,12 @@ class NotAnIntake(CoreError):
     code = ErrorCode.PERMISSION_DENIED
 
 
+class NotAnUpload(CoreError):
+    """A turn named a path that is no file under the workspace's uploads, so it did not start."""
+
+    code = ErrorCode.INVALID_ARGUMENT
+
+
 class IntakeFailed(CoreError):
     """A line's intake tool did not run on its workbench, or failed there, so it handed the line
     no work item."""

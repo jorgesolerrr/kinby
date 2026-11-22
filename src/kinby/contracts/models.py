@@ -17,6 +17,7 @@ from uuid import UUID
 from pydantic import (
     AfterValidator,
     AwareDatetime,
+    Base64Bytes,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -286,6 +287,8 @@ SystemPrompt = NewType("SystemPrompt", str)
 TreeId = NewType("TreeId", str)
 #: A coding client's session, which a later run of the client can continue.
 CodingSessionId = NewType("CodingSessionId", str)
+#: Where an upload landed in the instance's workspace: `uploads/<YYYY-MM-DD>/<name>`.
+UploadPath = NewType("UploadPath", str)
 
 
 class ChangeStatus(StrEnum):
@@ -342,6 +345,8 @@ class TurnStarted(ContractModel):
     message: str
     #: The skills *message* references, so a client knows which `/name` in it is one.
     skills: list[SkillName] = Field(default_factory=list)
+    #: The uploads the user gave the turn. The transcript keeps their paths, never their bytes.
+    uploads: list[UploadPath] = Field(default_factory=list)
     model: str
     permission_mode: PermissionMode | None = None
     origin: Origin = Field(default_factory=UserOrigin)
@@ -819,6 +824,24 @@ class ThreadTurnStartCommand(ContractModel):
     message: str
     #: The skills the message references, whose bodies the model reads with it.
     skills: list[SkillName] = Field(default_factory=list)
+    #: The uploads the turn names, as `upload.put` returned them.
+    uploads: list[UploadPath] = Field(default_factory=list)
+
+
+#: The most one upload holds, in bytes.
+UPLOAD_BYTES = 10 * 1024 * 1024
+#: The largest frame an instance's own sockets take: an upload, base64-encoded, and its call.
+CLIENT_FRAME_BYTES = UPLOAD_BYTES * 4 // 3 + 1024 * 1024
+
+
+class UploadPutCommand(ContractModel):
+    #: The file's name on the user's machine. The instance makes it safe for a path.
+    name: str
+    content: Annotated[Base64Bytes, Field(max_length=UPLOAD_BYTES)]
+
+
+class UploadPutResult(ContractModel):
+    path: UploadPath
 
 
 class ThreadAskCommand(ContractModel):

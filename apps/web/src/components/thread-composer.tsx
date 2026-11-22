@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { useListedThread } from "@/hooks/use-listed-thread"
 import { useRead } from "@/hooks/use-read"
 import { reason } from "@/lib/operation"
+import { base64 } from "@/lib/uploads"
 import {
   contextAgainst,
   contextFill,
@@ -85,8 +86,11 @@ export function ThreadComposer({
       name={name}
       running={running}
       failure={failure}
-      onSend={(message, skills) =>
-        client.call("thread.turn.start", { thread_id: threadId, message, skills })
+      onSend={(message, skills, uploads) =>
+        client.call("thread.turn.start", { thread_id: threadId, message, skills, uploads })
+      }
+      onUpload={async (file) =>
+        (await client.call("upload.put", { name: file.name, content: await base64(file) })).path
       }
       listSkills={listSkills}
       onStop={() => client.call("thread.turn.interrupt", { thread_id: threadId })}

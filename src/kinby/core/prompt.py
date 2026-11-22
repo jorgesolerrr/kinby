@@ -20,6 +20,7 @@ from kinby.contracts import (
     RoutineTrigger,
     StepValue,
     SystemPrompt,
+    UploadPath,
     UserOrigin,
     ValueName,
 )
@@ -234,6 +235,14 @@ def render_skill_references(skills: Sequence[Skill], wake: str) -> str:
     """*wake*, after the body of each skill its message references."""
     blocks = (f'<skill name="{skill.name}">\n{skill.body.strip()}\n</skill>' for skill in skills)
     return "\n\n".join((*blocks, wake))
+
+
+def render_uploads(wake: str, uploads: Sequence[UploadPath]) -> str:
+    """*wake*, followed by a line naming the turn's *uploads*."""
+    if not uploads:
+        return wake
+    named = f"Uploaded: {', '.join(uploads)}"
+    return f"{wake}\n\n{named}" if wake else named
 
 
 def render_step_message(

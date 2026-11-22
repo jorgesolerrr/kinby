@@ -1,8 +1,10 @@
 import asyncio
+from base64 import b64encode
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from io import StringIO
 from pathlib import Path
+from random import Random
 from uuid import UUID, uuid4
 
 import pytest
@@ -26,6 +28,8 @@ from kinby.contracts import (
     THREAD_SUBSCRIBE,
     THREAD_TURN_INTERRUPT,
     THREAD_TURN_START,
+    UPLOAD_BYTES,
+    UPLOAD_PUT,
     AcceptedResult,
     ControlToken,
     ErrorEnvelope,
@@ -40,6 +44,9 @@ from kinby.contracts import (
     ThreadSubscribeCommand,
     ThreadTurnInterruptCommand,
     ThreadTurnStartCommand,
+    UploadPath,
+    UploadPutCommand,
+    UploadPutResult,
 )
 from kinby.core.contract_server import ContractServer
 from kinby.core.dispatcher import Dispatcher
@@ -77,6 +84,25 @@ def test_a_call_crosses_the_socket_and_returns_its_result(tmp_path: Path) -> Non
         ]
 
     asyncio.run(scenario())
+
+
+def test_an_upload_of_ten_megabytes_crosses_the_socket(tmp_path: Path) -> None:
+    # Random, so the socket's compression can't shrink the frame under the cap.
+    content = b64encode(Random(0).randbytes(UPLOAD_BYTES))
+
+    async def scenario() -> object:
+        instance = instance_at(tmp_path)
+        async with (
+            served(instance, dispatcher_at(tmp_path)) as address,
+            contract_client(url(address), TOKEN) as client,
+        ):
+            return await client.call(
+                UPLOAD_PUT, UploadPutCommand(name="statement.pdf", content=content)
+            )
+
+    uploaded = asyncio.run(scenario())
+
+    assert uploaded == UploadPutResult(path=UploadPath("uploads/2026-09-18/statement.pdf"))
 
 
 def test_a_subscription_replays_to_its_head_sequence_then_streams_live(tmp_path: Path) -> None:
