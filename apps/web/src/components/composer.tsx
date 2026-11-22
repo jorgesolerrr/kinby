@@ -38,8 +38,8 @@ import { CornerDownLeftIcon, PaperclipIcon, SquareIcon } from "lucide-react"
  * reference in the message. The arrow keys move in the menu, Enter or Tab picks, and Escape closes.
  *
  * With `onUpload`, files picked from the foot or dropped on the box upload at once and show as
- * chips over the text. Send waits until every one is uploaded, and a message may then be only
- * files. A file removed before sending stays wherever it was uploaded.
+ * chips over the text, kept with the draft. Send waits until every one is uploaded, and a message
+ * may then be only files. A file removed before sending stays wherever it was uploaded.
  */
 export function Composer({
   ref,
@@ -91,7 +91,7 @@ export function Composer({
   const picker = useRef<HTMLInputElement>(null)
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement, [])
   const text = message.text.trim()
-  const { uploads, add, remove, sent: sentUploads } = useUploads(onUpload)
+  const { uploads, add, remove, sent: sentUploads } = useUploads(draftKey, onUpload)
   const unsendable =
     (text === "" && uploads.length === 0) || uploads.some((upload) => upload.status !== "uploaded")
   // The composer shows when the app opens on the home screen, and when a thread opens.

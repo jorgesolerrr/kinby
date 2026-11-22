@@ -1,4 +1,5 @@
 import type { Reference } from "@/lib/references"
+import type { Upload } from "@/lib/uploads"
 
 /** An unsent message: its text and the skill references picked into it. */
 export interface Draft {
@@ -22,7 +23,32 @@ export function keepDraft(key: string, kept: Draft): void {
   else drafts.set(key, kept)
 }
 
+// A draft's files settle while its composer is closed, so their readers listen for a change.
+const uploads = new Map<string, Upload[]>()
+const listeners = new Set<() => void>()
+const NO_UPLOADS: Upload[] = []
+
+/** The files added to the unsent message under `key`. */
+export function draftUploads(key: string): Upload[] {
+  return uploads.get(key) ?? NO_UPLOADS
+}
+
+/** Change the files under `key`, and tell every reader. */
+export function keepUploads(key: string, change: (current: Upload[]) => Upload[]): void {
+  const kept = change(draftUploads(key))
+  if (kept.length === 0) uploads.delete(key)
+  else uploads.set(key, kept)
+  for (const listener of listeners) listener()
+}
+
+/** Call `listener` on each change of any draft's files, until the returned function is called. */
+export function watchUploads(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
 /** Forget every draft, for a test that opens the app afresh. */
 export function forgetDrafts(): void {
   drafts.clear()
+  uploads.clear()
 }

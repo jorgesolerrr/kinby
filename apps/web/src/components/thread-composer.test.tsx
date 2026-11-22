@@ -590,6 +590,40 @@ describe("files", () => {
     expect(screen.queryByRole("listitem", { name: "march.csv" })).toBeNull()
   })
 
+  it("keeps a thread's files apart with its draft, and settles one uploaded while it was closed", async () => {
+    let land = () => {}
+    const landed = new Promise<void>((resolve) => (land = resolve))
+    const answering = instanceClient({
+      "thread.list": listing(),
+      "upload.put": uploaded,
+      "thread.turn.start": accepted,
+    })
+    const client: typeof answering = {
+      ...answering,
+      call: async (method, params) => {
+        if (method === "upload.put") await landed
+        return answering.call(method, params)
+      },
+    }
+    const user = userEvent.setup()
+    const first = open("t1", {}, client)
+    await user.upload(picker(), csv())
+    first.unmount()
+
+    const second = open("t2", {}, client)
+    expect(screen.queryByRole("listitem", { name: "march.csv" })).toBeNull()
+    second.unmount()
+    await act(async () => land())
+    open("t1", {}, client)
+
+    expect(chip("march.csv")).toBeDefined()
+    expect(screen.queryByRole("status", { name: "Uploading march.csv" })).toBeNull()
+    await user.click(send())
+    expect(turnStarts(answering)).toEqual([
+      { thread_id: "t1", message: "", skills: [], uploads: ["uploads/2026-11-22/march.csv"] },
+    ])
+  })
+
   it("starts a turn with the files and no message", async () => {
     const { client } = open("t1", { "upload.put": uploaded, "thread.turn.start": accepted })
     const user = userEvent.setup()
