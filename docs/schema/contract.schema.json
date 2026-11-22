@@ -2056,6 +2056,7 @@
         "NOT_FOUND",
         "THREAD_BUSY",
         "INSTANCE_BUSY",
+        "ROUTINES_RUNNING",
         "INSTANCE_DRAINING",
         "TURN_OPEN",
         "NO_ACTIVE_TURN",
@@ -12109,6 +12110,10 @@
     "ThreadTurnRevertCommand": {
       "additionalProperties": false,
       "properties": {
+        "interrupt_routines": {
+          "default": false,
+          "type": "boolean"
+        },
         "thread_id": {
           "format": "uuid",
           "type": "string"
@@ -12128,6 +12133,10 @@
     "ThreadTurnRevertPreviewCommand": {
       "additionalProperties": false,
       "properties": {
+        "interrupt_routines": {
+          "default": false,
+          "type": "boolean"
+        },
         "thread_id": {
           "format": "uuid",
           "type": "string"

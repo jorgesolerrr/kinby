@@ -68,6 +68,7 @@ from kinby.core.errors import (
     NoActiveTurn,
     PermissionDenied,
     ReadOnlyMarkRefused,
+    RoutinesRunning,
     SkillNotFound,
     SnapshotUnavailable,
     TakeoverNotFound,
@@ -462,7 +463,9 @@ class Turns:
         command: ThreadTurnRevertPreviewCommand,
     ) -> ThreadTurnRevertPreviewResult:
         self.require_thread(command.thread_id)
-        claim = self._claim_revert(command.thread_id)
+        claim = await self._claim_revert(
+            command.thread_id, interrupt_routines=command.interrupt_routines
+        )
         try:
             recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
             if self._snapshots is None or recorded is None:
@@ -482,7 +485,9 @@ class Turns:
         # A revert writes the workspace, so a draining instance takes no more of them.
         self.require_admitting()
         self.require_thread(command.thread_id)
-        claim = self._claim_revert(command.thread_id)
+        claim = await self._claim_revert(
+            command.thread_id, interrupt_routines=command.interrupt_routines
+        )
         try:
             recorded = self._recorded_snapshots(command.thread_id, command.turn_id)
             snapshots = self._snapshots
@@ -522,20 +527,53 @@ class Turns:
         finally:
             self._release_claim(command.thread_id, claim)
 
-    def _claim_revert(self, thread_id: UUID) -> RevertClaim:
-        # The workspace is shared by every thread, so a revert under any running
-        # turn would change the files out from under it. A parked routine holds only
-        # its own thread (ADR 0115).
-        parked = self._parked().values()
-        if (
-            self._live()
-            or self._claims
-            or any(not isinstance(origin, RoutineOrigin) for origin in parked)
-        ):
-            raise InstanceBusy("A turn is running. Wait for it to finish before reverting.")
+    async def _claim_revert(self, thread_id: UUID, *, interrupt_routines: bool) -> RevertClaim:
+        """Claim the instance for a revert, first interrupting the routine runs in its way
+        when *interrupt_routines* says so."""
+        while True:
+            # Clear before reading, so a change made while interrupting is never missed.
+            self._changed.clear()
+            routines = self._routines_in_revert_way()
+            if not routines:
+                break
+            if not interrupt_routines:
+                listed = ", ".join(
+                    f'"{name}" on thread "{thread}"' for thread, name in routines.items()
+                )
+                raise RoutinesRunning(
+                    f"Routine runs are in the way of the revert: {listed}. "
+                    "Revert with interrupt_routines to interrupt them first."
+                )
+            interrupted = False
+            for routine_thread in routines:
+                with suppress(CoreError):
+                    await self.interrupt(ThreadTurnInterruptCommand(thread_id=routine_thread))
+                    interrupted = True
+            if not interrupted:
+                # Only runs still being started are left: they have nothing to interrupt yet.
+                await self._changed.wait()
         claim = RevertClaim()
         self._claims[thread_id] = claim
         return claim
+
+    def _routines_in_revert_way(self) -> dict[UUID, RoutineName]:
+        """The routine of each live routine run, by thread. Anything else in a revert's way
+        refuses it, since a revert never interrupts a user's turn (ADR 0133)."""
+        # The workspace is shared by every thread, so a revert under any running
+        # turn would change the files out from under it. A parked routine holds only
+        # its own thread (ADR 0115).
+        routines: dict[UUID, RoutineName] = {}
+        for thread, origin in self._live().items():
+            if not isinstance(origin, RoutineOrigin):
+                raise _in_revert_way(thread)
+            routines[thread] = origin.name
+        for thread, origin in self._parked().items():
+            if not isinstance(origin, RoutineOrigin):
+                raise _in_revert_way(thread)
+        for thread, claim in self._claims.items():
+            if not isinstance(claim, TurnClaim):
+                raise _in_revert_way(thread)
+        return routines
 
     def _recorded_snapshots(self, thread_id: UUID, turn_id: UUID) -> RecordedSnapshots | None:
         """The snapshots recorded for a turn or a revert, or None if it started without one."""
@@ -1115,6 +1153,13 @@ def _permission_mode(
 
 def _thread_busy(thread_id: UUID) -> ThreadBusy:
     return ThreadBusy(f'Thread "{thread_id}" already has a running turn.')
+
+
+def _in_revert_way(thread_id: UUID) -> InstanceBusy:
+    return InstanceBusy(
+        f'Thread "{thread_id}" has a turn running or waiting, so the revert was not taken. '
+        "Wait for it to finish before reverting."
+    )
 
 
 def _snapshot_unavailable(turn_id: UUID) -> SnapshotUnavailable:

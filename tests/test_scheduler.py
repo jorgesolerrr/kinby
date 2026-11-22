@@ -24,6 +24,7 @@ from kinby.contracts import (
     Scope,
     SignalReceived,
     ThreadListResult,
+    ThreadTurnRevertPreviewResult,
     TurnCompleted,
     TurnInterrupted,
     TurnStarted,
@@ -42,6 +43,7 @@ from kinby.core.turns import TurnOutcome
 from kinby.instance import FeedbackPolicy, ManifestError, load_instance
 from kinby.instance.schema import manifest_schema
 from tests.helpers import (
+    FakeSnapshotStore,
     cannot_restore,
     does_not_park,
     every_event,
@@ -826,6 +828,184 @@ def test_no_routine_starts_while_a_revert_runs_and_a_tick_waits_for_it(tmp_path)
         assert waited and while_reverting == []
         assert isinstance(reverted, AcceptedResult), reverted
         assert len(routine_runs(instance)) == 1
+
+    asyncio.run(scenario())
+
+
+class HoldingRunner(ScriptedRunner):
+    """Holds routine turns and turns asked to "Hold" until released, and runs the rest through."""
+
+    def __init__(self):
+        self.release = asyncio.Event()
+
+    async def run(self, turn, context):
+        if isinstance(turn.origin, RoutineOrigin) or turn.message == "Hold":
+            await self.release.wait()
+        return await super().run(turn, context)
+
+
+async def revert_target(dispatcher):
+    thread = await call(dispatcher, "thread.create")
+    done = await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hi")
+    await events_for(dispatcher, thread.id)
+    return done
+
+
+@pytest.mark.parametrize("method", ["thread.turn.revert", "thread.turn.revert.preview"])
+def test_a_revert_with_only_routine_runs_in_its_way_is_refused_and_lists_them(tmp_path, method):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        routine_file(instance, "description: Scan", name="scan")
+        runner = HoldingRunner()
+        snapshots = FakeSnapshotStore()
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, runner, snapshots)
+        done = await revert_target(dispatcher)
+        news, scan = [await call(dispatcher, "routine.run", name=name) for name in ("news", "scan")]
+
+        refused = await call(dispatcher, method, thread_id=done.thread_id, turn_id=done.turn_id)
+        live = [not closed(instance, run.thread_id) for run in (news, scan)]
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert refused.code == "ROUTINES_RUNNING", refused
+        assert refused.message == (
+            f'Routine runs are in the way of the revert: "news" on thread "{news.thread_id}", '
+            f'"scan" on thread "{scan.thread_id}". Revert with interrupt_routines to interrupt '
+            "them first."
+        )
+        assert live == [True, True]
+        assert snapshots.restored == snapshots.restore_previews == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "method,result",
+    [
+        ("thread.turn.revert", AcceptedResult),
+        ("thread.turn.revert.preview", ThreadTurnRevertPreviewResult),
+    ],
+)
+def test_a_revert_interrupts_the_routine_runs_in_its_way_and_they_fire_again(
+    tmp_path, method, result
+):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nschedule: * * * * *")
+        routine_file(instance, "description: Scan", name="scan")
+        runner = HoldingRunner()
+        snapshots = FakeSnapshotStore()
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, runner, snapshots)
+        await dispatcher.scheduler.tick()
+        done = await revert_target(dispatcher)
+        clock.now = datetime(2026, 9, 6, 9, 1, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        [news] = routine_runs(instance)
+        scan = await call(dispatcher, "routine.run", name="scan")
+
+        async with asyncio.timeout(3):
+            reverted = await call(
+                dispatcher,
+                method,
+                thread_id=done.thread_id,
+                turn_id=done.turn_id,
+                interrupt_routines=True,
+            )
+            ends = [
+                (await events_for(dispatcher, thread_id))[-1]
+                for thread_id in (news.thread_id, scan.thread_id)
+            ]
+        runner.release.set()
+        clock.now = datetime(2026, 9, 6, 9, 2, tzinfo=UTC)
+        await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
+
+        assert isinstance(reverted, result), reverted
+        assert [type(end.payload) for end in ends] == [TurnInterrupted, TurnInterrupted]
+        assert len(routine_runs(instance)) == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("method", ["thread.turn.revert", "thread.turn.revert.preview"])
+@pytest.mark.parametrize("interrupt_routines", [False, True])
+def test_a_revert_with_a_user_turn_in_its_way_is_refused_and_names_its_thread(
+    tmp_path, method, interrupt_routines
+):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = HoldingRunner()
+        snapshots = FakeSnapshotStore()
+        clock = FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC))
+        dispatcher = runtime(instance, clock, runner, snapshots)
+        done = await revert_target(dispatcher)
+        run = await call(dispatcher, "routine.run", name="news")
+        thread = await call(dispatcher, "thread.create")
+        holding = await call(dispatcher, "thread.turn.start", thread_id=thread.id, message="Hold")
+
+        refused = await call(
+            dispatcher,
+            method,
+            thread_id=done.thread_id,
+            turn_id=done.turn_id,
+            interrupt_routines=interrupt_routines,
+        )
+        live = [not closed(instance, started.thread_id) for started in (holding, run)]
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert refused.code == "INSTANCE_BUSY", refused
+        assert refused.message == (
+            f'Thread "{holding.thread_id}" has a turn running or waiting, so the revert was not '
+            "taken. Wait for it to finish before reverting."
+        )
+        assert live == [True, True]
+        assert snapshots.restored == snapshots.restore_previews == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("answer", ["y", "n"])
+def test_repl_revert_offers_to_interrupt_the_routine_runs_in_its_way(tmp_path, answer):
+    async def scenario():
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News")
+        runner = HoldingRunner()
+        snapshots = FakeSnapshotStore()
+        dispatcher = runtime(
+            instance, FakeClock(datetime(2026, 9, 6, 9, tzinfo=UTC)), runner, snapshots
+        )
+        done = await revert_target(dispatcher)
+        run = await call(dispatcher, "routine.run", name="news")
+        stdout, stderr = StringIO(), StringIO()
+
+        async with asyncio.timeout(3):
+            exit_code = await run_repl(
+                ContractClient(dispatcher.dispatch, dispatcher.subscribe, set(Scope)),
+                done.thread_id,
+                feedback=FeedbackPolicy.OFF,
+                stdin=StringIO(f"/revert\n{answer}\ny\n"),
+                stdout=stdout,
+                stderr=stderr,
+            )
+        live = not closed(instance, run.thread_id)
+        runner.release.set()
+        await dispatcher.scheduler.drain()
+
+        assert exit_code == 0
+        assert stderr.getvalue().startswith("ROUTINES_RUNNING: Routine runs are in the way")
+        assert "> Interrupt them to preview the revert? [y/N] " in stdout.getvalue()
+        if answer == "y":
+            assert not live
+            assert f"Workspace reverted to before {done.turn_id}.\n" in stdout.getvalue()
+            assert len(snapshots.restored) == 1
+        else:
+            assert live
+            assert snapshots.restored == snapshots.restore_previews == []
 
     asyncio.run(scenario())
 

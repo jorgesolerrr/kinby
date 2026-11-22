@@ -603,7 +603,7 @@ def test_the_scheduler_does_not_spin_on_a_live_intake_that_is_due_again(tmp_path
     asyncio.run(scenario())
 
 
-def test_a_revert_waits_for_the_lines_intake(tmp_path, monkeypatch):
+def test_a_revert_is_refused_while_the_lines_intake_runs(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:
             done = await _user_turn(hub)
@@ -620,7 +620,7 @@ def test_a_revert_waits_for_the_lines_intake(tmp_path, monkeypatch):
             await _released(hub)
 
             assert isinstance(refused, ErrorEnvelope), refused
-            assert refused.code is ErrorCode.INSTANCE_BUSY
+            assert refused.code is ErrorCode.ROUTINES_RUNNING
 
     asyncio.run(scenario())
 
