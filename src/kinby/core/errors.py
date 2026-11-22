@@ -154,9 +154,16 @@ class NotAnIntake(CoreError):
 
 
 class NotAnUpload(CoreError):
-    """A turn named a path that is no file under the workspace's uploads, so it did not start."""
+    """A turn named a path that is no file under the workspace's uploads, so it did not start, or
+    a read named one outside them."""
 
     code = ErrorCode.INVALID_ARGUMENT
+
+
+class UploadNotFound(CoreError):
+    """The upload a read named is no longer in the workspace."""
+
+    code = ErrorCode.NOT_FOUND
 
 
 class IntakeFailed(CoreError):

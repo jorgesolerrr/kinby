@@ -939,6 +939,10 @@ export interface Contract {
       command: ToolReadOnlySetCommand;
       result: ToolListResult;
     };
+    "upload.get": {
+      command: UploadGetCommand;
+      result: UploadGetResult;
+    };
     "upload.put": {
       command: UploadPutCommand;
       result: UploadPutResult;
@@ -3812,6 +3816,12 @@ export interface ToolSummary {
 export interface ToolReadOnlySetCommand {
   name: ToolName;
   read_only: boolean;
+}
+export interface UploadGetCommand {
+  path: string;
+}
+export interface UploadGetResult {
+  content: string;
 }
 export interface UploadPutCommand {
   content: string;

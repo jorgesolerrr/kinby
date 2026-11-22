@@ -37,6 +37,8 @@ export interface TurnBlock {
   request: string
   /** The skills the request references. */
   skills: string[]
+  /** The paths of the files the user gave the request. */
+  uploads: string[]
   steps: Step[]
   /** The approval the turn is parked on, until the turn moves on. */
   approval?: ParkedApproval
@@ -150,6 +152,7 @@ export function project(timeline: Timeline, event: Event): Timeline {
       startedOn: localDay(event.timestamp),
       request: payload.message,
       skills: payload.skills ?? [],
+      uploads: payload.uploads ?? [],
       steps: [],
     }
     return { ...timeline, sequence: event.sequence, turns: [...timeline.turns, turn] }

@@ -37,8 +37,8 @@ import { CornerDownLeftIcon, PaperclipIcon, SquareIcon } from "lucide-react"
  * A `/` that starts a word opens a menu of the skills `listSkills` reads, and a pick puts a skill
  * reference in the message. The arrow keys move in the menu, Enter or Tab picks, and Escape closes.
  *
- * With `onUpload`, files picked from the foot or dropped on the box upload at once and show as
- * chips over the text, kept with the draft. Send waits until every one is uploaded, and a message
+ * With `onUpload`, files picked from the foot or dropped on the box, and images pasted into it,
+ * upload at once and show as chips over the text, kept with the draft. Send waits until every one is uploaded, and a message
  * may then be only files. A file removed before sending stays wherever it was uploaded.
  */
 export function Composer({
@@ -251,6 +251,14 @@ export function Composer({
                 at,
               )
               if (slashWord(next, at, []) === undefined) setClosedAt(undefined)
+            }}
+            onPaste={(event) => {
+              const images = Array.from(event.clipboardData.files).filter((file) =>
+                file.type.startsWith("image/"),
+              )
+              if (onUpload === undefined || images.length === 0) return
+              event.preventDefault()
+              add(images)
             }}
             onSelect={(event) => setCaret(event.currentTarget.selectionEnd)}
             onScroll={(event) => {

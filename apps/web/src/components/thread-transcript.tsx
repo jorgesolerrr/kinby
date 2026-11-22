@@ -7,6 +7,7 @@ import { ReferencedText } from "@/components/referenced-text"
 import { RaisedNotification, ViewLine } from "@/components/thread-cards"
 import { TurnEnd } from "@/components/thread-end"
 import { ToolRun } from "@/components/thread-tool-run"
+import { SentUploads } from "@/components/upload-chips"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Message, MessageContent } from "@/components/ui/message"
@@ -153,14 +154,18 @@ function Turn({
       {startedBy.kind === "user" ? (
         <Message align="end">
           <MessageContent>
-            <Bubble align="end" variant="secondary">
-              <BubbleContent className="whitespace-pre-wrap">
-                <ReferencedText
-                  text={turn.request}
-                  references={referencesIn(turn.request, turn.skills)}
-                />
-              </BubbleContent>
-            </Bubble>
+            {turn.uploads.length > 0 && <SentUploads paths={turn.uploads} client={client} />}
+            {/* A message may be only files. */}
+            {turn.request !== "" && (
+              <Bubble align="end" variant="secondary">
+                <BubbleContent className="whitespace-pre-wrap">
+                  <ReferencedText
+                    text={turn.request}
+                    references={referencesIn(turn.request, turn.skills)}
+                  />
+                </BubbleContent>
+              </Bubble>
+            )}
           </MessageContent>
         </Message>
       ) : (

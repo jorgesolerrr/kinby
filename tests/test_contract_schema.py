@@ -474,7 +474,7 @@ def test_the_schema_exports_a_view_as_a_page_and_its_data() -> None:
     assert "ViewComponent" not in definitions
 
 
-def test_the_schema_declares_the_upload_call_and_the_uploads_a_turn_names() -> None:
+def test_the_schema_declares_the_upload_calls_and_the_uploads_a_turn_names() -> None:
     schema = contract_schema()
     definitions = _object(schema["$defs"])
     methods_schema = _object(_object(_object(schema["properties"])["methods"])["properties"])
@@ -488,6 +488,12 @@ def test_the_schema_declares_the_upload_call_and_the_uploads_a_turn_names() -> N
     assert set(cast(list[str], put["required"])) == {"name", "content"}
     assert _object(_object(put["properties"])["content"])["format"] == "base64"
     assert cast(list[str], _object(definitions["UploadPutResult"])["required"]) == ["path"]
+    assert _object(methods_schema["upload.get"])["properties"] == {
+        "command": {"$ref": "#/$defs/UploadGetCommand"},
+        "result": {"$ref": "#/$defs/UploadGetResult"},
+    }
+    assert cast(list[str], _object(definitions["UploadGetCommand"])["required"]) == ["path"]
+    assert cast(list[str], _object(definitions["UploadGetResult"])["required"]) == ["content"]
     for command in ("ThreadTurnStartCommand", "TurnStarted"):
         definition = _object(definitions[command])
         assert upload_path.items() <= _object(_object(definition["properties"])["uploads"]).items()

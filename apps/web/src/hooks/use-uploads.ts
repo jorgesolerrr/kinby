@@ -26,23 +26,26 @@ export function useUploads(
   const add = (files: ArrayLike<File>) => {
     if (upload === undefined) return
     for (const file of Array.from(files)) {
-      const key = ++keys
+      const added = { key: ++keys, file, url: URL.createObjectURL(file) }
       if (file.size > UPLOAD_BYTES) {
         const failure = "Over 10 MB, so it can't be sent."
-        change((current) => [...current, { key, file, status: "failed", failure }])
+        change((current) => [...current, { ...added, status: "failed", failure }])
         continue
       }
-      change((current) => [...current, { key, file, status: "uploading" }])
+      change((current) => [...current, { ...added, status: "uploading" }])
       upload(file).then(
-        (path) => settle({ key, file, status: "uploaded", path }),
-        (error: unknown) => settle({ key, file, status: "failed", failure: reason(error) }),
+        (path) => settle({ ...added, status: "uploaded", path }),
+        (error: unknown) => settle({ ...added, status: "failed", failure: reason(error) }),
       )
     }
   }
-  const remove = (key: number) => change((current) => current.filter((each) => each.key !== key))
+  const drop = (dropped: (upload: Upload) => boolean) => {
+    for (const upload of uploads.filter(dropped)) URL.revokeObjectURL(upload.url)
+    change((current) => current.filter((each) => !dropped(each)))
+  }
+  const remove = (key: number) => drop((upload) => upload.key === key)
   /** Drop the uploads a sent message took. */
-  const sent = (taken: Upload[]) =>
-    change((current) => current.filter((each) => !taken.includes(each)))
+  const sent = (taken: Upload[]) => drop((upload) => taken.includes(upload))
 
   return { uploads, add, remove, sent }
 }

@@ -844,6 +844,15 @@ class UploadPutResult(ContractModel):
     path: UploadPath
 
 
+class UploadGetCommand(ContractModel):
+    path: UploadPath
+
+
+class UploadGetResult(ContractModel):
+    #: base64-encoded.
+    content: str
+
+
 class ThreadAskCommand(ContractModel):
     message: str
     #: The skills the message references, whose bodies the model reads with it.

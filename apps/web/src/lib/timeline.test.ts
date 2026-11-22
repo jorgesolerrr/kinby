@@ -79,6 +79,7 @@ describe("a thread's timeline", () => {
           startedOn: "2026-09-28",
           request: "Fix the runtime",
           skills: [],
+          uploads: [],
           steps: [
             { kind: "text", text: "Let me look first." },
             {
