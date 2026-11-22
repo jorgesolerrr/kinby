@@ -290,6 +290,9 @@ class Turns:
         self._deadlines: set[asyncio.Task[None]] = set()
         self._changed = asyncio.Event()
         self._running: dict[UUID, RunningTurn] = {}
+        #: The thread of each interrupted turn whose task has not stopped. It can still write
+        #: the workspace.
+        self._stopping: dict[asyncio.Task[None], UUID] = {}
         self._claims: dict[UUID, Claim] = {}
         self._admitting = True
         self._answering = True
@@ -544,14 +547,21 @@ class Turns:
                     f"Routine runs are in the way of the revert: {listed}. "
                     "Revert with interrupt_routines to interrupt them first."
                 )
-            interrupted = False
-            for routine_thread in routines:
-                with suppress(CoreError):
-                    await self.interrupt(ThreadTurnInterruptCommand(thread_id=routine_thread))
-                    interrupted = True
-            if not interrupted:
+            # One at a time from a fresh read: while one interrupt settles, another routine
+            # can end and a user's turn start on its thread.
+            running = next(
+                (
+                    thread
+                    for thread in routines
+                    if (turn := self._running.get(thread)) is not None and not turn.task.done()
+                ),
+                None,
+            )
+            if running is None:
                 # Only runs still being started are left: they have nothing to interrupt yet.
                 await self._changed.wait()
+            else:
+                await self.interrupt(ThreadTurnInterruptCommand(thread_id=running))
         claim = RevertClaim()
         self._claims[thread_id] = claim
         return claim
@@ -562,6 +572,11 @@ class Turns:
         # The workspace is shared by every thread, so a revert under any running
         # turn would change the files out from under it. A parked routine holds only
         # its own thread (ADR 0115).
+        for thread in self._stopping.values():
+            raise InstanceBusy(
+                f'The turn interrupted on thread "{thread}" has not stopped yet, so the revert '
+                "was not taken. Revert again once it stops."
+            )
         routines: dict[UUID, RoutineName] = {}
         for thread, origin in self._live().items():
             if not isinstance(origin, RoutineOrigin):
@@ -789,6 +804,8 @@ class Turns:
             self._release_claim(command.thread_id, claim)
         if running is not None and self._running.get(command.thread_id) is running:
             del self._running[command.thread_id]
+            if not running.task.done():
+                self._stopping[running.task] = command.thread_id
         if pending is not None and self._browser is not None:
             await self._browser.close(turn_id)
         return accepted(interrupted)
@@ -1105,6 +1122,7 @@ class Turns:
 
     def _forget_task(self, thread_id: UUID, task: asyncio.Task[None]) -> None:
         self._changed.set()
+        self._stopping.pop(task, None)
         running = self._running.get(thread_id)
         if running is not None and running.task is task:
             del self._running[thread_id]
