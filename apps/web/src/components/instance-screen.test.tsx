@@ -12,6 +12,11 @@ const BOARD = { id: "applications", title: "Job board", updated_at: "2026-10-25T
 const READING = { id: "reading", title: "Reading list", updated_at: "2026-10-24T08:00:00Z" }
 const TRIP = { id: "trip", title: "Trip plan", updated_at: "2026-10-26T07:00:00Z" }
 
+const STARTS: Answers = {
+  "thread.create": () => ({ id: "thread-1", created_at: "2026-10-26T08:00:00Z" }),
+  "thread.turn.start": () => ({ sequence: 1, thread_id: "thread-1", turn_id: "turn-1" }),
+}
+
 function snapshot({ id, title, updated_at }: ViewSummary): View {
   return {
     id,
@@ -52,8 +57,22 @@ async function openScreen(path: string, views: ViewSummary[], answers: Answers =
   return { page, caller, clock, deliver, subscriber }
 }
 
-const tabs = () => within(screen.getByRole("tablist", { name: "Ada's views" }))
-const openTab = () => tabs().getByRole("tab", { selected: true }).textContent
+const cards = () =>
+  within(screen.getByRole("region", { name: "Views" }))
+    .queryAllByRole("link")
+    .map((link) => link.querySelector('[data-slot="item-title"]')?.textContent)
+
+/** Write `text` in the composer and send it once Send is ready. */
+async function send(text: string) {
+  const user = userEvent.setup()
+  await user.type(screen.getByRole("textbox", { name: "Message" }), text)
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
+      "false",
+    ),
+  )
+  await user.click(screen.getByRole("button", { name: "Send" }))
+}
 
 async function askToDelete() {
   const user = userEvent.setup()
@@ -67,121 +86,96 @@ beforeEach(() => {
 })
 
 describe("an instance's screen", () => {
-  it("shows one tab per view, the most recently changed first", async () => {
-    await openScreen("/instances/hub-ada/views/applications", [BOARD, READING, TRIP])
+  it("shows a card per view, the most recently changed first, and opens none", async () => {
+    const { subscriber } = await openScreen("/instances/hub-ada/views", [BOARD, READING, TRIP])
 
-    expect(
-      tabs()
-        .getAllByRole("tab")
-        .map((tab) => tab.textContent),
-    ).toEqual(["Trip plan", "Job board", "Reading list"])
+    expect(cards()).toEqual(["Trip plan", "Job board", "Reading list"])
+    expect(window.location.pathname).toBe("/instances/hub-ada/views")
+    expect(subscriber.subscriptions).toEqual([])
   })
 
-  it("shows the tab its address names, following that view", async () => {
+  it("opens a view from its card, as a new history entry", async () => {
+    await openScreen("/instances/hub-ada/views", [BOARD, READING])
+    const entries = window.history.length
+
+    await userEvent.click(screen.getByRole("link", { name: /Reading list/ }))
+
+    expect(window.location.pathname).toBe("/instances/hub-ada/views/reading")
+    expect(window.history.length).toBe(entries + 1)
+  })
+
+  it("says the instance has no views yet", async () => {
+    await openScreen("/instances/hub-ada/views", [])
+
+    expect(screen.getByText(/^No views yet/)).toBeDefined()
+    expect(cards()).toEqual([])
+  })
+
+  it("lists a view the instance makes while it is open", async () => {
+    const views = [BOARD]
+    const { clock } = await openScreen("/instances/hub-ada/views", views)
+
+    views.push(TRIP)
+    await act(() => clock.advance(5_000))
+
+    expect(cards()).toEqual(["Trip plan", "Job board"])
+  })
+
+  it("starts a thread from its composer, and opens it", async () => {
+    const { caller } = await openScreen("/instances/hub-ada/views", [BOARD], STARTS)
+
+    await send("Plan my week")
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/instances/hub-ada/threads/thread-1"),
+    )
+    expect(window.location.search).toBe("")
+    expect(
+      caller.calls.filter(({ method }) => method.startsWith("thread.")).map(({ params }) => params),
+    ).toEqual([{}, { thread_id: "thread-1", message: "Plan my week", skills: [] }])
+  })
+})
+
+describe("a view opened from the screen", () => {
+  it("shows the view its address names, following it, under its title", async () => {
     const { deliver } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING])
 
     const following = deliver(READING)
 
-    expect(openTab()).toBe("Reading list")
+    expect(screen.getByRole("heading", { name: "Reading list" })).toBeDefined()
     expect(following.params).toEqual({ id: "reading" })
     const frame = await screen.findByTitle("Reading list")
     expect(drawnPage(frame).documentElement.innerHTML).toContain("The Reading list itself.")
   })
 
-  it("holds its tabs, when the view changed and the composer in the page column, and draws the view in the column's gutters at full width", async () => {
+  it("holds its title, when the view changed and the composer in the page column, and draws the view in the column's gutters at full width", async () => {
     const { deliver } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING])
     deliver(READING)
 
     const frame = await screen.findByTitle("Reading list")
     const column = '[data-slot="page-column"]'
-    expect(screen.getByRole("tablist", { name: "Ada's views" }).closest(column)).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Reading list" }).closest(column)).not.toBeNull()
     expect(screen.getByText(/^Changed /).closest(column)).not.toBeNull()
     expect(screen.getByRole("textbox", { name: "Message" }).closest(column)).not.toBeNull()
     expect(frame.closest(column)).toBeNull()
     expect(frame.closest('[data-slot="page-gutters"]')).not.toBeNull()
   })
 
-  it("opens a tab picked at its address, as a new history entry", async () => {
-    await openScreen("/instances/hub-ada/views/applications", [BOARD, READING])
-    const entries = window.history.length
+  it("goes back to the screen", async () => {
+    await openScreen("/instances/hub-ada/views/reading", [BOARD, READING])
 
-    await userEvent.click(tabs().getByRole("tab", { name: "Reading list" }))
+    await userEvent.click(screen.getByRole("link", { name: "Back to Ada" }))
 
-    expect(window.location.pathname).toBe("/instances/hub-ada/views/reading")
-    expect(window.history.length).toBe(entries + 1)
-    expect(openTab()).toBe("Reading list")
+    expect(window.location.pathname).toBe("/instances/hub-ada/views")
+    expect(cards()).toEqual(["Job board", "Reading list"])
   })
-
-  it("opens on the most recently changed view when it names none", async () => {
-    await openScreen("/instances/hub-ada/views", [BOARD, READING, TRIP])
-
-    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-ada/views/trip"))
-    expect(openTab()).toBe("Trip plan")
-  })
-
-  it("opens on the tab last open for the instance in this browser", async () => {
-    const { page } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING])
-    page.unmount()
-
-    await openScreen("/instances/hub-ada/views", [BOARD, READING])
-
-    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-ada/views/reading"))
-    expect(openTab()).toBe("Reading list")
-  })
-
-  it("opens on the most recently changed view once the last one open is gone", async () => {
-    const { page } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING])
-    page.unmount()
-
-    await openScreen("/instances/hub-ada/views", [BOARD])
-
-    await waitFor(() =>
-      expect(window.location.pathname).toBe("/instances/hub-ada/views/applications"),
-    )
-  })
-
-  it("lands on the composer sent to the instance when it has no views", async () => {
-    const entries = window.history.length
-    await openScreen("/instances/hub-ada/views", [])
-
-    await waitFor(() => expect(window.location.pathname).toBe("/"))
-    expect(window.location.search).toBe("?to=hub-ada")
-    expect(window.history.length).toBe(entries)
-  })
-
-  it("lists a view the instance makes while it is open", async () => {
-    const views = [BOARD]
-    const { clock } = await openScreen("/instances/hub-ada/views/applications", views)
-
-    views.push(TRIP)
-    await act(() => clock.advance(5_000))
-
-    expect(
-      tabs()
-        .getAllByRole("tab")
-        .map((tab) => tab.textContent),
-    ).toEqual(["Trip plan", "Job board"])
-  })
-})
-
-describe("the composer under the open view", () => {
-  /** Write `text` in the composer and send it once Send is ready. */
-  async function send(text: string) {
-    const user = userEvent.setup()
-    await user.type(screen.getByRole("textbox", { name: "Message" }), text)
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).toBe(
-        "false",
-      ),
-    )
-    await user.click(screen.getByRole("button", { name: "Send" }))
-  }
 
   it("starts a thread with the message, and opens it with the view in the pane beside it", async () => {
-    const { caller } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING], {
-      "thread.create": () => ({ id: "thread-1", created_at: "2026-10-26T08:00:00Z" }),
-      "thread.turn.start": () => ({ sequence: 1, thread_id: "thread-1", turn_id: "turn-1" }),
-    })
+    const { caller } = await openScreen(
+      "/instances/hub-ada/views/reading",
+      [BOARD, READING],
+      STARTS,
+    )
     const entries = window.history.length
 
     await send("Fold the read ones")
@@ -214,8 +208,8 @@ describe("the composer under the open view", () => {
   })
 })
 
-describe("deleting a view from its tab's menu", () => {
-  it("deletes it once confirmed, and shows the next view", async () => {
+describe("deleting a view from its menu", () => {
+  it("deletes it once confirmed, and goes back to the screen", async () => {
     const { caller } = await openScreen(
       "/instances/hub-ada/views/applications",
       [TRIP, BOARD, READING],
@@ -229,36 +223,11 @@ describe("deleting a view from its tab's menu", () => {
     expect(within(dialog).getByRole("heading", { name: "Delete Job board?" })).toBeDefined()
     await user.click(within(dialog).getByRole("button", { name: "Delete" }))
 
-    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-ada/views/reading"))
+    await waitFor(() => expect(window.location.pathname).toBe("/instances/hub-ada/views"))
     expect(window.history.length).toBe(entries)
     expect(caller.calls.filter(({ method }) => method === "view.delete")).toEqual([
       { method: "view.delete", params: { id: "applications" } },
     ])
-  })
-
-  it("shows the one before it when it was the last tab", async () => {
-    await openScreen("/instances/hub-ada/views/reading", [BOARD, READING], {
-      "view.delete": () => ({ views: [BOARD] }),
-    })
-
-    const { user, dialog } = await askToDelete()
-    await user.click(within(dialog).getByRole("button", { name: "Delete" }))
-
-    await waitFor(() =>
-      expect(window.location.pathname).toBe("/instances/hub-ada/views/applications"),
-    )
-  })
-
-  it("lands on the composer once the last view is deleted", async () => {
-    await openScreen("/instances/hub-ada/views/applications", [BOARD], {
-      "view.delete": () => ({ views: [] }),
-    })
-
-    const { user, dialog } = await askToDelete()
-    await user.click(within(dialog).getByRole("button", { name: "Delete" }))
-
-    await waitFor(() => expect(window.location.pathname).toBe("/"))
-    expect(window.location.search).toBe("?to=hub-ada")
   })
 
   it("deletes nothing when the confirm is cancelled", async () => {

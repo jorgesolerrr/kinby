@@ -188,7 +188,7 @@ function notificationStatus(
 
 /**
  * A view the turn created or changed, opening it in the pane beside the thread while it links to
- * the view's tab on the screen, or one it deleted, struck through.
+ * the view's page, or one it deleted, struck through.
  */
 export function ViewLine({ step, instanceId }: { step: ViewStep; instanceId: string }) {
   const icon = (
