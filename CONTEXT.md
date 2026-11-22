@@ -327,6 +327,11 @@ The portable description of an instance's identity and configuration. It contain
 
 The directory holding the user's *own* work that an instance or a **workbench** acts on — a repository, a notes folder. Lives under its instance or workbench (cloned there in a container, linked there on a local install) and is never written to by kinby on its own behalf: the instance's behavior stays in the instance, though it may *read* the workspace's **conventions** as an additional behavior source. The **software factory**'s runs never work in it directly: each works in its own **run worktree** cut from it.
 
+### Upload
+
+A file the user gives a **turn** from a client, of any kind. It is the user's own content, so it lands in the **workspace** before the turn starts and the turn names it; a **workspace revert** of that turn keeps it. The model sees an image upload with the turn's message; the agent works any other upload like a workspace file, writing code to read a PDF, a spreadsheet or a CSV. An upload never enters memory by itself.
+_Avoid_: attachment
+
 ### Conventions
 
 The workspace's own instruction files and skill directories an **instance** may read as extra behavior sources. Named explicitly in the **manifest**. The instance never loads tools from the workspace.
