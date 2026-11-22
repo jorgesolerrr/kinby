@@ -788,7 +788,7 @@ _Avoid_: artifact, widget, dashboard, surface
 
 ### Screen
 
-Where an **instance**'s **views** show in the web app, one tab each. Opening the instance lands on it.
+Where an **instance**'s **views** are listed in the web app, one card each, under a composer that starts a **thread** with the instance. Opening the instance lands on it, and a card opens its view.
 _Avoid_: dashboard, home (that is the **home instance**), views page
 
 ### Hub tool

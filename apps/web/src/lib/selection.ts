@@ -122,12 +122,12 @@ export function statsPath(instanceId: string): string {
   return tabPath(instanceId, STATS)
 }
 
-/** An instance's screen, which opens on one of its views. */
+/** An instance's screen, which lists its views. */
 export function screenPath(instanceId: string): string {
   return `${instancePath(instanceId)}/${VIEWS}`
 }
 
-/** One of an instance's views, as its tab on the screen. */
+/** One of an instance's views, opened from its card on the screen. */
 export function viewPath(instanceId: string, viewId: string): string {
   return `${screenPath(instanceId)}/${encodeURIComponent(viewId)}`
 }

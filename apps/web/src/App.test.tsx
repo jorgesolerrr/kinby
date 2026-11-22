@@ -238,15 +238,15 @@ describe("the instances", () => {
     expect((await instanceFold("research")).getAttribute("aria-expanded")).toBe("true")
   })
 
-  it("lands on the composer sent to an instance picked in the sidebar while it has no views", async () => {
+  it("opens the screen of an instance picked in the sidebar, with its composer and its views", async () => {
     openApp({ signedIn: true, instances: [ada, unnamed] })
     const user = userEvent.setup()
 
     await user.click(await instanceRow("Ada"))
 
-    await waitFor(() => expect(window.location.pathname).toBe("/"))
-    expect(window.location.search).toBe("?to=hub-ada")
+    expect(window.location.pathname).toBe("/instances/hub-ada/views")
     expect(await screen.findByRole("textbox", { name: "Message" })).toBeDefined()
+    expect(await screen.findByRole("region", { name: "Views" })).toBeDefined()
   })
 
   it("says a stopped instance is not running where its screen would be", async () => {

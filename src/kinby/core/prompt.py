@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
@@ -237,11 +237,14 @@ def render_skill_references(skills: Sequence[Skill], wake: str) -> str:
     return "\n\n".join((*blocks, wake))
 
 
-def render_uploads(wake: str, uploads: Sequence[UploadPath]) -> str:
-    """*wake*, followed by a line naming the turn's *uploads*."""
+def render_uploads(
+    wake: str, uploads: Sequence[UploadPath], gone: Collection[UploadPath] = ()
+) -> str:
+    """*wake*, followed by a line naming the turn's *uploads*, those *gone* as gone."""
     if not uploads:
         return wake
-    named = f"Uploaded: {', '.join(uploads)}"
+    paths = (f"{path} (gone from the workspace)" if path in gone else path for path in uploads)
+    named = f"Uploaded: {', '.join(paths)}"
     return f"{wake}\n\n{named}" if wake else named
 
 
