@@ -10,6 +10,7 @@ import {
 } from "react"
 
 import { ReferencedText } from "@/components/referenced-text"
+import { UploadChips } from "@/components/upload-chips"
 import { Command, CommandItem, CommandList } from "@/components/ui/command"
 import { Field, FieldDescription, FieldError } from "@/components/ui/field"
 import {
@@ -18,12 +19,13 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "@/components/ui/input-group"
+import { useUploads } from "@/hooks/use-uploads"
 import { type Draft, draft, EMPTY_DRAFT, keepDraft } from "@/lib/drafts"
 import { takeFocus } from "@/lib/focus"
 import { reason } from "@/lib/operation"
 import { carried, slashWord } from "@/lib/references"
 import { loadable } from "@/lib/skills"
-import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
+import { CornerDownLeftIcon, PaperclipIcon, SquareIcon } from "lucide-react"
 
 /**
  * One box where the user writes to an instance: the text, then a foot with `children` and Send.
@@ -34,6 +36,10 @@ import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
  *
  * A `/` that starts a word opens a menu of the skills `listSkills` reads, and a pick puts a skill
  * reference in the message. The arrow keys move in the menu, Enter or Tab picks, and Escape closes.
+ *
+ * With `onUpload`, files picked from the foot or dropped on the box upload at once and show as
+ * chips over the text. Send waits until every one is uploaded, and a message may then be only
+ * files. A file removed before sending stays wherever it was uploaded.
  */
 export function Composer({
   ref,
@@ -47,6 +53,7 @@ export function Composer({
   running = false,
   failure,
   onSend,
+  onUpload,
   listSkills,
   onStop,
   children,
@@ -65,8 +72,10 @@ export function Composer({
   running?: boolean
   /** Why the last change made from the foot failed. */
   failure?: string
-  /** Sends the message with the names of the skills it references. */
-  onSend: (message: string, skills: string[]) => Promise<unknown>
+  /** Sends the message with the names of the skills it references and the paths of its files. */
+  onSend: (message: string, skills: string[], uploads: string[]) => Promise<unknown>
+  /** Uploads a file added to the message, and resolves to its path. None takes no files. */
+  onUpload?: (file: File) => Promise<string>
   /** The instance's skills, read once a `/` starts a word. None leaves the menu closed. */
   listSkills?: () => Promise<SkillSummary[]>
   onStop?: () => Promise<unknown>
@@ -79,8 +88,12 @@ export function Composer({
   const [sendFailure, setSendFailure] = useState<string>()
   const field = useRef<HTMLTextAreaElement>(null)
   const mirror = useRef<HTMLDivElement>(null)
+  const picker = useRef<HTMLInputElement>(null)
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement, [])
   const text = message.text.trim()
+  const { uploads, add, remove, sent: sentUploads } = useUploads(onUpload)
+  const unsendable =
+    (text === "" && uploads.length === 0) || uploads.some((upload) => upload.status !== "uploaded")
   // The composer shows when the app opens on the home screen, and when a thread opens.
   useEffect(() => takeFocus(field.current), [])
   // A pick writes the box, so the caret goes after the reference it put in.
@@ -141,16 +154,18 @@ export function Composer({
   }
 
   const send = async () => {
-    if (text === "" || sending || running || !connected) return
+    if (unsendable || sending || running || !connected) return
     setSending(true)
     const sent = message
     const names = sent.references.toSorted((a, b) => a.at - b.at).map((reference) => reference.name)
+    const paths = uploads.flatMap((upload) => (upload.status === "uploaded" ? [upload.path] : []))
     try {
-      if ((await onSend(text, [...new Set(names)])) !== false) {
+      if ((await onSend(text, [...new Set(names)], paths)) !== false) {
         // The box may have changed while the send was out, here or in a composer opened again.
         setMessage((current) => (current === sent ? EMPTY_DRAFT : current))
         setClosedAt(undefined)
         if (draft(draftKey) === sent) keepDraft(draftKey, EMPTY_DRAFT)
+        sentUploads(uploads)
       }
       setSendFailure(undefined)
     } catch (error) {
@@ -168,7 +183,22 @@ export function Composer({
   return (
     <Field data-invalid={sendFailure !== undefined || failure !== undefined || undefined}>
       {/* A long draft scrolls in the box instead of pushing the transcript away. */}
-      <InputGroup variant="raised">
+      <InputGroup
+        variant="raised"
+        onDragOver={(event) => {
+          if (onUpload !== undefined) event.preventDefault()
+        }}
+        onDrop={(event) => {
+          if (onUpload === undefined) return
+          event.preventDefault()
+          add(event.dataTransfer.files)
+        }}
+      >
+        {uploads.length > 0 && (
+          <InputGroupAddon align="block-start">
+            <UploadChips uploads={uploads} onRemove={remove} />
+          </InputGroupAddon>
+        )}
         {rows.length > 0 && (
           <div className="absolute bottom-full left-0 z-50 mb-2 w-full">
             <Command
@@ -255,6 +285,15 @@ export function Composer({
           />
         </div>
         <InputGroupAddon align="block-end">
+          {onUpload !== undefined && (
+            <InputGroupButton
+              size="icon-sm"
+              aria-label="Add files"
+              onClick={() => picker.current?.click()}
+            >
+              <PaperclipIcon />
+            </InputGroupButton>
+          )}
           {children}
           {running ? (
             <InputGroupButton
@@ -275,7 +314,7 @@ export function Composer({
               variant="default"
               className="ml-auto"
               // aria-disabled, so an empty draft leaves the field looking ready to type in.
-              aria-disabled={text === "" || sending || !connected}
+              aria-disabled={unsendable || sending || !connected}
               onClick={() => void send()}
             >
               {sendLabel}
@@ -284,6 +323,19 @@ export function Composer({
           )}
         </InputGroupAddon>
       </InputGroup>
+      {/* Outside the group, whose addons focus the first input in it. */}
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        aria-label="Files"
+        onChange={(event) => {
+          add(event.currentTarget.files ?? [])
+          // So the same file can be picked again.
+          event.currentTarget.value = ""
+        }}
+      />
       {sendFailure !== undefined && <FieldError>{sendFailure}</FieldError>}
       {failure !== undefined && <FieldError>{failure}</FieldError>}
       {name !== undefined && (

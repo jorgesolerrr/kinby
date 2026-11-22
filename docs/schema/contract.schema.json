@@ -12189,6 +12189,12 @@
         "thread_id": {
           "format": "uuid",
           "type": "string"
+        },
+        "uploads": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -13133,6 +13139,12 @@
           "const": "turn.started",
           "default": "turn.started",
           "type": "string"
+        },
+        "uploads": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -13221,6 +13233,38 @@
       ],
       "title": "TurnVerdict",
       "type": "string"
+    },
+    "UploadPutCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "format": "base64",
+          "maxLength": 10485760,
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ],
+      "title": "UploadPutCommand",
+      "type": "object"
+    },
+    "UploadPutResult": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "UploadPutResult",
+      "type": "object"
     },
     "UsageGetCommand": {
       "additionalProperties": false,
@@ -17228,6 +17272,22 @@
           ],
           "type": "object"
         },
+        "upload.put": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/UploadPutCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/UploadPutResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "usage.get": {
           "additionalProperties": false,
           "properties": {
@@ -17700,6 +17760,7 @@
         "thread.takeover.resume",
         "browser.takeover.input",
         "browser.takeover.finish",
+        "upload.put",
         "usage.get",
         "stats.get",
         "instance.probe",

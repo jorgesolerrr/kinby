@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
@@ -39,6 +39,7 @@ from kinby.contracts import (
     is_turn_closing,
 )
 from kinby.core.budgets import daily_cost
+from kinby.core.clock import utc_now
 from kinby.core.dispatcher import (
     ScheduledDispatcher,
     ScheduledTurnConfig,
@@ -49,6 +50,7 @@ from kinby.core.errors import BudgetExceeded, ModelUnpriced
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map
 from kinby.core.scheduler import Delivery, SchedulerConfig
+from kinby.core.snapshots import SnapshotStore
 from kinby.core.threads import ThreadStore
 from kinby.core.turn_metrics import turn_metrics
 from kinby.core.turn_runner import ChatModel, LangGraphRunner
@@ -352,6 +354,8 @@ def signal_runtime(
     *,
     browser: BrowserService | None = None,
     memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
+    snapshots: SnapshotStore | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> tuple[ScheduledDispatcher, EventLog]:
     log = EventLog(instance.manifest.state_dir)
     runner = LangGraphRunner(
@@ -371,8 +375,9 @@ def signal_runtime(
                 runner,
                 compact=runner.compact,
                 context=runner.context_breakdown,
+                snapshots=snapshots,
             ),
-            SchedulerConfig(instance),
+            SchedulerConfig(instance, clock),
         ),
     )
     return dispatcher, log

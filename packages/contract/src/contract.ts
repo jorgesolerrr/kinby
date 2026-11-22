@@ -939,6 +939,10 @@ export interface Contract {
       command: ToolReadOnlySetCommand;
       result: ToolListResult;
     };
+    "upload.put": {
+      command: UploadPutCommand;
+      result: UploadPutResult;
+    };
     "usage.get": {
       command: UsageGetCommand;
       result: UsageGetResult;
@@ -3773,6 +3777,7 @@ export interface ThreadTurnStartCommand {
   message: string;
   skills?: string[];
   thread_id: string;
+  uploads?: string[];
 }
 export interface ThreadTurnTargetListCommand {
   thread_id: string;
@@ -3807,6 +3812,13 @@ export interface ToolSummary {
 export interface ToolReadOnlySetCommand {
   name: ToolName;
   read_only: boolean;
+}
+export interface UploadPutCommand {
+  content: string;
+  name: string;
+}
+export interface UploadPutResult {
+  path: string;
 }
 export interface UsageGetCommand {
   since?: string | null;
@@ -4172,6 +4184,7 @@ export interface TurnStarted {
   skills?: string[];
   snapshot?: string | null;
   type: "turn.started";
+  uploads?: string[];
 }
 export interface MessageDelta {
   text: string;

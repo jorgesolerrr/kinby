@@ -13,6 +13,7 @@ from multidict import CIMultiDict
 from pydantic import JsonValue
 
 from kinby.contracts import (
+    CLIENT_FRAME_BYTES,
     CallFrame,
     ErrorEnvelope,
     ErrorFrame,
@@ -70,11 +71,12 @@ async def relay_socket(
                 f"{endpoint.url}/ws",
                 headers={"Authorization": f"Bearer {endpoint.control_token}"},
                 heartbeat=HEARTBEAT_SECONDS,
+                max_msg_size=CLIENT_FRAME_BYTES,
             )
     except (aiohttp.ClientError, TimeoutError) as exc:
         await session.close()
         raise unreachable(InstanceUnreachable.UNAVAILABLE) from exc
-    downstream = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS)
+    downstream = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS, max_msg_size=CLIENT_FRAME_BYTES)
     await downstream.prepare(request)
     try:
         await _carry(downstream, upstream, approvals)

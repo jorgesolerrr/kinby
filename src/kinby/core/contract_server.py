@@ -14,6 +14,7 @@ from functools import partial
 from aiohttp import WSMsgType, web
 
 from kinby.contracts import (
+    CLIENT_FRAME_BYTES,
     CONTROL_SCOPES,
     INSTANCE_SCOPES,
     THREAD_APPROVAL_RESPOND,
@@ -127,7 +128,9 @@ class ContractServer:
     async def _serve(self, request: web.Request, scopes: frozenset[Scope]) -> web.WebSocketResponse:
         if not self._authenticated(request):
             raise web.HTTPUnauthorized(reason="authentication failed")
-        return await serve_contract(request, self._dispatcher, scopes)
+        return await serve_contract(
+            request, self._dispatcher, scopes, max_frame_bytes=CLIENT_FRAME_BYTES
+        )
 
     def _authenticated(self, request: web.Request) -> bool:
         return hmac.compare_digest(

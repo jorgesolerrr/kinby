@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Seque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
+from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -52,6 +53,7 @@ from kinby.contracts import (
     TurnInterrupted,
     TurnStarted,
     TurnTarget,
+    UploadPath,
     UserOrigin,
     WorkspaceReverted,
     accepted,
@@ -66,6 +68,7 @@ from kinby.core.errors import (
     InstanceDraining,
     InvalidParkedTurn,
     NoActiveTurn,
+    NotAnUpload,
     PermissionDenied,
     ReadOnlyMarkRefused,
     RoutinesRunning,
@@ -96,6 +99,7 @@ from kinby.core.threads import (
     pending_takeover,
     pinned_mode,
 )
+from kinby.core.uploads import names_upload
 from kinby.instance import Budgets, ModelName, ModelPrice
 from kinby.instance.permissions import constrain_mode, exceeds_ceiling
 from kinby.plugins.browser import BrowserService
@@ -117,6 +121,7 @@ class TurnRequest:
     permission_mode: PermissionMode
     origin: Origin = field(default_factory=UserOrigin)
     skills: tuple[SkillName, ...] = ()
+    uploads: tuple[UploadPath, ...] = ()
 
     def prepare(self, system_prompt: SystemPrompt) -> PreparedTurnRequest:
         return PreparedTurnRequest(
@@ -127,6 +132,7 @@ class TurnRequest:
             permission_mode=self.permission_mode,
             origin=self.origin,
             skills=self.skills,
+            uploads=self.uploads,
             system_prompt=system_prompt,
         )
 
@@ -148,6 +154,8 @@ class TurnPreparation:
     budgets: Budgets = field(default_factory=Budgets)
     #: The names of the skills a turn can load.
     skills: frozenset[SkillName] = frozenset()
+    #: The workspace a turn's uploads are in. None leaves a turn no upload to name.
+    workspace: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -438,7 +446,11 @@ class Turns:
 
     async def start(self, command: ThreadTurnStartCommand) -> AcceptedResult:
         started = await self.wake(
-            command.thread_id, command.message, UserOrigin(), tuple(command.skills)
+            command.thread_id,
+            command.message,
+            UserOrigin(),
+            tuple(command.skills),
+            tuple(command.uploads),
         )
         # A thread the user goes back to returns to the sidebar.
         self._store.unarchive(command.thread_id)
@@ -653,6 +665,7 @@ class Turns:
         message: str,
         origin: Origin,
         skills: tuple[SkillName, ...] = (),
+        uploads: tuple[UploadPath, ...] = (),
     ) -> AcceptedResult:
         self.require_thread(thread_id)
         self.require_available()
@@ -661,7 +674,9 @@ class Turns:
                 f'Thread "{thread_id}" already has a running turn, so this one was not taken. '
                 "Send it again when that turn finishes."
             )
-        return await self._wake(lambda: thread_id, message, origin, uuid4(), skills=skills)
+        return await self._wake(
+            lambda: thread_id, message, origin, uuid4(), skills=skills, uploads=uploads
+        )
 
     async def wake_recorded(
         self,
@@ -700,12 +715,20 @@ class Turns:
         turn_id: UUID,
         delivery_body: str | None = None,
         skills: tuple[SkillName, ...] = (),
+        uploads: tuple[UploadPath, ...] = (),
     ) -> AcceptedResult:
         preparation = self._prepare_for_turn()
         check_daily_budget(preparation.daily_budget)
         missing = next((name for name in skills if name not in preparation.skills), None)
         if missing is not None:
             raise SkillNotFound(f'Skill "{missing}" is not available in this turn.')
+        workspace = preparation.workspace
+        unknown = next(
+            (path for path in uploads if workspace is None or not names_upload(workspace, path)),
+            None,
+        )
+        if unknown is not None:
+            raise NotAnUpload(f'"{unknown}" is no upload in the workspace.')
         thread_id = thread()
         events = self._log.thread_events(thread_id)
         claim = TurnClaim(origin)
@@ -718,6 +741,7 @@ class Turns:
                 model=preparation.model,
                 origin=origin,
                 skills=skills,
+                uploads=uploads,
                 permission_mode=self._turn_mode(
                     origin,
                     _permission_mode(events, preparation.default_mode, preparation.ceiling),
@@ -735,6 +759,7 @@ class Turns:
                 TurnStarted(
                     message=turn.message,
                     skills=list(turn.skills),
+                    uploads=list(turn.uploads),
                     origin=turn.origin,
                     model=turn.model,
                     permission_mode=turn.permission_mode,

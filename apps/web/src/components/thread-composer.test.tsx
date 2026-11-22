@@ -1,6 +1,6 @@
 import { CallError, type Event, type PermissionMode, type SkillSummary } from "@kinby/contract"
 import { type Answers, fakeClock } from "@kinby/contract/testing"
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -65,7 +65,7 @@ describe("a thread's panel", () => {
     expect(sent()).toEqual([
       {
         method: "thread.turn.start",
-        params: { thread_id: "t1", message: "Fix the runtime", skills: [] },
+        params: { thread_id: "t1", message: "Fix the runtime", skills: [], uploads: [] },
       },
     ])
     expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Ada" }).value).toBe("")
@@ -397,7 +397,7 @@ describe("a skill reference", () => {
 
     await user.type(box(), "for it{Enter}")
     expect(turnStarts(client)).toEqual([
-      { thread_id: "t1", message: "Use /planning for it", skills: ["planning"] },
+      { thread_id: "t1", message: "Use /planning for it", skills: ["planning"], uploads: [] },
     ])
   })
 
@@ -413,7 +413,7 @@ describe("a skill reference", () => {
     await user.type(box(), "{Enter}")
 
     expect(turnStarts(client)).toEqual([
-      { thread_id: "t1", message: "/planning then /tdd", skills: ["planning", "tdd"] },
+      { thread_id: "t1", message: "/planning then /tdd", skills: ["planning", "tdd"], uploads: [] },
     ])
   })
 
@@ -425,7 +425,9 @@ describe("a skill reference", () => {
     await screen.findAllByRole("option")
     await user.keyboard("{Enter}{Backspace}{Backspace}d now{Enter}")
 
-    expect(turnStarts(client)).toEqual([{ thread_id: "t1", message: "/tdd now", skills: [] }])
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "/tdd now", skills: [], uploads: [] },
+    ])
   })
 
   it("sends a slash typed without a pick as plain text, even when it names a skill", async () => {
@@ -440,7 +442,7 @@ describe("a skill reference", () => {
 
     expect(marked()).toEqual([])
     expect(turnStarts(client)).toEqual([
-      { thread_id: "t1", message: "/tdd and /etc/hosts", skills: [] },
+      { thread_id: "t1", message: "/tdd and /etc/hosts", skills: [], uploads: [] },
     ])
   })
 
@@ -491,6 +493,154 @@ describe("a skill reference", () => {
     expect(marked()).toEqual(["/tdd"])
     await user.type(box(), "{Enter}")
 
-    expect(turnStarts(client)).toEqual([{ thread_id: "t1", message: "/tdd now", skills: ["tdd"] }])
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "/tdd now", skills: ["tdd"], uploads: [] },
+    ])
+  })
+})
+
+describe("files", () => {
+  const accepted = () => ({ sequence: 1, thread_id: "t1", turn_id: "turn-1" })
+  const uploaded = (params: { name: string }) => ({ path: `uploads/2026-11-22/${params.name}` })
+  const csv = () => new File(["date,amount\n"], "march.csv", { type: "text/csv" })
+  const picker = () => screen.getByLabelText<HTMLInputElement>("Files")
+  const chip = (name: string) => screen.getByRole("listitem", { name })
+  const send = () => screen.getByRole("button", { name: "Send" })
+  const turnStarts = (client: { calls: { method: string; params: unknown }[] }) =>
+    client.calls.filter((call) => call.method === "thread.turn.start").map((call) => call.params)
+
+  it("uploads a picked file at once, as its name and base64 content, and shows it as a chip", async () => {
+    const { client } = open("t1", { "upload.put": uploaded })
+
+    await userEvent.setup().upload(picker(), csv())
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Uploading march.csv" })).toBeNull(),
+    )
+    expect(client.calls.filter((call) => call.method === "upload.put")).toEqual([
+      { method: "upload.put", params: { name: "march.csv", content: btoa("date,amount\n") } },
+    ])
+    expect(chip("march.csv").textContent).toContain("12 B")
+  })
+
+  it("uploads each file dropped on the composer", async () => {
+    const { client } = open("t1", { "upload.put": uploaded })
+    const pdf = new File(["%PDF"], "april.pdf")
+
+    await act(async () => fireEvent.drop(box(), { dataTransfer: { files: [csv(), pdf] } }))
+
+    await waitFor(() => expect(screen.queryAllByRole("status")).toEqual([]))
+    expect(
+      client.calls.filter((call) => call.method === "upload.put").map((call) => call.params),
+    ).toEqual([
+      { name: "march.csv", content: btoa("date,amount\n") },
+      { name: "april.pdf", content: btoa("%PDF") },
+    ])
+    expect(chip("march.csv")).toBeDefined()
+    expect(chip("april.pdf")).toBeDefined()
+  })
+
+  it("refuses a file over 10 MB before any call, and says why", async () => {
+    const { client } = open("t1", { "upload.put": uploaded })
+    const big = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "statements.zip")
+
+    await userEvent.setup().upload(picker(), big)
+
+    expect(client.calls.map((call) => call.method)).not.toContain("upload.put")
+    expect(chip("statements.zip").textContent).toContain("Over 10 MB, so it can't be sent.")
+  })
+
+  it("shows the upload in progress, and sends only once every upload is done", async () => {
+    let land = () => {}
+    const landed = new Promise<void>((resolve) => (land = resolve))
+    const answering = instanceClient({
+      "thread.list": listing(),
+      "upload.put": uploaded,
+      "thread.turn.start": accepted,
+    })
+    const client: typeof answering = {
+      ...answering,
+      call: async (method, params) => {
+        if (method === "upload.put") await landed
+        return answering.call(method, params)
+      },
+    }
+    open("t1", {}, client)
+    const user = userEvent.setup()
+
+    await user.upload(picker(), csv())
+    await user.type(box(), "Total it{Enter}")
+
+    expect(screen.getByRole("status", { name: "Uploading march.csv" })).toBeDefined()
+    expect(send().getAttribute("aria-disabled")).toBe("true")
+    expect(turnStarts(answering)).toEqual([])
+
+    await act(async () => land())
+    await user.click(send())
+
+    expect(screen.queryByRole("status", { name: "Uploading march.csv" })).toBeNull()
+    expect(turnStarts(answering)).toEqual([
+      {
+        thread_id: "t1",
+        message: "Total it",
+        skills: [],
+        uploads: ["uploads/2026-11-22/march.csv"],
+      },
+    ])
+    expect(screen.queryByRole("listitem", { name: "march.csv" })).toBeNull()
+  })
+
+  it("starts a turn with the files and no message", async () => {
+    const { client } = open("t1", { "upload.put": uploaded, "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.upload(picker(), csv())
+    await user.click(send())
+
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "", skills: [], uploads: ["uploads/2026-11-22/march.csv"] },
+    ])
+  })
+
+  it("leaves a removed file out of the turn", async () => {
+    const { client } = open("t1", { "upload.put": uploaded, "thread.turn.start": accepted })
+    const user = userEvent.setup()
+
+    await user.upload(picker(), csv())
+    await user.click(screen.getByRole("button", { name: "Remove march.csv" }))
+    await user.type(box(), "Total it{Enter}")
+
+    expect(screen.queryByRole("listitem", { name: "march.csv" })).toBeNull()
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "Total it", skills: [], uploads: [] },
+    ])
+  })
+
+  it("says why an upload failed, and holds the message until the file is removed", async () => {
+    const { client } = open("t1", {
+      "upload.put": () => {
+        throw new CallError({
+          code: "CONNECTION_LOST",
+          message: "The connection to the instance dropped.",
+          retryable: true,
+        })
+      },
+      "thread.turn.start": accepted,
+    })
+    const user = userEvent.setup()
+
+    await user.upload(picker(), csv())
+    await user.type(box(), "Total it{Enter}")
+
+    expect(chip("march.csv").textContent).toContain("The connection to the instance dropped.")
+    expect(send().getAttribute("aria-disabled")).toBe("true")
+    expect(turnStarts(client)).toEqual([])
+
+    await user.click(screen.getByRole("button", { name: "Remove march.csv" }))
+    await user.click(send())
+
+    expect(turnStarts(client)).toEqual([
+      { thread_id: "t1", message: "Total it", skills: [], uploads: [] },
+    ])
   })
 })

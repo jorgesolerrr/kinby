@@ -113,6 +113,7 @@ from kinby.core.prompt import (
     prompt_version,
     render_skill_references,
     render_system_prompt,
+    render_uploads,
     render_wake,
     with_searchable_groups,
 )
@@ -613,6 +614,7 @@ class LangGraphRunner:
             daily_budget=daily_budget,
             budgets=manifest.budgets,
             skills=frozenset(skill.name for skill in skills),
+            workspace=manifest.workspace.path,
         )
 
     def _manifest(self) -> Manifest:
@@ -938,6 +940,7 @@ class LangGraphRunner:
             )
         wake = render_wake(turn.origin, prepared.message, prepared.payload)
         if isinstance(graph_input, ModelState):
+            wake = render_uploads(wake, turn.uploads)
             wake = render_skill_references(referenced_skills(skills, turn.skills), wake)
             wake = await self._pre_searched(wake, prepared.message, emit)
         model = self._model_factory(turn.model)
