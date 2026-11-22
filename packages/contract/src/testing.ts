@@ -1,4 +1,5 @@
 import {
+  CALL_LIMIT,
   CallError,
   type Client,
   type Clock,
@@ -265,6 +266,74 @@ export function stubCaller(answers: Answers): StubCaller {
         })
       }
       return answer(params)
+    },
+  }
+}
+
+export interface LimitedHub {
+  readonly transport: Transport
+  /** The most calls the hub held in flight at once. */
+  readonly mostInFlight: number
+}
+
+/**
+ * A hub that answers each call from `answers` on the next tick, and refuses a call past
+ * `CALL_LIMIT` in flight on its connection, as the contract server does. A method with no
+ * answer is not found.
+ */
+export function limitedHub(answers: Answers): LimitedHub {
+  let mostInFlight = 0
+  const transport: Transport = {
+    openSocket(_url, events) {
+      let inFlight = 0
+      let closed = false
+      const reply = (frame: unknown) => {
+        if (!closed) events.message(JSON.stringify(frame))
+      }
+      queueMicrotask(() => events.open())
+      return {
+        send(data) {
+          const { id, method, params } = JSON.parse(data) as {
+            id: string
+            method: Method
+            params: never
+          }
+          if (inFlight === CALL_LIMIT) {
+            return reply({
+              type: "error",
+              id,
+              error: { code: "RESOURCE_EXHAUSTED", message: "Too many calls.", retryable: true },
+            })
+          }
+          inFlight += 1
+          mostInFlight = Math.max(mostInFlight, inFlight)
+          queueMicrotask(() => {
+            inFlight -= 1
+            try {
+              const answer = answers[method]
+              if (answer === undefined) {
+                throw new CallError({ code: "NOT_FOUND", message: "No answer.", retryable: false })
+              }
+              reply({ type: "result", id, result: answer(params) })
+            } catch (error) {
+              if (!(error instanceof CallError)) throw error
+              const { code, message, retryable } = error
+              reply({ type: "error", id, error: { code, message, retryable } })
+            }
+          })
+        },
+        close() {
+          closed = true
+          events.close()
+        },
+      }
+    },
+    fetch: async () => new Response(null, { status: 204 }),
+  }
+  return {
+    transport,
+    get mostInFlight() {
+      return mostInFlight
     },
   }
 }

@@ -44,6 +44,7 @@ CONTROL_TOKEN_VARIABLE = "KINBY_CONTROL_TOKEN"
 #: Items one subscription may hold for a client that is not reading fast enough.
 SUBSCRIPTION_QUEUE_LIMIT = 1024
 #: Unary calls one connection may hold in each bucket: ordinary, or interrupt and approval.
+#: The web client holds its calls at the same limit, and a test there pins the two together.
 CALL_LIMIT = 8
 #: How often a contract server pings, on its own socket and on one a hub relays.
 HEARTBEAT_SECONDS = 30

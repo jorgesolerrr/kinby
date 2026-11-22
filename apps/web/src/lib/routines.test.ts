@@ -1,7 +1,8 @@
-import type { RoutineSummary } from "@kinby/contract"
-import { describe, expect, it } from "vitest"
+import { CallError, createClient, type RoutineSummary } from "@kinby/contract"
+import { fakeClock, limitedHub } from "@kinby/contract/testing"
+import { describe, expect, it, vi } from "vitest"
 
-import { triggerInWords } from "@/lib/routines"
+import { listRoutines, triggerInWords } from "@/lib/routines"
 
 const routine: RoutineSummary = {
   name: "news",
@@ -41,5 +42,32 @@ describe("triggerInWords", () => {
 
   it("says a routine with neither starts only by hand", () => {
     expect(triggerInWords(routine)).toBe("Only when started by hand")
+  })
+})
+
+describe("listRoutines", () => {
+  it("reads more routines than the instance takes calls at once, less one removed before its read", async () => {
+    const names = ["a", "b", "c", "d", "gone", "e", "f"]
+    const hub = limitedHub({
+      "routine.list": () => ({
+        routines: names.map((name) => ({ ...routine, name })),
+        warnings: [],
+      }),
+      "routine.read": ({ name }) => {
+        if (name === "gone") {
+          throw new CallError({ code: "NOT_FOUND", message: "Gone.", retryable: false })
+        }
+        return { name, content: "", hash: `hash-${name}` }
+      },
+      "config.history": () => ({ changes: [] }),
+    })
+    const client = createClient("https://hub.example", hub.transport, fakeClock()).instance("ada")
+    await vi.waitFor(() => expect(client.state()).toBe("connected"))
+
+    const listed = await listRoutines(client)
+
+    expect(listed.map(({ summary, hash }) => [summary.name, hash])).toEqual(
+      ["a", "b", "c", "d", "e", "f"].map((name) => [name, `hash-${name}`]),
+    )
   })
 })

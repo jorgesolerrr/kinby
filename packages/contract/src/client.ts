@@ -41,6 +41,14 @@ const LAST_BACKOFF_MS = 16_000
 const STEADY_MS = 30_000
 /** How long a socket may take to open before it counts as dropped. */
 const CONNECT_MS = 10_000
+/** The contract server's CALL_LIMIT: the calls it takes on one connection at once, in each bucket. */
+export const CALL_LIMIT = 8
+/** The calls that unblock a turn. The server counts them apart, so they never wait behind reads. */
+const UNBLOCKING = new Set<Method>([
+  "thread.turn.interrupt",
+  "thread.approval.respond",
+  "thread.takeover.resume",
+])
 
 export interface SocketEvents {
   open(): void
@@ -109,7 +117,15 @@ export class CallError extends Error {
 }
 
 interface PendingCall {
+  readonly unblocking: boolean
   resolve(result: unknown): void
+  reject(error: CallError): void
+}
+
+/** A call past the server's limit, sent once a call in its bucket finishes. */
+interface HeldCall {
+  readonly unblocking: boolean
+  send(): void
   reject(error: CallError): void
 }
 
@@ -177,6 +193,7 @@ function connect(
   let socket: Socket | undefined
   let nextId = 1
   const pending = new Map<string, PendingCall>()
+  const held: HeldCall[] = []
   const subscriptions = new Map<string, OpenSubscription>()
   const listeners = new Set<() => void>()
   let settleGeneration = 0
@@ -213,6 +230,14 @@ function connect(
     socket?.send(JSON.stringify({ type: "subscribe", id, method, params: resumed }))
   }
 
+  const inFlight = (unblocking: boolean) =>
+    [...pending.values()].filter((call) => call.unblocking === unblocking).length
+  const finish = (id: string, call: PendingCall) => {
+    pending.delete(id)
+    const next = held.findIndex((waiting) => waiting.unblocking === call.unblocking)
+    if (next !== -1) held.splice(next, 1)[0]?.send()
+  }
+
   const answer = (frame: Reply) => {
     const call = pending.get(frame.id)
     const subscription = subscriptions.get(frame.id)
@@ -222,10 +247,10 @@ function connect(
       case "item":
         return subscription?.deliver(frame.sequence, frame.item)
       case "result":
-        pending.delete(frame.id)
+        if (call !== undefined) finish(frame.id, call)
         return call?.resolve(frame.result)
       case "error":
-        pending.delete(frame.id)
+        if (call !== undefined) finish(frame.id, call)
         subscriptions.delete(frame.id)
         call?.reject(new CallError(frame.error))
         return subscription?.end(new CallError(frame.error))
@@ -243,6 +268,8 @@ function connect(
       cancelTimer()
       for (const call of pending.values()) call.reject(new CallError(CONNECTION_LOST))
       pending.clear()
+      for (const call of held) call.reject(new CallError(NOT_CONNECTED))
+      held.length = 0
       if (!closed) void settle()
     }
     const opened = transport.openSocket(socketUrl(origin, path), {
@@ -277,13 +304,20 @@ function connect(
       }
       const id = String(nextId++)
       const sent = socket
+      const unblocking = UNBLOCKING.has(method)
       return new Promise((resolve, reject) => {
-        pending.set(id, {
-          // The generated contract types come from the hub's models, and a test keeps them in step.
-          resolve: (result) => resolve(result as Result<typeof method>),
-          reject,
-        })
-        sent.send(JSON.stringify({ type: "call", id, method, params }))
+        const send = () => {
+          pending.set(id, {
+            unblocking,
+            // The generated contract types come from the hub's models, and a test keeps them in step.
+            resolve: (result) => resolve(result as Result<typeof method>),
+            reject,
+          })
+          sent.send(JSON.stringify({ type: "call", id, method, params }))
+        }
+        // The server refuses a call past its limit, so the call waits here for one to finish.
+        if (inFlight(unblocking) < CALL_LIMIT) send()
+        else held.push({ unblocking, send, reject })
       })
     },
     subscribe(method, params) {
