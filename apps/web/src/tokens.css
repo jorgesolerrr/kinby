@@ -28,6 +28,8 @@
   --chart-4: oklch(0.62 0.06 150);
   --chart-5: oklch(0.5 0.09 320);
   --radius: 0.625rem;
+  /* The width of a page's content: the page column's, less its gutters, and a view's page's. */
+  --page-width: 52rem;
   --avatar-foreground: oklch(0.985 0 0);
   --avatar-blue: oklch(0.546 0.215 262.9);
   --avatar-violet: oklch(0.541 0.247 293);

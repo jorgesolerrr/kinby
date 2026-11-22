@@ -13,6 +13,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* The page column: a page's content and the column's gutters at md. */
+  --container-page: calc(var(--page-width) + 4rem);
   --font-heading: "Gabarito Variable", "Geist Variable", sans-serif;
   --font-sans: "Geist Variable", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;

@@ -8,8 +8,8 @@ The user comes to it to see what is new and what is next, so it opens with a sen
 so, not with a heading. The postings share their fields, so they sit in a table, at 0.875rem with
 tight rows. The filters show their counts, the choice survives a redraw because it lives outside
 `draw`, and the postings the user passed on fold away under a `<details>` that keeps its state for
-the same reason. Colour marks only what is new and an interview. At pane width the salary and the
-date columns hide.
+the same reason. Colour marks only what is new and an interview. The board takes the full width
+of the screen, so its table has room, and at pane width the salary and the date columns hide.
 
 ## Page
 
@@ -135,6 +135,7 @@ date columns hide.
   }
 </style>
 
+<body class="full-width">
 <div class="board">
   <p class="lede" id="lede"></p>
   <div class="filters" id="filters"></div>

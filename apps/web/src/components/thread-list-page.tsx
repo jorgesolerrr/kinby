@@ -11,6 +11,7 @@ import { type ReactNode, useEffect, useState } from "react"
 
 import { ArchiveButton } from "@/components/archive-button"
 import { Failure, OlderCoreAlert } from "@/components/config-alerts"
+import { PageColumn } from "@/components/page-column"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
@@ -151,7 +152,7 @@ export function ThreadListPage({
   }
 
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <PageColumn className="flex flex-col gap-4 py-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Threads</h1>
         <div className="flex flex-wrap items-center gap-2">
@@ -207,7 +208,7 @@ export function ThreadListPage({
           )}
         </>
       )}
-    </div>
+    </PageColumn>
   )
 }
 
