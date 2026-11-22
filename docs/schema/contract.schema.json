@@ -13234,6 +13234,32 @@
       "title": "TurnVerdict",
       "type": "string"
     },
+    "UploadGetCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "UploadGetCommand",
+      "type": "object"
+    },
+    "UploadGetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "UploadGetResult",
+      "type": "object"
+    },
     "UploadPutCommand": {
       "additionalProperties": false,
       "properties": {
@@ -17272,6 +17298,22 @@
           ],
           "type": "object"
         },
+        "upload.get": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/UploadGetCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/UploadGetResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "upload.put": {
           "additionalProperties": false,
           "properties": {
@@ -17761,6 +17803,7 @@
         "browser.takeover.input",
         "browser.takeover.finish",
         "upload.put",
+        "upload.get",
         "usage.get",
         "stats.get",
         "instance.probe",

@@ -66,6 +66,7 @@ from kinby.contracts import (
     THREAD_UNARCHIVE,
     TOOL_LIST,
     TOOL_READ_ONLY_SET,
+    UPLOAD_GET,
     UPLOAD_PUT,
     USAGE_GET,
     VIEW_DELETE,
@@ -453,6 +454,7 @@ def build_dispatcher(
             turns.scheduler.instance.manifest.workspace.path, turns.scheduler.clock
         )
         dispatcher.register(UPLOAD_PUT, uploads.put)
+        dispatcher.register(UPLOAD_GET, uploads.get)
         views = InstanceViews(turns.scheduler.instance)
         dispatcher.register(VIEW_LIST, views.list)
         dispatcher.register(VIEW_GET, views.get)

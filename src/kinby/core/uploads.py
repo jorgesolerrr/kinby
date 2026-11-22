@@ -1,5 +1,6 @@
-"""Land a file the user gives a turn in the workspace, under the day's uploads folder, and send
-the model a turn's uploads: named on its user message, an image also seen (ADR 0132)."""
+"""Land a file the user gives a turn in the workspace, under the day's uploads folder, read it
+back, and send the model a turn's uploads: named on its user message, an image also seen
+(ADR 0132)."""
 
 from __future__ import annotations
 
@@ -16,7 +17,14 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from langchain_core.messages.content import ImageContentBlock
 from PIL import Image
 
-from kinby.contracts import UploadPath, UploadPutCommand, UploadPutResult
+from kinby.contracts import (
+    UploadGetCommand,
+    UploadGetResult,
+    UploadPath,
+    UploadPutCommand,
+    UploadPutResult,
+)
+from kinby.core.errors import NotAnUpload, UploadNotFound
 from kinby.core.prompt import render_uploads
 
 _UPLOADS = "uploads"
@@ -41,6 +49,16 @@ class InstanceUploads:
         folder = self._workspace / _UPLOADS / self._clock().date().isoformat()
         path = await asyncio.to_thread(_write, folder, _safe_name(command.name), command.content)
         return UploadPutResult(path=UploadPath(path.relative_to(self._workspace).as_posix()))
+
+    async def get(self, command: UploadGetCommand) -> UploadGetResult:
+        path = (self._workspace / command.path).resolve()
+        if not path.is_relative_to((self._workspace / _UPLOADS).resolve()):
+            raise NotAnUpload(f'"{command.path}" is outside the workspace\'s uploads.')
+        try:
+            content = await asyncio.to_thread(path.read_bytes)
+        except (FileNotFoundError, IsADirectoryError) as exc:
+            raise UploadNotFound(f'"{command.path}" is no longer in the workspace.') from exc
+        return UploadGetResult(content=base64.b64encode(content).decode())
 
 
 def names_upload(workspace: Path, path: UploadPath) -> bool:

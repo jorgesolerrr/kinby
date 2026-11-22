@@ -1,6 +1,6 @@
 import { CallError, type Event, type PermissionMode, type SkillSummary } from "@kinby/contract"
 import { type Answers, fakeClock } from "@kinby/contract/testing"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -538,6 +538,40 @@ describe("files", () => {
     ])
     expect(chip("march.csv")).toBeDefined()
     expect(chip("april.pdf")).toBeDefined()
+  })
+
+  it("uploads an image pasted into the box, and shows it as a chip with its thumbnail", async () => {
+    const { client } = open("t1", { "upload.put": uploaded })
+    const screenshot = new File(["png"], "image.png", { type: "image/png" })
+
+    await act(async () => fireEvent.paste(box(), { clipboardData: { files: [screenshot] } }))
+
+    await waitFor(() => expect(screen.queryAllByRole("status")).toEqual([]))
+    expect(
+      client.calls.filter((call) => call.method === "upload.put").map((call) => call.params),
+    ).toEqual([{ name: "image.png", content: btoa("png") }])
+    expect(within(chip("image.png")).getByRole("img").getAttribute("src")).toMatch(/^blob:/)
+  })
+
+  it("refuses a pasted image over 10 MB before any call", async () => {
+    const { client } = open("t1", { "upload.put": uploaded })
+    const big = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "image.png", {
+      type: "image/png",
+    })
+
+    await act(async () => fireEvent.paste(box(), { clipboardData: { files: [big] } }))
+
+    expect(client.calls.map((call) => call.method)).not.toContain("upload.put")
+    expect(chip("image.png").textContent).toContain("Over 10 MB, so it can't be sent.")
+  })
+
+  it("opens a file from its chip, and shows no thumbnail for one that isn't an image", async () => {
+    open("t1", { "upload.put": uploaded })
+
+    await userEvent.setup().upload(picker(), csv())
+
+    expect(screen.getByRole("link", { name: "march.csv" }).getAttribute("href")).toMatch(/^blob:/)
+    expect(within(chip("march.csv")).queryByRole("img")).toBeNull()
   })
 
   it("refuses a file over 10 MB before any call, and says why", async () => {

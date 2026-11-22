@@ -13,6 +13,11 @@ window.matchMedia = (query) =>
     removeListener: () => {},
   })
 
+// jsdom has no object URLs, and a file's chip links to one and draws its thumbnail from it.
+let objects = 0
+URL.createObjectURL = () => `blob:${++objects}`
+URL.revokeObjectURL = () => {}
+
 afterEach(() => {
   cleanup()
   forgetDrafts()

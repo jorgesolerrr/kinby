@@ -19,9 +19,11 @@ from kinby.contracts import (
     ErrorCode,
     ErrorEnvelope,
     Payload,
+    Scope,
     ThreadCreateResult,
     ThreadSummary,
     TurnStarted,
+    UploadGetResult,
     UploadPutResult,
     WorkspaceReverted,
 )
@@ -145,6 +147,50 @@ def test_an_upload_over_ten_megabytes_is_refused(tmp_path: Path) -> None:
     assert isinstance(refused, ErrorEnvelope)
     assert refused.code is ErrorCode.INVALID_ARGUMENT
     assert not (instance.manifest.workspace.path / "uploads").exists()
+
+
+def test_a_reader_of_threads_reads_an_upload_back_by_its_path(tmp_path: Path) -> None:
+    dispatcher = runtime(instance_at(tmp_path), RecordingModel())
+
+    async def scenario() -> object:
+        path = await put(dispatcher, "screenshot.png", b"\x89PNG\r\n")
+        return await dispatcher.dispatch("upload.get", {"path": path}, {Scope.THREAD_READ})
+
+    read = asyncio.run(scenario())
+
+    assert read == UploadGetResult(content=base64.b64encode(b"\x89PNG\r\n").decode())
+
+
+@pytest.mark.parametrize("path", ["kinby.toml", "uploads/../kinby.toml", "/etc/passwd"])
+def test_a_read_outside_the_uploads_is_refused(tmp_path: Path, path: str) -> None:
+    instance = instance_at(tmp_path)
+    (instance.manifest.workspace.path / "kinby.toml").write_text("id = 'other'\n")
+    dispatcher = runtime(instance, RecordingModel())
+
+    async def scenario() -> object:
+        await put(dispatcher, "statement.csv", b"1")
+        return await call(dispatcher, "upload.get", path=path)
+
+    refused = asyncio.run(scenario())
+
+    assert isinstance(refused, ErrorEnvelope)
+    assert refused.code is ErrorCode.INVALID_ARGUMENT
+    assert path in refused.message
+
+
+def test_a_read_of_an_upload_gone_from_the_workspace_is_not_found(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    dispatcher = runtime(instance, RecordingModel())
+
+    async def scenario() -> object:
+        path = await put(dispatcher, "statement.csv", b"1")
+        (instance.manifest.workspace.path / path).unlink()
+        return await call(dispatcher, "upload.get", path=path)
+
+    gone = asyncio.run(scenario())
+
+    assert isinstance(gone, ErrorEnvelope)
+    assert gone.code is ErrorCode.NOT_FOUND
 
 
 def test_a_turn_records_its_uploads_and_the_model_reads_them_after_the_message(

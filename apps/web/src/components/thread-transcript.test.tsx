@@ -1,4 +1,4 @@
-import type { Event } from "@kinby/contract"
+import { CallError, type Event } from "@kinby/contract"
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
@@ -284,6 +284,45 @@ describe("a thread's panel", () => {
     expect(screen.getByText(/^Use \/planning, then/).textContent).toBe(
       "Use /planning, then /tdd on /etc/hosts",
     )
+  })
+
+  it("shows the files the user's message gave as chips, each read back to open, an image with its thumbnail", async () => {
+    const day = "uploads/2026-09-28"
+    const events = thread([
+      "turn-1",
+      {
+        ...started(""),
+        uploads: [`${day}/screenshot.png`, `${day}/march.csv`, `${day}/april.pdf`],
+      },
+    ])
+    const { client, subscription } = openThread({
+      "upload.get": ({ path }) => {
+        if (path === `${day}/april.pdf`) {
+          throw new CallError({ code: "NOT_FOUND", message: "Gone.", retryable: false })
+        }
+        return { content: btoa(path.endsWith(".png") ? "\x89PNG" : "date,amount\n") }
+      },
+    })
+
+    await act(async () => {
+      subscription().subscribed(events.length)
+      for (const event of events) subscription().deliver(event)
+    })
+
+    const chip = (name: string) => screen.getByRole("listitem", { name })
+    await waitFor(() => expect(chip("march.csv").textContent).toContain("12 B"))
+    expect(client.calls.filter((call) => call.method === "upload.get")).toEqual(
+      [`${day}/screenshot.png`, `${day}/march.csv`, `${day}/april.pdf`].map((path) => ({
+        method: "upload.get",
+        params: { path },
+      })),
+    )
+    expect(chip("screenshot.png").textContent).toContain("4 B")
+    expect(within(chip("screenshot.png")).getByRole("img").getAttribute("src")).toMatch(/^blob:/)
+    expect(within(chip("march.csv")).queryByRole("img")).toBeNull()
+    expect(screen.getByRole("link", { name: "march.csv" }).getAttribute("href")).toMatch(/^blob:/)
+    expect(chip("april.pdf").textContent).toContain("Gone from the workspace")
+    expect(screen.queryByRole("link", { name: "april.pdf" })).toBeNull()
   })
 
   it("names the browser's zone in the time a routine's turn started", async () => {

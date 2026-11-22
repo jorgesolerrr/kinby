@@ -266,6 +266,8 @@ from kinby.contracts.models import (
     ToolListCommand,
     ToolListResult,
     ToolReadOnlySetCommand,
+    UploadGetCommand,
+    UploadGetResult,
     UploadPutCommand,
     UploadPutResult,
     UsageGetCommand,
@@ -420,6 +422,7 @@ BROWSER_TAKEOVER_FINISH = Method(
     "browser.takeover.finish", Scope.INSTANCE_ADMIN, BrowserTakeoverFinishCommand, BrowserProfile
 )
 UPLOAD_PUT = Method("upload.put", Scope.THREAD_OPERATE, UploadPutCommand, UploadPutResult)
+UPLOAD_GET = Method("upload.get", Scope.THREAD_READ, UploadGetCommand, UploadGetResult)
 USAGE_GET = Method("usage.get", Scope.INSTANCE_READ, UsageGetCommand, UsageGetResult)
 STATS_GET = Method("stats.get", Scope.INSTANCE_READ, StatsGetCommand, StatsGetResult)
 THREAD_SUBSCRIBE = Subscription(
@@ -922,6 +925,7 @@ METHODS = (
     BROWSER_TAKEOVER_INPUT,
     BROWSER_TAKEOVER_FINISH,
     UPLOAD_PUT,
+    UPLOAD_GET,
     USAGE_GET,
     STATS_GET,
     INSTANCE_PROBE,
