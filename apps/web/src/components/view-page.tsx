@@ -2,6 +2,7 @@ import type { InstanceClient, View } from "@kinby/contract"
 import { HistoryIcon, Trash2Icon } from "lucide-react"
 
 import { Failure } from "@/components/config-alerts"
+import { PageColumn, PageGutters } from "@/components/page-column"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ViewFrame } from "@/components/view-frame"
@@ -9,9 +10,10 @@ import { type FollowedView, useView } from "@/hooks/use-view"
 import { when } from "@/lib/config-changes"
 
 /**
- * The view open on its instance's screen: when it last changed, and the view. It follows the view
- * while open, showing each snapshot the instance sends after a write. A view that is gone, because
- * its subscription ended or the instance did not find it, shows as deleted.
+ * The view open on its instance's screen: when it last changed, in the page column, and the view,
+ * in the column's gutters at the screen's full width. It follows the view while open, showing each
+ * snapshot the instance sends after a write. A view that is gone, because its subscription ended
+ * or the instance did not find it, shows as deleted.
  */
 export function ViewPage({
   client,
@@ -24,14 +26,18 @@ export function ViewPage({
   if (deleted) return <Deleted />
   return (
     <div className="flex flex-col gap-4">
-      {failure !== undefined && <Failure error={failure} />}
-      {view === undefined ? (
-        failure === undefined && <Skeleton className="h-72 w-full" />
-      ) : (
-        <>
+      <PageColumn className="flex flex-col gap-4">
+        {failure !== undefined && <Failure error={failure} />}
+        {view === undefined ? (
+          failure === undefined && <Skeleton className="h-72 w-full" />
+        ) : (
           <p className="text-sm text-muted-foreground">Changed {when(view.updated_at)}</p>
+        )}
+      </PageColumn>
+      {view !== undefined && (
+        <PageGutters className="flex flex-col gap-4">
           <Drawn client={client} view={view} />
-        </>
+        </PageGutters>
       )}
     </div>
   )

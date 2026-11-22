@@ -14,11 +14,17 @@ html.dark {
   color-scheme: dark;
 }
 
+/* The page sits centred at the page column's width, unless it asks for the full width. */
 body {
-  margin: 0;
+  max-width: var(--page-width);
+  margin: 0 auto;
   background: var(--background);
   color: var(--foreground);
   font: 1rem/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+
+body.full-width {
+  max-width: none;
 }
 
 h1,

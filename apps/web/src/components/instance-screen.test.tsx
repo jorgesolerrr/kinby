@@ -88,6 +88,19 @@ describe("an instance's screen", () => {
     expect(drawnPage(frame).documentElement.innerHTML).toContain("The Reading list itself.")
   })
 
+  it("holds its tabs, when the view changed and the composer in the page column, and draws the view in the column's gutters at full width", async () => {
+    const { deliver } = await openScreen("/instances/hub-ada/views/reading", [BOARD, READING])
+    deliver(READING)
+
+    const frame = await screen.findByTitle("Reading list")
+    const column = '[data-slot="page-column"]'
+    expect(screen.getByRole("tablist", { name: "Ada's views" }).closest(column)).not.toBeNull()
+    expect(screen.getByText(/^Changed /).closest(column)).not.toBeNull()
+    expect(screen.getByRole("textbox", { name: "Message" }).closest(column)).not.toBeNull()
+    expect(frame.closest(column)).toBeNull()
+    expect(frame.closest('[data-slot="page-gutters"]')).not.toBeNull()
+  })
+
   it("opens a tab picked at its address, as a new history entry", async () => {
     await openScreen("/instances/hub-ada/views/applications", [BOARD, READING])
     const entries = window.history.length

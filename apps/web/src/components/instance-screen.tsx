@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 
 import { Composer } from "@/components/composer"
 import { Failure } from "@/components/config-alerts"
+import { PageColumn } from "@/components/page-column"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,7 +40,7 @@ const LAST_OPEN = "kinby-screen-"
 
 /**
  * An instance's screen: its views as tabs, the most recently changed first, listed again as
- * `usePolled` says, over the view the URL opens, at full width. With none named, it opens on the
+ * `usePolled` says, over the view the URL opens. With none named, it opens on the
  * view last open for the instance in this browser, or else the most recently changed one, and an
  * instance with no views lands on the home screen sent to it. The open tab's menu offers Delete,
  * and a delete that succeeds shows the next view, or the one before it, or the home screen. Under
@@ -77,7 +78,13 @@ export function InstanceScreen({
     landAt(opening === undefined ? homePath(instanceId) : viewPath(instanceId, opening.id))
   }, [instanceId, screenOpen, viewId, views])
 
-  if (views === undefined) return <Skeleton className="m-6 h-72" />
+  if (views === undefined) {
+    return (
+      <PageColumn className="py-6">
+        <Skeleton className="h-72" />
+      </PageColumn>
+    )
+  }
   const open = views.find((view) => view.id === viewId)
   const removed = () => {
     const at = views.findIndex((view) => view.id === viewId)
@@ -95,23 +102,25 @@ export function InstanceScreen({
     <Tabs
       value={viewId ?? null}
       onValueChange={(picked: string) => openView(instanceId, picked)}
-      className="m-6"
+      className="my-6"
     >
-      <div className="flex items-center gap-2 border-b">
-        <TabsList
-          variant="line"
-          aria-label={`${name}'s views`}
-          className="min-w-0 flex-1 justify-start overflow-x-auto"
-        >
-          {views.map((view) => (
-            <TabsTrigger key={view.id} value={view.id} className="flex-none">
-              {view.title}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {open !== undefined && (
-          <ViewMenu key={open.id} client={client} view={open} onDeleted={removed} />
-        )}
+      <div className="border-b">
+        <PageColumn className="flex items-center gap-2">
+          <TabsList
+            variant="line"
+            aria-label={`${name}'s views`}
+            className="min-w-0 flex-1 justify-start overflow-x-auto"
+          >
+            {views.map((view) => (
+              <TabsTrigger key={view.id} value={view.id} className="flex-none">
+                {view.title}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {open !== undefined && (
+            <ViewMenu key={open.id} client={client} view={open} onDeleted={removed} />
+          )}
+        </PageColumn>
       </div>
       {viewId !== undefined && (
         <TabsContent value={viewId}>
@@ -120,7 +129,7 @@ export function InstanceScreen({
             <ViewPage key={viewId} client={client} viewId={viewId} />
           </div>
           <div className="sticky bottom-0 bg-background pt-4">
-            <div className="mx-auto max-w-3xl">
+            <PageColumn>
               <Composer
                 draftKey={`screen-${instanceId}`}
                 label="Message"
@@ -130,7 +139,7 @@ export function InstanceScreen({
                 onSend={send}
                 listSkills={listSkills}
               />
-            </div>
+            </PageColumn>
           </div>
         </TabsContent>
       )}

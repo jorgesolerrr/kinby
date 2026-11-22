@@ -68,6 +68,14 @@ describe("the thread list page", () => {
     window.history.replaceState(null, "", "/instances/hub-ada/threads")
   })
 
+  it("holds its heading and its threads in the page column", async () => {
+    openPage({ "thread.list": () => page([thread({ id: "t-1", title: "Plan the trip" })]) })
+
+    const column = '[data-slot="page-column"]'
+    expect(screen.getByRole("heading", { name: "Threads" }).closest(column)).not.toBeNull()
+    expect((await screen.findByRole("table", { name: "Threads" })).closest(column)).not.toBeNull()
+  })
+
   it("shows each thread's title, origin, status and last activity, in the order listed", async () => {
     openPage({
       "thread.list": () =>

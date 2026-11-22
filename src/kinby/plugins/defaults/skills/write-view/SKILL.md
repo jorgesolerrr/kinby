@@ -147,9 +147,12 @@ view for, and put that first.
 The tab and the pane already show the view's title and when it last changed, so don't repeat
 either in the page. Open with what matters: the figure, a sentence of status, or the list itself.
 
-A view is drawn at the full width of the screen, and in a pane beside a thread as narrow as 350
-pixels. Make it hold at both: let rows wrap, stack side-by-side blocks, and hide a table's
-secondary columns at narrow widths with a container query.
+On the screen, the base stylesheet centres the page at the width of the app's own pages, about
+830 pixels, so leave the page's width and margins to it. A page whose content needs the room, such
+as a board or a wide table, takes the full width of the screen with `<body class="full-width">`.
+Keep every other page centred. In a pane beside a thread a view is as narrow as 350 pixels. Make it
+hold at both: let rows wrap, stack side-by-side blocks, and hide a table's secondary columns at
+narrow widths with a container query.
 
 ### Type
 
@@ -236,7 +239,7 @@ Three whole views of different kinds. Before you write a page, read the one near
 `view_write`, and says why it is designed that way.
 
 - `examples/job-board.md`: a board a routine refreshes. A table with filters and their counts,
-  and a fold for what is done.
+  and a fold for what is done, at the full width of the screen.
 - `examples/spending-summary.md`: a summary with a chart. One figure, a chart of the months, and a
   table of categories.
 - `examples/trip-plan.md`: a page made once. Everything is in the page, with no script and empty
