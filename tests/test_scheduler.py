@@ -539,7 +539,7 @@ def test_instance_busy_serializes_routines_but_not_users(tmp_path):
         assert isinstance(accepted, AcceptedResult)
         busy = await call(dispatcher, "thread.turn.start", thread_id=one.id, message="Hi")
         assert busy.code == "INSTANCE_BUSY" and busy.retryable
-        assert "news" in busy.message
+        assert busy.message == 'Routine "news" is running. Send again when it finishes.'
         runner.release.set()
         await dispatcher.scheduler.drain()
 

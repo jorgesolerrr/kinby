@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from pydantic import JsonValue
@@ -9,6 +10,10 @@ from pydantic import JsonValue
 from kinby.contracts import LINE_INTAKE, LineIntakeCommand, Scope
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, call_hub
 from kinby.plugins.tools import Tool, ToolContext, tool
+
+#: How long the intake waits on the hub. Longer than the hub waits on the workbench
+#: (``kinby.hub.control.INTAKE_SECONDS``), so a hung workbench fails with the hub's answer.
+HUB_INTAKE_SECONDS = 6 * 60
 
 
 def intake_tools() -> tuple[Tool, ...]:
@@ -29,4 +34,10 @@ async def run_line_intake(context: ToolContext, signal: dict[str, JsonValue] | N
     if context.routine is None:
         raise ValueError("Only a line's intake routine runs its intake.")
     command = LineIntakeCommand(routine=context.routine, signal=signal or {})
-    await call_hub(LINE_INTAKE.name, command.model_dump(mode="json"), "the line's intake")
+    try:
+        async with asyncio.timeout(HUB_INTAKE_SECONDS):
+            await call_hub(LINE_INTAKE.name, command.model_dump(mode="json"), "the line's intake")
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"The hub did not answer the line's intake within {HUB_INTAKE_SECONDS} seconds."
+        ) from exc

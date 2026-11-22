@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -49,6 +50,9 @@ from kinby.contracts import (
 
 #: How long the probe waits before it calls the lifecycle endpoint unreachable.
 PROBE_SECONDS = 10
+#: How long the hub waits on a workbench for a line's intake. A hung intake fails its routine's
+#: run, rather than holding the run for good.
+INTAKE_SECONDS = 5 * 60
 _FRAME_ID = FrameId("1")
 _HEARTBEAT_SECONDS = 30
 #: The largest answer frame the hub reads. A larger one closes the control socket.
@@ -169,8 +173,15 @@ class HttpInstanceControl:
     async def run_intake(
         self, endpoint: ControlEndpoint, command: IntakeRunCommand
     ) -> IntakeRunResult:
-        """Have the workbench run a line's intake tool and wait for the work items it found."""
-        return await _call(endpoint, INTAKE_RUN, command, "the intake")
+        """Have the workbench run a line's intake tool and wait for the work items it found, up
+        to ``INTAKE_SECONDS``."""
+        try:
+            async with asyncio.timeout(INTAKE_SECONDS):
+                return await _call(endpoint, INTAKE_RUN, command, "the intake")
+        except TimeoutError as exc:
+            raise ControlUnreachable(
+                f"The workbench did not answer the intake within {INTAKE_SECONDS} seconds."
+            ) from exc
 
     async def read_view(self, endpoint: ControlEndpoint, command: ViewGetCommand) -> View:
         """Read a view an agent step wrote from the workbench that ran it."""

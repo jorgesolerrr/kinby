@@ -421,6 +421,8 @@ class FakeControl:
         #: An intake answers once this is set. Clear it to hold every intake.
         self.intake_release = asyncio.Event()
         self.intake_release.set()
+        #: Set once the hub has asked a workbench for an intake.
+        self.intake_asked = asyncio.Event()
         #: Each read of a workbench's workspace the hub sent, and the endpoint it sent it to.
         self.workspace_reads: list[tuple[ControlEndpoint, ContractModel]] = []
         #: What the next reads of a workspace answer, in order.
@@ -494,6 +496,7 @@ class FakeControl:
         self, endpoint: ControlEndpoint, command: IntakeRunCommand
     ) -> IntakeRunResult:
         self.intakes.append((endpoint, command))
+        self.intake_asked.set()
         await self.intake_release.wait()
         return IntakeRunResult(work_items=self.found.pop(0) if self.found else [])
 

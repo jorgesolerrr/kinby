@@ -338,7 +338,10 @@ class Scheduler:
     async def _fire(self, routine: Routine, trigger: RoutineTrigger) -> AcceptedResult:
         now = self._clock()
         origin = RoutineOrigin(
-            name=routine.name, trigger=trigger, dreaming_stage=routine.is_dreaming_stage
+            name=routine.name,
+            trigger=trigger,
+            dreaming_stage=routine.is_dreaming_stage,
+            intake=routine.is_intake,
         )
         self._turns.require_available(origin)
         accepted = await self._turns.wake_new_thread(
@@ -374,17 +377,23 @@ class Scheduler:
             history = histories.routines
             self._armed = self._arm(routines, catch_up_from={})
             disabled = {routine.name for routine in routines if not routine.enabled}
+            # Only an intake runs past the holding check below, and it waits for its own run.
+            live = self._turns.live_routines()
             pending = [
                 item
                 for record in history.values()
                 for item in record.pending
-                if item.origin.name not in disabled or item.origin.trigger is RoutineTrigger.MANUAL
+                if item.origin.name not in live
+                and (
+                    item.origin.name not in disabled or item.origin.trigger is RoutineTrigger.MANUAL
+                )
             ]
             delivery = min(pending, key=lambda item: item.receipt_order) if pending else None
             due = [
                 (armed.time, routine, armed)
                 for routine in routines
-                if (armed := self._armed.get(routine.name)) is not None
+                if routine.name not in live
+                and (armed := self._armed.get(routine.name)) is not None
                 and armed.time <= self._clock()
             ]
             scheduled = min(due, key=lambda item: item[0]) if due else None
@@ -395,12 +404,15 @@ class Scheduler:
             if delivery is not None and (
                 scheduled is None or delivery.delivery.received_at <= scheduled[0]
             ):
-                stage = any(
-                    routine.name == delivery.origin.name and routine.is_dreaming_stage
-                    for routine in routines
+                target = next(
+                    (routine for routine in routines if routine.name == delivery.origin.name), None
                 )
                 origin = delivery.origin.model_copy(
-                    update={"trigger": RoutineTrigger.SIGNAL, "dreaming_stage": stage}
+                    update={
+                        "trigger": RoutineTrigger.SIGNAL,
+                        "dreaming_stage": target is not None and target.is_dreaming_stage,
+                        "intake": target is not None and target.is_intake,
+                    }
                 )
                 firing = self._start(delivery, origin)
                 rearm = None
@@ -426,7 +438,8 @@ class Scheduler:
                         armed.schedule, self._next(armed.schedule, self._clock())
                     )
                 return
-            await self._turns.drain()
+            # An intake's run is left to end on its own: its close schedules the next pass.
+            await self._turns.drain_holding()
             await self._handle_failures()
             await self._raise_notifications()
 
