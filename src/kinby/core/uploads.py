@@ -22,14 +22,10 @@ from kinby.core.prompt import render_uploads
 _UPLOADS = "uploads"
 #: What a file name may not hold on any system the workspace may sit on.
 _UNSAFE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
-#: The uploads the model sees, by extension, with their media type.
-_IMAGE_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-}
+#: The uploads the model sees, by extension.
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+#: The media type of each image format the model takes, by Pillow's name for the format.
+_MEDIA_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}
 #: The longest edge an image is sent at: Anthropic's limit once a request holds over 20 images.
 _SENT_EDGE = 2000
 #: The bytes an image is sent at, so that its base64 fits Anthropic's 5 MB.
@@ -113,26 +109,33 @@ def _with_uploads(
 
 
 def _image_block(path: Path) -> ImageContentBlock | None:
-    """The image at *path* as the model is sent it, or None for a file that is no image."""
-    mime_type = _IMAGE_TYPES.get(path.suffix.lower())
-    if mime_type is None:
+    """The image at *path* as the model is sent it, or None for a file that is no image the
+    model takes, whatever its extension says."""
+    if path.suffix.lower() not in _IMAGE_SUFFIXES:
         return None
     try:
-        content = _scaled(path.read_bytes())
+        content = path.read_bytes()
+        with Image.open(io.BytesIO(content)) as image:
+            # Pillow decodes lazily, so a truncated image fails only once it loads.
+            image.load()
+            mime_type = _MEDIA_TYPES.get(image.format or "")
+            sent = _scaled(image, content)
     except OSError, Image.DecompressionBombError:
         return None
-    return {"type": "image", "base64": base64.b64encode(content).decode(), "mime_type": mime_type}
+    if mime_type is None:
+        return None
+    return {"type": "image", "base64": base64.b64encode(sent).decode(), "mime_type": mime_type}
 
 
-def _scaled(content: bytes) -> bytes:
-    """*content*, an image, scaled down in its own format until it fits what the model takes."""
-    with Image.open(io.BytesIO(content)) as image:
-        edge = max(image.size)
-        while edge > _SENT_EDGE or len(content) > _SENT_BYTES:
-            edge = _SENT_EDGE if edge > _SENT_EDGE else edge * 3 // 4
-            scaled = image.copy()
-            scaled.thumbnail((edge, edge))
-            out = io.BytesIO()
-            scaled.save(out, format=image.format)
-            content = out.getvalue()
+def _scaled(image: Image.Image, content: bytes) -> bytes:
+    """*content*, the encoded *image*, scaled down in its own format until it fits what the
+    model takes."""
+    edge = max(image.size)
+    while edge > _SENT_EDGE or len(content) > _SENT_BYTES:
+        edge = _SENT_EDGE if edge > _SENT_EDGE else edge * 3 // 4
+        scaled = image.copy()
+        scaled.thumbnail((edge, edge))
+        out = io.BytesIO()
+        scaled.save(out, format=image.format)
+        content = out.getvalue()
     return content

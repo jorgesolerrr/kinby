@@ -409,3 +409,51 @@ def test_a_compactions_summary_request_names_the_uploads(tmp_path: Path) -> None
 
     [summary_call] = model.requests[-1]
     assert f"User: {'a' * LONG}\n\nUploaded: {path}" in summary_call.text
+
+
+def encoded(image_format: str) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (40, 30), "white").save(out, format=image_format)
+    return out.getvalue()
+
+
+def test_an_image_named_for_another_format_arrives_as_its_own_format(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    model = RecordingModel([])
+    dispatcher = runtime(instance, model)
+    screenshot = encoded("JPEG")
+
+    async def scenario() -> None:
+        path = await put(dispatcher, "positions.png", screenshot)
+        await run_turn(dispatcher, await new_thread(dispatcher), "Read it.", [path])
+
+    asyncio.run(scenario())
+
+    [user] = user_messages(model.requests[-1])
+    assert images(user) == [
+        {
+            "type": "image",
+            "base64": base64.b64encode(screenshot).decode(),
+            "mime_type": "image/jpeg",
+        }
+    ]
+
+
+@pytest.mark.parametrize("kind", ["truncated", "unsupported"])
+def test_an_image_the_model_cannot_take_arrives_as_a_path_only(tmp_path: Path, kind: str) -> None:
+    instance = instance_at(tmp_path)
+    model = RecordingModel([])
+    dispatcher = runtime(instance, model)
+    whole = png(40, 30, noise=True)
+    content = whole[: len(whole) // 2] if kind == "truncated" else encoded("BMP")
+
+    async def scenario() -> str:
+        path = await put(dispatcher, "positions.png", content)
+        await run_turn(dispatcher, await new_thread(dispatcher), "Read it.", [path])
+        return path
+
+    path = asyncio.run(scenario())
+
+    [user] = user_messages(model.requests[-1])
+    assert user.text == f"Read it.\n\nUploaded: {path}"
+    assert images(user) == []
