@@ -167,7 +167,7 @@ class Scheduler:
         self._turns.close()
 
     async def interrupt(self) -> None:
-        await self._turns.interrupt_routine()
+        await self._turns.interrupt_routines()
 
     async def interrupt_all(self) -> None:
         """Interrupt every live turn and parked approval: only a force stop asks for this."""
@@ -341,12 +341,10 @@ class Scheduler:
     async def _fire(self, routine: Routine, trigger: RoutineTrigger) -> AcceptedResult:
         now = self._clock()
         origin = RoutineOrigin(
-            name=routine.name,
-            trigger=trigger,
-            dreaming_stage=routine.is_dreaming_stage,
-            intake=routine.is_intake,
+            name=routine.name, trigger=trigger, dreaming_stage=routine.is_dreaming_stage
         )
-        self._turns.require_available(origin)
+        self._turns.require_available()
+        self._turns.require_routine_idle(routine.name, "run")
         accepted = await self._turns.wake_new_thread(
             f"{routine.name} · {self._local_minute(now)}", routine.prompt, origin
         )
@@ -370,7 +368,9 @@ class Scheduler:
         self._instance = replace(self._instance, manifest=manifest)
 
     async def tick(self) -> None:
-        await self._turns.wait_idle()
+        """Start the oldest ready work, and pass again at once after it for the rest."""
+        # Due work a revert refuses stays due, so a pass during one would come round at once.
+        await self._turns.wait_reverted()
         async with self._pass:
             self._reread_manifest()
             await self._handle_failures()
@@ -380,7 +380,7 @@ class Scheduler:
             history = histories.routines
             self._armed = self._arm(routines, catch_up_from={})
             disabled = {routine.name for routine in routines if not routine.enabled}
-            # Only an intake runs past the holding check below, and it waits for its own run.
+            # A routine never runs twice at once, though a parked run lets the next one in.
             live = self._turns.live_routines()
             pending = [
                 item
@@ -402,20 +402,15 @@ class Scheduler:
             scheduled = min(due, key=lambda item: item[0]) if due else None
             if delivery is None and scheduled is None:
                 return
-            if self._turns.holding():
-                return
             if delivery is not None and (
                 scheduled is None or delivery.delivery.received_at <= scheduled[0]
             ):
-                target = next(
-                    (routine for routine in routines if routine.name == delivery.origin.name), None
+                stage = any(
+                    routine.name == delivery.origin.name and routine.is_dreaming_stage
+                    for routine in routines
                 )
                 origin = delivery.origin.model_copy(
-                    update={
-                        "trigger": RoutineTrigger.SIGNAL,
-                        "dreaming_stage": target is not None and target.is_dreaming_stage,
-                        "intake": target is not None and target.is_intake,
-                    }
+                    update={"trigger": RoutineTrigger.SIGNAL, "dreaming_stage": stage}
                 )
                 firing = self._start(delivery, origin)
                 rearm = None
@@ -441,10 +436,7 @@ class Scheduler:
                         armed.schedule, self._next(armed.schedule, self._clock())
                     )
                 return
-            # An intake's run is left to end on its own: its close schedules the next pass.
-            await self._turns.drain_holding()
-            await self._handle_failures()
-            await self._raise_notifications()
+            self.schedule()
 
     async def _raise_notifications(self) -> None:
         """Raise each notification the hub has not answered, until one finds it out of reach."""

@@ -752,6 +752,7 @@ def fetch(signal: dict) -> str:
             RoutineName("news"), delivery, RoutineTrigger.SIGNAL
         )
         await dispatcher.scheduler.tick()
+        await dispatcher.scheduler.drain()
 
         failed = next(
             event.payload

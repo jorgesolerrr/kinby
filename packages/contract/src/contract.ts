@@ -3372,9 +3372,8 @@ export interface UserOrigin {
   kind: "user";
 }
 /**
- * A routine's run. ``dreaming_stage`` and ``intake`` say whether the routine was a dreaming
- * stage, or a line's intake, when its turn started, so a later reader never reloads a routine
- * file that may have changed.
+ * A routine's run. ``dreaming_stage`` says whether the routine was a dreaming stage when
+ * its turn started, so a later reader never reloads a routine file that may have changed.
  */
 export interface RoutineOrigin {
   delivery_id?: string | null;

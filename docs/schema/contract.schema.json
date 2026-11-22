@@ -8850,7 +8850,7 @@
     },
     "RoutineOrigin": {
       "additionalProperties": false,
-      "description": "A routine's run. ``dreaming_stage`` and ``intake`` say whether the routine was a dreaming\nstage, or a line's intake, when its turn started, so a later reader never reloads a routine\nfile that may have changed.",
+      "description": "A routine's run. ``dreaming_stage`` says whether the routine was a dreaming stage when\nits turn started, so a later reader never reloads a routine file that may have changed.",
       "properties": {
         "delivery_id": {
           "anyOf": [
