@@ -576,6 +576,33 @@ def test_another_routine_fires_while_the_lines_intake_runs_but_the_intake_waits_
     asyncio.run(scenario())
 
 
+def test_the_scheduler_does_not_spin_on_a_live_intake_that_is_due_again(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        async with owned(tmp_path, monkeypatch) as hub:
+            await _holding_intake(hub)
+            hub.clock.now = datetime(2026, 11, 14, 9, 1, tzinfo=UTC)
+            scheduler = hub.dispatcher.scheduler
+            tick = scheduler.tick
+            passes = 0
+
+            async def counted() -> None:
+                nonlocal passes
+                passes += 1
+                await tick()
+
+            monkeypatch.setattr(scheduler, "tick", counted)
+            scheduler.start()
+            # Yields to the loop only: a spinning worker passes again on each round.
+            for _ in range(200):
+                await asyncio.sleep(0)
+            await scheduler.stop()
+            await _released(hub)
+
+            assert passes == 1
+
+    asyncio.run(scenario())
+
+
 def test_a_revert_waits_for_the_lines_intake(tmp_path, monkeypatch):
     async def scenario() -> None:
         async with owned(tmp_path, monkeypatch) as hub:

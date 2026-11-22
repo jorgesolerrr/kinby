@@ -219,10 +219,13 @@ class Scheduler:
                 logging.getLogger(__name__).exception("The scheduler pass failed.")
                 delay = 60.0
             else:
+                # A live routine fires once its run ends, whose close schedules the next pass.
+                live = self._turns.live_routines()
                 delay = min(
                     (
                         max(0.0, (armed.time - self._clock()).total_seconds())
-                        for armed in self._armed.values()
+                        for name, armed in self._armed.items()
+                        if name not in live
                     ),
                     default=60.0,
                 )
