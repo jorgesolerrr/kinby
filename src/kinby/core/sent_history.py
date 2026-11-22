@@ -12,6 +12,8 @@ from uuid import UUID
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
 from kinby.contracts import Event, ModelCompleted, ThreadCompacted, TurnStarted, is_turn_closing
+from kinby.core.prompt import render_uploads
+from kinby.core.uploads import named_uploads
 
 #: The size over which a tool result from an earlier turn reaches the model cleared.
 _CLEARED_OVER = 1_000
@@ -175,7 +177,7 @@ def summary_request(
 def _transcript_line(message: AnyMessage) -> str:
     match message:
         case HumanMessage():
-            return f"User: {message.text}"
+            return f"User: {render_uploads(message.text, named_uploads(message))}"
         case AIMessage():
             said = [f"Assistant: {message.text}"] if message.text else []
             calls = [f"Called {call['name']} with {call['args']}" for call in message.tool_calls]
