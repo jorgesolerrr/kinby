@@ -1,5 +1,7 @@
 # Routines and signals start turns through one wake
 
+Amended by [ADR 0133](0133-a-routine-serializes-only-on-its-own-thread.md): a routine turn no longer runs exclusively; it serializes only on its own thread.
+
 Ticket #11 chose to make every non-user start of a turn a wake: one runtime entry point that takes an origin (user, routine, signal) and a payload, records the origin on `turn.started`, and renders the payload into the prompt as data rather than as a user message. A scheduled routine, a routine whose own code ran first, and a future inbound signal all use this path, so gate, recap, statistics and rating apply to them unchanged and the signal receiver only decides listening and auth. A routine run is an ordinary turn on a fresh thread; continuity between runs is the knowledge graph's job. A separate routine runner, or a cue placed in a user-role message that later code sniffs, was rejected because it would give proactive turns a second code path that every later feature (peer messages, subagent completions) would have to join.
 
 ## Consequences

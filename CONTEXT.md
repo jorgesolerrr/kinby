@@ -348,7 +348,7 @@ _Avoid_: git diff (the workspace may not be a Git repository), changes (when the
 
 ### Workspace revert
 
-A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted.
+A user's request to put the workspace back to the **workspace snapshot** taken before a chosen **turn**, discarding that turn's changes and every later turn's. Recorded on the thread like a turn, with its own snapshots, so a revert can itself be reverted. It runs only while no other turn runs on the **instance**, since every thread shares the workspace.
 _Avoid_: rollback, undo
 
 ### Turn target
@@ -382,7 +382,7 @@ One run of the agent loop against a thread, from start to exit (a process, a REP
 
 ### Turn
 
-One cycle of agent work within a **thread**, started by the user or a **wake**, ending when it completes, fails, or is interrupted. An **agent step** on the kinby **engine** is a turn too, on a **workbench**, in a thread of its own that no **instance** holds. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
+One cycle of agent work within a **thread**, started by the user or a **wake**, ending when it completes, fails, or is interrupted. An **agent step** on the kinby **engine** is a turn too, on a **workbench**, in a thread of its own that no **instance** holds. An instance runs turns on different threads at the same time, whoever started them; turns on one thread run one at a time. The natural unit of token attribution, checkpoint bracketing, compaction boundaries, and eval cases. A turn is also the unit of work: what the user calls a task is a turn, and each turn earns at most one **episode**.
 _Avoid_: task
 
 ### Budget
@@ -834,7 +834,7 @@ What started a **turn**: the user, a **routine**, a **step** of a **factory run*
 
 ### Routine
 
-A **wake** an **instance** owns: a prompt, and optionally the instance's own **code step** that runs first. Started by a schedule, by a **delivery**, or by hand. Lives as a directory in the instance; its file is the source of truth.
+A **wake** an **instance** owns: a prompt, and optionally the instance's own **code step** that runs first. Started by a schedule, by a **delivery**, or by hand. Its runs go alongside the user's turns, never in their way. Lives as a directory in the instance; its file is the source of truth.
 _Avoid_: cron job, automation, job
 
 ### Code step

@@ -2,6 +2,8 @@
 
 Amended by [ADR 0119](0119-a-shell-read-runs-unasked-and-a-routine-can-be-granted-its-code-step.md): the gate tells a shell read from other bash, and allows it unasked under ask and auto.
 
+Amended by [ADR 0133](0133-a-routine-serializes-only-on-its-own-thread.md): every turn serializes only on its own thread, so answering a parked routine no longer takes the instance back.
+
 [ADR 0099](0099-dreaming-runs-in-stages-as-routines-whose-body-is-the-lens.md) let a **dreaming stage** parked on an **approval** hold only its own thread. Every other parked turn held the whole **instance**. On 2026-11-01 the `cec-backend` coder's weekly `reflection` routine parked on a `bash` call at 04:00 UTC. Its routine file had no `run: reflect`, so it was not a dreaming stage, and nobody answered. From then on every factory step waited on it, the hub's queue for that instance stalled behind the step, and the hourly `scan` piled up 79 **deliveries**. The only trace was "reflection: parked" in the routine list.
 
 ## Decision
