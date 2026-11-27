@@ -22,6 +22,7 @@ from kinby.contracts import (
     Payload,
     PermissionMode,
     PromptVersion,
+    RoutineName,
     Scope,
     SystemPrompt,
     ThreadCompacted,
@@ -334,7 +335,7 @@ def test_set_mode_rejects_a_mode_above_the_instance_ceiling(tmp_path: Path) -> N
     dispatcher = build_dispatcher(
         tmp_path,
         turns=TurnConfig(
-            lambda: TurnPreparation(
+            lambda _: TurnPreparation(
                 model="openai:gpt-5",
                 default_mode=PermissionMode.ASK,
                 ceiling=PermissionMode.AUTO,
@@ -400,7 +401,7 @@ def test_lowered_ceiling_constrains_an_existing_pin(tmp_path: Path) -> None:
     async def scenario() -> None:
         ceiling = PermissionMode.FULL_ACCESS
 
-        def prepare_for_turn() -> TurnPreparation:
+        def prepare_for_turn(routine: RoutineName | None) -> TurnPreparation:
             return TurnPreparation(
                 model="openai:gpt-5",
                 default_mode=PermissionMode.ASK,
@@ -492,7 +493,7 @@ def test_unpinned_thread_uses_the_instance_default_mode(tmp_path: Path) -> None:
         dispatcher = build_dispatcher(
             tmp_path,
             turns=TurnConfig(
-                lambda: TurnPreparation(
+                lambda _: TurnPreparation(
                     model="openai:gpt-5",
                     default_mode=PermissionMode.AUTO,
                     ceiling=PermissionMode.FULL_ACCESS,
@@ -590,7 +591,7 @@ def test_turn_started_records_the_prepared_prompt_version(tmp_path: Path) -> Non
         dispatcher = build_dispatcher(
             tmp_path,
             turns=TurnConfig(
-                lambda: TurnPreparation(
+                lambda _: TurnPreparation(
                     model="openai:gpt-5",
                     default_mode=PermissionMode.ASK,
                     ceiling=PermissionMode.FULL_ACCESS,
@@ -664,7 +665,7 @@ def test_daily_cost_budget_refuses_a_turn_at_the_limit_without_an_event(
     async def scenario() -> None:
         event_log = EventLog(tmp_path)
 
-        def prepare_for_turn() -> TurnPreparation:
+        def prepare_for_turn(routine: RoutineName | None) -> TurnPreparation:
             return _daily_budget_preparation(event_log, 0.000025)
 
         dispatcher = build_dispatcher(
@@ -722,7 +723,7 @@ def test_daily_cost_budget_refuses_an_unpriced_model_but_unbounded_turns_run(
             bounded_path,
             event_log=bounded_log,
             turns=TurnConfig(
-                lambda: _daily_budget_preparation(
+                lambda _: _daily_budget_preparation(
                     bounded_log,
                     1,
                     model="other:model",
@@ -754,7 +755,7 @@ def test_daily_cost_budget_refuses_an_unpriced_model_but_unbounded_turns_run(
         unbounded = build_dispatcher(
             unbounded_path,
             turns=TurnConfig(
-                lambda: TurnPreparation(
+                lambda _: TurnPreparation(
                     model="other:model",
                     default_mode=PermissionMode.ASK,
                     ceiling=PermissionMode.FULL_ACCESS,
@@ -791,7 +792,7 @@ def test_daily_cost_budget_does_not_count_a_turn_closed_yesterday(
             _historical_turn(datetime.now(UTC) - timedelta(days=1), "openai:gpt-5"),
         )
 
-        def prepare_for_turn() -> TurnPreparation:
+        def prepare_for_turn(routine: RoutineName | None) -> TurnPreparation:
             return _daily_budget_preparation(event_log, 0.000025)
 
         dispatcher = build_dispatcher(
@@ -826,7 +827,7 @@ def test_daily_cost_budget_refuses_an_unpriced_model_from_a_turn_closed_today(
             _historical_turn(datetime.now(UTC), "other:model"),
         )
 
-        def prepare_for_turn() -> TurnPreparation:
+        def prepare_for_turn(routine: RoutineName | None) -> TurnPreparation:
             return _daily_budget_preparation(event_log, 1)
 
         dispatcher = build_dispatcher(
@@ -1727,7 +1728,7 @@ def test_parked_turn_uses_checkpoint_mode_when_event_lacks_mode(tmp_path: Path) 
         restarted = build_dispatcher(
             tmp_path,
             turns=TurnConfig(
-                lambda: TurnPreparation(
+                lambda _: TurnPreparation(
                     model="openai:gpt-5",
                     default_mode=PermissionMode.AUTO,
                     ceiling=PermissionMode.FULL_ACCESS,
@@ -1868,7 +1869,7 @@ def test_lowered_ceiling_constrains_a_parked_turn_on_resume(tmp_path: Path) -> N
     async def scenario() -> None:
         ceiling = PermissionMode.FULL_ACCESS
 
-        def prepare_for_turn() -> TurnPreparation:
+        def prepare_for_turn(routine: RoutineName | None) -> TurnPreparation:
             return TurnPreparation(
                 model="openai:gpt-5",
                 default_mode=PermissionMode.AUTO,

@@ -146,6 +146,7 @@ def test_write_routine_documents_every_frontmatter_key_from_spec(tmp_path):
         "mode",
         "catch_up",
         "run",
+        "model",
         "signal",
         "arguments",
         "steps",

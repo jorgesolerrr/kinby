@@ -12,8 +12,9 @@ from cronsim import CronSim
 from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue  # noqa: TID251 - file boundary
 
 from kinby.contracts import CronSchedule, PermissionMode, RoutineName, SignalAuth, Warning
+from kinby.core.pricing import instance_prices
 from kinby.frontmatter import parse_frontmatter, required_string
-from kinby.instance import Budgets, Instance
+from kinby.instance import Budgets, Instance, ModelName, Models
 from kinby.instance.layout import ROUTINE_CODE_FILE, ROUTINE_FILE, ROUTINES_DIR
 from kinby.instance.permissions import GatePolicy, constrain_mode, load_permissions
 from kinby.plugins.intake import intake_tools
@@ -39,6 +40,7 @@ class _RawRoutine(_RawFrontmatter):
     mode: PermissionMode | None = None
     catch_up: bool = True
     run: str | None = None
+    model: ModelName | None = None
     signal: _RawSignal | None = None
     arguments: Json[dict[str, JsonValue]] = Field(default_factory=dict)
     steps: Annotated[int, Field(gt=0)] | None = None
@@ -125,10 +127,17 @@ class Routine:
     budgets: Budgets
     code_step: SharedCodeStep | Tool | None
     signal: SignalConfig | None = None
+    model: ModelName | None = None
 
     @property
     def is_dreaming_stage(self) -> bool:
         return self.code_step in DREAMING_STEPS
+
+    def turn_model(self, models: Models) -> ModelName:
+        """Its own model, else the recap model for consolidation and the main one otherwise."""
+        if self.model is not None:
+            return self.model
+        return models.recap if self.code_step == CONSOLIDATION_STEP else models.main
 
 
 def load_routines(
@@ -182,6 +191,10 @@ def load_routine_file(path: Path, policy: GatePolicy, instance: Instance) -> Rou
             raise ValueError("A routine schedule must have five cron fields.")
         if next(CronSim(raw.schedule, datetime.now(UTC)), None) is None:
             raise ValueError("The routine schedule has no occurrence in the next fifty years.")
+    if raw.model is not None and raw.model not in instance_prices(instance):
+        raise ValueError(
+            f'Model "{raw.model}" has no price. Add [prices."{raw.model}"] to kinby.toml.'
+        )
     mode = raw.mode if raw.mode is not None else policy.mode
     mode = constrain_mode(mode, policy.ceiling)
     code_path = path.parent / ROUTINE_CODE_FILE
@@ -228,6 +241,7 @@ def load_routine_file(path: Path, policy: GatePolicy, instance: Instance) -> Rou
         arguments=raw.arguments,
         budgets=Budgets(steps=raw.steps, tokens=raw.tokens, seconds=raw.seconds),
         signal=signal,
+        model=raw.model,
     )
 
 

@@ -35,6 +35,7 @@ Use one `key: value` per line between `---` delimiters.
 | `mode` | Instance default | `read-only`, `ask`, `auto`, or `full-access`, clamped to the instance ceiling. |
 | `catch_up` | `true` | After downtime, fire a missed schedule at most once. A routine with no run history waits for its next scheduled time. |
 | `run` | Absent | Name of a shared code-step tool. Without this key or `run.py`, the model runs directly. |
+| `model` | The instance's main model; `[models] recap` for a `run: consolidate` routine | A `provider:model` the instance prices, from kinby's shipped prices or a `[prices]` table in `kinby.toml`. |
 | `signal` | Absent | Inbound signal configuration. Without this block, the routine has no signal path. |
 | `arguments` | `{}` | JSON object passed to the code step, written on one line. |
 | `steps` | Inherit instance budget, otherwise unlimited | Positive integer counting node executions. |

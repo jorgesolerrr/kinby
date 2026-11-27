@@ -483,6 +483,46 @@ def test_routine_write_refuses_a_routine_the_loader_refuses(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_routine_write_refuses_an_unpriced_model(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+
+        refused = await call(
+            dispatcher,
+            "routine.write",
+            name="news",
+            content="---\ndescription: News\nmodel: custom:unpriced\n---\nRead the news.\n",
+            hash=None,
+        )
+
+        assert isinstance(refused, ErrorEnvelope)
+        assert refused.code is ErrorCode.INVALID_ARGUMENT
+        assert 'Model "custom:unpriced" has no price.' in refused.message
+        assert not (tmp_path / "routines" / "news").exists()
+
+    asyncio.run(scenario())
+
+
+def test_routine_write_takes_a_model_priced_since_the_instance_started(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        with (tmp_path / "kinby.toml").open("a") as manifest:
+            manifest.write('[prices."custom:local"]\ninput = 1\noutput = 2\n')
+
+        written = await call(
+            dispatcher,
+            "routine.write",
+            name="news",
+            content="---\ndescription: News\nmodel: custom:local\n---\nRead the news.\n",
+            hash=None,
+        )
+
+        assert not isinstance(written, ErrorEnvelope)
+        assert "model: custom:local" in written.content
+
+    asyncio.run(scenario())
+
+
 def test_routine_set_enabled_toggles_the_enabled_line_without_a_hash(tmp_path: Path) -> None:
     async def scenario() -> None:
         instance = instance_at(tmp_path)

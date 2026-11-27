@@ -41,6 +41,8 @@ _DEFAULT_DAILY_COST = DailyCost()
 
 
 def fixed_turn_preparation(
+    routine: RoutineName | None = None,
+    /,
     *,
     model: str = "openai:gpt-5",
     budgets: Budgets = _DEFAULT_BUDGETS,

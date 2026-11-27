@@ -189,6 +189,8 @@ def _no_token_usage() -> TokenTotals:
 
 
 TurnResult = TurnOutcome | ParkedTurn
+#: Prepares a turn, given the routine whose turn it is.
+PrepareTurn = Callable[[RoutineName | None], TurnPreparation]
 Emit = Callable[[Payload], Awaitable[Event]]
 
 
@@ -276,7 +278,7 @@ class Turns:
         store: ThreadStore,
         log: EventLog,
         runner: TurnRunner,
-        prepare_for_turn: Callable[[], TurnPreparation],
+        prepare_for_turn: PrepareTurn,
         permission_ceiling: Callable[[], PermissionMode],
         after_turn: ClosedTurnHook,
         snapshots: SnapshotStore | None = None,
@@ -717,7 +719,7 @@ class Turns:
         skills: tuple[SkillName, ...] = (),
         uploads: tuple[UploadPath, ...] = (),
     ) -> AcceptedResult:
-        preparation = self._prepare_for_turn()
+        preparation = self._prepare_for_turn(_routine(origin))
         check_daily_budget(preparation.daily_budget)
         missing = next((name for name in skills if name not in preparation.skills), None)
         if missing is not None:
@@ -936,7 +938,7 @@ class Turns:
         claim = TurnClaim(origin)
         self._claims[parked.thread_id] = claim
         try:
-            preparation = self._prepare_for_turn()
+            preparation = self._prepare_for_turn(_routine(origin))
             turn = await self._runner.restore(parked.thread_id, parked.turn_id)
             if self._claims.get(parked.thread_id) is not claim:
                 raise _no_active_turn(parked.thread_id)
@@ -1184,6 +1186,10 @@ def _recorded_model_calls(turn_events: Sequence[Event]) -> list[ModelCompleted]:
 
 def _recorded_model_usage(turn_events: Sequence[Event]) -> TokenTotals:
     return _sum_model_calls(_recorded_model_calls(turn_events))
+
+
+def _routine(origin: Origin) -> RoutineName | None:
+    return origin.name if isinstance(origin, RoutineOrigin) else None
 
 
 def _permission_mode(

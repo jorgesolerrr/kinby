@@ -327,6 +327,42 @@ def test_routine_mode_is_clamped_to_instance_ceiling(tmp_path: Path) -> None:
     assert load_routines(instance)[0][0].mode is PermissionMode.READ_ONLY
 
 
+def test_routine_names_a_model_the_price_map_prices(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    routine_file(instance, "description: News\nmodel: anthropic:claude-haiku-4-5")
+    routine_file(instance, "description: Notes", name="notes")
+    routines, warnings = load_routines(instance)
+    assert warnings == ()
+    assert [routine.model for routine in routines] == ["anthropic:claude-haiku-4-5", None]
+
+
+def test_routine_model_may_be_priced_by_the_manifest(tmp_path: Path) -> None:
+    (tmp_path / "kinby.toml").write_text(
+        'id = "test"\n[models]\nmain = "openai:gpt-5"\n[tools]\ndefaults = false\n'
+        '[prices."custom:local"]\ninput = 1\noutput = 2\n'
+    )
+    instance = load_instance(tmp_path)
+    routine_file(instance, "description: News\nmodel: custom:local")
+    routines, warnings = load_routines(instance)
+    assert warnings == ()
+    assert routines[0].model == "custom:local"
+
+
+def test_routine_refuses_an_unpriced_model(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    path = routine_file(instance, "description: News\nmodel: custom:unpriced")
+    assert load_routines(instance) == (
+        (),
+        (
+            Warning(
+                sources=(str(path),),
+                message='Model "custom:unpriced" has no price. '
+                'Add [prices."custom:unpriced"] to kinby.toml.',
+            ),
+        ),
+    )
+
+
 class RoutineModel:
     def __init__(self) -> None:
         self.messages: list[list[BaseMessage]] = []
@@ -723,6 +759,118 @@ def test_routine_turn_started_records_the_routine_mode(
             if isinstance(event.payload, TurnStarted)
         )
         assert started.permission_mode is recorded
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "model"),
+    [
+        ("model: anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+        ("mode: ask", "openai:gpt-5"),
+        ("run: consolidate", "custom:unpriced"),
+        ("run: consolidate\nmodel: anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+        ("run: reflect", "openai:gpt-5"),
+        ("run: learning_review", "openai:gpt-5"),
+    ],
+)
+@pytest.mark.parametrize("trigger", [RoutineTrigger.MANUAL, RoutineTrigger.SIGNAL])
+def test_routine_turn_started_records_the_routine_model(
+    tmp_path: Path, frontmatter: str, model: str, trigger: RoutineTrigger
+) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, f"description: News\n{frontmatter}")
+        dispatcher, log = signal_runtime(instance, RoutineModel())
+        scheduler = dispatcher.scheduler
+
+        if trigger is RoutineTrigger.SIGNAL:
+            delivery = Delivery(
+                headers={},
+                content_type="text/plain",
+                body="news",
+                received_at=datetime(2026, 9, 7, 10, tzinfo=UTC),
+            )
+            accepted = (await scheduler.receive(RoutineName("news"), delivery, trigger)).accepted
+            await scheduler.tick()
+        else:
+            accepted = await scheduler.run(RoutineRunCommand(name=RoutineName("news")))
+        await scheduler.drain()
+
+        started = next(
+            event.payload
+            for event in log.thread_events(accepted.thread_id)
+            if isinstance(event.payload, TurnStarted)
+        )
+        assert started.model == model
+
+    asyncio.run(scenario())
+
+
+def test_routine_model_calls_run_on_the_routine_model(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        routine_file(instance, "description: News\nmodel: anthropic:claude-haiku-4-5")
+        log = EventLog(instance.manifest.state_dir)
+        store = ThreadStore(instance.manifest.state_dir)
+        asked: list[str] = []
+
+        def model_factory(name: str) -> RoutineModel:
+            asked.append(name)
+            return RoutineModel()
+
+        runner = LangGraphRunner(instance, event_log=log, model_factory=model_factory)
+        turns = Turns(
+            store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, no_recap
+        )
+        routine_thread = store.create(None)
+        await turns.wake(
+            routine_thread.id,
+            "Read the news.",
+            RoutineOrigin(name=RoutineName("news"), trigger=RoutineTrigger.MANUAL),
+        )
+        await turns.wait_idle()
+        user_thread = store.create(None)
+        await turns.wake(user_thread.id, "Hello", UserOrigin())
+        await turns.wait_idle()
+
+        assert asked == ["anthropic:claude-haiku-4-5", "openai:gpt-5"]
+
+    asyncio.run(scenario())
+
+
+def test_daily_budget_prices_the_routine_model(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        instance = instance_at(tmp_path)
+        manifest = tmp_path / "kinby.toml"
+        manifest.write_text(
+            manifest.read_text().replace("openai:gpt-5", "custom:main")
+            + "[budgets]\nusd_per_day = 1\n"
+        )
+        routine_file(instance, "description: News\nmodel: anthropic:claude-haiku-4-5")
+        routine_file(instance, "description: Consolidate\nrun: consolidate", name="consolidation")
+
+        events = await fire(instance, RoutineModel())
+
+        assert isinstance(events[0].payload, TurnStarted)
+        assert events[0].payload.model == "anthropic:claude-haiku-4-5"
+        assert isinstance(events[-1].payload, TurnCompleted)
+        log = EventLog(instance.manifest.state_dir)
+        store = ThreadStore(instance.manifest.state_dir)
+        runner = LangGraphRunner(instance, event_log=log, model_factory=lambda _: RoutineModel())
+        turns = Turns(
+            store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, no_recap
+        )
+        with pytest.raises(ModelUnpriced, match="custom:unpriced"):
+            await turns.wake(
+                store.create(None).id,
+                "",
+                RoutineOrigin(
+                    name=RoutineName("consolidation"),
+                    trigger=RoutineTrigger.MANUAL,
+                    dreaming_stage=True,
+                ),
+            )
 
     asyncio.run(scenario())
 

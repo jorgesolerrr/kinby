@@ -162,11 +162,19 @@ async def _fire(
     instance: Instance,
     model: ConsolidatingModel,
     after_turn: ClosedTurnHook = no_recap,
+    asked: list[str] | None = None,
 ) -> list[Event]:
+    """Fire the stage on *model*, adding each model name the runner asks for to *asked*."""
     log = EventLog(instance.manifest.state_dir)
     store = ThreadStore(instance.manifest.state_dir)
+    asked = [] if asked is None else asked
+
+    def model_factory(name: str) -> ConsolidatingModel:
+        asked.append(name)
+        return model
+
     runner = LangGraphRunner(
-        instance, event_log=log, model_factory=lambda _: model, today=lambda: _DAY
+        instance, event_log=log, model_factory=model_factory, today=lambda: _DAY
     )
     turns = Turns(
         store, log, runner, runner.prepare_for_turn, runner.permission_ceiling, after_turn
@@ -214,6 +222,34 @@ def test_a_firing_with_no_uncovered_episodes_is_no_work_at_zero_tokens(tmp_path:
     assert completed(events).outcome is CompletionOutcome.NO_WORK
     assert completed(events).input_tokens == completed(events).output_tokens == 0
     assert consolidated(events) == []
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "model"),
+    [
+        ("", "custom:unpriced"),
+        ("\nmodel: anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+    ],
+)
+def test_consolidation_runs_on_the_recap_model_unless_it_names_its_own(
+    tmp_path: Path, frontmatter: str, model: str
+) -> None:
+    instance = instance_at(tmp_path)
+    routine_file(
+        instance,
+        f"description: Consolidate episodes\nrun: consolidate\nmode: full-access{frontmatter}",
+        _LENS,
+        name="consolidation",
+    )
+    episode(instance, "Sent the invoices late on Monday")
+    asked: list[str] = []
+
+    events = asyncio.run(_fire(instance, ConsolidatingModel(), asked=asked))
+
+    assert completed(events).outcome is CompletionOutcome.WORK
+    assert asked == [model]
+    assert isinstance(events[0].payload, TurnStarted)
+    assert events[0].payload.model == model
 
 
 def test_a_consolidation_writes_cited_facts_and_covers_the_whole_batch(tmp_path: Path) -> None:

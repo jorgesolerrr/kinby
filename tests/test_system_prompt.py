@@ -7,7 +7,14 @@ from typing import Self
 from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 
-from kinby.contracts import AcceptedResult, Event, Scope, ThreadCreateResult, TurnStarted
+from kinby.contracts import (
+    AcceptedResult,
+    Event,
+    RoutineName,
+    Scope,
+    ThreadCreateResult,
+    TurnStarted,
+)
 from kinby.core.dispatcher import Dispatcher, TurnConfig, build_dispatcher
 from kinby.core.events import EventLog
 from kinby.core.prompt import assemble_system_prompt, prompt_version
@@ -270,7 +277,7 @@ def test_prepared_prompt_does_not_drift_before_the_model_runs(tmp_path: Path) ->
             today=_fixed_today,
         )
 
-        def prepare_for_turn() -> TurnPreparation:
+        def prepare_for_turn(routine: RoutineName | None) -> TurnPreparation:
             preparation = runner.prepare_for_turn()
             (instance_path / "SYSTEM.md").write_text("CHANGED BEHAVIOR", encoding="utf-8")
             return preparation

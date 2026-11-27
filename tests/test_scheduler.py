@@ -1997,7 +1997,7 @@ def test_daily_refusal_leaves_failure_count_unchanged(tmp_path):
             instance.manifest.state_dir,
             turns=ScheduledTurnConfig(
                 TurnConfig(
-                    lambda: fixed_turn_preparation(
+                    lambda _: fixed_turn_preparation(
                         budgets=Budgets(usd_per_day=1), daily_cost=DailyCost(usd=1)
                     ),
                     fixed_permission_ceiling,
