@@ -42,10 +42,21 @@ BROWSER_GUIDANCE = (
     "and tell the user with notify, instead of signing in."
 )
 
+#: What a kinby turn on a workbench is told about its line owner's memory (ADR 0134).
+OWNER_MEMORY_GUIDANCE = (
+    "# Memory\n"
+    "Earlier work is remembered by the owner of your run's line, and you can read its memory but "
+    "not change it. memory_search finds the facts whose description or subjects hold any word of "
+    "the query, best match first; a date bound adds the episodes of earlier work in that range. "
+    "memory_open reads one node by the id memory_search returns.\n"
+    "Before you act, search the owner's memory for the task."
+)
+
 
 class PromptSectionName(StrEnum):
     PREAMBLE = "preamble"
     BROWSER = "browser"
+    OWNER_MEMORY = "owner memory"
     BEHAVIOR = "behavior prompt"
     CONVENTIONS = "workspace conventions"
     SKILLS = "skills catalogue"
@@ -108,8 +119,11 @@ def assemble_system_prompt(
     skills: Sequence[Skill],
     today: date,
     memory_index: str | None = None,
+    *,
+    owner_memory: bool = False,
 ) -> tuple[PromptSection, ...]:
-    """Return the existing prompt sections in their fixed cache-friendly order."""
+    """Return the existing prompt sections in their fixed cache-friendly order, with the guidance
+    on the line owner's memory for a workbench turn that reads it."""
     sections = [
         PromptSection(
             name=PromptSectionName.PREAMBLE,
@@ -123,6 +137,14 @@ def assemble_system_prompt(
                 name=PromptSectionName.BROWSER,
                 source=PromptSectionSource.KINBY,
                 text=BROWSER_GUIDANCE,
+            )
+        )
+    if owner_memory:
+        sections.append(
+            PromptSection(
+                name=PromptSectionName.OWNER_MEMORY,
+                source=PromptSectionSource.KINBY,
+                text=OWNER_MEMORY_GUIDANCE,
             )
         )
     behavior = _file_section(PromptSectionName.BEHAVIOR, instance.path / SYSTEM_NAME)

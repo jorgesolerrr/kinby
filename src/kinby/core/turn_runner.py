@@ -129,6 +129,7 @@ from kinby.core.sent_history import (
     turn_start,
     unanswered,
 )
+from kinby.core.session_recalls import SessionAttempt
 from kinby.core.threads import ThreadStore, pending_approval
 from kinby.core.turn_metrics import UnpricedModel
 from kinby.core.turns import (
@@ -172,6 +173,7 @@ from kinby.plugins.browser_tools import browser_takeover, browser_tools
 from kinby.plugins.core import built_in_states, by_state, core_tools
 from kinby.plugins.errors import exception_message
 from kinby.plugins.hub_browser import HubBrowser
+from kinby.plugins.hub_memory import owner_memory_tools
 from kinby.plugins.instance_tools import routine_config_file
 from kinby.plugins.listed_tools import record_authored_tools
 from kinby.plugins.mcp import McpTools, mcp_tool_states, mcp_tools
@@ -532,6 +534,7 @@ class LangGraphRunner:
         browser: BrowserService | None = None,
         memory_delivery: MemoryDelivery = MemoryDelivery.NONE,
         workbench_skills: tuple[Skill, ...] | None = None,
+        owner_memory: SessionAttempt | None = None,
     ) -> None:
         """Count each profile version with *tokenizer*. Without one, the profile goes uncounted.
         The browser tools reach *browser*, or else the hub's browser service. Each turn gets its
@@ -540,10 +543,12 @@ class LangGraphRunner:
         With *workbench_skills* the turn runs on a workbench, where no instance's files hold its
         manifest or its skills: *instance* is never read again, its skills are those, and the
         skill tool and view_write are its only core tools. The views it writes are handed to the
-        run's owner, so it reads, patches and deletes none.
+        run's owner, so it reads, patches and deletes none. With *owner_memory* too, it searches
+        and opens, read-only, the memory of its run's line owner at that step attempt.
         """
         self._instance = instance
         self._workbench_skills = workbench_skills
+        self._owner_memory = owner_memory
         self._event_log = (
             event_log if event_log is not None else EventLog(instance.manifest.state_dir)
         )
@@ -629,7 +634,8 @@ class LangGraphRunner:
 
     def _core_tools(self, skills: tuple[Skill, ...]) -> tuple[Tool, ...]:
         if self._workbench_skills is not None:
-            return (skill_tool(skills), view_write, *browser_tools(self._instance))
+            memory = () if self._owner_memory is None else owner_memory_tools(self._owner_memory)
+            return (skill_tool(skills), view_write, *browser_tools(self._instance), *memory)
         return core_tools(self._instance, skills, today=self._today)
 
     def routine_mode(self, name: RoutineName) -> PermissionMode | None:
@@ -862,7 +868,13 @@ class LangGraphRunner:
             if self._memory_delivery is MemoryDelivery.INDEX
             else None
         )
-        return assemble_system_prompt(self._instance, skills, self._today(), index)
+        return assemble_system_prompt(
+            self._instance,
+            skills,
+            self._today(),
+            index,
+            owner_memory=self._owner_memory is not None,
+        )
 
     async def _invoke(
         self,

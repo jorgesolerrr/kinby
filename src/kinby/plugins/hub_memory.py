@@ -21,6 +21,7 @@ from kinby.core.session_recalls import SessionAttempt
 from kinby.memory.facade import MemoryHit
 from kinby.memory.tools import hits_json
 from kinby.plugins.hub import HUB_SCOPES_VARIABLE, HUB_URL_VARIABLE, HubRefused, call_hub
+from kinby.plugins.tools import Tool, tool
 
 
 class OwnerMemoryUnavailable(Exception):
@@ -61,6 +62,30 @@ async def open_owner_memory(attempt: SessionAttempt, node: NodeId) -> str:
     elif found.run is not None:
         opened |= {"run": str(found.run), "tools": found.tools}
     return json.dumps(opened, ensure_ascii=False)
+
+
+def owner_memory_tools(attempt: SessionAttempt) -> tuple[Tool, ...]:
+    """The read-only memory tools of a kinby turn at the step *attempt* of a workbench's run."""
+
+    @tool(write=False)
+    async def memory_search(
+        query: str, after: date | None = None, before: date | None = None
+    ) -> str:
+        """Search facts for any query word, best match first; after or before adds the episodes."""
+        try:
+            return await search_owner_memory(attempt, query, after, before)
+        except OwnerMemoryUnavailable as exc:
+            return f"{exc} Go on without memory."
+
+    @tool(write=False)
+    async def memory_open(node: NodeId) -> str:
+        """Open one memory node by the id returned from memory_search."""
+        try:
+            return await open_owner_memory(attempt, node)
+        except OwnerMemoryUnavailable as exc:
+            return f"{exc} Go on without memory."
+
+    return memory_search, memory_open
 
 
 async def _call[Command: ContractModel, Result: ContractModel](
