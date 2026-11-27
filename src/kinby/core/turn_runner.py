@@ -579,7 +579,8 @@ class LangGraphRunner:
         graph_builder.add_edge("tools", "model")
         self._graph_builder = graph_builder
 
-    def prepare_for_turn(self) -> TurnPreparation:
+    def prepare_for_turn(self, routine: RoutineName | None = None) -> TurnPreparation:
+        """Prepare a turn, on *routine*'s model when it is a routine's turn."""
         manifest = self._manifest()
         if manifest.tools != self._instance.manifest.tools:
             self._tools = ToolRegistry(self._instance.path, tools=manifest.tools)
@@ -587,6 +588,8 @@ class LangGraphRunner:
         self._gate_policy = self._load_gate_policy()
         skills, _ = self._skills()
         sections = self._prompt_sections(skills)
+        found = None if routine is None else self._routine(routine)
+        model = manifest.models.main if found is None else found.turn_model(manifest.models)
         profile = next(
             (section for section in sections if section.name is PromptSectionName.PROFILE), None
         )
@@ -603,14 +606,10 @@ class LangGraphRunner:
             daily_budget = DailyBudget(
                 limit=limit,
                 cost=daily_cost(self._closed_on(today), prices, today),
-                unpriced_model=(
-                    UnpricedModel(manifest.models.main)
-                    if manifest.models.main not in prices
-                    else None
-                ),
+                unpriced_model=UnpricedModel(model) if model not in prices else None,
             )
         return TurnPreparation(
-            model=manifest.models.main,
+            model=model,
             default_mode=self._gate_policy.mode,
             ceiling=self._gate_policy.ceiling,
             prompt_version=prompt_version(sections),
@@ -639,8 +638,12 @@ class LangGraphRunner:
         return core_tools(self._instance, skills, today=self._today)
 
     def routine_mode(self, name: RoutineName) -> PermissionMode | None:
+        routine = self._routine(name)
+        return None if routine is None else routine.mode
+
+    def _routine(self, name: RoutineName) -> Routine | None:
         routines, _ = load_routines(self._instance, policy=self._gate_policy)
-        return next((routine.mode for routine in routines if routine.name == name), None)
+        return next((routine for routine in routines if routine.name == name), None)
 
     def permission_ceiling(self) -> PermissionMode:
         return self._load_gate_policy().ceiling

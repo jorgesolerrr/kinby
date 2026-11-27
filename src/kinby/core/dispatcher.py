@@ -134,7 +134,7 @@ from kinby.core.stats import (
 from kinby.core.threads import ThreadRecord, ThreadStore, thread_list, thread_summary
 from kinby.core.titles import TitleWriter
 from kinby.core.turn_metrics import TurnKey, TurnMetricsResult, metrics_events, turn_metrics
-from kinby.core.turns import TurnPreparation, TurnRunner, Turns
+from kinby.core.turns import PrepareTurn, TurnRunner, Turns
 from kinby.core.uploads import InstanceUploads
 from kinby.core.usage import TimeRange, usage_totals
 from kinby.core.views import InstanceViews
@@ -152,7 +152,7 @@ _WORK_EVENTS = frozenset(
 
 @dataclass(frozen=True)
 class TurnConfig:
-    prepare_for_turn: Callable[[], TurnPreparation]
+    prepare_for_turn: PrepareTurn
     permission_ceiling: Callable[[], PermissionMode]
     runner: TurnRunner
     recap: RecapWriter | None = None

@@ -821,7 +821,7 @@ def test_turn_config_reapplies_the_session_model_override(tmp_path: Path) -> Non
             encoding="utf-8",
         )
 
-        preparation = configured.prepare_for_turn()
+        preparation = configured.prepare_for_turn(None)
 
         assert preparation.model == "anthropic:claude-sonnet-4-6"
         assert preparation.default_mode is PermissionMode.ASK
