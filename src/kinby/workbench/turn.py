@@ -1,7 +1,7 @@
 """An agent step's kinby turn on a workbench, which runs with what a workbench has instead of an
-instance: the run's folder, the shipped gate policy, the skills it is offered, and the hub's
-browser when the workbench has one. The views it writes belong to the run's owner, which the hub
-writes them to."""
+instance: the run's folder, the shipped gate policy, the skills it is offered, the hub's browser
+when the workbench has one, and its line owner's memory, read-only, when its hub route reads it.
+The views it writes belong to the run's owner, which the hub writes them to."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from kinby.core.errors import CoreError
 from kinby.core.events import EventLog
 from kinby.core.pricing import price_map, token_cost
 from kinby.core.prompt import render_step_message
+from kinby.core.session_recalls import SessionAttempt
 from kinby.core.steps import last_message, step_failed
 from kinby.core.turn_runner import LangGraphRunner, ModelFactory
 from kinby.core.turns import ApprovalAnswer, ParkedTurn, PreparedTurnRequest, TurnContext
@@ -59,6 +60,7 @@ from kinby.instance import (
 from kinby.instance.dataclasses import Compaction
 from kinby.instance.permissions import SHIPPED_POLICY
 from kinby.plugins.browser import BrowserService
+from kinby.plugins.hub_memory import reads_owner_memory
 from kinby.plugins.skills import Skill
 
 #: The default tools a workbench's turn is offered: bash and the file tools.
@@ -105,6 +107,11 @@ async def run_turn(
         gate_policy=SHIPPED_POLICY,
         browser=browser,
         workbench_skills=tuple(skills),
+        owner_memory=(
+            SessionAttempt(command.origin.run_id, command.origin.step, command.attempt)
+            if reads_owner_memory()
+            else None
+        ),
     )
     preparation = runner.prepare_for_turn()
     if answered is None:
