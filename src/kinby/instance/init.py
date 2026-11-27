@@ -46,7 +46,10 @@ DEFAULT_CONSOLIDATION_LENS = (
     "Look for lessons the episodes repeat: a mistake made twice, a fix that worked again, "
     "a preference the user restated. Look for areas of the work they share, such as a "
     "feature of a repository or a recurring errand. Prefer a few facts a later session "
-    "would search for over many small ones."
+    "would search for over many small ones. Keep each fact short enough to read in a tight "
+    "turn: the area map, the current decision, the gotcha to follow, never the history of how "
+    "it got there. When a fact updates an area fact or merges facts that overlap, list the "
+    "facts it replaces in supersedes."
 )
 #: The body of a new instance's reflection routine: what that dreaming stage looks for.
 DEFAULT_REFLECTION_LENS = (
