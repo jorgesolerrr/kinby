@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -43,7 +43,7 @@ class InvalidNodeId(ValueError):
 
 
 class NodeNotFound(LookupError):
-    """No live node has this id: none was written, or it was forgotten."""
+    """No live node has this id: none was written, or it was forgotten or superseded."""
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -62,6 +62,8 @@ class _FactFrontmatter(_NodeFrontmatter):
     #: Written only on a fact dreaming learned from episodes.
     sources: tuple[NodeId, ...] = ()
     workbench: str | None = None
+    #: Written only on a fact consolidation learned in place of others.
+    supersedes: tuple[NodeId, ...] = ()
     tombstone: bool = False
     #: Absent on a tombstone written before a forget recorded its day.
     forgotten: date | None = None
@@ -97,6 +99,13 @@ class ForgottenFact:
 
     fact: Fact
     forgotten_on: date | None
+
+
+def _superseded(nodes: Iterable[MemoryNode]) -> frozenset[NodeId]:
+    """The facts any fact supersedes, a forgotten one's too, so a forget brings none back."""
+    return frozenset(
+        node for memory in nodes if isinstance(memory, Fact) for node in memory.supersedes
+    )
 
 
 def _searchable(memory: MemoryNode) -> str:
@@ -170,7 +179,13 @@ class GraphStore:
         A fact also holds its source episodes' terms, since it takes their place in recall
         (ADR 0100).
         """
-        live = [memory for memory, frontmatter in self._read_all() if not frontmatter.tombstone]
+        nodes = list(self._read_all())
+        superseded = _superseded(memory for memory, _ in nodes)
+        live = [
+            memory
+            for memory, frontmatter in nodes
+            if not frontmatter.tombstone and memory.node not in superseded
+        ]
         text = {memory.node: _searchable(memory) for memory in live}
         scored: list[tuple[MemoryNode, int]] = []
         for memory in live:
@@ -196,7 +211,7 @@ class GraphStore:
         return frozenset(memory.node for memory, _ in self._read_all() if isinstance(memory, Fact))
 
     def live_facts(self) -> list[LiveFact]:
-        """Every fact no tombstone hides, newest first."""
+        """Every fact neither forgotten nor superseded, newest first."""
         return [
             LiveFact(node=memory.node, date=memory.date, description=memory.description)
             for memory in self.nodes()
@@ -220,6 +235,8 @@ class GraphStore:
         memory = _read_node(path)
         if memory is None:
             raise NodeNotFound(f'Graph node "{node}" was forgotten.')
+        if node in _superseded(memory for memory, _ in self._read_all()):
+            raise NodeNotFound(f'Graph node "{node}" was superseded.')
         return memory
 
     def remember(self, memory: MemoryNode) -> NodeId:
@@ -304,6 +321,11 @@ def _render_node(memory: MemoryNode) -> str:
         if isinstance(memory, Fact) and memory.sources
         else ""
     )
+    supersedes = (
+        f"supersedes: {render_frontmatter_value(memory.supersedes)}\n"
+        if isinstance(memory, Fact) and memory.supersedes
+        else ""
+    )
     workbench = (
         ""
         if memory.workbench is None
@@ -320,6 +342,7 @@ def _render_node(memory: MemoryNode) -> str:
         f"{tools}"
         f"{source}"
         f"{sources}"
+        f"{supersedes}"
         "---\n"
         f"{body}\n"
     )
@@ -362,6 +385,7 @@ def _parse_node(path: Path) -> tuple[MemoryNode, _Frontmatter]:
             added_by_user=frontmatter.source == "user",
             sources=frontmatter.sources,
             workbench=frontmatter.workbench,
+            supersedes=frontmatter.supersedes,
         )
         return fact, frontmatter
     recaps = (

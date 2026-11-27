@@ -540,6 +540,64 @@ def test_remember_writes_a_fact_with_its_source_episodes(tmp_path: Path) -> None
     )
 
 
+def _deploy_fact(memory: Memory, day: int, *supersedes: NodeId) -> NodeId:
+    return memory.remember(
+        Fact(
+            node=NodeId(f"2026-09-0{day}-deploy-day"),
+            date=date(2026, 9, day),
+            description=f"Deploys go out on day {day}",
+            subjects=("deployment",),
+            body="Deploy then.",
+            thread=_THREAD_ID,
+            supersedes=supersedes,
+        )
+    )
+
+
+def test_remember_writes_a_fact_with_the_facts_it_supersedes(tmp_path: Path) -> None:
+    memory = _graph_store(tmp_path)
+    older = _deploy_fact(memory, 1)
+
+    newer = _deploy_fact(memory, 2, older)
+
+    opened = memory.open(newer)
+    assert isinstance(opened, Fact)
+    assert opened.supersedes == (older,)
+    assert f'supersedes: ["{older}"]\n' in (
+        tmp_path / "memory" / "graph" / f"{newer}.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_a_superseded_fact_is_hidden_and_its_file_left_as_it_was(tmp_path: Path) -> None:
+    graph = GraphStore(tmp_path)
+    older = _deploy_fact(graph, 1)
+    older_path = tmp_path / "memory" / "graph" / f"{older}.md"
+    document = older_path.read_text(encoding="utf-8")
+
+    newer = _deploy_fact(graph, 2, older)
+
+    assert older_path.read_text(encoding="utf-8") == document
+    assert [hit.node for hit in graph.recall("deploys")] == [newer]
+    assert [node.node for node in graph.nodes()] == [newer]
+    assert [fact.node for fact in graph.live_facts()] == [newer]
+    assert graph.forgotten_facts() == []
+    with pytest.raises(NodeNotFound, match="was superseded"):
+        graph.open(older)
+
+
+def test_forgetting_a_replacement_leaves_the_facts_it_superseded_hidden(tmp_path: Path) -> None:
+    graph = GraphStore(tmp_path)
+    older = _deploy_fact(graph, 1)
+    newer = _deploy_fact(graph, 2, older)
+
+    graph.forget(newer, _FORGOTTEN_ON)
+
+    assert graph.recall("deploys") == ()
+    assert graph.live_facts() == []
+    with pytest.raises(NodeNotFound, match="was superseded"):
+        graph.open(older)
+
+
 def test_remember_writes_a_run_episode_and_a_fact_marked_with_their_workbench(
     tmp_path: Path,
 ) -> None:

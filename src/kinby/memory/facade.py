@@ -41,6 +41,8 @@ class Fact(_MemoryNode):
     sources: tuple[NodeId, ...] = ()
     #: The workbench its sources all came from. None on any other fact.
     workbench: str | None = None
+    #: The facts consolidation retired for this one, which stay hidden even once it is forgotten.
+    supersedes: tuple[NodeId, ...] = ()
 
 
 @dataclass(frozen=True)
