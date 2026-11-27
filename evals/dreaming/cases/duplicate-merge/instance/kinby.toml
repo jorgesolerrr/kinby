@@ -1,0 +1,11 @@
+id = "dreaming-eval-duplicate-merge"
+
+[models]
+main = "inspect:active"
+recap = "inspect:active"
+
+[memory]
+recap = "off"
+
+[tools]
+defaults = false

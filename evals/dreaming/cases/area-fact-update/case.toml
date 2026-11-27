@@ -1,0 +1,15 @@
+name = "area-fact-update"
+today = 2026-11-20
+
+# The area fact gains the idempotency decision and the local secret gotcha, and keeps its map.
+[[replacements]]
+supersedes = [
+    "2026-10-10-01a21bc422e0772598202f3f0303ed55-the-booking-site-s-stripe-webhook-lives-in-api-webhooks-stripe-p",
+]
+sources = [
+    "2026-10-06-01a21bc422e0772598202f3d127911ba-added-the-stripe-webhook-endpoint-to-the-booking-site",
+    "2026-10-09-01a21bc422e0772598202f3ec113822f-fixed-the-booking-site-s-stripe-webhook-signature-check",
+    "2026-11-17-01a21bc422e0772598202f405feb68b2-stripe-retried-a-webhook-and-the-booking-site-confirmed-a-bookin",
+    "2026-11-19-01a21bc422e0772598202f410507ae5f-local-webhook-tests-failed-with-the-dashboard-signing-secret",
+]
+mentions = ["webhooks/stripe.py", "raw", "processed_events", "stripe listen"]

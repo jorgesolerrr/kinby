@@ -1,0 +1,17 @@
+name = "duplicate-merge"
+today = 2026-11-20
+
+# Three facts tell one lesson; one fact replaces them all and cites every source they cite.
+[[replacements]]
+supersedes = [
+    "2026-09-11-01a21bc422e170a4a5d97f7f4c065842-staging-deploys-need-staging-key-loaded-from-the-vault-first",
+    "2026-09-25-01a21bc422e170a4a5d97f80f0088091-make-deploy-staging-refuses-to-start-without-staging-key",
+    "2026-10-09-01a21bc422e170a4a5d97f81a4c2e0fc-run-vault-load-staging-before-deploying-the-blog-to-staging",
+]
+sources = [
+    "2026-09-03-01a21bc422e170a4a5d97f7b00366cbd-the-blog-s-staging-deploy-failed-because-staging-key-was-not-set",
+    "2026-09-10-01a21bc422e170a4a5d97f7c77060048-loaded-staging-key-with-vault-load-staging-and-deployed-the-blog",
+    "2026-09-24-01a21bc422e170a4a5d97f7dbaabae3a-the-newsletter-s-staging-deploy-stopped-on-a-missing-staging-key",
+    "2026-10-08-01a21bc422e170a4a5d97f7eea62827b-deployed-the-blog-to-staging-after-vault-load-staging",
+]
+mentions = ["vault-load staging", "STAGING_KEY", "make deploy-staging"]
