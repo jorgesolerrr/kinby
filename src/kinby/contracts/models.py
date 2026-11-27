@@ -100,6 +100,9 @@ class Scope(StrEnum):
     #: Get a current access token for one of the instance's MCP sign-ins. Every instance holds it,
     #: on its hub route (ADR 0128).
     MCP_TOKEN = "mcp:token"
+    #: Search and open, read-only, the memory of the owner of a line the workbench carries, for
+    #: one of that line's runs. Every workbench holds it, on its hub route (ADR 0134).
+    WORKBENCH_MEMORY = "workbench:memory"
 
 
 #: What a client driving one instance holds. Lifecycle is granted by the control route alone.
@@ -126,9 +129,16 @@ LINE_SCOPES = frozenset({Scope.LINE_INTAKE, Scope.LINE_OWNER})
 BROWSER_SCOPES = frozenset({Scope.BROWSER_OPEN})
 #: What every instance holds on its hub route, for the MCP servers it signs in to (ADR 0128).
 MCP_TOKEN_SCOPES = frozenset({Scope.MCP_TOKEN})
+#: What every workbench holds on its hub route, for its runs' agent steps (ADR 0134).
+WORKBENCH_MEMORY_SCOPES = frozenset({Scope.WORKBENCH_MEMORY})
 #: What a client authenticated against the hub holds: a hub has one user.
 HUB_SCOPES = (
-    frozenset(Scope) - NOTIFICATION_SCOPES - BROWSER_SCOPES - MCP_TOKEN_SCOPES - {Scope.HUB_HOME}
+    frozenset(Scope)
+    - NOTIFICATION_SCOPES
+    - BROWSER_SCOPES
+    - MCP_TOKEN_SCOPES
+    - WORKBENCH_MEMORY_SCOPES
+    - {Scope.HUB_HOME}
 )
 #: What the update token holds: run an instance update and follow its operation.
 UPDATE_SCOPES = frozenset({Scope.HUB_UPDATE})
@@ -614,8 +624,9 @@ class MemoryRecapped(TokenTotals):
 class MemoryRecalled(ContractModel):
     """A memory search or open returned these facts and episodes to the turn.
 
-    A ``kinby memory search`` in a factory run's coding session is recorded on the run's thread
-    instead, naming the step, the attempt and the session.
+    A ``kinby memory search`` in a factory run's coding session, and a workbench step's search
+    or open the hub relays to the line's owner, are recorded on the run's thread instead, naming
+    the step and the attempt.
     """
 
     type: Literal[EventType.MEMORY_RECALLED] = EventType.MEMORY_RECALLED
@@ -1904,6 +1915,32 @@ class WorkbenchCommandsSetCommand(ContractModel):
     commands: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]]
 
 
+class WorkbenchMemorySearchCommand(ContractModel):
+    """Search the memory of the owner of the run's line, for a step of the run. Only the nodes
+    marked with the workbench and the unmarked match."""
+
+    #: A run of a line the workbench carries.
+    run_id: UUID
+    step: StepId
+    attempt: int | None = None
+    query: str
+    #: Inclusive. Without a date bound only facts match, and episodes only when no fact does.
+    after: date | None = None
+    #: Inclusive.
+    before: date | None = None
+
+
+class WorkbenchMemoryOpenCommand(ContractModel):
+    """Open a node of the memory of the owner of the run's line, for a step of the run. A node
+    marked with another workbench is refused."""
+
+    #: A run of a line the workbench carries.
+    run_id: UUID
+    step: StepId
+    attempt: int | None = None
+    node: NodeId
+
+
 class WorkbenchFileReadCommand(ContractModel):
     """Read one UTF-8 text file of a workbench's workspace."""
 
@@ -2504,7 +2541,8 @@ class RunTokens(ContractModel):
     run_id: UUID
     api: ApiUse
     subscriptions: list[SubscriptionUse]
-    #: Whether an agent step's turn or a coding session recalled a fact for the run here.
+    #: Whether an agent step's turn, a coding session or a workbench step recalled a fact for
+    #: the run here.
     recalled_fact: bool = False
 
 
@@ -3164,8 +3202,42 @@ class MemoryListResult(ContractModel):
     cursor: NodeId | None
 
 
+class MemorySearchCommand(ContractModel):
+    """Search the knowledge graph as the agent's memory search does."""
+
+    #: Nodes holding more of its terms come first. One with no terms matches every node.
+    query: str
+    #: Inclusive. Without a date bound only facts match, and episodes only when no fact does.
+    after: date | None = None
+    #: Inclusive.
+    before: date | None = None
+    #: Match only the nodes marked with this workbench and the unmarked. Null matches any mark.
+    workbench: str | None = None
+    #: The factory run whose step searches. The nodes found are recorded as recalled under it.
+    run_id: UUID | None = None
+    step: StepId | None = None
+    attempt: int | None = None
+
+
+class MemorySearchHit(ContractModel):
+    node: NodeId
+    date: date
+    description: str
+
+
+class MemorySearchResult(ContractModel):
+    #: Best match first.
+    hits: list[MemorySearchHit]
+
+
 class MemoryOpenCommand(ContractModel):
     node: NodeId
+    #: Refuse a node marked with another workbench. Null opens a node with any mark.
+    workbench: str | None = None
+    #: The factory run whose step opens the node. The node is recorded as recalled under it.
+    run_id: UUID | None = None
+    step: StepId | None = None
+    attempt: int | None = None
 
 
 class MemoryOpenResult(NodeSummary):

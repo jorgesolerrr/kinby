@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
-from kinby.contracts import ErrorCode, ErrorEnvelope, Event, Scope
+from kinby.contracts import ErrorCode, ErrorEnvelope, Event, MemoryRecalled, Scope
 from kinby.core.events import EventLog
 from kinby.core.turn_runner import LangGraphRunner
 from tests.helpers import every_event
@@ -403,6 +403,78 @@ def test_open_refuses_an_unknown_a_forgotten_and_a_malformed_node(tmp_path: Path
         assert tombstoned.code is ErrorCode.NOT_FOUND
         assert isinstance(malformed, ErrorEnvelope)
         assert malformed.code is ErrorCode.INVALID_ARGUMENT
+
+    asyncio.run(scenario())
+
+
+def _marked(instance_path: Path) -> dict[str | None, str]:
+    """An install lesson marked with each of two workbenches, and one unmarked."""
+    return {
+        workbench: _node(
+            instance_path,
+            f"2026-09-01-install-on-{workbench or 'any'}",
+            description=f"Install on {workbench or 'any workbench'}",
+            subjects="install",
+            extra="" if workbench is None else f"workbench: {workbench}\n",
+        )
+        for workbench in ("landing", "cec-backend", None)
+    }
+
+
+def test_search_for_a_workbench_finds_its_nodes_and_the_unmarked_only(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        marked = _marked(tmp_path)
+
+        searched = await call(dispatcher, "memory.search", query="install", workbench="landing")
+        unfiltered = await call(dispatcher, "memory.search", query="install")
+
+        assert {hit.node for hit in searched.hits} == {marked["landing"], marked[None]}
+        assert {hit.node for hit in unfiltered.hits} == set(marked.values())
+        [hit] = (hit for hit in searched.hits if hit.node == marked["landing"])
+        assert (hit.date, hit.description) == (date(2026, 9, 1), "Install on landing")
+
+    asyncio.run(scenario())
+
+
+def test_open_for_a_workbench_refuses_a_node_marked_with_another(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        marked = _marked(tmp_path)
+
+        own = await call(dispatcher, "memory.open", node=marked["landing"], workbench="landing")
+        unmarked = await call(dispatcher, "memory.open", node=marked[None], workbench="landing")
+        sibling = await call(
+            dispatcher, "memory.open", node=marked["cec-backend"], workbench="landing"
+        )
+
+        assert (own.node, unmarked.node) == (marked["landing"], marked[None])
+        assert isinstance(sibling, ErrorEnvelope)
+        assert sibling.code is ErrorCode.PERMISSION_DENIED
+
+    asyncio.run(scenario())
+
+
+def test_a_runs_search_and_open_record_their_recalls_on_its_thread(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        dispatcher = _dispatcher(tmp_path)
+        marked = _marked(tmp_path)
+        step = {"run_id": str(_RUN_ID), "step": "implement", "attempt": 2}
+
+        await call(dispatcher, "memory.search", query="nothing-matches", **step)
+        await call(dispatcher, "memory.search", query="install", workbench="landing", **step)
+        await call(dispatcher, "memory.open", node=marked["landing"], **step)
+        await call(dispatcher, "memory.open", node=marked[None])
+
+        recalls = [
+            (event.thread_id, set(event.payload.nodes), event.payload.step, event.payload.attempt)
+            for event in every_event(EventLog(instance_at(tmp_path).manifest.state_dir))
+            if isinstance(event.payload, MemoryRecalled)
+        ]
+        assert recalls == [
+            (_RUN_ID, {marked["landing"], marked[None]}, "implement", 2),
+            (_RUN_ID, {marked["landing"]}, "implement", 2),
+        ]
 
     asyncio.run(scenario())
 

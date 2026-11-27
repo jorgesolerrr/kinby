@@ -179,6 +179,8 @@ from kinby.contracts.models import (
     MemoryListResult,
     MemoryOpenCommand,
     MemoryOpenResult,
+    MemorySearchCommand,
+    MemorySearchResult,
     MemoryWriteResult,
     NotificationListCommand,
     NotificationListResult,
@@ -300,6 +302,8 @@ from kinby.contracts.models import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchLoginStartCommand,
+    WorkbenchMemoryOpenCommand,
+    WorkbenchMemorySearchCommand,
     WorkbenchOperationResult,
     WorkbenchPicksGetCommand,
     WorkbenchPicksResult,
@@ -512,6 +516,9 @@ PERMISSIONS_SET = Method(
     "permissions.set", Scope.INSTANCE_ADMIN, PermissionsSetCommand, PermissionsResult
 )
 MEMORY_LIST = Method("memory.list", Scope.INSTANCE_READ, MemoryListCommand, MemoryListResult)
+MEMORY_SEARCH = Method(
+    "memory.search", Scope.INSTANCE_READ, MemorySearchCommand, MemorySearchResult
+)
 MEMORY_OPEN = Method("memory.open", Scope.INSTANCE_READ, MemoryOpenCommand, MemoryOpenResult)
 MEMORY_ADD = Method("memory.add", Scope.INSTANCE_ADMIN, MemoryAddCommand, MemoryWriteResult)
 MEMORY_CORRECT = Method(
@@ -686,6 +693,15 @@ WORKBENCH_OWNED_COMMAND_RUN = Method(
 )
 WORKBENCH_OWNED_COMMANDS_SET = Method(
     "workbench.owned.commands.set", Scope.LINE_OWNER, WorkbenchCommandsSetCommand, Workbench
+)
+WORKBENCH_MEMORY_SEARCH = Method(
+    "workbench.memory.search",
+    Scope.WORKBENCH_MEMORY,
+    WorkbenchMemorySearchCommand,
+    MemorySearchResult,
+)
+WORKBENCH_MEMORY_OPEN = Method(
+    "workbench.memory.open", Scope.WORKBENCH_MEMORY, WorkbenchMemoryOpenCommand, MemoryOpenResult
 )
 OPERATION_GET = Method(
     "operation.get",
@@ -957,6 +973,7 @@ METHODS = (
     PERMISSIONS_SET,
     CONFIG_HISTORY,
     MEMORY_LIST,
+    MEMORY_SEARCH,
     MEMORY_OPEN,
     MEMORY_ADD,
     MEMORY_CORRECT,
@@ -1025,6 +1042,8 @@ METHODS = (
     WORKBENCH_OWNED_DIRECTORY_LIST,
     WORKBENCH_OWNED_COMMAND_RUN,
     WORKBENCH_OWNED_COMMANDS_SET,
+    WORKBENCH_MEMORY_SEARCH,
+    WORKBENCH_MEMORY_OPEN,
     OPERATION_GET,
     IMAGE_PREPARE,
     IMAGE_DESCRIBE,

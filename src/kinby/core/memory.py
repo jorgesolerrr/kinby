@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from kinby.contracts import (
     MemoryAddCommand,
@@ -16,6 +16,10 @@ from kinby.contracts import (
     MemoryListResult,
     MemoryOpenCommand,
     MemoryOpenResult,
+    MemoryRecalled,
+    MemorySearchCommand,
+    MemorySearchHit,
+    MemorySearchResult,
     MemoryWriteResult,
     NodeId,
     NodeKind,
@@ -27,7 +31,9 @@ from kinby.core.errors import (
     InvalidFact,
     InvalidMemoryNode,
     MemoryNodeNotFound,
+    PermissionDenied,
 )
+from kinby.core.events import EventLog
 from kinby.memory import (
     Episode,
     Fact,
@@ -43,12 +49,16 @@ from kinby.memory.facade import new_node_id
 class InstanceMemory:
     """The instance's knowledge graph as clients read and write it.
 
-    A write goes straight to the graph: it passes no gate and appends nothing to a thread.
+    A write goes straight to the graph: it passes no gate and appends nothing to a thread. A
+    factory run's step that searches or opens it records its recall on the run's thread.
     """
 
-    def __init__(self, graph: GraphStore, clock: Callable[[], datetime]) -> None:
+    def __init__(
+        self, graph: GraphStore, clock: Callable[[], datetime], event_log: EventLog
+    ) -> None:
         self._graph = graph
         self._clock = clock
+        self._event_log = event_log
 
     async def list(self, command: MemoryListCommand) -> MemoryListResult:
         """One page of the live nodes the command's filters match, newest first."""
@@ -69,9 +79,27 @@ class InstanceMemory:
             cursor=page[-1].node if len(matches) > command.limit else None,
         )
 
+    async def search(self, command: MemorySearchCommand) -> MemorySearchResult:
+        hits = self._graph.recall(
+            command.query,
+            after=command.after,
+            before=command.before,
+            workbench=command.workbench,
+        )
+        await self._recalled(command, tuple(hit.node for hit in hits))
+        return MemorySearchResult(
+            hits=[
+                MemorySearchHit(node=hit.node, date=hit.date, description=hit.description)
+                for hit in hits
+            ]
+        )
+
     async def open(self, command: MemoryOpenCommand) -> MemoryOpenResult:
         with _refusals():
             memory = self._graph.open(command.node)
+        if command.workbench is not None and memory.workbench not in (None, command.workbench):
+            raise PermissionDenied(f'Graph node "{command.node}" is marked with another workbench.')
+        await self._recalled(command, (memory.node,))
         thread, turn, run = _origin(memory)
         return MemoryOpenResult(
             **_summary(memory).model_dump(),
@@ -100,6 +128,18 @@ class InstanceMemory:
             self._graph.open(command.node)
         self._graph.forget(command.node, self._today())
         return MemoryForgetResult()
+
+    async def _recalled(
+        self, command: MemorySearchCommand | MemoryOpenCommand, nodes: tuple[NodeId, ...]
+    ) -> None:
+        """Record the recall of *nodes* on the thread of the run whose step searched or opened."""
+        if command.run_id is None or not nodes:
+            return
+        await self._event_log.append(
+            command.run_id,
+            uuid4(),
+            MemoryRecalled(nodes=nodes, step=command.step, attempt=command.attempt),
+        )
 
     def _today(self) -> date:
         return self._clock().astimezone(UTC).date()

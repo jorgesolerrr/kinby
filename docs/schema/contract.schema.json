@@ -6806,8 +6806,53 @@
     "MemoryOpenCommand": {
       "additionalProperties": false,
       "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "node": {
           "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workbench": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -6909,7 +6954,7 @@
     },
     "MemoryRecalled": {
       "additionalProperties": false,
-      "description": "A memory search or open returned these facts and episodes to the turn.\n\nA ``kinby memory search`` in a factory run's coding session is recorded on the run's thread\ninstead, naming the step, the attempt and the session.",
+      "description": "A memory search or open returned these facts and episodes to the turn.\n\nA ``kinby memory search`` in a factory run's coding session, and a workbench step's search\nor open the hub relays to the line's owner, are recorded on the run's thread instead, naming\nthe step and the attempt.",
       "properties": {
         "attempt": {
           "anyOf": [
@@ -7014,6 +7059,127 @@
         "type"
       ],
       "title": "MemoryRecapped",
+      "type": "object"
+    },
+    "MemorySearchCommand": {
+      "additionalProperties": false,
+      "description": "Search the knowledge graph as the agent's memory search does.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "before": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "query": {
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workbench": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "MemorySearchCommand",
+      "type": "object"
+    },
+    "MemorySearchHit": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "format": "date",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "date",
+        "description"
+      ],
+      "title": "MemorySearchHit",
+      "type": "object"
+    },
+    "MemorySearchResult": {
+      "additionalProperties": false,
+      "properties": {
+        "hits": {
+          "items": {
+            "$ref": "#/$defs/MemorySearchHit"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hits"
+      ],
+      "title": "MemorySearchResult",
       "type": "object"
     },
     "MemoryWriteResult": {
@@ -14289,6 +14455,98 @@
       "title": "WorkbenchLoginStartCommand",
       "type": "object"
     },
+    "WorkbenchMemoryOpenCommand": {
+      "additionalProperties": false,
+      "description": "Open a node of the memory of the owner of the run's line, for a step of the run. A node\nmarked with another workbench is refused.",
+      "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "node": {
+          "type": "string"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "run_id",
+        "step",
+        "node"
+      ],
+      "title": "WorkbenchMemoryOpenCommand",
+      "type": "object"
+    },
+    "WorkbenchMemorySearchCommand": {
+      "additionalProperties": false,
+      "description": "Search the memory of the owner of the run's line, for a step of the run. Only the nodes\nmarked with the workbench and the unmarked match.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "before": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "query": {
+          "type": "string"
+        },
+        "run_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "required": [
+        "run_id",
+        "step",
+        "query"
+      ],
+      "title": "WorkbenchMemorySearchCommand",
+      "type": "object"
+    },
     "WorkbenchOperationResult": {
       "additionalProperties": false,
       "description": "The lifecycle operation a workbench method started, read through `operation.get`.",
@@ -16418,6 +16676,22 @@
           ],
           "type": "object"
         },
+        "memory.search": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/MemorySearchCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemorySearchResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "notification.list": {
           "additionalProperties": false,
           "properties": {
@@ -17522,6 +17796,38 @@
           ],
           "type": "object"
         },
+        "workbench.memory.open": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchMemoryOpenCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemoryOpenResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
+        "workbench.memory.search": {
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/WorkbenchMemorySearchCommand"
+            },
+            "result": {
+              "$ref": "#/$defs/MemorySearchResult"
+            }
+          },
+          "required": [
+            "command",
+            "result"
+          ],
+          "type": "object"
+        },
         "workbench.owned.command.run": {
           "additionalProperties": false,
           "properties": {
@@ -17835,6 +18141,7 @@
         "permissions.set",
         "config.history",
         "memory.list",
+        "memory.search",
         "memory.open",
         "memory.add",
         "memory.correct",
@@ -17903,6 +18210,8 @@
         "workbench.owned.directory.list",
         "workbench.owned.command.run",
         "workbench.owned.commands.set",
+        "workbench.memory.search",
+        "workbench.memory.open",
         "operation.get",
         "image.prepare",
         "image.describe",

@@ -217,7 +217,8 @@ def run_tokens(
     facts: Collection[NodeId],
 ) -> list[RunTokens]:
     """Each factory run's tokens: its agent steps' turns, its client steps' runs and its recap.
-    A run recalled a fact when one of its turns or coding sessions read one of *facts*."""
+    A run recalled a fact when one of its turns or steps read one of *facts*, even before it is
+    recapped."""
     totals: dict[UUID, _RunTotals] = {}
     for record in records:
         if isinstance(record.origin, FactoryRunOrigin):
@@ -232,8 +233,9 @@ def run_tokens(
     for recap in recaps:
         totals.setdefault(recap.run_id, _RunTotals()).add(recap.tokens, recap.cost)
     for recall in recalls:
-        if recall.run_id in totals:
-            totals[recall.run_id].recalled_fact |= any(node in facts for node in recall.nodes)
+        totals.setdefault(recall.run_id, _RunTotals()).recalled_fact |= any(
+            node in facts for node in recall.nodes
+        )
     return [
         RunTokens(
             run_id=run_id,

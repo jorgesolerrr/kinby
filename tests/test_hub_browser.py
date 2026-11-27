@@ -371,6 +371,9 @@ def test_a_workbench_with_a_browser_reaches_the_browser_service_and_one_with_non
                 spec.instance_id: spec.env.get(HUB_SCOPES_VARIABLE)
                 for spec in hub.instances.created
             }
-            assert (routes[str(browsing)], routes[str(plain)]) == (Scope.BROWSER_OPEN.value, None)
+            assert (routes[str(browsing)], routes[str(plain)]) == (
+                f"{Scope.BROWSER_OPEN.value},{Scope.WORKBENCH_MEMORY.value}",
+                Scope.WORKBENCH_MEMORY.value,
+            )
 
     asyncio.run(scenario())

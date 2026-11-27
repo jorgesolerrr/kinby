@@ -141,6 +141,8 @@ from kinby.contracts import (
     MCP_REGISTRY_SEARCH,
     MCP_SIGN_IN_TOKEN,
     MCP_TOKEN_SCOPES,
+    MEMORY_OPEN,
+    MEMORY_SEARCH,
     NOTIFICATION_LIST,
     NOTIFICATION_RAISE,
     NOTIFICATION_REPLY,
@@ -167,6 +169,9 @@ from kinby.contracts import (
     WORKBENCH_GET,
     WORKBENCH_LIST,
     WORKBENCH_LOGIN_START,
+    WORKBENCH_MEMORY_OPEN,
+    WORKBENCH_MEMORY_SCOPES,
+    WORKBENCH_MEMORY_SEARCH,
     WORKBENCH_OWNED_COMMAND_RUN,
     WORKBENCH_OWNED_COMMANDS_SET,
     WORKBENCH_OWNED_DIRECTORY_LIST,
@@ -303,6 +308,8 @@ from kinby.contracts import (
     McpSignInStartResult,
     McpSignInTokenCommand,
     McpSignInTokenResult,
+    MemoryOpenCommand,
+    MemorySearchCommand,
     Method,
     NewerVersion,
     OperationGetCommand,
@@ -369,6 +376,8 @@ from kinby.contracts import (
     WorkbenchListCommand,
     WorkbenchListResult,
     WorkbenchLoginStartCommand,
+    WorkbenchMemoryOpenCommand,
+    WorkbenchMemorySearchCommand,
     WorkbenchOperationResult,
     WorkbenchPicksGetCommand,
     WorkbenchPicksResult,
@@ -1159,7 +1168,7 @@ class Hub:
     def _scopes(self, record: ManagedInstance, manifest: Manifest | None) -> frozenset[Scope]:
         if record.workbench is not None:
             browser = record.workbench.browser and self._browsers is not None
-            return BROWSER_SCOPES if browser else frozenset()
+            return WORKBENCH_MEMORY_SCOPES | (BROWSER_SCOPES if browser else frozenset())
         return (
             NOTIFICATION_SCOPES
             | LINE_SCOPES
@@ -1222,6 +1231,13 @@ class Hub:
             )
             dispatcher.register(
                 FACTORY_OWNED_CHANGE, partial(self.change_owned_factory, instance_id)
+            )
+        if Scope.WORKBENCH_MEMORY in scopes:
+            dispatcher.register(
+                WORKBENCH_MEMORY_SEARCH, partial(self.read_run_memory, instance_id, MEMORY_SEARCH)
+            )
+            dispatcher.register(
+                WORKBENCH_MEMORY_OPEN, partial(self.read_run_memory, instance_id, MEMORY_OPEN)
             )
         if Scope.BROWSER_OPEN in scopes:
             browsers = self._browsers
@@ -4172,6 +4188,34 @@ class Hub:
             raise WorkspaceReadFailed(
                 f'Workbench "{self._instance_name(command.workbench_id)}" answered no read: {exc}'
             ) from exc
+
+    async def read_run_memory[
+        Command: MemorySearchCommand | MemoryOpenCommand,
+        Result: ContractModel,
+    ](
+        self,
+        workbench_id: UUID,
+        method: Method[Command, Result],
+        command: WorkbenchMemorySearchCommand | WorkbenchMemoryOpenCommand,
+    ) -> Result:
+        """Relay the workbench's read of memory for one of its runs to the owner of the run's
+        line, which reads only the nodes marked with the workbench and the unmarked (ADR 0134)."""
+        run = self.registry.run(command.run_id)
+        line_id = run.line_id if run is not None else None
+        line = next((line for line in self.registry.lines() if line.line_id == line_id), None)
+        if line is None or line.workbench_id != workbench_id:
+            raise PermissionDenied(f'Factory run "{command.run_id}" is no run of this workbench.')
+        read = method.command.model_validate(
+            command.model_dump() | {"workbench": self._instance_name(workbench_id)}
+        )
+        try:
+            answer = await self._relayed(line.owner_id, method.name, read.model_dump(mode="json"))
+        except InstanceUnavailable as exc:
+            raise InstanceUnavailable(
+                f'The memory of "{self._instance_name(line.owner_id)}", which owns the line of '
+                f"the run, is unavailable: {exc}"
+            ) from exc
+        return method.result.model_validate(answer)
 
     async def set_owned_workbench_commands(
         self, instance_id: UUID, command: WorkbenchCommandsSetCommand

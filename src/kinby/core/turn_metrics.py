@@ -197,7 +197,7 @@ class RunRecap:
 
 @dataclass(frozen=True)
 class RunRecall:
-    """A recall no turn made: a factory run's coding session read *nodes*, under its run."""
+    """A recall no turn made: a step of a factory run read *nodes*, under its run."""
 
     run_id: UUID
     timestamp: datetime
