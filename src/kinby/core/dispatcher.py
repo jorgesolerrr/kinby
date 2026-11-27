@@ -21,6 +21,7 @@ from kinby.contracts import (
     MEMORY_FORGET,
     MEMORY_LIST,
     MEMORY_OPEN,
+    MEMORY_SEARCH,
     PERMISSIONS_GET,
     PERMISSIONS_SET,
     PROFILE_GET,
@@ -444,8 +445,11 @@ def build_dispatcher(
         dispatcher.register(ROUTINE_GRANT_ADD, config.add_routine_grant)
         dispatcher.register(ROUTINE_GRANT_REVOKE, config.revoke_routine_grant)
     if isinstance(turns, ScheduledTurnConfig):
-        memory = InstanceMemory(GraphStore(turns.scheduler.instance.path), turns.scheduler.clock)
+        memory = InstanceMemory(
+            GraphStore(turns.scheduler.instance.path), turns.scheduler.clock, event_log
+        )
         dispatcher.register(MEMORY_LIST, memory.list)
+        dispatcher.register(MEMORY_SEARCH, memory.search)
         dispatcher.register(MEMORY_OPEN, memory.open)
         dispatcher.register(MEMORY_ADD, memory.add)
         dispatcher.register(MEMORY_CORRECT, memory.correct)

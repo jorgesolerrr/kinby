@@ -1327,6 +1327,23 @@ def test_stats_get_marks_a_run_that_recalled_a_fact_in_a_step_turn_or_a_coding_s
     }
 
 
+def test_stats_get_marks_a_run_whose_only_record_here_is_a_steps_recall(tmp_path: Path) -> None:
+    graph = GraphStore(tmp_path)
+    fact = _learned(graph, date(2026, 8, 30), "Deploys run from the hub")
+    run_id = uuid4()
+    recalled = MemoryRecalled(nodes=(fact,), step="implement", attempt=1)
+    events = [_event(1, run_id, uuid4(), datetime(2026, 9, 1, 10, tzinfo=UTC), recalled)]
+
+    result = asyncio.run(
+        build_dispatcher(
+            tmp_path, event_log=historical_event_log(tmp_path, events), facts=graph.fact_ids
+        ).dispatch("stats.get", {}, {Scope.INSTANCE_READ})
+    )
+
+    assert isinstance(result, StatsGetResult)
+    assert [(run.run_id, run.recalled_fact) for run in result.runs or []] == [(run_id, True)]
+
+
 def _learned(graph: GraphStore, day: date, description: str) -> NodeId:
     return graph.remember(
         Fact(

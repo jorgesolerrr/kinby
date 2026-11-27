@@ -97,8 +97,8 @@ class _TurnLog:
 
 @dataclass
 class _RunLog:
-    """What the event log holds of one factory run: its agent steps' turns, its stops, and its
-    coding sessions' recalls."""
+    """What the event log holds of one factory run: its agent steps' turns, its stops, and the
+    recalls its steps made outside a turn here."""
 
     turns: list[_TurnLog] = field(default_factory=list)
     stops: list[RunStop] = field(default_factory=list)
@@ -274,7 +274,7 @@ def _read(
             case MemoryRecalled(nodes=nodes) if turn is not None:
                 turn.recalled.extend(nodes)
             case MemoryRecalled(nodes=nodes, step=step) if step is not None and in_week:
-                # A coding session's recall, on its run's thread.
+                # A step's recall outside a turn here, on its run's thread.
                 runs[event.thread_id].recalled.extend(nodes)
             case RunStopped(stop=stop) if in_week:
                 runs[event.thread_id].stops.append(stop)

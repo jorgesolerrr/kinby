@@ -719,6 +719,10 @@ export interface Contract {
       command: MemoryOpenCommand;
       result: MemoryOpenResult;
     };
+    "memory.search": {
+      command: MemorySearchCommand;
+      result: MemorySearchResult;
+    };
     "notification.list": {
       command: NotificationListCommand;
       result: NotificationListResult;
@@ -994,6 +998,14 @@ export interface Contract {
     "workbench.login.start": {
       command: WorkbenchLoginStartCommand;
       result: WorkbenchOperationResult;
+    };
+    "workbench.memory.open": {
+      command: WorkbenchMemoryOpenCommand;
+      result: MemoryOpenResult;
+    };
+    "workbench.memory.search": {
+      command: WorkbenchMemorySearchCommand;
+      result: MemorySearchResult;
     };
     "workbench.owned.command.run": {
       command: WorkbenchCommandRunCommand;
@@ -2840,7 +2852,11 @@ export interface NodeSummary {
   subjects: string[];
 }
 export interface MemoryOpenCommand {
+  attempt?: number | null;
   node: string;
+  run_id?: string | null;
+  step?: StepId | null;
+  workbench?: string | null;
 }
 export interface MemoryOpenResult {
   body: string;
@@ -2854,6 +2870,26 @@ export interface MemoryOpenResult {
   thread: string | null;
   tools: string[] | null;
   turn: string | null;
+}
+/**
+ * Search the knowledge graph as the agent's memory search does.
+ */
+export interface MemorySearchCommand {
+  after?: string | null;
+  attempt?: number | null;
+  before?: string | null;
+  query: string;
+  run_id?: string | null;
+  step?: StepId | null;
+  workbench?: string | null;
+}
+export interface MemorySearchResult {
+  hits: MemorySearchHit[];
+}
+export interface MemorySearchHit {
+  date: string;
+  description: string;
+  node: string;
 }
 /**
  * The notifications of one instance or one thread, or every one without either.
@@ -3998,6 +4034,28 @@ export interface WorkbenchLoginStartCommand {
   workbench_id: string;
 }
 /**
+ * Open a node of the memory of the owner of the run's line, for a step of the run. A node
+ * marked with another workbench is refused.
+ */
+export interface WorkbenchMemoryOpenCommand {
+  attempt?: number | null;
+  node: string;
+  run_id: string;
+  step: StepId;
+}
+/**
+ * Search the memory of the owner of the run's line, for a step of the run. Only the nodes
+ * marked with the workbench and the unmarked match.
+ */
+export interface WorkbenchMemorySearchCommand {
+  after?: string | null;
+  attempt?: number | null;
+  before?: string | null;
+  query: string;
+  run_id: string;
+  step: StepId;
+}
+/**
  * Run one shell read in a workbench's workspace: a bash command whose programs only read, on
  * paths inside the workspace (ADR 0119). Any other command is refused.
  */
@@ -4294,8 +4352,9 @@ export interface MemoryRecapped {
 /**
  * A memory search or open returned these facts and episodes to the turn.
  *
- * A ``kinby memory search`` in a factory run's coding session is recorded on the run's thread
- * instead, naming the step, the attempt and the session.
+ * A ``kinby memory search`` in a factory run's coding session, and a workbench step's search
+ * or open the hub relays to the line's owner, are recorded on the run's thread instead, naming
+ * the step and the attempt.
  */
 export interface MemoryRecalled {
   attempt?: number | null;

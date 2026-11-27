@@ -381,6 +381,45 @@ def test_a_bad_run_matches_its_workbench_facts_and_the_unmarked_only(tmp_path: P
     assert marked["cec-backend"] not in model.wake
 
 
+def test_a_bad_workbench_run_names_the_fact_its_step_opened_through_its_owner(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    review_stage(instance)
+    lesson = fact(instance, "Install before the checks", ("install",))
+    run_id = uuid4()
+
+    async def opened() -> None:
+        dispatcher = runtime(instance, FakeClock(_IN_THE_WEEK))
+        await call(
+            dispatcher,
+            "memory.open",
+            node=lesson,
+            workbench="landing",
+            run_id=str(run_id),
+            step="implement",
+            attempt=1,
+        )
+
+    asyncio.run(opened())
+    stop = RunStop(
+        run_id=run_id,
+        factory="software",
+        work_item={},
+        status=FactoryRunStatus.DONE,
+        generation=1,
+        attempts=[attempt("implement", 1, "Built it."), attempt("implement", 2, "Installed.")],
+        workbench="landing",
+    )
+    record(instance, _IN_THE_WEEK, run_id, RunStopped(stop=stop))
+    model = ReviewingModel()
+
+    review(instance, model)
+
+    assert str(run_id) in model.wake
+    assert lesson in model.wake
+
+
 def test_the_stage_is_offered_no_write_tool_and_writes_nothing(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     review_stage(instance)
