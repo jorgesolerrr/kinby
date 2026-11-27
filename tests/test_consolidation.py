@@ -135,6 +135,7 @@ def fact(
     description: str,
     subjects: tuple[str, ...],
     sources: tuple[NodeId, ...] = (),
+    supersedes: tuple[NodeId, ...] = (),
 ) -> NodeId:
     return GraphStore(instance.path).remember(
         Fact(
@@ -145,16 +146,20 @@ def fact(
             body=f"{description}.",
             thread=None,
             sources=sources,
+            supersedes=supersedes,
         )
     )
 
 
-def learned(description: str, *sources: NodeId) -> dict[str, object]:
+def learned(
+    description: str, *sources: NodeId, supersedes: tuple[NodeId, ...] = ()
+) -> dict[str, object]:
     return {
         "description": description,
         "subjects": ["billing"],
         "body": f"{description}.",
         "sources": list(sources),
+        "supersedes": list(supersedes),
     }
 
 
@@ -352,6 +357,123 @@ def test_a_fact_taking_the_place_of_a_fact_changed_after_the_frame_is_skipped(
         assert memory.open(area).body == "Billing moved to ledger."
     [offered] = consolidated(fire(instance, ConsolidatingModel()))
     assert offered.episodes == (new,)
+
+
+def consolidate_result(events: list[Event]) -> ToolResult:
+    [result] = [
+        event.payload
+        for event in events
+        if isinstance(event.payload, ToolResult) and event.payload.name == "consolidate"
+    ][1:]
+    return result
+
+
+def test_a_fact_superseding_framed_facts_hides_them_and_leaves_their_files(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Moved billing to the new provider", _DAY - timedelta(days=30))
+    fire(instance, ConsolidatingModel())
+    area = fact(instance, "Billing lives in the payments service", ("billing",), (old,))
+    area_file = (instance.path / "memory" / "graph" / f"{area}.md").read_text(encoding="utf-8")
+    new = episode(instance, "Billing retries failed cards")
+    again = episode(instance, "Billing retried the failed cards again")
+    model = ConsolidatingModel(
+        [learned("Billing lives in payments and retries cards", new, again, supersedes=(area,))]
+    )
+
+    [covering] = consolidated(fire(instance, model))
+
+    memory = GraphStore(instance.path)
+    [written] = covering.facts
+    learned_fact = memory.open(written)
+    assert isinstance(learned_fact, Fact)
+    assert learned_fact.supersedes == (area,)
+    assert (instance.path / "memory" / "graph" / f"{area}.md").read_text(
+        encoding="utf-8"
+    ) == area_file
+    assert [fact.node for fact in memory.live_facts()] == [written]
+    assert [hit.node for hit in memory.recall("billing")] == [written]
+    episode(instance, "Billing sent a refund")
+    later = ConsolidatingModel()
+    fire(instance, later)
+    assert written in later.wake
+    assert area not in later.wake
+
+
+@pytest.mark.parametrize(
+    "target", ["fact off the subjects", "forgotten fact", "episode", "unknown"]
+)
+def test_superseding_a_fact_the_frame_holds_no_live_copy_of_is_refused(
+    tmp_path: Path, target: str
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Sent the invoices late", _DAY - timedelta(days=30))
+    gone = forgotten(instance, old)
+    elsewhere = fact(instance, "The dentist is on Main Street", ("health",))
+    monday = episode(instance, "Billing retried cards on Monday")
+    thursday = episode(instance, "Billing retried cards on Thursday", _DAY + timedelta(days=3))
+    superseded = {
+        "fact off the subjects": elsewhere,
+        "forgotten fact": gone,
+        "episode": monday,
+        "unknown": NodeId("2026-09-01-nothing-here"),
+    }[target]
+    memory = GraphStore(instance.path)
+    before = memory.nodes()
+    model = ConsolidatingModel(
+        [learned("Billing retries cards", monday, thursday, supersedes=(superseded,))]
+    )
+
+    events = fire(instance, model)
+
+    result = consolidate_result(events)
+    assert result.error
+    assert superseded in result.output
+    assert consolidated(events) == []
+    assert memory.nodes() == before
+
+
+@pytest.mark.parametrize("change", ["rewritten", "forgotten", "superseded"])
+def test_a_fact_superseding_a_fact_changed_after_the_frame_is_skipped(
+    tmp_path: Path, change: str
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Moved billing to the new provider", _DAY - timedelta(days=30))
+    fire(instance, ConsolidatingModel())
+    area = fact(instance, "Billing lives in the payments service", ("billing",), (old,))
+    new = episode(instance, "Billing retries failed cards")
+    again = episode(instance, "Billing retried the failed cards again")
+    monday = episode(instance, "Sent the invoices late on Monday")
+    thursday = episode(instance, "Sent the invoices late on Thursday", _DAY + timedelta(days=3))
+    memory = GraphStore(instance.path)
+    framed = memory.open(area)
+    assert isinstance(framed, Fact)
+    changes = {
+        "rewritten": lambda: memory.remember(replace(framed, body="Billing moved to ledger.")),
+        "forgotten": lambda: memory.forget(area, _DAY),
+        "superseded": lambda: fact(instance, "Billing moved", ("billing",), supersedes=(area,)),
+    }
+    model = ChangingModel(
+        [
+            learned("Billing lives in payments and retries cards", new, again, supersedes=(area,)),
+            learned("Invoices go out late", monday, thursday),
+        ],
+        changes[change],
+    )
+
+    events = fire(instance, model)
+
+    result = consolidate_result(events)
+    assert not result.error
+    assert area in result.output
+    [covering] = consolidated(events)
+    assert covering.episodes == (monday, thursday)
+    [written] = covering.facts
+    assert memory.open(written).description == "Invoices go out late"
 
 
 def test_a_fact_from_one_episode_is_refused(tmp_path: Path) -> None:
@@ -668,12 +790,15 @@ def test_a_firing_prunes_old_covered_episodes_no_live_fact_cites(tmp_path: Path)
     uncited = episode(instance, "Sent the invoices late", old)
     cited = episode(instance, "Moved billing to the new provider", old)
     cited_by_forgotten = episode(instance, "Retried the failed cards", old)
+    cited_by_superseded = episode(instance, "Refunded a customer", old)
     recent = episode(instance, "Billing retries failed cards", _DAY - timedelta(days=30))
     fire(instance, ConsolidatingModel())
-    fact(instance, "Billing lives in payments", ("billing",), (cited,))
+    area = fact(instance, "Billing lives in payments", ("billing",), (cited,))
     GraphStore(instance.path).forget(
         fact(instance, "Cards are retried", ("billing",), (cited_by_forgotten,)), _FORGOTTEN_ON
     )
+    refunds = fact(instance, "Refunds go by card", ("billing",), (cited_by_superseded,))
+    fact(instance, "Billing lives in payments and refunds", ("billing",), (cited,), (area, refunds))
     uncovered = episode(instance, "Billed a new customer", old)
 
     events = fire(instance, ConsolidatingModel())
@@ -681,7 +806,7 @@ def test_a_firing_prunes_old_covered_episodes_no_live_fact_cites(tmp_path: Path)
     memory = GraphStore(instance.path)
     episodes = {node.node for node in memory.nodes() if isinstance(node, Episode)}
     assert episodes == {cited, recent, uncovered}
-    for pruned in (uncited, cited_by_forgotten):
+    for pruned in (uncited, cited_by_forgotten, cited_by_superseded):
         with pytest.raises(NodeNotFound, match="was not found"):
             memory.open(pruned)
     assert [covering.episodes for covering in consolidated(events)] == [(uncovered,)]

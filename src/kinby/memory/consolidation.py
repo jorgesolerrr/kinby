@@ -36,7 +36,8 @@ _RULES = (
     "Earlier episodes were reviewed on another night and taught no fact alone. Cite one with "
     "an episode of this batch that repeats its lesson or shares its area.",
     "An area is a subject, and the latest fact about a subject wins. To update an area fact, "
-    "write a new fact on its subject that cites its sources and the new episodes.",
+    "write a new fact on its subject that cites its sources and the new episodes and supersedes "
+    "it.",
     "Write nothing the episodes do not support. A batch that teaches nothing needs no fact.",
     "The user forgot the forgotten facts: do not write them back. A fact citing a forgotten "
     "fact's sources is refused unless it also cites an episode recorded after the forget.",
@@ -44,8 +45,8 @@ _RULES = (
 _CONTRACT = (
     "Call consolidate once with every fact. The call covers every episode of this batch, "
     "including those that produced no fact. A refused call writes nothing and covers nothing. "
-    "A fact citing the sources of a fact shown here that changed since this frame is skipped, "
-    "and the episodes it cites stay uncovered."
+    "A fact citing the sources of a fact shown here, or superseding one, that changed since this "
+    "frame is skipped, and the episodes it cites stay uncovered."
 )
 
 
@@ -57,6 +58,8 @@ class LearnedFact:
     subjects: tuple[str, ...]
     body: str
     sources: tuple[NodeId, ...]
+    #: The facts shown in the frame this one replaces.
+    supersedes: tuple[NodeId, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -213,9 +216,11 @@ def consolidate_tool(
         Each fact cites as sources at least two episodes it was learned from: episodes of the
         batch, earlier episodes the frame shows, or the sources of a fact it shows. A fact
         citing a forgotten fact's sources is refused unless it also cites an episode recorded
-        after the forget. Call with no facts when the batch teaches nothing. A refused call
-        writes nothing and covers nothing. A fact citing the sources of a shown fact that
-        changed since the frame is skipped, and the episodes it cites stay uncovered.
+        after the forget. A fact supersedes the facts the frame shows that it replaces, which
+        then leave recall. Call with no facts when the batch teaches nothing. A refused call
+        writes nothing and covers nothing. A fact citing the sources of a shown fact, or
+        superseding one, that changed since the frame is skipped, and the episodes it cites
+        stay uncovered.
         """
         frame = await asyncio.to_thread(_turn_frame, log, thread_id, turn_id)
         writing = asyncio.create_task(write_and_cover(frame, facts))
@@ -230,8 +235,8 @@ def consolidate_tool(
         if consolidated.changed:
             changed = ", ".join(f'"{node}"' for node in consolidated.changed)
             report += (
-                f" Skipped the facts citing the sources of {changed}, which changed since the "
-                "frame. Their episodes stay uncovered for the next consolidation."
+                f" Skipped the facts citing the sources of {changed} or superseding them, which "
+                "changed since the frame. Their episodes stay uncovered for the next consolidation."
             )
         return report
 
@@ -370,12 +375,25 @@ def _write(
         if framed.node not in live or _framed_fact(live[framed.node]) != framed
     ]
     replacing = {
-        fact: [framed.node for framed in changed if set(fact.sources) & set(framed.sources)]
+        fact: [
+            framed.node
+            for framed in changed
+            if set(fact.sources) & set(framed.sources) or framed.node in fact.supersedes
+        ]
         for fact in facts
     }
     kept = [fact for fact in facts if not replacing[fact]]
     forgotten = graph.forgotten_facts()
-    refusals: list[str] = []
+    framed_facts = {framed.node for framed in frame.facts}
+    framed_forgotten = {gone.node for gone in frame.forgotten}
+    refusals = [
+        f'Fact "{fact.description}" supersedes "{node}", which the user forgot.'
+        if node in framed_forgotten
+        else f'Fact "{fact.description}" supersedes "{node}", which is no fact this frame shows.'
+        for fact in facts
+        for node in fact.supersedes
+        if node not in framed_facts
+    ]
     for fact in kept:
         if len(set(fact.sources)) < MIN_SOURCES:
             refusals.append(f'Fact "{fact.description}" cites fewer than {MIN_SOURCES} episodes.')
@@ -405,6 +423,7 @@ def _write(
                 thread=thread_id,
                 sources=fact.sources,
                 workbench=_shared_workbench(episodes[source] for source in fact.sources),
+                supersedes=fact.supersedes,
             )
         )
         for fact in kept
