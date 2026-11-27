@@ -21,7 +21,11 @@ if TYPE_CHECKING:
     from kinby.memory.graph import ForgottenFact, GraphStore
 
 #: The most episodes one consolidation reviews, so a first run on a large graph fits its budget.
-BATCH_LIMIT = 50
+BATCH_LIMIT = 20
+#: The most facts a frame shows, those on the most batch subjects first, then the newest.
+FACT_LIMIT = 25
+#: The most earlier episodes a frame shows, ranked as its facts are.
+EARLIER_LIMIT = 20
 #: How old a covered episode no live fact cites gets before it is pruned (ADR 0074).
 PRUNE_AGE = timedelta(days=90)
 #: The fewest episodes a fact cites, since one episode repeats nothing.
@@ -38,6 +42,12 @@ _RULES = (
     "An area is a subject, and the latest fact about a subject wins. To update an area fact, "
     "write a new fact on its subject that cites its sources and the new episodes and supersedes "
     "it.",
+    "Facts shown here that overlap, telling the same lesson or area twice, become one fact that "
+    "cites their sources and supersedes every one of them.",
+    "Keep a fact short and scannable, to be followed: where an area lives, what is decided now, "
+    "and the gotchas to avoid. Leave out the run-by-run history; the episodes keep it.",
+    "Each subject holds the episodes, facts and forgotten facts of one workbench, or of none. "
+    "Earlier episodes show their description and subjects only.",
     "Write nothing the episodes do not support. A batch that teaches nothing needs no fact.",
     "The user forgot the forgotten facts: do not write them back. A fact citing a forgotten "
     "fact's sources is refused unless it also cites an episode recorded after the forget.",
@@ -72,6 +82,14 @@ class _FramedEpisode:
 
 
 @dataclass(frozen=True)
+class _FramedEarlierEpisode:
+    node: NodeId
+    date: date
+    description: str
+    subjects: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _FramedFact:
     node: NodeId
     date: date
@@ -94,6 +112,7 @@ class _FramedForgottenFact:
 @dataclass(frozen=True)
 class _Subject:
     subject: str
+    workbench: str | None
     episodes: tuple[NodeId, ...]
     earlier: tuple[NodeId, ...]
     facts: tuple[NodeId, ...]
@@ -108,7 +127,7 @@ class _ConsolidationFrame:
     contract: str
     subjects: tuple[_Subject, ...]
     episodes: tuple[_FramedEpisode, ...]
-    earlier: tuple[_FramedEpisode, ...]
+    earlier: tuple[_FramedEarlierEpisode, ...]
     facts: tuple[_FramedFact, ...]
     forgotten: tuple[_FramedForgottenFact, ...]
 
@@ -175,7 +194,6 @@ def consolidation_step(
         if not batch:
             return None
         cited = {source for fact in facts for source in fact.sources}
-        # Newest first, as nodes() returns them, so the cap keeps the most recent.
         earlier = [
             episode
             for episode in episodes
@@ -263,24 +281,25 @@ def _frame(
     facts: list[Fact],
     forgotten: list[ForgottenFact],
 ) -> _ConsolidationFrame:
-    """Frame *batch* with the *earlier* episodes, facts and forgotten facts on its subjects."""
-    subjects: dict[str, str] = {}
+    """Frame *batch* with the *earlier* episodes, facts and forgotten facts on its subjects.
+
+    A subject matches only within one workbench, unmarked with unmarked, so no repository's
+    work frames another's or the user's own.
+    """
+    subjects: dict[_Key, str] = {}
     for episode in batch:
         for subject in episode.subjects:
-            subjects.setdefault(subject.casefold(), subject)
-    framed_earlier = [
-        episode
-        for episode in earlier
-        if any(subject.casefold() in subjects for subject in episode.subjects)
-    ][:BATCH_LIMIT]
-    framed_facts = _on(subjects, facts)
-    framed_forgotten = _forgotten_on(subjects, forgotten)
+            subjects.setdefault((episode.workbench, subject.casefold()), subject)
+    framed_earlier = _ranked(subjects, earlier)[:EARLIER_LIMIT]
+    framed_facts = _ranked(subjects, facts)[:FACT_LIMIT]
+    framed_forgotten = [gone for gone in forgotten if _shared(subjects, gone.fact)]
     return _ConsolidationFrame(
         rules=_RULES,
         contract=_CONTRACT,
         subjects=tuple(
             _Subject(
                 subject=subject,
+                workbench=key[0],
                 episodes=_about(key, batch),
                 earlier=_about(key, framed_earlier),
                 facts=_about(key, framed_facts),
@@ -288,8 +307,25 @@ def _frame(
             )
             for key, subject in subjects.items()
         ),
-        episodes=tuple(_framed_episode(episode) for episode in batch),
-        earlier=tuple(_framed_episode(episode) for episode in framed_earlier),
+        episodes=tuple(
+            _FramedEpisode(
+                node=episode.node,
+                date=episode.date,
+                description=episode.description,
+                subjects=episode.subjects,
+                body=episode.body,
+            )
+            for episode in batch
+        ),
+        earlier=tuple(
+            _FramedEarlierEpisode(
+                node=episode.node,
+                date=episode.date,
+                description=episode.description,
+                subjects=episode.subjects,
+            )
+            for episode in framed_earlier
+        ),
         facts=tuple(_framed_fact(fact) for fact in framed_facts),
         forgotten=tuple(
             _FramedForgottenFact(
@@ -305,16 +341,6 @@ def _frame(
     )
 
 
-def _framed_episode(episode: Episode) -> _FramedEpisode:
-    return _FramedEpisode(
-        node=episode.node,
-        date=episode.date,
-        description=episode.description,
-        subjects=episode.subjects,
-        body=episode.body,
-    )
-
-
 def _framed_fact(fact: Fact) -> _FramedFact:
     return _FramedFact(
         node=fact.node,
@@ -326,11 +352,26 @@ def _framed_fact(fact: Fact) -> _FramedFact:
     )
 
 
-def _on(subjects: Collection[str], facts: list[Fact]) -> list[Fact]:
-    """The facts on any of *subjects*, which are casefolded."""
-    return [
-        fact for fact in facts if any(subject.casefold() in subjects for subject in fact.subjects)
-    ]
+#: A batch subject: the workbench of the episode it came from and the subject casefolded.
+type _Key = tuple[str | None, str]
+
+
+def _keys(node: Episode | Fact) -> set[_Key]:
+    return {(node.workbench, subject.casefold()) for subject in node.subjects}
+
+
+def _shared(subjects: Collection[_Key], node: Episode | Fact) -> int:
+    """How many of the batch *subjects* *node* is on."""
+    return sum(key in subjects for key in _keys(node))
+
+
+def _ranked[N: (Episode, Fact)](subjects: Collection[_Key], nodes: list[N]) -> list[N]:
+    """The *nodes* on any of the batch *subjects*, those on the most first, then the newest."""
+    return sorted(
+        (node for node in nodes if _shared(subjects, node)),
+        key=lambda node: (_shared(subjects, node), node.date, node.node),
+        reverse=True,
+    )
 
 
 def _forgotten_on(subjects: Collection[str], forgotten: list[ForgottenFact]) -> list[ForgottenFact]:
@@ -342,10 +383,8 @@ def _forgotten_on(subjects: Collection[str], forgotten: list[ForgottenFact]) -> 
     ]
 
 
-def _about(subject: str, nodes: list[Episode] | list[Fact]) -> tuple[NodeId, ...]:
-    return tuple(
-        node.node for node in nodes if subject in {each.casefold() for each in node.subjects}
-    )
+def _about(key: _Key, nodes: list[Episode] | list[Fact]) -> tuple[NodeId, ...]:
+    return tuple(node.node for node in nodes if key in _keys(node))
 
 
 def _turn_frame(log: EventLog, thread_id: UUID, turn_id: UUID) -> _ConsolidationFrame:

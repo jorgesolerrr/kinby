@@ -1,11 +1,12 @@
 import asyncio
+import json
 import random
 import threading
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 from uuid import uuid4
 
 import pytest
@@ -136,16 +137,20 @@ def fact(
     subjects: tuple[str, ...],
     sources: tuple[NodeId, ...] = (),
     supersedes: tuple[NodeId, ...] = (),
+    *,
+    learned_on: date = _DAY,
+    workbench: str | None = None,
 ) -> NodeId:
     return GraphStore(instance.path).remember(
         Fact(
-            node=new_node_id(_DAY, description),
-            date=_DAY,
+            node=new_node_id(learned_on, description),
+            date=learned_on,
             description=description,
             subjects=subjects,
             body=f"{description}.",
             thread=None,
             sources=sources,
+            workbench=workbench,
             supersedes=supersedes,
         )
     )
@@ -207,6 +212,17 @@ def fire(instance: Instance, model: ConsolidatingModel) -> list[Event]:
 
 def consolidated(events: list[Event]) -> list[MemoryConsolidated]:
     return [event.payload for event in events if isinstance(event.payload, MemoryConsolidated)]
+
+
+def framed(events: list[Event]) -> Any:
+    """The frame the stage's code step handed the model."""
+    return json.loads(
+        next(
+            event.payload.output
+            for event in events
+            if isinstance(event.payload, ToolResult) and event.payload.name == "consolidate"
+        )
+    )
 
 
 def completed(events: list[Event]) -> TurnCompleted:
@@ -582,22 +598,22 @@ def test_a_consolidated_fact_is_recalled_by_its_sources_terms(tmp_path: Path) ->
     )
 
 
-def test_a_batch_holds_the_fifty_oldest_and_the_next_firing_the_rest(tmp_path: Path) -> None:
+def test_a_batch_holds_the_twenty_oldest_and_the_next_firing_the_rest(tmp_path: Path) -> None:
     instance = instance_at(tmp_path)
     consolidation_stage(instance)
-    days = list(range(60))
+    days = list(range(30))
     random.Random(771).shuffle(days)
     by_day = {
         day: episode(instance, f"Episode of day {day}", _DAY + timedelta(days=day)) for day in days
     }
-    oldest_first = [by_day[day] for day in range(60)]
+    oldest_first = [by_day[day] for day in range(30)]
 
     first = consolidated(fire(instance, ConsolidatingModel()))
     second = consolidated(fire(instance, ConsolidatingModel()))
     third = fire(instance, ConsolidatingModel())
 
-    assert [covering.episodes for covering in first] == [tuple(oldest_first[:50])]
-    assert [covering.episodes for covering in second] == [tuple(oldest_first[50:])]
+    assert [covering.episodes for covering in first] == [tuple(oldest_first[:20])]
+    assert [covering.episodes for covering in second] == [tuple(oldest_first[20:])]
     assert completed(third).outcome is CompletionOutcome.NO_WORK
 
 
@@ -682,6 +698,115 @@ def test_the_frame_lists_the_forgotten_facts_on_the_batch_subjects(tmp_path: Pat
     assert old in model.wake
     assert "forgotten" in model.wake
     assert elsewhere not in model.wake
+
+
+@pytest.mark.parametrize("workbench", [None, "cec-backend"])
+def test_the_frame_holds_only_what_carries_the_workbench_of_the_batch(
+    tmp_path: Path, workbench: str | None
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    marks = (None, "cec-backend", "landing")
+    earlier = {
+        mark: episode(instance, f"Billing ran on {mark}", _DAY - timedelta(days=30), workbench=mark)
+        for mark in marks
+    }
+    fire(instance, ConsolidatingModel())
+    facts = {
+        mark: fact(instance, f"Billing lives on {mark}", ("billing",), workbench=mark)
+        for mark in marks
+    }
+    gone = {
+        mark: fact(instance, f"Billing was forgotten on {mark}", ("billing",), workbench=mark)
+        for mark in marks
+    }
+    for node in gone.values():
+        GraphStore(instance.path).forget(node, _FORGOTTEN_ON)
+    new = episode(instance, "Billing retries failed cards", workbench=workbench)
+
+    frame = framed(fire(instance, ConsolidatingModel()))
+
+    assert frame["subjects"] == [
+        {
+            "subject": "billing",
+            "workbench": workbench,
+            "episodes": [new],
+            "earlier": [earlier[workbench]],
+            "facts": [facts[workbench]],
+            "forgotten": [gone[workbench]],
+        }
+    ]
+    assert [framed["node"] for framed in frame["earlier"]] == [earlier[workbench]]
+    assert [framed["node"] for framed in frame["facts"]] == [facts[workbench]]
+    assert [framed["node"] for framed in frame["forgotten"]] == [gone[workbench]]
+
+
+def test_the_frame_holds_25_facts_sharing_the_most_subjects_then_the_newest(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    both = fact(
+        instance,
+        "Invoices bill on the first",
+        ("billing", "invoices"),
+        learned_on=_DAY - timedelta(days=60),
+    )
+    newest_first = [
+        fact(instance, f"Billing fact {day}", ("billing",), learned_on=_DAY - timedelta(days=day))
+        for day in range(30)
+    ]
+    episode(instance, "Sent the invoices late", subjects=("billing", "invoices"))
+
+    frame = framed(fire(instance, ConsolidatingModel()))
+
+    assert [framed["node"] for framed in frame["facts"]] == [both, *newest_first[:24]]
+
+
+def test_the_frame_holds_20_earlier_episodes_sharing_the_most_subjects_then_the_newest(
+    tmp_path: Path,
+) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    both = episode(
+        instance,
+        "Sent the invoices late in July",
+        _DAY - timedelta(days=60),
+        subjects=("billing", "invoices"),
+    )
+    newest_first = [
+        episode(instance, f"Billing ran on day {day}", _DAY - timedelta(days=day + 1))
+        for day in range(25)
+    ]
+    fire(instance, ConsolidatingModel())
+    fire(instance, ConsolidatingModel())
+    episode(instance, "Sent the invoices late", subjects=("billing", "invoices"))
+
+    frame = framed(fire(instance, ConsolidatingModel()))
+
+    assert [framed["node"] for framed in frame["earlier"]] == [both, *newest_first[:19]]
+
+
+def test_the_frame_shows_earlier_episodes_without_their_bodies(tmp_path: Path) -> None:
+    instance = instance_at(tmp_path)
+    consolidation_stage(instance)
+    old = episode(instance, "Moved billing to the new provider", _DAY - timedelta(days=30))
+    fire(instance, ConsolidatingModel())
+    episode(instance, "Billing retries failed cards")
+
+    frame = framed(fire(instance, ConsolidatingModel()))
+
+    assert frame["earlier"] == [
+        {
+            "node": old,
+            "date": (_DAY - timedelta(days=30)).isoformat(),
+            "description": "Moved billing to the new provider",
+            "subjects": ["billing"],
+        }
+    ]
+    assert [framed["body"] for framed in frame["episodes"]] == [
+        "## What happened\nBilling retries failed cards."
+    ]
 
 
 @pytest.mark.parametrize("cited", ["all", "an episode before the forget"])
