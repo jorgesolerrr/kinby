@@ -2,6 +2,8 @@ If the factory run's data holds no `results.feedback`, the pull request has no r
 
 Otherwise `results.feedback` is a JSON list of the review threads to answer on pull request `results.pr`, of the branch `results.branch`, each with its id, path, line and comments.
 
+Before you reply, search memory with `kinby memory search` for review pushback earlier pull requests on this repository drew, so this round's fixes hold to it.
+
 A good result:
 
 - Answers every thread. Before you claim a fix, check whether a commit already on the branch fixed the thread, and say so in the reply when one did. A fixed reply names the commit that holds its fix, pushed or not.

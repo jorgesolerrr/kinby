@@ -75,7 +75,7 @@ from kinby.core.receiver import Receiver
 from kinby.core.routing import Dispatcher
 from kinby.core.runtime import boot_instance
 from kinby.core.runtime_lock import InstanceBusyError, runtime_lock
-from kinby.core.session_recalls import keep_recall
+from kinby.core.session_recalls import SessionAttempt, keep_recall, session_attempt
 from kinby.core.threads import ThreadStore
 from kinby.instance import (
     PLACEHOLDER_MODEL,
@@ -103,7 +103,14 @@ from kinby.memory import (
     open_memory,
 )
 from kinby.plugins.core import built_in_states, by_state, core_tools
+from kinby.plugins.hub import HubRefused
 from kinby.plugins.hub_browser import HubBrowser, lends_a_browser
+from kinby.plugins.hub_memory import (
+    OwnerMemoryUnavailable,
+    open_owner_memory,
+    reads_owner_memory,
+    search_owner_memory,
+)
 from kinby.plugins.registry import ToolRegistry
 from kinby.plugins.skills import load_skills
 from kinby.workbench import WorkbenchServer, WorkbenchSteps, prepare_workspace
@@ -250,6 +257,24 @@ def _range_command[Command](build: Callable[[], Command]) -> Command | None:
             file=sys.stderr,
         )
         return None
+
+
+async def _owner_memory(args: argparse.Namespace, attempt: SessionAttempt) -> int:
+    """Search or open, through the hub, the memory of the owner of the line whose run's step
+    *attempt* this is. An owner that cannot be reached leaves the step to go on without it."""
+    try:
+        match args.memory_command:
+            case "search":
+                query = " ".join(args.query)
+                print(await search_owner_memory(attempt, query, args.after, args.before))
+            case "open":
+                print(await open_owner_memory(attempt, NodeId(args.node)))
+    except OwnerMemoryUnavailable as exc:
+        print(f"{exc} Go on without memory.", file=sys.stderr)
+    except HubRefused as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
 
 
 def _load_selected_instance(
@@ -1232,6 +1257,9 @@ def main(
                         )
                     return asyncio.run(_list_routines(instance))
             case "memory" if args.memory_command is not None:
+                attempt = session_attempt()
+                if args.instance_directory is None and attempt and reads_owner_memory():
+                    return asyncio.run(_owner_memory(args, attempt))
                 instance = _load_selected_instance(args)
                 memory = GraphStore(instance.path)
                 match args.memory_command:
@@ -1241,7 +1269,9 @@ def main(
                         print(hits_json(hits))
                         keep_recall(instance.manifest.state_dir, tuple(hit.node for hit in hits))
                     case "open":
-                        print(open_memory(memory, NodeId(args.node)))
+                        node = NodeId(args.node)
+                        print(open_memory(memory, node))
+                        keep_recall(instance.manifest.state_dir, (node,))
                 return 0
             case "usage":
                 command = _range_command(lambda: _usage_command(args))

@@ -373,13 +373,7 @@ class WorkbenchSteps:
         transcript = self._attempt_transcript(command)
         ran = await run_coding_client(
             step.client,
-            render_client_message(
-                step.prompt,
-                command.work_item,
-                command.results,
-                skills,
-                remembers=False,
-            ),
+            render_client_message(step.prompt, command.work_item, command.results, skills),
             folder,
             instance=None,
             state_dir=self._directory / STATE_DIR,

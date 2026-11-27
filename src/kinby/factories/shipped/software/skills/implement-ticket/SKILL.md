@@ -5,6 +5,8 @@ description: Implement one GitHub issue test-first and commit it on the branch t
 
 Implement the ticket the prompt names. The ticket is the spec: read it with `gh issue view <number> --comments`, including any parent issue it links. Then read how this repository wants code written: its agent instructions (`AGENTS.md`, `CLAUDE.md`), contributing guide, coding standards, domain glossary (`CONTEXT.md`), and any decision record in the area you will touch, whichever of these exist.
 
+Then, before you design or edit anything, search memory for what earlier work on this repository learned: `kinby memory search` with the ticket's domain terms and the areas you will touch, then `kinby memory open` on each hit that fits. A search that finds nothing, or says memory is unavailable, does not stop you.
+
 ## Process
 
 1. **Stay on the branch.** The factory checked out a fresh branch for this ticket from its base. Do not switch branches, push, or open a pull request. The factory owns those.
