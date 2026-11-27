@@ -264,7 +264,8 @@ def render_step_message(
 
 _CLIENT_MEMORY = (
     "# Memory\n"
-    "Your instance remembers its earlier work. Two read-only commands look it up from your shell. "
+    "Earlier work is remembered by your instance or, on a workbench, by the owner of your run's "
+    "line. Two read-only commands look it up from your shell. "
     "`kinby memory search <query> [--after DATE] [--before DATE]` prints, as JSON, the facts whose "
     "description or subjects hold any word of the query, those holding the most words first, "
     "each with its node id and date. "
@@ -288,19 +289,18 @@ def render_client_message(
     results: Mapping[ValueName, StepValue],
     skills: Sequence[Skill],
     memory: str | None = None,
-    *,
-    remembers: bool = True,
 ) -> str:
     """A client step's message, how to search memory and the *memory* the step brings, how to keep
     a command from holding the step, then the skills catalogue with the path of each skill's file.
-    A client with no memory to search, as on a workbench, is told nothing of memory.
 
     A coding client has no kinby tools, so it searches memory from its shell and reads a skill
     from its path.
     """
     delivered = "" if memory is None else f"\n\n{memory}"
-    recall = f"{_CLIENT_MEMORY}{delivered}\n\n" if remembers else ""
-    message = f"{render_step_message(prompt, work_item, results)}\n\n{recall}{_CLIENT_COMMANDS}"
+    message = (
+        f"{render_step_message(prompt, work_item, results)}\n\n"
+        f"{_CLIENT_MEMORY}{delivered}\n\n{_CLIENT_COMMANDS}"
+    )
     if not skills:
         return message
     catalogue = "\n".join(

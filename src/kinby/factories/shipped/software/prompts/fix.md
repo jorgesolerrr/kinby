@@ -2,7 +2,7 @@ The workspace is on the branch `results.branch`.
 
 If the factory run's data holds no `results.failure` and .scratch/review.md does not exist, nothing failed: change nothing and stop.
 
-`results.failure` is what failed. It is either a command, with the tail of its output, or the checks that failed on the pull request, each with its link. Rerun the part of a failed command that failed, such as its failing test, for the full output. Read a failed check's logs with `gh`, such as `gh run view --log-failed`. Then find the root cause and fix it. .scratch/review.md, when it exists, is a review of your work on this branch: fix every hard finding, and apply each suggestion once.
+`results.failure` is what failed. It is either a command, with the tail of its output, or the checks that failed on the pull request, each with its link. Rerun the part of a failed command that failed, such as its failing test, for the full output. Read a failed check's logs with `gh`, such as `gh run view --log-failed`. Search memory with `kinby memory search` for what earlier failures of the same check or command taught. Then find the root cause and fix it. .scratch/review.md, when it exists, is a review of your work on this branch: fix every hard finding, and apply each suggestion once.
 
 A good result:
 

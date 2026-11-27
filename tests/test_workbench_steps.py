@@ -837,7 +837,9 @@ def stub_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, then
         "               'no_background':\n"
         "                   os.environ.get('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'),\n"
         "               'command_limit': os.environ.get('BASH_MAX_TIMEOUT_MS'),\n"
-        "               'command_default': os.environ.get('BASH_DEFAULT_TIMEOUT_MS')},\n"
+        "               'command_default': os.environ.get('BASH_DEFAULT_TIMEOUT_MS'),\n"
+        "               'kinby': {name: value for name, value in os.environ.items()\n"
+        "                         if name.startswith('KINBY_')}},\n"
         "              calls)\n"
         "    calls.write('\\n')\n"
         f"{then}\n"
@@ -875,6 +877,8 @@ class ClientCall:
     command_limit: str | None
     #: How long Claude waits for a command that names no timeout, in milliseconds.
     command_default: str | None
+    #: The kinby variables the client saw, by name.
+    kinby: dict[str, str]
 
 
 def recorded_calls(calls: Path) -> list[ClientCall]:
@@ -908,9 +912,32 @@ def test_an_agent_step_runs_its_coding_client_in_the_run_folder_with_its_prompt(
     assert called.cwd == str(tmp_path / "workbench" / "worktrees" / "tickets" / "issue-12")
     assert called.stdin.startswith("Implement the issue.\n")
     assert '{"work_item": {"issue": 12}, "results": {}}' in called.stdin
-    assert "kinby memory" not in called.stdin
     assert called.argv[-4:] == ["--model", "claude-opus-5-5", "--effort", "high"]
     assert called.config_dir == str(tmp_path / "workbench" / ".state" / "claude")
+
+
+def test_an_agent_step_tells_its_coding_client_how_to_search_the_owners_memory_for_the_run(
+    tmp_path, monkeypatch
+):
+    workbench = _workbench(tmp_path, None)
+    calls = stub_client(tmp_path, monkeypatch, "claude", streaming(CLAUDE_STREAM))
+    route = {
+        "KINBY_HUB_URL": "http://hub:8080/instances/cec/hub",
+        "KINBY_HUB_SCOPES": "workbench:memory",
+        "KINBY_CONTROL_TOKEN": "control",
+    }
+    for name, value in route.items():
+        monkeypatch.setenv(name, value)
+    run_id = uuid4()
+
+    asyncio.run(workbench.run(_command(run_id, IMPLEMENT, PLAIN, attempt=2)))
+
+    [called] = recorded_calls(calls)
+    assert "kinby memory search <query>" in called.stdin
+    assert "kinby memory open <node>" in called.stdin
+    assert "the owner of your run's line" in called.stdin
+    session = route | {"KINBY_RUN": str(run_id), "KINBY_STEP": IMPLEMENT.kind, "KINBY_ATTEMPT": "2"}
+    assert {name: called.kinby.get(name) for name in session} == session
 
 
 def test_an_agent_steps_result_carries_what_its_coding_client_spent(tmp_path, monkeypatch):
