@@ -34,7 +34,7 @@ One distilled record in the **knowledge graph** of a single **turn** or **factor
 
 ### Fact
 
-An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread. A fact **dreaming** writes cites its **source episodes**, the episodes it was learned from, and carries the **workbench** mark they all share, if they share one. A search finds such a fact by its own words or by those of its source episodes.
+An atomic, timestamped statement in the **knowledge graph**, recorded when it is learned. Recency decides which fact is current: the latest fact about a subject wins. The agent remembers a fact in a **thread**; the user can add one from a client, and that fact belongs to no thread. A fact **dreaming** writes cites its **source episodes**, the episodes it was learned from, and carries the **workbench** mark they all share, if they share one. A fact **consolidation** writes may also name older live facts it **supersedes**, hiding them without changing their files. A search finds such a fact by its own words or by those of its source episodes.
 
 ### Correction
 
@@ -51,7 +51,7 @@ _Avoid_: dream phase
 
 ### Consolidation
 
-The nightly **dreaming stage**. It reviews uncovered **episodes** and writes a **fact** for a lesson or detail at least two episodes repeat, or an **area fact** for an area they share, citing them as its **source episodes**. A source may be an earlier episode on the same subjects that it covered on another night and no fact cites. Its own write needs no approval.
+The nightly **dreaming stage**. It reviews uncovered **episodes** and writes concise **facts** for lessons or details at least two episodes repeat, or an **area fact** for an area they share, citing them as its **source episodes** and naming any live facts they **supersede**. Each episode matches earlier episodes and live facts within its own **workbench**, or unmarked with unmarked. A source may be an earlier episode on the same subjects that it covered on another night and no fact cites. Its own write needs no approval, and it defaults to the **recap** model unless its routine names a model.
 
 ### Reflection
 
@@ -81,7 +81,12 @@ _Avoid_: dream artifact
 
 ### Area fact
 
-A **fact** **consolidation** writes about one area of the work, such as a feature of a repository: where it lives and what was decided about it, and why. When a later **episode** touches the area, a new area fact citing the old sources and the new one takes its place.
+A **fact** **consolidation** writes about one area of the work, such as a feature of a repository: where it lives and what was decided about it, and why. When a later **episode** touches the area, a new area fact citing the old sources and the new one **supersedes** the old area fact.
+
+### Superseded
+
+Said of a **fact** that a newer fact written by **consolidation** explicitly replaces. The newer fact names the replaced fact's id; the old fact's file is never rewritten or tombstoned. A superseded fact is no longer live: it stays out of recall, live fact lists, and future consolidation frames, and it no longer protects its **source episodes** from being **pruned**. Forgetting the replacement leaves the superseded fact hidden.
+_Avoid_: tombstoned, deprecated, archived fact
 
 ### Source episode
 
@@ -834,7 +839,7 @@ What started a **turn**: the user, a **routine**, a **step** of a **factory run*
 
 ### Routine
 
-A **wake** an **instance** owns: a prompt, and optionally the instance's own **code step** that runs first. Started by a schedule, by a **delivery**, or by hand. Its runs go alongside the user's turns, never in their way. Lives as a directory in the instance; its file is the source of truth.
+A **wake** an **instance** owns: a prompt, and optionally the instance's own **code step** that runs first. Started by a schedule, by a **delivery**, or by hand. Its runs go alongside the user's turns, never in their way. Lives as a directory in the instance; its file is the source of truth. It may name a **model choice** of its own; otherwise it uses the instance's main model, except **consolidation**, which defaults to the recap model.
 _Avoid_: cron job, automation, job
 
 ### Code step
@@ -871,7 +876,7 @@ _Avoid_: install, binding, assignment
 
 ### Agent step
 
-A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. On a workbench with a browser it has the browser tools too, and can ask the user for a **takeover**. It can write a **view** whole, which the **hub** writes among the views of the line's owner, and it reads, patches and deletes none. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
+A **step** where a model does the work from a prompt, on the **workbench**, in the **run folder**, with the workbench's **picks** and the **skills** of the **factory**'s folder. It has no persona and no memory of its own. It reads the memory of its **line**'s owner (nodes marked with its workbench and unmarked nodes) read-only through the **hub**, failing soft if the owner is unavailable: coding clients through the memory CLI, kinby turns through read-only memory tools. Its **engine** runs it, with the model the step names, or else the **line**'s when the engine runs that model's provider, as the kinby engine runs any. A kinby turn has bash and the file tools in the run folder: the file tools refuse a path outside it, and bash reaches outside it only through the gate. On a workbench with a browser it has the browser tools too, and can ask the user for a **takeover**. It can write a **view** whole, which the **hub** writes among the views of the line's owner, and it reads, patches and deletes none. Each attempt's transcript stays on the workbench, and the **hub** reads it from there, with what the attempt spent.
 _Avoid_: behavior (that is an **instance**'s), agent (alone, as a term)
 
 ### Engine
