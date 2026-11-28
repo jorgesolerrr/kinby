@@ -22,7 +22,7 @@ A factory runs on a workbench: the place with the image, the secrets, the worksp
 Each field may be left out.
 
 - `image`: one of the image recipes kinby ships. Left out, kinby's base image. Setting up a line refuses a workbench built from another recipe, so a factory that leaves it out runs only on a workbench on the base image. kinby ships one:
-  - `coder`: the base image with `gh`, Claude Code, Codex, Bun, Node and pnpm, for the coding client engines.
+  - `coder`: the base image with `gh`, Claude Code, Codex, Bun, Node, pnpm, and Playwright's headless Chromium, for the coding client engines and local browser verification.
 - `secrets`: the secrets the steps read, as environment variables of the workbench. See Fields.
 - `values`: named values that are not secrets, such as a site's address, which the workbench's record holds by name. Every step reads them as run values, as the workbench holds them when the step starts, and they never reach the environment. A named value cannot share its name with a work item value, a step's `results`, `branch`, `base` or `notes`. See Fields.
 - `commands`: the names of the workbench's lists of repository commands the steps run, such as `setup` and `checks`. A `command` step's `{ commands: <name> }` names one of them. The workbench holds the commands themselves, so the factory names no repository's commands.
@@ -70,6 +70,7 @@ Every step runs on the workbench, in the run folder. Every step has these fields
 - `kind`: `agent`, `command`, `code`, `wait` or `approve`.
 - `description`: what the step does and why, as the user reads it on the factory's page. Optional.
 - `off`: `true` keeps the step in the factory, but its runs pass over it to the next step. The check treats an off step as missing, so it refuses a step that's on and resumes it, sends work back to it, or takes a value only it records. Left out, the step is on.
+- `when`: a run value name from the work item, `requires.values`, any step's `results`, `branch`, `base`, `failure`, `notes` or `quiet`. The step runs only while that value is present and truthy; otherwise the run passes over it to the next step without recording an attempt or using the workbench. When skipping reaches the end of the factory, the run ends done once `done_requires` holds.
 - `requires`: values the step needs, from the work item, `requires.values` or an earlier step's `results`. The check refuses a value none of them holds. A value false counts as missing. A named value the workbench lacks fails this step, which says so, since no earlier step produces it.
 - `results`: the values the step hands on, by name and type, as in `work_item`.
 - `outcomes`: what each outcome a check or code step names does next. See What happens next.

@@ -424,6 +424,7 @@ describe("LibraryPage, a step's editor", () => {
       "Effort",
       "Timeout",
       "Resume",
+      "When",
       "Retry",
       "When it fails",
       "Outcome no-change",
@@ -448,7 +449,14 @@ describe("LibraryPage, a step's editor", () => {
   it("opens a wait step's card with its quiet time and its signal patterns", async () => {
     const { form, editor } = await openStep("babysit")
 
-    expect(labels(form)).toEqual(["Description", "Quiet", "Retry", "When it fails", "Signal"])
+    expect(labels(form)).toEqual([
+      "Description",
+      "Quiet",
+      "When",
+      "Retry",
+      "When it fails",
+      "Signal",
+    ])
     expect((editor.getByRole("textbox", { name: "Signal" }) as HTMLInputElement).value).toContain(
       "- headers.X-GitHub-Event: pull_request_review\n  body.pull_request.number:",
     )
@@ -1174,5 +1182,41 @@ describe("LibraryPage, a step's last change", () => {
     expect(within(screen.getByRole("list", { name: "Steps" })).queryAllByRole("link")).toEqual([])
     await user.click(within(card("review")).getByRole("button", { name: "review" }))
     expect(await within(card("review")).findByRole("form", { name: "review" })).toBeTruthy()
+  })
+
+  it("shows a step's when condition and saves edits to it", async () => {
+    const conditional = `name: software
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - { id: classify, kind: code, call: classify, results: { verify_ui: bool } }
+  - { id: verify, kind: command, when: verify_ui, run: ["echo ok"] }
+`
+    const saved: unknown[] = []
+    const { user } = openPage(conditional, versions, {
+      "factory.step.save": (command) => {
+        saved.push(command)
+        return factoryRead("software", conditional, commit, "h-3")
+      },
+    })
+
+    await user.click(await screen.findByRole("button", { name: "software, shipped factory" }))
+    const list = await screen.findByRole("list", { name: "Steps" })
+    const verifyCard = within(list).getAllByRole("listitem")[1]
+    expect(within(verifyCard).getByText("when verify_ui")).toBeTruthy()
+
+    await user.click(within(verifyCard).getByRole("button", { name: "verify" }))
+    const editor = within(await within(verifyCard).findByRole("form", { name: "verify" }))
+    const whenInput = editor.getByRole("textbox", { name: "When" })
+    expect((whenInput as HTMLInputElement).value).toBe("verify_ui")
+
+    await user.clear(whenInput)
+    await user.type(whenInput, "failure")
+    await user.click(editor.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(saved).toHaveLength(1))
+    expect(saved[0]).toMatchObject({
+      step: { id: "verify", kind: "command", when: "failure" },
+    })
   })
 })

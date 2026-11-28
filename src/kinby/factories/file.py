@@ -162,6 +162,8 @@ class _Step:
     description: str | None = None
     #: An off step stays in the factory, but its runs pass over it to the next step.
     off: bool = False
+    #: A run value that must be truthy for this step to run; otherwise the run passes over it.
+    when: ValueName | None = None
     #: Values earlier steps or the work item must hold before this step starts.
     requires: tuple[ValueName, ...] = ()
     #: The values this step's result declares, by name.

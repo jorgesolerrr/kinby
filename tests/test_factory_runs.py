@@ -2141,3 +2141,167 @@ def test_a_run_names_the_steps_before_its_own_it_can_be_sent_back_to(tmp_path):
         assert stopped.earlier_steps == ["fix", "review"]
 
     asyncio.run(scenario())
+
+
+WHEN_FACTORY = """\
+name: checks
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - id: classify
+    kind: code
+    call: classify
+    results: { verify_ui: bool, verify_api: bool }
+  - id: verify_ui
+    kind: command
+    when: verify_ui
+    run: ["echo ui"]
+  - id: verify_api
+    kind: command
+    when: verify_api
+    run: ["echo api"]
+  - id: publish
+    kind: command
+    run: ["echo publish"]
+"""
+WHEN_TOOLS = """\
+from kinby.plugins.tools import tool
+
+
+@tool(write=False)
+def classify() -> dict[str, bool]:
+    \"\"\"Return which verification steps should run.\"\"\"
+    return {"verify_ui": False, "verify_api": True}
+"""
+
+
+def test_when_skips_steps_whose_value_is_falsy_and_runs_truthy_ones(tmp_path):
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"verify_ui": False, "verify_api": True}),
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(
+        tmp_path / "hub",
+        control,
+        runtime,
+        {"factory.yaml": WHEN_FACTORY, "tools/classify.py": WHEN_TOOLS},
+    )
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert done.run.step is None
+        assert [attempt.step for attempt in done.attempts] == ["classify", "verify_api", "publish"]
+        assert [command.origin.step for _, command in control.steps] == [
+            "classify",
+            "verify_api",
+            "publish",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_skipping_trailing_when_steps_finishes_done_or_needs_human_on_done_requires(tmp_path):
+    trailing = """\
+name: checks
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - id: classify
+    kind: code
+    call: classify
+    results: { verify_ui: bool, ready: bool }
+  - id: verify_ui
+    kind: command
+    when: verify_ui
+    run: ["echo ui"]
+    results: { verified: bool }
+done_requires: [ready]
+"""
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN, values={"verify_ui": False, "ready": True}),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(
+        tmp_path / "hub",
+        control,
+        runtime,
+        {"factory.yaml": trailing, "tools/classify.py": WHEN_TOOLS},
+    )
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert done.run.step is None
+        assert [attempt.step for attempt in done.attempts] == ["classify"]
+
+        control.step_results = [
+            StepResult(ending=StepEnding.CLEAN, values={"verify_ui": False, "ready": False}),
+        ]
+        second = await handed_in(hub, line, 8)
+        stopped = await settled(hub, second.run_id)
+
+        assert (stopped.run.status, stopped.run.step) == (FactoryRunStatus.NEEDS_HUMAN, "verify_ui")
+        assert 'done_requires needs "ready"' in stopped.attempts[-1].summary
+
+    asyncio.run(scenario())
+
+
+def test_when_skips_a_step_on_the_first_pass_and_runs_it_when_send_back_sets_its_value(tmp_path):
+    loop = """\
+name: checks
+requires: { image: coder }
+work_item: { issue: int }
+steps:
+  - id: implement
+    kind: command
+    run: ["echo impl"]
+  - id: answer
+    kind: command
+    when: feedback
+    run: ["echo answer"]
+  - id: assess
+    kind: code
+    call: classify
+    results: { feedback: str }
+    outcomes: { feedback: { back: answer, max: 2 }, done: done }
+"""
+    control = FakeControl()
+    control.step_results = [
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN, outcome="feedback", values={"feedback": "fix line 1"}),
+        StepResult(ending=StepEnding.CLEAN),
+        StepResult(ending=StepEnding.CLEAN, outcome="done"),
+    ]
+    runtime = FakeRuntime()
+    hub = factory_hub(
+        tmp_path / "hub",
+        control,
+        runtime,
+        {"factory.yaml": loop, "tools/classify.py": WHEN_TOOLS},
+    )
+
+    async def scenario() -> None:
+        line = await started_line(hub, runtime)
+        run = await handed_in(hub, line, 7)
+        done = await settled(hub, run.run_id)
+
+        assert done.run.status is FactoryRunStatus.DONE
+        assert [attempt.step for attempt in done.attempts] == [
+            "implement",
+            "assess",
+            "answer",
+            "assess",
+        ]
+
+    asyncio.run(scenario())

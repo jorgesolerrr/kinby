@@ -96,6 +96,17 @@
             }
           ],
           "default": null
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -672,6 +683,17 @@
             }
           ],
           "default": null
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -824,6 +846,17 @@
             }
           ],
           "default": null
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -935,6 +968,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueName"
             },
             {
               "type": "null"
@@ -1064,6 +1108,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueName"
             },
             {
               "type": "null"

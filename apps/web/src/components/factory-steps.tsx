@@ -456,9 +456,10 @@ function StepCard({
             </a>
           </CardDescription>
         )}
-        {(differs || step.off) && (
+        {(differs || step.off || step.when != null) && (
           <CardAction>
             <div className="flex gap-2">
+              {step.when != null && <Badge variant="outline">when {step.when}</Badge>}
               {differs && <Badge variant="secondary">Differs from kinby&apos;s</Badge>}
               {step.off && <Badge variant="outline">Off</Badge>}
             </div>

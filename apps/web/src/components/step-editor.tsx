@@ -230,6 +230,7 @@ export function StepEditor({
         {draft.kind === "wait" && (
           <Text label="Quiet" value={draft.quiet} onChange={(quiet) => put("quiet", quiet)} />
         )}
+        <Text label="When" value={draft.when} onChange={(when) => put("when", when)} />
         <Field>
           <FieldLabel htmlFor={`${id}retry`}>Retry</FieldLabel>
           <Input

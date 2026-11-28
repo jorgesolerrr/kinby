@@ -886,7 +886,7 @@ _Avoid_: runner (that is the **turn runner**), client (for a kinby turn)
 
 ### Step
 
-One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. A wait or an approval parks the run, which holds no workbench until the signal, a deadline or the user moves it on. So does an **approval** or a **takeover** a kinby **agent step**'s turn requests, until the user answers it or finishes the takeover. A wait on the user's approval tells the user by itself, with a summary that can name the run's values. The user approves the run, or sends it back to an earlier step, with notes or none. It ends with a **step result**.
+One stage of a **factory**: an **agent step**, commands or deterministic code run on the **line**'s **workbench**, in the run's **run folder**, or a wait on a **signal** or on the user's approval. A step may guard itself with a run value (`when`): when that value is absent or false, the run passes over the step to the next one without an attempt. A wait or an approval parks the run, which holds no workbench until the signal, a deadline or the user moves it on. So does an **approval** or a **takeover** a kinby **agent step**'s turn requests, until the user answers it or finishes the takeover. A wait on the user's approval tells the user by itself, with a summary that can name the run's values. The user approves the run, or sends it back to an earlier step, with notes or none. It ends with a **step result**.
 
 ### Off
 
