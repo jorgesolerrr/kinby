@@ -184,3 +184,27 @@ def test_deleting_an_off_step_keeps_a_prompt_another_step_uses(tmp_path):
         assert deleted.files["prompts/implement.md"] == FILES["prompts/implement.md"]
 
     asyncio.run(scenario())
+
+
+def test_the_check_validates_when_values_against_declared_and_off_steps(tmp_path):
+    factory = """\
+name: tickets
+work_item: { issue: int }
+steps:
+  - { id: classify, kind: command, run: ["echo ok"], results: { verify_ui: bool } }
+  - { id: answer, kind: command, run: ["echo ok"], when: feedback }
+  - { id: fix, kind: command, run: ["echo ok"], when: failure }
+  - { id: verify_ui, kind: command, run: ["echo ok"], when: verify_ui }
+  - { id: assess, kind: command, run: ["echo ok"], results: { feedback: str } }
+"""
+    assert problems(tmp_path / "ok", {"factory.yaml": factory}) == []
+    assert problems(
+        tmp_path / "typo", {"factory.yaml": factory.replace("when: verify_ui", "when: verfy_ui")}
+    ) == [
+        'Step "verify_ui" runs when "verfy_ui", which no step declares in its results '
+        "and the work item does not carry."
+    ]
+    assert problems(
+        tmp_path / "off",
+        {"factory.yaml": factory.replace("id: classify,", "id: classify, off: true,")},
+    ) == ['Step "verify_ui" runs when "verify_ui", which only off step "classify" records.']

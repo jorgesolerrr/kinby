@@ -30,6 +30,12 @@ RUN apt-get update \
     && npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
         "@openai/codex@${CODEX_VERSION}" "pnpm@${PNPM_VERSION}" \
     && npm cache clean --force
+# Headless Chromium for browser verification against local dev servers in the run worktree.
+ARG PLAYWRIGHT_VERSION=1.64.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/*
 # Claude Code must not update itself inside a pinned image. Bun has no background updater;
 # only `bun upgrade` replaces it, and nothing in the factory runs that.
 ENV DISABLE_AUTOUPDATER=1

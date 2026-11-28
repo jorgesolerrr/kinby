@@ -29,7 +29,9 @@ from kinby.factories import ships_recipe
 from kinby.factories.file import (
     BASE,
     BRANCH,
+    FAILURE,
     NOTES,
+    QUIET,
     ApproveStep,
     Engine,
     InvalidFactoryFile,
@@ -95,6 +97,12 @@ def off_dependents(factory: WorkbenchFactory) -> Iterator[tuple[StepId, str]]:
     held = set(factory.work_item) | {value.name for value in factory.requires.values}
     if factory.worktree is not None:
         held |= {BRANCH, BASE}
+    on_results = (
+        held
+        | {FAILURE, NOTES, QUIET}
+        | {name for step in factory.steps if not step.off for name in step.results}
+    )
+    all_off_results = {name: step.id for step in factory.steps if step.off for name in step.results}
     recorded_off: dict[ValueName, StepId] = {}
     for step in factory.steps:
         if step.off:
@@ -105,6 +113,12 @@ def off_dependents(factory: WorkbenchFactory) -> Iterator[tuple[StepId, str]]:
         for outcome in (*step.outcomes.values(), step.failed):
             if isinstance(outcome, SendBack) and outcome.back in off:
                 yield step.id, f'sends work back to "{outcome.back}", which is off.'
+        if step.when is not None and step.when not in on_results and step.when in all_off_results:
+            yield (
+                step.id,
+                f'runs when "{step.when}", which only off step '
+                f'"{all_off_results[step.when]}" records.',
+            )
         filters = step.signal if isinstance(step, WaitStep) else ()
         taken = (
             *step.requires,
@@ -280,12 +294,20 @@ def _prompt(folder: Path, step: WorkbenchAgentStep) -> Iterator[str]:
 
 def _inputs(factory: WorkbenchFactory) -> Iterator[str]:
     """Each value a step requires, a wait or a command names is held: by the work item, the
-    workbench's named values, the factory's worktree call or an earlier step. Each value
-    done_requires or a closing filter names is held by any step."""
+    workbench's named values, the factory's worktree call or an earlier step. Each value a step's
+    when, done_requires or a closing filter names is held by any step."""
     held = set(factory.work_item) | {value.name for value in factory.requires.values}
     if factory.worktree is not None:
         held |= {BRANCH, BASE}
+    declared = (
+        held | {FAILURE, NOTES, QUIET} | {name for step in factory.steps for name in step.results}
+    )
     for step in factory.steps:
+        if step.when is not None and step.when not in declared:
+            yield (
+                f'Step "{step.id}" runs when "{step.when}", which no step declares in its '
+                "results and the work item does not carry."
+            )
         for value in step.requires:
             if value not in held:
                 yield (

@@ -607,23 +607,57 @@ class FactoryRuns:
         return moved
 
     def _enqueue(self, run: FactoryRun) -> None:
-        """Queue the run's step for its workbench.
+        """Queue the run's step for its workbench, passing over any steps whose ``when`` value is
+        absent or falsy.
 
         A step that cannot start fails an attempt right away: its own, or that of the step that
         should have produced a value it requires.
         """
         if run.step is None:
             raise ValueError(f'Factory run "{run.run_id}" is at no step to queue.')
-        placed = self._placed(run, run.step)
+        ready = self._skip_unmet_when(run)
+        if ready is None or ready.step is None:
+            return
+        placed = self._placed(ready, ready.step)
         if isinstance(placed, _Refused):
-            self._publish(self._registry.begin_attempt(run.run_id, placed.step))
-            self._advance(run.run_id, StepResult(ending=StepEnding.FAILED, summary=placed.reason))
+            self._publish(self._registry.begin_attempt(ready.run_id, placed.step))
+            self._advance(ready.run_id, StepResult(ending=StepEnding.FAILED, summary=placed.reason))
             return
         if isinstance(placed, WaitStep | ApproveStep):
-            self._park(run.run_id, placed)
+            self._park(ready.run_id, placed)
             return
         workbench_id, queued = placed
         self._queue(workbench_id).put_nowait(queued)
+
+    def _skip_unmet_when(self, run: FactoryRun) -> FactoryRun | None:
+        """Move *run* past any steps whose ``when`` value is absent or falsy.
+
+        Returns the run at the first runnable step, or None when skipping reaches the end of the
+        factory and settles the run as done (or needs human when ``done_requires`` is unmet).
+        """
+        factory = self._file(run.factory, run.version)
+        if factory is None or run.step is None:
+            return run
+        current = _step(factory, run.step)
+        if current is None or current.when is None:
+            return run
+        held = run.work_item | self._results(run, factory, current.id)
+        while current is not None and current.when is not None and not held.get(current.when):
+            current = _next_on(factory, current)
+        if current is None:
+            unfinishable = _unfinishable(held, factory.done_requires)
+            if unfinishable is None:
+                self._move(run.run_id, FactoryRunStatus.DONE, None)
+                return None
+            self._publish(self._registry.begin_attempt(run.run_id, run.step))
+            self._advance(
+                run.run_id, StepResult(ending=StepEnding.NEEDS_HUMAN, summary=unfinishable)
+            )
+            return None
+        if current.id != run.step:
+            run = self._registry.move_run(run.run_id, FactoryRunStatus.QUEUED, current.id)
+            self._publish(run)
+        return run
 
     def _queue(self, instance_id: UUID) -> asyncio.Queue[_Queued]:
         """The workbench's or the owner's queue, with the worker that empties it."""
@@ -1378,7 +1412,12 @@ class FactoryRuns:
 
         A run that ended done is at no step, so the call names the step of its last attempt.
         """
-        step = run.step if run.step is not None else self._registry.attempts(run.run_id)[-1].step
+        attempts = self._registry.attempts(run.run_id)
+        step = (
+            run.step
+            if run.step is not None
+            else (attempts[-1].step if attempts else factory.steps[0].id)
+        )
         placed = self._workbench(run)
         if run.version is not None:
             self._factories.keep_tree(run.factory, run.version)

@@ -10,6 +10,7 @@ export type FactoryStep = {
   kind: string
   description?: string | null
   off?: boolean
+  when?: string | null
   engine?: string
   model?: string | null
   effort?: string | null
